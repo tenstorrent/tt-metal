@@ -5,10 +5,10 @@
 #include "dataflow_api.h"
 
 namespace detail {
-template <bool DstIsDram>
-void noc_async_write(const uint32_t i, const InterleavedAddrGenFast<DstIsDram>& s, const uint32_t l1_read_addr) {
+template <class AdderGenT>
+void noc_async_write(const uint32_t i, const AdderGenT& s, const uint32_t l1_read_addr) {
 #ifdef ROWMAJOR
-    const uint64_t dst_noc_addr = s.get_noc_addr(i);
+    const uint64_t dst_noc_addr = get_noc_addr(i, s);
     ::noc_async_write(l1_read_addr, dst_noc_addr, s.page_size);
 #else
     noc_async_write_tile(i, s, l1_read_addr);
@@ -32,12 +32,12 @@ void kernel_main() {
 
 #ifdef ROWMAJOR
     const uint32_t page_bytes = get_arg_val<uint32_t>(3);
+    const InterleavedAddrGen<dst_is_dram> s = {.bank_base_address = dst_addr, .page_size = page_bytes};
 #else
     const uint32_t page_bytes = get_tile_size(cb_id_out);
-#endif
-
     const InterleavedAddrGenFast<dst_is_dram> s = {
         .bank_base_address = dst_addr, .page_size = page_bytes, .data_format = data_format};
+#endif
 
 #ifdef OUT_SHARDED
     cb_wait_front(cb_id_out, num_tiles);

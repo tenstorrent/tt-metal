@@ -24,7 +24,9 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         compute_aligned_packet_dims(output_tensor.get_dtype(), output_page_size_bytes, output_num_pages, l1_alignment);
 
     // distribute work
-    const auto use_cores = mesh_device->compute_with_storage_grid_size();
+    // const auto use_cores = mesh_device->compute_with_storage_grid_size();
+    const CoreCoord use_cores = {1, 1};
+
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_packets_per_core_group_1, num_packets_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(use_cores, total_packets);
@@ -96,16 +98,10 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             num_page_segments,
             operation_attributes.receiver_semaphore.address()};
 
-        std::cout << "READER RT ARGS " << std::endl;
-        for (auto& x : reader_runtime_args) {
-            std::cout << x << " ";
-        }
-        std::cout << std::endl;
-
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
 
         const std::vector<uint32_t> writer_runtime_args = {
-            output_tensor.buffer()->address(), increment, page_idx_start, packet_size_bytes};
+            output_tensor.buffer()->address(), increment, page_idx_start, output_page_size_bytes};
 
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, c, writer_runtime_args);
 

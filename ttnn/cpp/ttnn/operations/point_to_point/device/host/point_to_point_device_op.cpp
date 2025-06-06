@@ -34,9 +34,6 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> compute_aligned_packet_dims(
         total_packets = num_page_segments * num_pages;
     }
 
-    std::cout << "packet_size_bytes " << packet_size_bytes << " max_num_pages_per_packet " << max_num_pages_per_packet
-              << " num_page_segments " << num_page_segments << " total_packets " << total_packets << std::endl;
-
     return std::make_tuple(packet_size_bytes, max_num_pages_per_packet, num_page_segments, total_packets);
 }
 }  // namespace detail

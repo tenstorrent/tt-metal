@@ -5,16 +5,14 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-#include "dprint_pages.h"
-
 namespace detail {
-template <bool SrcIsDram>
-void noc_async_read(const uint32_t i, const InterleavedAddrGenFast<SrcIsDram>& s, const uint32_t l1_write_addr) {
+template <class AddrGenT>
+void noc_async_read(const uint32_t i, const AddrGenT& s, const uint32_t l1_write_addr) {
 #ifdef ROWMAJOR
-    const uint64_t src_noc_addr = s.get_noc_addr(i);
+    const uint64_t src_noc_addr = get_noc_addr(i, s);
     ::noc_async_read(src_noc_addr, l1_write_addr, s.page_size);
 #else
-    noc_async_read_tile(i, s, l1_read_addr);
+    noc_async_read_tile(i, s, l1_write_addr);
 
 #endif
 }
@@ -34,12 +32,13 @@ void kernel_main() {
 
 #ifdef ROWMAJOR
     const uint32_t page_bytes = get_arg_val<uint32_t>(3);
+    const InterleavedAddrGen<src_is_dram> s = {
+        .bank_base_address = src_addr, .page_size = page_bytes};  //, .data_format = data_format};
 #else
     const uint32_t page_bytes = get_tile_size(cb_id_in0);
-#endif
-
     const InterleavedAddrGenFast<src_is_dram> s = {
-        .bank_base_address = src_addr, .page_size = page_bytes, .data_format = data_format};
+        .bank_base_address = src_addr, .page_size = page_bytes};  //, .data_format = data_format};
+#endif
 
 // read a ublock of tiles from src to CB, and then push the ublock to unpacker
 #ifdef BACKWARDS
@@ -54,6 +53,7 @@ void kernel_main() {
 
         detail::noc_async_read(i, s, l1_write_addr);
         noc_async_read_barrier();
+
         cb_push_back(cb_id_in0, onetile);
     }
 }
