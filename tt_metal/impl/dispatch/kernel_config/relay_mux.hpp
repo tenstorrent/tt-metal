@@ -112,4 +112,31 @@ void assemble_fabric_mux_client_config_args(
 // The two devices must be along the same tunnel.
 int get_num_hops(chip_id_t mmio_dev_id, chip_id_t downstream_dev_id);
 
+// Helper function to assemble args specific to the 2D fabric header
+template <typename Configuration>
+void assemble_2d_fabric_packet_header_args(Configuration& config, int my_device_id, int destination_device_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(my_device_id);
+    const auto& dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(destination_device_id);
+    const auto& forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    const auto& mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
+    const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
+
+    config.my_dev_id = src_fabric_node_id.chip_id;
+    config.ew_dim = mesh_shape[1];
+    config.to_mesh_id = dst_fabric_node_id.mesh_id.get();
+    config.to_dev_id = dst_fabric_node_id.chip_id;
+    config.router_direction = router_direction;
+
+    log_info(
+        "Src {} -> Dst {}: Src Chip {}, Mesh Shape {}, Dst Mesh Id {}, Dst Chip Id {} Router Direction {}",
+        my_device_id,
+        destination_device_id,
+        src_fabric_node_id.chip_id,
+        mesh_shape[1],
+        dst_fabric_node_id.mesh_id.get(),
+        dst_fabric_node_id.chip_id,
+        router_direction);
+}
+
 }  // namespace tt::tt_metal
