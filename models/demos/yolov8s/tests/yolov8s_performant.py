@@ -1,7 +1,6 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
-
 
 import ttnn
 from models.demos.yolov8s.tests.yolov8s_test_infra import create_test_infra
