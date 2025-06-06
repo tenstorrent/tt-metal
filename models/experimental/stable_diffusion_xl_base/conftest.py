@@ -18,6 +18,11 @@ def pytest_addoption(parser):
         default=5000,
         help="Number of prompts to process (default: 5000)",
     )
+    parser.addoption(
+        "--profiler",
+        action="store_true",
+        help="Profiler recording in progress, will enable DumpDeviceProfiler where needed",
+    )
 
 
 @pytest.fixture
@@ -35,3 +40,8 @@ def evaluation_range(request):
         num_prompts = 5000
 
     return start_from, num_prompts
+
+
+@pytest.fixture
+def profiler_recording(request):
+    return request.config.getoption("--profiler")

@@ -86,6 +86,7 @@ def test_unet(
     reset_seeds,
     conv_weights_dtype,
     transformer_weights_dtype,
+    profiler_recording,
 ):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
@@ -102,6 +103,7 @@ def test_unet(
         "unet",
         transformer_weights_dtype=transformer_weights_dtype,
         model_config=model_config,
+        profiler_recording=profiler_recording,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_timestep_tensor = torch_random(timestep_shape, -0.1, 0.1, dtype=torch.float32)
@@ -152,7 +154,12 @@ def test_unet(
         device, torch_input_tensor, torch_timestep_tensor, torch_temb_tensor, torch_encoder_tensor, torch_time_ids
     )
 
+    if profiler_recording:
+        ttnn.DumpDeviceProfiler(device)
+
     tracy.signpost("Second pass")
+    if profiler_recording:
+        tracy.signpost("start")
     ttnn_output_tensor, output_shape = tt_unet.forward(
         ttnn_input_tensor,
         [B, C, H, W],
@@ -160,6 +167,8 @@ def test_unet(
         encoder_hidden_states=ttnn_encoder_tensor,
         added_cond_kwargs=ttnn_added_cond_kwargs,
     )
+    if profiler_recording:
+        tracy.signpost("stop")
 
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
     output_tensor = output_tensor.reshape(B, output_shape[1], output_shape[2], output_shape[0])

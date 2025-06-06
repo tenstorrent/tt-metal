@@ -26,11 +26,20 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 class TtUNet2DConditionModel(nn.Module):
     # During testing it was observed that setting conv_weights to bfloat16 + HiFi4 leads to much better image quality.
     # Other weights seem not to have as an impact on it.
-    def __init__(self, device, state_dict, module_path, model_config, transformer_weights_dtype=ttnn.bfloat16):
+    def __init__(
+        self,
+        device,
+        state_dict,
+        module_path,
+        model_config,
+        transformer_weights_dtype=ttnn.bfloat16,
+        profiler_recording=False,
+    ):
         super().__init__()
 
         self.device = device
         self.model_config = model_config
+        self.profiler_recording = profiler_recording
 
         self.stride = (1, 1)
         self.padding = (1, 1)
@@ -222,9 +231,15 @@ class TtUNet2DConditionModel(nn.Module):
 
             residuals += block_residuals
 
+            if self.profiler_recording:
+                ttnn.DumpDeviceProfiler(self.device)
+
         sample, [C, H, W] = self.mid_block.forward(
             sample, [B, C, H, W], temb=temb, encoder_hidden_states=encoder_hidden_states
         )
+
+        if self.profiler_recording:
+            ttnn.DumpDeviceProfiler(self.device)
 
         encoder_hidden_states = ttnn.to_memory_config(encoder_hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         for i, up_block in enumerate(self.up_blocks):
@@ -246,6 +261,9 @@ class TtUNet2DConditionModel(nn.Module):
                     temb=temb,
                     encoder_hidden_states=encoder_hidden_states,
                 )
+
+            if self.profiler_recording:
+                ttnn.DumpDeviceProfiler(self.device)
 
         sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
 
