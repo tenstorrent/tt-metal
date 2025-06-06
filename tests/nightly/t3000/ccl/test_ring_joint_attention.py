@@ -12,7 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
-from .test_scaled_dot_product_attention import fa_rand
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_scaled_dot_product_attention import fa_rand
 
 
 def torch_sdpa(q, k, v, joint_q, joint_k, joint_v, num_devices):
