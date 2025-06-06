@@ -81,6 +81,9 @@ public:
 
 class GraphTracker {
 public:
+    GraphTracker(const GraphTracker&) = delete;
+    GraphTracker(GraphTracker&&) = delete;
+
     static GraphTracker& instance() {
         static GraphTracker tracker;
         return tracker;
@@ -156,8 +159,6 @@ public:
 private:
     GraphTracker() = default;
     ~GraphTracker() = default;
-    GraphTracker(const GraphTracker&) = delete;
-    GraphTracker(GraphTracker&&) = delete;
 
     std::vector<std::shared_ptr<IGraphProcessor>> processors;
 

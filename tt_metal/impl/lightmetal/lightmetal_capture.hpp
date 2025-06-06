@@ -36,6 +36,9 @@ class LightMetalCaptureContext {
 public:
     static LightMetalCaptureContext& get();
 
+    LightMetalCaptureContext(const LightMetalCaptureContext&) = delete;
+    LightMetalCaptureContext& operator=(const LightMetalCaptureContext&) = delete;
+
     bool is_tracing() const;
     void set_tracing(bool tracing);
 
@@ -79,9 +82,6 @@ private:
     std::unordered_map<const Kernel*, uint32_t> kernel_to_global_id_map_;
     std::unordered_map<CBHandle, uint32_t> cb_handle_to_global_id_map_;
     // TODO (kmabee) - consider adding map for CommandQueue object.
-
-    LightMetalCaptureContext(const LightMetalCaptureContext&) = delete;
-    LightMetalCaptureContext& operator=(const LightMetalCaptureContext&) = delete;
 };
 
 TraceDescriptorByTraceIdOffset to_flatbuffer(
