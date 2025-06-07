@@ -301,21 +301,12 @@ ShardedBufferWriteDispatchParams initialize_sharded_buf_dispatch_params(
     const BufferDispatchConstants& buf_dispatch_constants,
     const BufferRegion& region) {
     ShardedBufferWriteDispatchParams dispatch_params;
-    if (buffer.is_nd_sharded()) {
-        TT_FATAL(
-            region.offset == 0 && region.size == buffer.size(),
-            "Specifying a region for ND sharded buffers is not supported");
-        dispatch_params.width_split = true;
-        dispatch_params.max_pages_per_shard = buffer.buffer_distribution_spec()->num_dev_pages_per_core();
-        dispatch_params.total_pages_to_write = dispatch_params.max_pages_per_shard * *buffer.num_cores();
-    } else {
-        dispatch_params.width_split =
-            buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape_in_pages[1];
-        dispatch_params.max_pages_per_shard = buffer.shard_spec().num_pages();
-        dispatch_params.total_pages_to_write = region.size / buffer.page_size();
-    }
+    dispatch_params.width_split =
+        buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape_in_pages[1];
     dispatch_params.buffer_page_mapping = (dispatch_params.width_split) ? buffer.get_buffer_page_mapping() : nullptr;
+    dispatch_params.total_pages_to_write = region.size / buffer.page_size();
     dispatch_params.total_pages_written = 0;
+    dispatch_params.max_pages_per_shard = buffer.shard_spec().num_pages();
     dispatch_params.page_size_to_write = buffer.aligned_page_size();
     dispatch_params.dst_page_index = region.offset / buffer.page_size();
     dispatch_params.starting_dst_host_page_index = region.offset / buffer.page_size();
@@ -461,7 +452,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
         for (uint32_t dev_page = dispatch_params.dst_page_index;
              dev_page < dispatch_params.dst_page_index + dispatch_params.pages_per_txn;
              ++dev_page) {
-            auto& host_page = page_mapping.dev_page_to_host_page_mapping[dev_page];
+            auto& host_page = page_mapping.dev_page_to_host_page_mapping_[dev_page];
             if (host_page.has_value()) {
                 const uint32_t src_offset =
                     (host_page.value() - dispatch_params.starting_dst_host_page_index) * buffer.page_size();
@@ -565,7 +556,7 @@ void write_interleaved_buffer_to_device(
 
 std::vector<CoreCoord> get_cores_for_sharded_buffer(
     bool width_split, const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping, Buffer& buffer) {
-    return width_split ? buffer_page_mapping->all_cores
+    return width_split ? buffer_page_mapping->all_cores_
                        : corerange_to_cores(
                              buffer.shard_spec().grid(),
                              buffer.num_cores(),
@@ -579,12 +570,11 @@ std::pair<uint32_t, uint32_t> calculate_pages_to_process_in_shard(
     const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping,
     uint32_t starting_host_page_idx,
     uint32_t ending_host_page_idx) {
-    TT_ASSERT(!buffer.is_nd_sharded());
-    const std::vector<std::optional<uint32_t>> core_host_pages = buffer_page_mapping->core_host_page_indices[core_id];
+    const std::vector<uint32_t> core_host_pages = buffer_page_mapping->core_host_page_indices_[core_id];
     TT_ASSERT(std::is_sorted(core_host_pages.begin(), core_host_pages.end()));
 
-    auto is_host_page_within_region = [&](const std::optional<uint32_t> host_page) {
-        return *host_page >= starting_host_page_idx && *host_page < ending_host_page_idx;
+    auto is_host_page_within_region = [&](const uint32_t host_page) {
+        return host_page >= starting_host_page_idx && host_page < ending_host_page_idx;
     };
 
     auto core_start_host_page_it =
@@ -601,8 +591,8 @@ std::pair<uint32_t, uint32_t> calculate_pages_to_process_in_shard(
         return {0, 0};
     }
 
-    const uint32_t start_host_page = **(core_start_host_page_it);
-    const uint32_t end_host_page = **(core_end_host_page_it);
+    const uint32_t start_host_page = *(core_start_host_page_it);
+    const uint32_t end_host_page = *(core_end_host_page_it);
     TT_ASSERT(end_host_page >= start_host_page);
 
     uint32_t num_dev_pages_to_process;
@@ -610,14 +600,14 @@ std::pair<uint32_t, uint32_t> calculate_pages_to_process_in_shard(
     const bool is_core_end_host_page_last_page_in_shard = core_end_host_page_it == core_host_pages.rbegin();
     if (is_core_end_host_page_last_page_in_shard) {
         const uint32_t num_dev_pages_in_shard =
-            buffer_page_mapping->core_shard_shape[core_id][0] * buffer.shard_spec().shape_in_pages()[1];
+            buffer_page_mapping->core_shard_shape_[core_id][0] * buffer.shard_spec().shape_in_pages()[1];
         num_dev_pages_to_process =
-            num_dev_pages_in_shard - buffer_page_mapping->host_page_to_local_shard_page_mapping[start_host_page];
+            num_dev_pages_in_shard - buffer_page_mapping->host_page_to_local_shard_page_mapping_[start_host_page];
     } else {
-        const uint32_t host_page_after_end_host_page = **(core_end_host_page_it - 1);
+        const uint32_t host_page_after_end_host_page = *(core_end_host_page_it - 1);
         num_dev_pages_to_process =
-            buffer_page_mapping->host_page_to_local_shard_page_mapping[host_page_after_end_host_page] -
-            buffer_page_mapping->host_page_to_local_shard_page_mapping[start_host_page];
+            buffer_page_mapping->host_page_to_local_shard_page_mapping_[host_page_after_end_host_page] -
+            buffer_page_mapping->host_page_to_local_shard_page_mapping_[start_host_page];
     }
     TT_ASSERT(num_dev_pages_to_process > 0);
 
@@ -640,10 +630,7 @@ void write_sharded_buffer_to_core(
     uint32_t num_pages = 0;
     uint32_t remaining_pages_in_shard = dispatch_params.max_pages_per_shard;
     uint32_t curr_page_idx_in_shard = 0;
-    if (buffer.is_nd_sharded()) {
-        // ND sharded buffers are always written in full
-        num_pages = dispatch_params.buffer_page_mapping->core_host_page_indices[core_id].size();
-    } else if (dispatch_params.width_split) {
+    if (dispatch_params.width_split) {
         const uint32_t ending_dst_host_page_index = dispatch_params.starting_dst_host_page_index +
                                                     dispatch_params.total_pages_written +
                                                     dispatch_params.total_pages_to_write;
@@ -659,8 +646,8 @@ void write_sharded_buffer_to_core(
             return;
         }
 
-        dispatch_params.dst_page_index = dispatch_params.buffer_page_mapping->host_page_to_dev_page_mapping[host_page];
-        curr_page_idx_in_shard = dispatch_params.buffer_page_mapping->host_page_to_local_shard_page_mapping[host_page];
+        dispatch_params.dst_page_index = dispatch_params.buffer_page_mapping->host_page_to_dev_page_mapping_[host_page];
+        curr_page_idx_in_shard = dispatch_params.buffer_page_mapping->host_page_to_local_shard_page_mapping_[host_page];
         remaining_pages_in_shard -= curr_page_idx_in_shard;
     } else {
         while (remaining_pages_in_shard > 0 &&
@@ -805,19 +792,6 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     // Note that the src_page_index is the device page idx, not the host page idx
     // Since we read core by core we are reading the device pages sequentially
     ShardedBufferReadDispatchParams dispatch_params;
-
-    if (buffer.is_nd_sharded()) {
-        TT_FATAL(
-            region.offset == 0 && region.size == buffer.size(),
-            "Specifying a region for ND sharded buffers is not supported");
-        dispatch_params.width_split = true;
-        dispatch_params.max_pages_per_shard = buffer.buffer_distribution_spec()->num_dev_pages_per_core();
-    } else {
-        dispatch_params.width_split =
-            buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape_in_pages[1];
-        dispatch_params.max_pages_per_shard = buffer.shard_spec().num_pages();
-    }
-
     dispatch_params.cq_id = cq_id;
     dispatch_params.device = buffer.device();
     dispatch_params.padded_page_size = buffer.aligned_page_size();
@@ -825,9 +799,12 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     dispatch_params.src_page_index = region.offset / buffer.page_size();
     dispatch_params.starting_src_host_page_index = region.offset / buffer.page_size();
     dispatch_params.unpadded_dst_offset = 0;
+    dispatch_params.width_split =
+        buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape_in_pages[1];
     dispatch_params.buffer_page_mapping = (dispatch_params.width_split) ? buffer.get_buffer_page_mapping() : nullptr;
     dispatch_params.total_pages_to_read = region.size / buffer.page_size();
     dispatch_params.total_pages_read = 0;
+    dispatch_params.max_pages_per_shard = buffer.shard_spec().num_pages();
     dispatch_params.expected_num_workers_completed = expected_num_workers_completed;
     return dispatch_params;
 }
@@ -946,10 +923,7 @@ void copy_sharded_buffer_from_core_to_completion_queue(
     uint32_t host_page = 0;
     uint32_t address = buffer.address();
 
-    if (buffer.is_nd_sharded()) {
-        // ND sharded buffers are always read in full
-        pages_per_txn = dispatch_params.buffer_page_mapping->core_host_page_indices[core_id].size();
-    } else if (dispatch_params.width_split) {
+    if (dispatch_params.width_split) {
         const uint32_t ending_src_host_page_index = dispatch_params.starting_src_host_page_index +
                                                     dispatch_params.total_pages_read +
                                                     dispatch_params.total_pages_to_read;
@@ -963,9 +937,9 @@ void copy_sharded_buffer_from_core_to_completion_queue(
         pages_per_txn = num_pages_to_read;
         if (pages_per_txn > 0) {
             dispatch_params.src_page_index =
-                dispatch_params.buffer_page_mapping->host_page_to_dev_page_mapping[host_page];
+                dispatch_params.buffer_page_mapping->host_page_to_dev_page_mapping_[host_page];
             curr_page_idx_in_shard =
-                dispatch_params.buffer_page_mapping->host_page_to_local_shard_page_mapping[host_page];
+                dispatch_params.buffer_page_mapping->host_page_to_local_shard_page_mapping_[host_page];
         }
     } else {
         host_page = dispatch_params.src_page_index;
@@ -1204,7 +1178,7 @@ void copy_completion_queue_data_into_user_space(
                 } else if (src_offset_bytes + padded_page_size >= bytes_xfered) {
                     // Case 2: Last page of data that was popped off the completion queue
                     // Don't need to compute src_offset_increment since this is end of loop
-                    host_page_id = buffer_page_mapping->dev_page_to_host_page_mapping[dev_page_id];
+                    host_page_id = buffer_page_mapping->dev_page_to_host_page_mapping_[dev_page_id];
                     uint32_t num_bytes_remaining = bytes_xfered - src_offset_bytes;
                     num_bytes_to_copy = std::min(num_bytes_remaining, page_size);
                     remaining_bytes_of_nonaligned_page = page_size - num_bytes_to_copy;
@@ -1221,7 +1195,7 @@ void copy_completion_queue_data_into_user_space(
                     }
                 } else {
                     num_bytes_to_copy = page_size;
-                    host_page_id = buffer_page_mapping->dev_page_to_host_page_mapping[dev_page_id];
+                    host_page_id = buffer_page_mapping->dev_page_to_host_page_mapping_[dev_page_id];
                     dev_page_id++;
                     if (host_page_id.has_value()) {
                         dst_offset_bytes = (*host_page_id - starting_host_page_id) * page_size;
