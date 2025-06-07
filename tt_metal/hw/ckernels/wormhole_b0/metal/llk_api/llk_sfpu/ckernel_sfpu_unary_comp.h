@@ -75,12 +75,13 @@ inline void calculate_unary_lt(uint value) {
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        v_if(v < s) { v = 1.0f; }
-        v_else { v = 0.0f; }
+        vFloat four = 4.0f;
+        vFloat five = 5.0f;
+        vFloat result = 44;
+        v_if(four > five) { result = 55; }
         v_endif;
 
-        dst_reg[0] = v;
+        dst_reg[0] = result;
 
         dst_reg++;
     }
