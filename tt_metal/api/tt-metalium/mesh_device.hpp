@@ -122,6 +122,7 @@ private:
     std::vector<IDevice*> get_row_major_devices(const MeshShape& new_shape) const;
 
     std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
+    void clear_submeshes();
 
 public:
     MeshDevice(

@@ -478,7 +478,21 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
     view_ = std::move(new_view);
 }
 
+void MeshDevice::clear_submeshes() {
+    // Remove all submeshes from the parent mesh before closing the parent.
+    if (submeshes_.size()) {
+        TT_FATAL(this->is_parent_mesh(), "Only the parent mesh should have submeshes allocated.");
+    }
+    for (auto& weak_submesh : submeshes_) {
+        if (auto submesh = weak_submesh.lock()) {
+            submesh->close();
+        }
+    }
+    submeshes_.clear();
+}
+
 bool MeshDevice::close() {
+    this->clear_submeshes();
     mesh_command_queues_.clear();
     sub_device_manager_tracker_.reset();
     scoped_devices_.reset();
