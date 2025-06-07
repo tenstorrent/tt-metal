@@ -593,19 +593,19 @@ def test_untilize_multi_core_sharded_to_interleaved(
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_pack_untilize", [True])
-@pytest.mark.parametrize("tensor_shape", [[224, 224]])
+@pytest.mark.parametrize("tensor_shape", [[160, 160]])
 @pytest.mark.parametrize(
     "input_memory_layout, input_shard_shape, input_shard_core_grid",
     [
         [
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (64, 224),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            (128, 160),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
         ],
         [
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            (224, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            (160, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
         ],
         [
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -755,62 +755,57 @@ def test_untilize_multi_core_sharded_to_sharded_different_shard_types(
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_pack_untilize", [True])
+@pytest.mark.parametrize("tensor_shape", [[160, 160]])
 @pytest.mark.parametrize(
-    "tensor_shape, input_memory_layout, input_shard_shape, input_shard_core_grid, output_memory_layout, output_shard_shape, output_shard_core_grid",
+    "input_memory_layout, input_shard_shape, input_shard_core_grid, output_memory_layout, output_shard_shape, output_shard_core_grid",
     [
         [
-            [224, 64],
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (64, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            (128, 160),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            (224, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            (160, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 4))}),
         ],
         [
-            [288, 96],
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (160, 96),
+            (128, 160),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            (96, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 2))}),
+            (32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 4))}),
         ],
         [
-            [64, 224],
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            (64, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            (160, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (32, 224),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            (32, 160),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 4))}),
         ],
         [
-            [96, 288],
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            (96, 160),
+            (160, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            (32, 96),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 2))}),
+            (32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 4))}),
         ],
         [
-            [224, 224],
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             (128, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (32, 224),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 6))}),
+            (32, 160),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 4))}),
         ],
         [
-            [224, 224],
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             (128, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            (224, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 6))}),
+            (160, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 4))}),
         ],
     ],
 )
@@ -998,32 +993,30 @@ def test_untilize_multi_core_sharded_to_sharded_same_shard_type_different_shard_
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_pack_untilize", [True])
+@pytest.mark.parametrize("tensor_shape", [[160, 160]])
 @pytest.mark.parametrize(
-    "tensor_shape, memory_layout, input_shard_shape, input_shard_core_grid, output_shard_shape, output_shard_core_grid",
+    "memory_layout, input_shard_shape, input_shard_core_grid, output_shard_shape, output_shard_core_grid",
     [
         [
-            [224, 64],
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (64, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-            (32, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+            (128, 160),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            (32, 160),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 4))}),
         ],
         [
-            [64, 224],
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            (64, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-            (64, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+            (160, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            (160, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 4))}),
         ],
         [
-            [192, 192],
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             (128, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
-            (64, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 2))}),
+            (32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 4))}),
         ],
     ],
 )
@@ -1157,19 +1150,19 @@ def test_untilize_multi_core_sharded_to_sharded_same_shard_type_and_shard_spec(
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_pack_untilize", [True])
-@pytest.mark.parametrize("tensor_shape", [[224, 224]])
+@pytest.mark.parametrize("tensor_shape", [[160, 160]])
 @pytest.mark.parametrize(
     "memory_layout, shard_shape, shard_core_grid",
     [
         [
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (64, 224),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            (128, 160),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
         ],
         [
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            (224, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            (160, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
         ],
         [
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
