@@ -16,9 +16,7 @@ import hashlib
 
 is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
-from models.demos.llama3_subdevices.tt.llama_common import (
-    PagedAttentionConfig,
-)
+from models.demos.llama3_subdevices.tt.llama_common import PagedAttentionConfig, PagedAttention
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
@@ -106,7 +104,7 @@ def run_llama3_demo(
     batch_size,
     num_batches,
     paged_attention,
-    paged_attention_config,
+    page_params,
     max_generated_tokens,
     optimizations,
     sampling_params,
@@ -186,11 +184,10 @@ def run_llama3_demo(
     profiler.end("weight_loading")
 
     page_table_tt = None
+
     if paged_attention:
         paged_cache_max_seq_len = (
-            paged_attention_config.block_size
-            * paged_attention_config.max_num_blocks
-            / model_args.batch_size_per_device_group
+            page_params["block_size"] * page_params["max_num_blocks"] / model_args.batch_size_per_device_group
         )
         is_valid_token_position = (stress_test and start_pos <= paged_cache_max_seq_len) or (
             max_generated_tokens + start_pos <= paged_cache_max_seq_len
@@ -198,21 +195,21 @@ def run_llama3_demo(
         assert_msg = f"Either stress test with start_pos ({start_pos}) <= paged_cache_max_seq_len ({paged_cache_max_seq_len}) or max_generated_tokens ({max_generated_tokens}) + start_pos ({start_pos}) <= paged_cache_max_seq_len ({paged_cache_max_seq_len})"
         assert is_valid_token_position, assert_msg
 
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            model_args.batch_size_per_device_group,
-            paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
+        mesh_mapper = ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, None),
+            mesh_shape=model_args.cluster_shape,
         )
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
+
+        paged_attn = PagedAttention(page_params=page_params, model_args=model_args)
+
+        page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper, per_device_group=True)
+
+        paged_attention_config = PagedAttentionConfig(
+            block_size=page_params["page_block_size"],
+            max_num_blocks=page_params["page_max_num_blocks"],
         )
+
         logger.info("Page table tensor done")
 
     # Load TTNN Llama3.1 model
@@ -733,14 +730,6 @@ def test_llama_demo(
     if galaxy_type != "6U" and galaxy_type != "4U":
         raise Exception("Not running on TG nor on 6U, you must run on those systems for this test")
 
-    if paged_attention:
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
-    else:
-        paged_attention_config = None
-
     enable_pf_perf_mode = not request.config.getoption("--disable_pf_perf_mode")
 
     return run_llama3_demo(
@@ -750,7 +739,7 @@ def test_llama_demo(
         batch_size=batch_size,
         num_batches=repeat_batches,
         paged_attention=paged_attention,
-        paged_attention_config=paged_attention_config,
+        page_params=page_params,
         max_generated_tokens=max_generated_tokens,
         optimizations=optimizations,
         sampling_params=sampling_params,

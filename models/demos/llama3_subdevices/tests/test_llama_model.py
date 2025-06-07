@@ -10,6 +10,7 @@ from models.demos.llama3_subdevices.tt.llama_common import (
     sample_host,
     HostEmbedding,
     PagedAttentionConfig,
+    PagedAttention,
 )
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
@@ -187,30 +188,20 @@ def test_llama_model_inference(
 
     # Prepare page table for paged attention
     if paged_attention:
+        mesh_mapper = ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, None),
+            mesh_shape=model_args.cluster_shape,
+        )
+
+        paged_attn = PagedAttention(page_params, model_args)
+
+        page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper, per_device_group=True)
+
         paged_attention_config = PagedAttentionConfig(
             block_size=page_params["page_block_size"],
             max_num_blocks=page_params["page_max_num_blocks"],
         )
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            model_args.batch_size_per_device_group,
-            paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
-        )
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=(None, None),
-                mesh_shape=model_args.cluster_shape,
-            ),
-        )
-
     # Load TTNN model
     tt_model = TtTransformer(
         args=model_args,
@@ -383,7 +374,9 @@ def test_llama_model_inference(
                                             dims=(1, 3) if model_args.is_galaxy else (0, 1),
                                             mesh_shape=model_args.cluster_shape,
                                         ),
-                                    )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
+                                    )[paged_attn.reverse_permutation][
+                                        :, : model_args.n_kv_heads, :, : model_args.head_dim
+                                    ]
                                     .reshape(
                                         model_args.max_batch_size,
                                         paged_attention_config.max_num_blocks // model_args.max_batch_size,
