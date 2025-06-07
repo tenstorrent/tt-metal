@@ -223,7 +223,7 @@ struct EdmChannelWorkerInterface {
     }
 
     FORCE_INLINE void notify_worker_of_read_counter_update() {
-        noc_inline_dw_write<false, true>(
+        noc_inline_dw_write<true, true>(
             this->cached_worker_semaphore_address,
             local_read_counter.counter,
             0xf,

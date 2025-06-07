@@ -557,7 +557,7 @@ inline void fabric_client_connect(
         router_addr,
         (STREAM_REG_ADDR(
             STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX)));
-    noc_inline_dw_write(router_addr + sizeof(uint32_t), xy_local_addr >> 32);
+    noc_inline_dw_write(router_addr + sizeof(uint32_t), xy_local_addr >> NOC_ADDR_COORD_SHIFT);
     client_interface->router_addr_h = router_addr_h;
     client_interface->buffer_size = FABRIC_ROUTER_OUTBOUND_BUF_SLOTS;
     client_interface->wr_ptr = local_req_entry->remote_router_wr_ptr.ptr;
@@ -620,7 +620,7 @@ inline void fabric_async_write_push_data(
         size -= PACKET_HEADER_SIZE_BYTES;
     }
     noc_async_write_one_packet(src_addr, buffer_wr_addr, size, noc_index);
-    noc_inline_dw_write(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+    noc_inline_dw_write<true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
     client_interface->wr_ptr++;
     *(volatile uint32_t*)client_interface->update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
     if (client_interface->wr_ptr >= client_interface->buffer_size) {

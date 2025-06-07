@@ -173,7 +173,10 @@ struct fvc_outbound_push_state_t {
         } else {
             // relay the credits to noc data sender to replenish buffer space in noc sender
             noc_inline_dw_write_with_state<false, true, true, true, true>(
-                slots_cleared << REMOTE_DEST_BUF_WORDS_FREE_INC, *slots_cleared_ack_addr >> 32, write_at_cmd_buf, 1);
+                slots_cleared << REMOTE_DEST_BUF_WORDS_FREE_INC,
+                *slots_cleared_ack_addr >> NOC_ADDR_COORD_SHIFT,
+                write_at_cmd_buf,
+                1);
             // clear the credits receied from ethernet receiver.
             *update_sender_slots_cleared = (-slots_cleared) << REMOTE_DEST_BUF_WORDS_FREE_INC;
         }
@@ -370,7 +373,7 @@ struct fvc_inbound_push_state_t {
                 // Write lower 4 Bytes of 8 Byte entry.
                 noc_inline_dw_write(router_addr, (uint32_t)update_router_space);
                 // Write upper 4 Bytes of 8 Byte entry.
-                noc_inline_dw_write(router_addr + (sizeof(uint32_t)), xy_local_addr >> 32);
+                noc_inline_dw_write(router_addr + (sizeof(uint32_t)), xy_local_addr >> NOC_ADDR_COORD_SHIFT);
             }
         } else {
             uint32_t router_direction = get_next_hop_router_direction(mesh_id, device_id);
@@ -382,7 +385,7 @@ struct fvc_inbound_push_state_t {
             router_addr += router_direction * sizeof(uint64_t);
             // stream register to receive router buffer space available updates.
             noc_inline_dw_write(router_addr, (uint32_t)update_router_space);
-            noc_inline_dw_write(router_addr + sizeof(uint32_t), xy_local_addr >> 32);
+            noc_inline_dw_write(router_addr + sizeof(uint32_t), xy_local_addr >> NOC_ADDR_COORD_SHIFT);
             uint32_t remote_buffer_start =
                 FABRIC_ROUTER_DATA_BUF_START + router_direction * FABRIC_ROUTER_OUTBOUND_BUF_SIZE;
             for (uint32_t i = 0; i < FABRIC_ROUTER_OUTBOUND_BUF_SLOTS; i++) {
@@ -597,7 +600,7 @@ struct fvc_inbound_push_state_t {
             advance_remote_wrptr(1, remote_wrptr_direction);
             advance_out_rdptr<fvc_mode>(1);
             uint64_t push_addr = get_noc_addr_helper(dest_addr, router_push_addr);
-            noc_inline_dw_write<false, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+            noc_inline_dw_write<true, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
 
             *update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
             uint32_t words_available = packet_words_remaining;
@@ -639,7 +642,7 @@ struct fvc_inbound_push_state_t {
         noc_async_write_one_packet(get_local_buffer_read_addr(), buffer_wr_addr, FABRIC_ROUTER_BUF_SLOT_SIZE);
         advance_remote_wrptr(1, direction);
         uint64_t push_addr = get_noc_addr_helper(mcast_router_noc_xy[direction], router_push_addr);
-        noc_inline_dw_write<false, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+        noc_inline_dw_write<true, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
         *update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
     }
 
@@ -768,7 +771,7 @@ struct fvc_inbound_push_state_t {
         advance_remote_wrptr(1);
         advance_out_rdptr<fvc_mode>(1);
         uint64_t push_addr = get_noc_addr_helper(dest_addr, router_push_addr);
-        noc_inline_dw_write(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+        noc_inline_dw_write<true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
 
         *update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
         uint32_t words_available = packet_words_remaining;

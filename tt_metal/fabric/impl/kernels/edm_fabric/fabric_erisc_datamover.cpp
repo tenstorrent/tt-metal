@@ -2051,8 +2051,10 @@ void kernel_main() {
     }
 #endif
 
+    WAYPOINT("FSCW");
     wait_for_static_connection_to_ready(
         local_sender_channel_worker_interfaces, local_sender_channel_free_slots_stream_ids_ordered);
+    WAYPOINT("FSCD");
 
     //////////////////////////////
     //////////////////////////////
