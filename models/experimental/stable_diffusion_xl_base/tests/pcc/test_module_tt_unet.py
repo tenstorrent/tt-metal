@@ -72,6 +72,7 @@ def prepare_ttnn_tensors(
         ((1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6)),
     ],
 )
+@pytest.mark.parametrize("single_run", [True, False])
 @pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
@@ -86,6 +87,7 @@ def test_unet(
     reset_seeds,
     conv_weights_dtype,
     transformer_weights_dtype,
+    single_run,
 ):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
@@ -133,26 +135,27 @@ def test_unet(
 
     import tracy
 
-    tracy.signpost("Compilation pass")
-    _, _ = tt_unet.forward(
-        ttnn_input_tensor,
-        [B, C, H, W],
-        timestep=ttnn_timestep_tensor,
-        encoder_hidden_states=ttnn_encoder_tensor,
-        added_cond_kwargs=ttnn_added_cond_kwargs,
-    )
+    if not single_run:
+        tracy.signpost("Compilation pass")
+        _, _ = tt_unet.forward(
+            ttnn_input_tensor,
+            [B, C, H, W],
+            timestep=ttnn_timestep_tensor,
+            encoder_hidden_states=ttnn_encoder_tensor,
+            added_cond_kwargs=ttnn_added_cond_kwargs,
+        )
 
-    (
-        ttnn_input_tensor,
-        [B, C, H, W],
-        ttnn_timestep_tensor,
-        ttnn_encoder_tensor,
-        ttnn_added_cond_kwargs,
-    ) = prepare_ttnn_tensors(
-        device, torch_input_tensor, torch_timestep_tensor, torch_temb_tensor, torch_encoder_tensor, torch_time_ids
-    )
+        (
+            ttnn_input_tensor,
+            [B, C, H, W],
+            ttnn_timestep_tensor,
+            ttnn_encoder_tensor,
+            ttnn_added_cond_kwargs,
+        ) = prepare_ttnn_tensors(
+            device, torch_input_tensor, torch_timestep_tensor, torch_temb_tensor, torch_encoder_tensor, torch_time_ids
+        )
 
-    tracy.signpost("Second pass")
+        tracy.signpost("Second pass")
     ttnn_output_tensor, output_shape = tt_unet.forward(
         ttnn_input_tensor,
         [B, C, H, W],
