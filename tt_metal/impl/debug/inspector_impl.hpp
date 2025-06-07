@@ -75,14 +75,13 @@ public:
 
 class Data {
 private:
-    Data();
+    Data(); // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
 
     inspector::Logger logger;
     std::mutex programs_mutex;
     std::unordered_map<uint64_t, inspector::ProgramData> programs_data;
 
     friend class tt::tt_metal::Inspector;
-    friend class tt::tt_metal::MetalContext;
 };
 
 }  // namespace tt::tt_metal::inspector
