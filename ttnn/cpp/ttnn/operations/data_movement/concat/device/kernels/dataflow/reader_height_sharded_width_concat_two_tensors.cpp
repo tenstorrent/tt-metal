@@ -32,13 +32,13 @@ void kernel_main() {
     uint32_t l1_write_addr_0 = base_l1_write_addr + output_stick_offset;
     const uint32_t l1_read_addr_0 = get_read_ptr(0) + input_start_0;
     const uint64_t noc_addr_0 = get_noc_addr(l1_read_addr_0);
-    noc_async_read_one_packet_set_state(noc_addr_0, group_stick_size_0);
+    noc_async_read_set_state<group_stick_size_0>(noc_addr_0, group_stick_size_0);
 
     uint32_t read_offset_0 = l1_read_addr_0;
     uint32_t l1_write_addr_inc_0 = group_stick_size_0 + group_stride_0;
     for (uint32_t page_id_input = page_start; page_id_input < page_end; page_id_input++) {
         for (uint32_t i = 0; i < groups; i++) {
-            noc_async_read_one_packet_with_state<true>(read_offset_0, l1_write_addr_0);
+            noc_async_read_with_state<group_stick_size_0, true>(read_offset_0, l1_write_addr_0, group_stick_size_0);
             l1_write_addr_0 += (l1_write_addr_inc_0);
             read_offset_0 += group_stick_size_0;
         }
@@ -47,13 +47,13 @@ void kernel_main() {
     uint32_t l1_write_addr_1 = base_l1_write_addr + output_stick_offset + group_stick_size_0;
     const uint32_t l1_read_addr_1 = get_read_ptr(1) + input_start_1;
     const uint64_t noc_addr_1 = get_noc_addr(l1_read_addr_1);
-    noc_async_read_one_packet_set_state(noc_addr_1, group_stick_size_1);
+    noc_async_read_set_state<group_stick_size_1>(noc_addr_1, group_stick_size_1);
 
     uint32_t read_offset_1 = l1_read_addr_1;
     uint32_t l1_write_addr_inc_1 = group_stick_size_1 + group_stride_1;
     for (uint32_t page_id_input = page_start; page_id_input < page_end; page_id_input++) {
         for (uint32_t i = 0; i < groups; i++) {
-            noc_async_read_one_packet_with_state<true>(read_offset_1, l1_write_addr_1);
+            noc_async_read_with_state<group_stick_size_1, true>(read_offset_1, l1_write_addr_1, group_stick_size_1);
             l1_write_addr_1 += (l1_write_addr_inc_1);
             read_offset_1 += group_stick_size_1;
         }

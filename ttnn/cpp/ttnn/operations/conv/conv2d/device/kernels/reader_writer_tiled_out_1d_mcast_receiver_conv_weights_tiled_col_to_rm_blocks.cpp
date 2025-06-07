@@ -101,7 +101,7 @@ void kernel_main() {
         for (uint32_t block_weight_h = 0; block_weight_h < num_blocks_weight_h; block_weight_h++) {
             if constexpr (split_reader) {
                 // Do the second half of the reads for act
-                noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
+                noc_async_read_set_state<coalesced_read_bytes>(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
                 reader_idx = start_reader_idx;
                 cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles);
                 uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);

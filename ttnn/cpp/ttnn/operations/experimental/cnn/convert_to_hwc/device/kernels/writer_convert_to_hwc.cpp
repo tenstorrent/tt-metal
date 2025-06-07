@@ -9,9 +9,9 @@ constexpr uint32_t TILE_SIZE = 32;
 
 template <uint32_t StickSize, uint32_t PaddedStickSize, uint32_t NumSticks>
 FORCE_INLINE void copy_padded_sticks(uint32_t l1_read_addr, uint32_t& l1_write_addr) {
-    noc_async_read_one_packet_set_state(get_noc_addr(l1_read_addr), StickSize);
+    noc_async_read_set_state<StickSize>(get_noc_addr(l1_read_addr), StickSize);
     for (uint32_t row = 0; row < NumSticks; row++) {
-        noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
+        noc_async_read_with_state<StickSize, true>(l1_read_addr, l1_write_addr, StickSize);
         l1_read_addr += PaddedStickSize;
         l1_write_addr += StickSize;
     }
@@ -30,9 +30,9 @@ FORCE_INLINE void copy_segment_from_dram(
     uint32_t read_addr = base_read_addr + read_offset;
     uint64_t noc_read_addr = get_noc_addr_from_bank_id<true>(bank_id, read_addr);
 
-    noc_async_read_one_packet_set_state(noc_read_addr, copy_size);
+    noc_async_read_set_state<1>(noc_read_addr, copy_size);
     for (uint32_t j = 0; j < NumSticks; ++j) {
-        noc_async_read_one_packet_with_state<true>(noc_read_addr, l1_write_addr);
+        noc_async_read_with_state<1, true>(noc_read_addr, l1_write_addr, copy_size);
         l1_write_addr += WriteStrideBytes;
         noc_read_addr += ReadStrideBytes;
     }
