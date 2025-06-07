@@ -173,7 +173,7 @@ void write_socket_configs(
     SocketEndpoint socket_endpoint) {
     auto mesh_device = config_buffer->device();
     auto peer_device = peer_config_buffer->device();
-    auto& core_to_core_id = config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
+    auto& core_to_core_id = config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
 
     auto grouped_connections = group_socket_connections(config, socket_endpoint);

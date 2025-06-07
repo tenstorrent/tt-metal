@@ -70,9 +70,9 @@ std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed:
             } else {
                 const auto& buffer_page_mapping = *buffer->get_buffer_page_mapping();
                 for (int page_index = 0; page_index < num_pages; page_index++) {
-                    auto dev_page_index = buffer_page_mapping.host_page_to_dev_page_mapping_[page_index];
+                    auto dev_page_index = buffer_page_mapping.host_page_to_dev_page_mapping[page_index];
                     auto core =
-                        buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_index]];
+                        buffer_page_mapping.all_cores[buffer_page_mapping.dev_page_to_core_mapping[dev_page_index]];
                     auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer->buffer_type(), core)[0];
 
                     if (bank_to_num_pages.find(bank_id) == bank_to_num_pages.end()) {
@@ -124,9 +124,8 @@ std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::dis
                     bank_id = (bank_id + 1) % num_banks;
                 } else {
                     const auto& buffer_page_mapping = *buffer->get_buffer_page_mapping();
-                    auto dev_page_index = buffer_page_mapping.host_page_to_dev_page_mapping_[page_index];
-                    core =
-                        buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_index]];
+                    auto dev_page_index = buffer_page_mapping.host_page_to_dev_page_mapping[page_index];
+                    core = buffer_page_mapping.all_cores[buffer_page_mapping.dev_page_to_core_mapping[dev_page_index]];
                     bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer->buffer_type(), core)[0];
                     page_address = buffer->sharded_page_address(bank_id, dev_page_index);
                 }
