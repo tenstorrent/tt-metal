@@ -109,7 +109,7 @@ public:
 
     void compile(IDevice* device, bool force_slow_dispatch = false);
 
-    void generate_dispatch_commands(IDevice* device);
+    ProgramCommandSequence& generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
 
     void invalidate_circular_buffer_allocation();
 
@@ -173,6 +173,8 @@ private:
     bool runs_on_noc_multicast_only_cores();
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;
     bool kernel_binary_always_stored_in_ringbuffer();
+
+    uint32_t get_program_kernel_bins_sizeB(IDevice* device);
 
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
