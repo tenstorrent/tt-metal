@@ -343,6 +343,61 @@ https://gist.github.com/dgomezTT/ad5af9cf42f245a9a220458f431919c4
 
 Please note that we have over 300.000 lines in the json file, so we just included a few in the gist.
 
+### How to trace a hanging operation?
+Sometimes there might be cases where an operation hangs and the arguments can be quite handy to troubleshoot the issue or even adding extra coverage.
+We have added the following configuration
+
+./build_metal.sh --build-all --debug --operation-timeout-seconds=10
+
+operation-timeout-seconds will enable a timeout mechanism for operations, the value is the amount of seconds we will wait for the operation to finish.
+
+We have included an example case in the test_graph_capture.py file, you can check it here:
+
+```
+def test_graph_capture_with_hang(device):
+    # Create input tensor
+    tt_input = ttnn.empty(
+        shape=(1, 1, 2048, 512),
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+
+    failed = False
+    try:
+        output = ttnn.test.test_hang_operation(tt_input)
+        failed = False
+    except RuntimeError as e:
+        captured_graph = ttnn.graph.end_graph_capture()
+        failed = True
+        assert "TIMEOUT" in str(e)
+
+    # this is the normal case for CI
+    if not failed:
+        assert output == tt_input
+    else:
+        # this is the case for --ttnn-enable-operation-timeout
+        # the graph should have captured the arguments to the hang operation
+        assert (
+            captured_graph[1]["arguments"][0]
+            == .... # the arguments to the hang operation
+        )
+
+```
+
+You can check the full test here: https://github.com/tenstorrent/tt-metal/pull/22756/files#diff-0b28f2a718f7dad91bb0aab5246bde64a3ad5a88dc6d35b5bc65219386d7f100
+
+
+Please note that given the hacky nature of this test, it is recommended to build with --debug flag.
+
+In this case, we are using a ttnn.test.test_hang_operation, which is a test operation that runs a while(true) loop.
+The idea behind it is to simulate an unresponsive operation, so we can test the graph capture and the arguments that generated the hang.
+If metal is not compiled with the flags previously mentioned, it will just return the input tensor.
+
+
 
 ### What is next for this tool?
 - Supporting more operations
