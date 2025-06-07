@@ -181,12 +181,10 @@ tt::tt_metal::operation::Hash Softmax::compute_program_hash(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     return tt::tt_metal::operation::hash_operation<Softmax>(
-        std::get<tt::tt_metal::DeviceStorage>(input_tensors.at(0).storage()).memory_config(),
+        input_tensors.at(0).memory_config(),
         input_tensors.at(0).dtype(),
-        optional_input_tensors.at(0).has_value()
-            ? std::optional{std::get<tt::tt_metal::DeviceStorage>(optional_input_tensors.at(0).value().storage())
-                                .memory_config()}
-            : std::nullopt,
+        optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().memory_config()}
+                                                 : std::nullopt,
         optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().dtype()}
                                                  : std::nullopt,
         this->output_mem_config);

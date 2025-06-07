@@ -121,9 +121,9 @@ operation::Hash AttnMatmulDeviceOperation::compute_program_hash(const std::vecto
         this->transpose_hw,
         this->output_mem_config,
         this->output_dtype,
-        std::get<DeviceStorage>(input_tensors.at(0).storage()).memory_config(),
+        input_tensors.at(0).memory_config(),
         input_tensors.at(0).dtype(),
-        std::get<DeviceStorage>(input_tensors.at(1).storage()).memory_config(),
+        input_tensors.at(1).memory_config(),
         input_tensors.at(1).dtype());
 }
 

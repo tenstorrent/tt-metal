@@ -199,12 +199,12 @@ operation::Hash GroupAttnMatmulDeviceOperation::compute_program_hash(const std::
         this->output_mem_config.buffer_type(),
         this->output_dtype,
         this->row_major,
-        std::get<DeviceStorage>(input_tensor_a.storage()).memory_config().memory_layout(),
-        std::get<DeviceStorage>(input_tensor_a.storage()).memory_config().buffer_type(),
+        input_tensor_a.memory_config().memory_layout(),
+        input_tensor_a.memory_config().buffer_type(),
         input_tensor_a.dtype(),
         input_tensor_a.device()->id(),
-        std::get<DeviceStorage>(input_tensor_b.storage()).memory_config().memory_layout(),
-        std::get<DeviceStorage>(input_tensor_b.storage()).memory_config().buffer_type(),
+        input_tensor_b.memory_config().memory_layout(),
+        input_tensor_b.memory_config().buffer_type(),
         input_tensor_b.dtype(),
         input_tensor_b.device()->id());
 }
