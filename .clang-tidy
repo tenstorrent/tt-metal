@@ -17,7 +17,6 @@ Checks: >
   -bugprone-implicit-widening-of-multiplication-result,
   -bugprone-integer-division,
   -bugprone-macro-parentheses,
-  -bugprone-move-forwarding-reference,
   -bugprone-narrowing-conversions,
   -bugprone-parent-virtual-call,
   -bugprone-reserved-identifier,
