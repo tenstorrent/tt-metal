@@ -20,27 +20,27 @@ using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
 
 void send_weights_to_aggregator(
     const ttml::autograd::DistributedContext &ctx, const SortedParameters &sorted_model_parameters) {
-    auto aggregator_rank = ttml::core::distributed::Rank(*ctx.rank() - 1);
+    auto aggregator_rank = ttml::core::Rank(*ctx.rank() - 1);
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
         if (!tensor_ptr->get_requires_grad()) {
             continue;
         }
 
         auto tensor = tensor_ptr->get_value();
-        ttml::core::distributed::send_tensor(ctx, tensor, aggregator_rank);
+        ttml::core::send_tensor(ctx, tensor, aggregator_rank);
     }
 }
 
 void receive_gradients_from_aggregator(
     const ttml::autograd::DistributedContext &ctx, const SortedParameters &sorted_model_parameters) {
-    auto aggregator_rank = ttml::core::distributed::Rank(*ctx.rank() - 1);
+    auto aggregator_rank = ttml::core::Rank(*ctx.rank() - 1);
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
         if (!tensor_ptr->get_requires_grad()) {
             continue;
         }
 
         auto tensor = ttnn::empty_like(tensor_ptr->get_value());
-        ttml::core::distributed::recv_tensor(ctx, tensor, aggregator_rank);
+        ttml::core::recv_tensor(ctx, tensor, aggregator_rank);
         tensor_ptr->set_grad(tensor);
     }
 }
@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
 
     auto create_model = [enable_tp](const auto &config) -> std::shared_ptr<ttml::autograd::ModuleBase> {
         if (enable_tp) {
-            return ttml::models::distributed::gpt2::create(config);
+            return ttml::models::gpt2::create(config);
         }
         return ttml::models::gpt2::create(config);
     };

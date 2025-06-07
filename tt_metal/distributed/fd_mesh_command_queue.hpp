@@ -14,7 +14,7 @@
 #include "dispatch/worker_config_buffer.hpp"
 #include "mesh_trace.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 struct MeshReadEventDescriptor;
 struct MeshBufferReadDescriptor;
@@ -223,4 +223,4 @@ public:
     void read_l1_data_from_completion_queue(MeshCoreDataReadDescriptor& read_l1_data_descriptor);
 };
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

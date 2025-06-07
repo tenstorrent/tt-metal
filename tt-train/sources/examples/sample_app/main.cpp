@@ -7,7 +7,7 @@
 
 #include "ttml.hpp"
 
-std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device;
+std::shared_ptr<tt::tt_metal::MeshDevice> device;
 
 void print_tensor(const tt::tt_metal::Tensor& tensor) {
     // IMPORTANT. This function prints the tensor data assuming the tensor is in ROW_MAJOR layout
@@ -53,7 +53,7 @@ int main() {
     std::srand(0);
     num_devices_ = tt::tt_metal::GetNumAvailableDevices();
     std::cout << "num_devices:" << num_devices_ << std::endl;
-    device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(0);
+    device = tt::tt_metal::MeshDevice::create_unit_mesh(0);
     std::cout << "Device created" << std::endl;
     // AutoFormat::SetDefaultDevice(device);  // set the default device to the one we just opened
 

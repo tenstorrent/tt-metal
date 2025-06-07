@@ -19,7 +19,7 @@
 #include "tt_cluster.hpp"
 #include "dispatch/dispatch_settings.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const void* src) {
     auto global_buffer_shape = buffer.global_shard_spec().global_buffer_shape;
@@ -286,4 +286,4 @@ void MeshCommandQueueBase::enqueue_read(
     this->enqueue_read_shards(shard_data_transfers, buffer, blocking);
 }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

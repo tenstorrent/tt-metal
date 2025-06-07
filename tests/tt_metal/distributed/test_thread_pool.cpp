@@ -6,7 +6,7 @@
 #include "tt_metal/common/thread_pool.hpp"
 #include "impl/context/metal_context.hpp"
 
-namespace tt::tt_metal::distributed::test {
+namespace tt::tt_metal::test {
 namespace {
 
 // Stress test for thread pool used by TT-Mesh
@@ -51,4 +51,4 @@ TEST(ThreadPoolTest, Exception) {
 
 }  // namespace
 
-}  // namespace tt::tt_metal::distributed::test
+}  // namespace tt::tt_metal::test

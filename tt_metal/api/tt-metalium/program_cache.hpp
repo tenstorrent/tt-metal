@@ -59,10 +59,10 @@ public:
 
 template <typename shared_variables_t>
 struct CachedMeshWorkload {
-    tt::tt_metal::distributed::MeshWorkload workload;
+    tt::tt_metal::MeshWorkload workload;
     shared_variables_t shared_variables;
 
-    CachedMeshWorkload(tt::tt_metal::distributed::MeshWorkload&& workload, shared_variables_t&& shared_variables) :
+    CachedMeshWorkload(tt::tt_metal::MeshWorkload&& workload, shared_variables_t&& shared_variables) :
         workload{std::move(workload)}, shared_variables{std::move(shared_variables)} {}
 };
 
@@ -71,12 +71,12 @@ struct CachedMeshWorkload {
 // then stamped out to the entire mesh.
 template <typename shared_variables_t>
 struct AdaptedCachedMeshWorkload {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<distributed::MeshCoordinateRange, shared_variables_t> shared_variables;
+    tt::tt_metal::MeshWorkload workload;
+    std::unordered_map<MeshCoordinateRange, shared_variables_t> shared_variables;
 
     AdaptedCachedMeshWorkload(
-        tt::tt_metal::distributed::MeshWorkload&& workload,
-        std::unordered_map<distributed::MeshCoordinateRange, shared_variables_t>&& shared_variables) :
+        tt::tt_metal::MeshWorkload&& workload,
+        std::unordered_map<MeshCoordinateRange, shared_variables_t>&& shared_variables) :
         workload{std::move(workload)}, shared_variables{std::move(shared_variables)} {}
 };
 

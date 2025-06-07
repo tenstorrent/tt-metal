@@ -55,8 +55,6 @@ class SubDeviceManagerTracker;
 class ThreadPool;
 class TraceDescriptor;
 
-namespace distributed {
-
 class MeshCommandQueue;
 class MeshDeviceView;
 class MeshTraceBuffer;
@@ -253,7 +251,7 @@ public:
     std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     bool is_mmio_capable() const override;
-    std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
+    std::shared_ptr<MeshDevice> get_mesh_device() override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.
@@ -337,7 +335,5 @@ public:
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);
-
-}  // namespace distributed
 
 }  // namespace tt::tt_metal

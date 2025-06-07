@@ -33,15 +33,14 @@ struct InputOutputBufferParams {
     DistributionSpecParams output_shard_spec;
 };
 
-std::array<std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>, 2>
-create_replicated_input_and_output_mesh_buffers_from_inputs(
-    const InputOutputBufferParams& inputs, tt::tt_metal::distributed::MeshDevice* mesh_device) {
+std::array<std::shared_ptr<tt::tt_metal::MeshBuffer>, 2> create_replicated_input_and_output_mesh_buffers_from_inputs(
+    const InputOutputBufferParams& inputs, tt::tt_metal::MeshDevice* mesh_device) {
     // These values would be passed from tensor correctly based on PageConfig
     const auto host_size_in_bytes = inputs.physical_tensor_shape.volume() * inputs.bytes_per_element;
     const auto page_size = inputs.page_shape.height() * inputs.page_shape.width() * inputs.bytes_per_element;
 
     // Mirrors allocate_mesh_buffer_on_device in ttnn
-    const tt::tt_metal::distributed::ReplicatedBufferConfig mesh_buffer_config{.size = host_size_in_bytes};
+    const tt::tt_metal::ReplicatedBufferConfig mesh_buffer_config{.size = host_size_in_bytes};
 
     // Create input mesh buffer
     auto input_buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
@@ -50,14 +49,14 @@ create_replicated_input_and_output_mesh_buffers_from_inputs(
         inputs.page_shape,
         inputs.input_shard_spec.grid,
         inputs.input_shard_spec.shard_orientation);
-    const tt::tt_metal::distributed::DeviceLocalBufferConfig input_device_local_config{
+    const tt::tt_metal::DeviceLocalBufferConfig input_device_local_config{
         .page_size = page_size,
         .buffer_type = inputs.input_shard_spec.buffer_type,
         .buffer_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
         .shard_parameters = input_buffer_distribution_spec,
     };
     const auto input_mesh_buffer =
-        tt::tt_metal::distributed::MeshBuffer::create(mesh_buffer_config, input_device_local_config, mesh_device);
+        tt::tt_metal::MeshBuffer::create(mesh_buffer_config, input_device_local_config, mesh_device);
 
     // Create output mesh buffer
     auto output_buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
@@ -66,14 +65,14 @@ create_replicated_input_and_output_mesh_buffers_from_inputs(
         inputs.page_shape,
         inputs.output_shard_spec.grid,
         inputs.output_shard_spec.shard_orientation);
-    const tt::tt_metal::distributed::DeviceLocalBufferConfig output_device_local_config{
+    const tt::tt_metal::DeviceLocalBufferConfig output_device_local_config{
         .page_size = page_size,
         .buffer_type = inputs.output_shard_spec.buffer_type,
         .buffer_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
         .shard_parameters = output_buffer_distribution_spec,
     };
     const auto output_mesh_buffer =
-        tt::tt_metal::distributed::MeshBuffer::create(mesh_buffer_config, output_device_local_config, mesh_device);
+        tt::tt_metal::MeshBuffer::create(mesh_buffer_config, output_device_local_config, mesh_device);
 
     return {input_mesh_buffer, output_mesh_buffer};
 }
@@ -94,7 +93,7 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
         create_replicated_input_and_output_mesh_buffers_from_inputs(params, mesh_device_.get());
 
     // Extract local single-device buffer (ie. shard_view) concepts for testing
-    const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
+    const tt::tt_metal::MeshCoordinate mesh_coordinate{0, 0};
     const auto input_shard_view = input_mesh_buffer->get_device_buffer(mesh_coordinate);
     const auto output_shard_view = output_mesh_buffer->get_device_buffer(mesh_coordinate);
     const auto local_device = input_shard_view->device();
@@ -131,8 +130,8 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
 
     {
         tt::log_info("Writing input buffer to device");
-        std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
-            .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
+        std::vector<tt::tt_metal::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
+            .shard_coord = tt::tt_metal::MeshCoordinate{0, 0},
             .host_data = const_cast<void*>(reinterpret_cast<const void*>(src.data())),
         }};
         mesh_device_->mesh_command_queue().enqueue_write_shards(
@@ -228,9 +227,9 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
         SetRuntimeArgs(program, writer_kernel_id, grid, output_runtime_args);
 
         // Launch program
-        auto mesh_work_load = tt::tt_metal::distributed::CreateMeshWorkload();
+        auto mesh_work_load = tt::tt_metal::CreateMeshWorkload();
         AddProgramToMeshWorkload(
-            mesh_work_load, std::move(program), (tt::tt_metal::distributed::MeshCoordinateRange)mesh_coordinate);
+            mesh_work_load, std::move(program), (tt::tt_metal::MeshCoordinateRange)mesh_coordinate);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_work_load, false);
 
         // Wait for program to finish
@@ -245,8 +244,8 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
     // Validate output buffer matches src vector
     {
         tt::log_info("Validating output buffer matches src vector");
-        std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
-            .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
+        std::vector<tt::tt_metal::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
+            .shard_coord = tt::tt_metal::MeshCoordinate{0, 0},
             .host_data = const_cast<void*>(reinterpret_cast<const void*>(dst.data())),
         }};
         mesh_device_->mesh_command_queue().enqueue_read_shards(
@@ -260,8 +259,8 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
     // Validate input buffer matches src vector (ie. unmodified after kernel read/writes)
     {
         tt::log_info("Validating input buffer matches src vector (as a sanity check)");
-        std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
-            .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
+        std::vector<tt::tt_metal::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
+            .shard_coord = tt::tt_metal::MeshCoordinate{0, 0},
             .host_data = const_cast<void*>(reinterpret_cast<const void*>(dst.data())),
         }};
         mesh_device_->mesh_command_queue().enqueue_read_shards(

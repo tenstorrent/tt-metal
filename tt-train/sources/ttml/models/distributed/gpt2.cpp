@@ -19,7 +19,7 @@
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
 
-namespace ttml::models::distributed::gpt2 {
+namespace ttml::models::gpt2 {
 
 namespace {
 
@@ -106,11 +106,11 @@ DistributedTransformer::DistributedTransformer(const TransformerConfig& config) 
     pos_emb = create_positional_embedding();
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        blocks.push_back(std::make_shared<ttml::modules::distributed::DistributedGPTBlock>(
+        blocks.push_back(std::make_shared<ttml::modules::DistributedGPTBlock>(
             embedding_dim, num_heads, dropout_prob, use_composite_layernorm));
     }
     ln_fc = std::make_shared<ttml::modules::LayerNormLayer>(embedding_dim, use_composite_layernorm);
-    fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
+    fc = std::make_shared<ttml::modules::ColumnParallelLinear>(
         embedding_dim, vocab_size, /* bias */ false, /* gather_output */ true);
 
     create_name("transformer");
@@ -158,4 +158,4 @@ std::shared_ptr<DistributedTransformer> create(const YAML::Node& config) {
     return std::make_shared<DistributedTransformer>(transformer_config);
 }
 
-}  // namespace ttml::models::distributed::gpt2
+}  // namespace ttml::models::gpt2

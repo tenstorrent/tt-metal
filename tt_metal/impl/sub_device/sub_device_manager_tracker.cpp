@@ -74,9 +74,9 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
     auto num_sub_devices = sub_device_manager->num_sub_devices();
     // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
     // when MeshCommandQueue + CommandQueue are unified under the same API
-    if (dynamic_cast<distributed::MeshDevice*>(device_)) {
+    if (dynamic_cast<MeshDevice*>(device_)) {
         // Multi CQ support for MeshDevice is not currently available
-        distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device_);
+        MeshDevice* mesh_device = dynamic_cast<MeshDevice*>(device_);
         mesh_device->mesh_command_queue().reset_worker_state(
             true, num_sub_devices, sub_device_manager->noc_mcast_unicast_data());
     } else {

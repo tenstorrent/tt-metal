@@ -53,14 +53,21 @@ std::vector<uint32_t> read_control_buffer_from_core(
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
     if (state != ProfilerDumpState::FORCE_UMD_READ && tt::DevicePool::instance().is_dispatch_firmware_active()) {
         if (auto mesh_device = device->get_mesh_device()) {
-            distributed::FDMeshCommandQueue& mesh_cq =
-                dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
-            const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
-            const distributed::DeviceMemoryAddress address = {
-                device_coord, core, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector)};
-            control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
-            mesh_cq.enqueue_read_shard_from_core(
-                address, control_buffer.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);
+            if (core_type == HalProgrammableCoreType::TENSIX) {
+                FDMeshCommandQueue& mesh_cq = dynamic_cast<FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+                const MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
+                const DeviceMemoryAddress address = {
+                    device_coord, core, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector)};
+                control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
+                mesh_cq.enqueue_read_shard_from_core(
+                    address, control_buffer.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);
+            } else {
+                control_buffer = tt::llrt::read_hex_vec_from_core(
+                    device->id(),
+                    core,
+                    reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+            }
         } else {
             control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
             dynamic_cast<HWCommandQueue&>(device->command_queue())
@@ -92,13 +99,17 @@ void write_control_buffer_to_core(
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
     if (state != ProfilerDumpState::FORCE_UMD_READ && tt::DevicePool::instance().is_dispatch_firmware_active()) {
         if (auto mesh_device = device->get_mesh_device()) {
-            distributed::FDMeshCommandQueue& mesh_cq =
-                dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
-            const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
-            const distributed::DeviceMemoryAddress address = {
-                device_coord, core, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector)};
-            mesh_cq.enqueue_write_shard_to_core(
-                address, control_buffer.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);
+            if (core_type == HalProgrammableCoreType::TENSIX) {
+                FDMeshCommandQueue& mesh_cq = dynamic_cast<FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+                const MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
+                const DeviceMemoryAddress address = {
+                    device_coord, core, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector)};
+                mesh_cq.enqueue_write_shard_to_core(
+                    address, control_buffer.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);
+            } else {
+                tt::llrt::write_hex_vec_to_core(
+                    device->id(), core, control_buffer, reinterpret_cast<DeviceAddr>(profiler_msg->control_vector));
+            }
         } else {
             dynamic_cast<HWCommandQueue&>(device->command_queue())
                 .enqueue_write_to_core(
@@ -125,10 +136,10 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
         for (uint32_t y = 0; y < dram_grid_size.y; ++y) {
             const CoreCoord dram_core = device->virtual_core_from_logical_core({x, y}, CoreType::DRAM);
             if (auto mesh_device = device->get_mesh_device()) {
-                const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
-                dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue())
+                const MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
+                dynamic_cast<FDMeshCommandQueue&>(mesh_device->mesh_command_queue())
                     .enqueue_read_shard_from_core(
-                        distributed::DeviceMemoryAddress{device_coord, dram_core, profiler_addr},
+                        DeviceMemoryAddress{device_coord, dram_core, profiler_addr},
                         &(profile_buffer[profile_buffer_idx]),
                         profile_buffer_bank_size_bytes,
                         true);

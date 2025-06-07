@@ -16,7 +16,7 @@ ttnn::Tensor add(ttnn::Tensor v1, ttnn::Tensor v2) {
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> create_inputs_for_add() {
-    ttnn::distributed::MeshDevice* v1 = ttnn::DeviceGetter::getInstance();
+    ttnn::MeshDevice* v1 = ttnn::DeviceGetter::getInstance();
     ttnn::Tensor v2 = ttnn::ones(
         ttnn::Shape({32, 32}),
         ttnn::DataType::BFLOAT16,

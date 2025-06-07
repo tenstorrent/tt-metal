@@ -29,7 +29,7 @@ protected:
         if (!check_board_is_n300()) {
             GTEST_SKIP() << "Skipping N300 specific tests";
         }
-        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
+        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::MeshShape(1, 2));
         ttml::autograd::ctx().open_device();
     }
 
@@ -50,7 +50,7 @@ TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
     ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
     auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, shard_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
-    auto all_reduce_tensor = ttml::ops::distributed::all_reduce(tensor);
+    auto all_reduce_tensor = ttml::ops::all_reduce(tensor);
 
     ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
     auto all_reduce_xtensor = ttml::core::to_xtensor<float>(all_reduce_tensor->get_value(), identity_composer);
@@ -105,7 +105,7 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
     ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
     auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, shard_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
-    auto all_reduce_tensor = ttml::ops::distributed::all_reduce(tensor);
+    auto all_reduce_tensor = ttml::ops::all_reduce(tensor);
 
     ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
     auto all_reduce_xtensor = ttml::core::to_xtensor<float>(all_reduce_tensor->get_value(), identity_composer);
@@ -154,7 +154,7 @@ TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
     ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
     auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, shard_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
-    auto all_reduce_tensor = ttml::ops::distributed::all_reduce(tensor);
+    auto all_reduce_tensor = ttml::ops::all_reduce(tensor);
 
     ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
     auto all_reduce_xtensor = ttml::core::to_xtensor<float>(all_reduce_tensor->get_value(), identity_composer);
@@ -202,7 +202,7 @@ TEST_F(N300CommOpsTest, TestAllGatherNotFullyTiled) {
     ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
     auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, shard_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
-    auto gathered_tensor = ttml::ops::distributed::all_gather(tensor, 3);
+    auto gathered_tensor = ttml::ops::all_gather(tensor, 3);
 
     ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
     auto gathered_xtensor = ttml::core::to_xtensor<float>(gathered_tensor->get_value(), identity_composer);
@@ -247,7 +247,7 @@ TEST_F(N300CommOpsTest, TestAllGatherFullyTiled) {
     ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
     auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, shard_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
-    auto gathered_tensor = ttml::ops::distributed::all_gather(tensor, 3);
+    auto gathered_tensor = ttml::ops::all_gather(tensor, 3);
 
     ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
     auto gathered_xtensor = ttml::core::to_xtensor<float>(gathered_tensor->get_value(), identity_composer);
@@ -290,7 +290,7 @@ TEST_F(N300CommOpsTest, TestScatterNotFullyTiled) {
     ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
     auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, replicate_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
-    auto scattered_tensor = ttml::ops::distributed::scatter(tensor, 3);
+    auto scattered_tensor = ttml::ops::scatter(tensor, 3);
 
     // check forward
     ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
@@ -340,7 +340,7 @@ TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
     EXPECT_TRUE(xt::allclose(xtensor, xtensor_after_replication[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
-    auto scattered_tensor = ttml::ops::distributed::scatter(tensor, 3);
+    auto scattered_tensor = ttml::ops::scatter(tensor, 3);
 
     // check forward
     auto xtensors_back = ttml::core::to_xtensor<float>(scattered_tensor->get_value(), identity_composer);

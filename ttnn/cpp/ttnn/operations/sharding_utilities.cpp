@@ -752,9 +752,7 @@ ShardingConfig get_specs_for_sharding_partition(
 
 namespace sharded_accessor_utils {
 ShardedAccessorArgs get_sharded_accessor_args(
-    const distributed::MeshDevice& mesh_device,
-    const BufferDistributionSpec& buffer_distribution_spec,
-    const CoreType& bank_type) {
+    const MeshDevice& mesh_device, const BufferDistributionSpec& buffer_distribution_spec, const CoreType& bank_type) {
     const auto& tensor_shape = buffer_distribution_spec.get_tensor_shape_in_pages();
     const auto& shard_shape = buffer_distribution_spec.get_shard_shape_in_pages();
     const auto& bank_coords = buffer_distribution_spec.get_cores();

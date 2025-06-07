@@ -18,7 +18,7 @@ using namespace tt;
 using namespace tt_metal;
 using namespace constants;
 
-bool test_2d_tensor(distributed::MeshDevice* device) {
+bool test_2d_tensor(MeshDevice* device) {
     bool pass = true;
 
     ttnn::Shape shape({30, 30});
@@ -31,7 +31,7 @@ bool test_2d_tensor(distributed::MeshDevice* device) {
     return pass;
 }
 
-bool test_3d_tensor(distributed::MeshDevice* device) {
+bool test_3d_tensor(MeshDevice* device) {
     bool pass = true;
 
     ttnn::Shape shape({3, 30, 30});
@@ -44,7 +44,7 @@ bool test_3d_tensor(distributed::MeshDevice* device) {
     return pass;
 }
 
-bool test_4d_tensor(distributed::MeshDevice* device) {
+bool test_4d_tensor(MeshDevice* device) {
     bool pass = true;
 
     ttnn::Shape shape({2, 3, 30, 30});
@@ -57,7 +57,7 @@ bool test_4d_tensor(distributed::MeshDevice* device) {
     return pass;
 }
 
-bool test_5d_tensor(distributed::MeshDevice* device) {
+bool test_5d_tensor(MeshDevice* device) {
     bool pass = true;
 
     ttnn::Shape shape({2, 2, 3, 30, 30});
@@ -70,7 +70,7 @@ bool test_5d_tensor(distributed::MeshDevice* device) {
     return pass;
 }
 
-bool test_6d_tensor(distributed::MeshDevice* device) {
+bool test_6d_tensor(MeshDevice* device) {
     bool pass = true;
 
     ttnn::Shape shape({2, 2, 2, 3, 30, 30});
@@ -83,7 +83,7 @@ bool test_6d_tensor(distributed::MeshDevice* device) {
     return pass;
 }
 
-bool test_7d_tensor(distributed::MeshDevice* device) {
+bool test_7d_tensor(MeshDevice* device) {
     bool pass = true;
 
     ttnn::Shape shape({2, 2, 2, 2, 3, 30, 30});
@@ -96,7 +96,7 @@ bool test_7d_tensor(distributed::MeshDevice* device) {
     return pass;
 }
 
-bool test_8d_tensor(distributed::MeshDevice* device) {
+bool test_8d_tensor(MeshDevice* device) {
     bool pass = true;
 
     ttnn::Shape shape({2, 2, 2, 2, 2, 3, 30, 30});
@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        auto device_owner = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+        auto device_owner = tt_metal::MeshDevice::create_unit_mesh(device_id);
         auto device = device_owner.get();
 
         pass &= test_2d_tensor(device);

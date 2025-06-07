@@ -33,10 +33,8 @@ namespace tt {
 
 namespace tt_metal {
 
-namespace distributed {
 class MeshDevice;
 class MeshCommandQueue;
-}  // namespace distributed
 
 class Tensor {
 public:
@@ -49,7 +47,7 @@ public:
     // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
     // If not set, the tensor can either be on host or allocated on a single device.
     // TODO: #21099 - This won't be needed after the migration to MeshDevice is complete.
-    std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
+    std::optional<MeshDevice*> mesh_device_ = std::nullopt;
 
     // ======================================================================================
     //                                  Hi Level APIs
@@ -90,7 +88,7 @@ public:
     static Tensor from_span(
         tt::stl::Span<const T> buffer,
         const TensorSpec& spec,
-        distributed::MeshDevice* device = nullptr,
+        MeshDevice* device = nullptr,
         ttnn::QueueId cq_id = ttnn::DefaultQueueId,
         T pad_value = 0);
 
@@ -119,7 +117,7 @@ public:
     static Tensor from_vector(
         const std::vector<T>& buffer,
         const TensorSpec& spec,
-        distributed::MeshDevice* device = nullptr,
+        MeshDevice* device = nullptr,
         ttnn::QueueId cq_id = ttnn::DefaultQueueId,
         T pad_value = 0) {
         return from_span(tt::stl::Span<const T>(buffer), spec, device, cq_id, pad_value);
@@ -131,7 +129,7 @@ public:
     static Tensor from_vector(
         std::vector<T>&& buffer,
         const TensorSpec& spec,
-        distributed::MeshDevice* device = nullptr,
+        MeshDevice* device = nullptr,
         ttnn::QueueId cq_id = ttnn::DefaultQueueId,
         T pad_value = 0);
 
@@ -149,13 +147,13 @@ public:
         ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
     Tensor to_device(
-        distributed::MeshDevice* mesh_device,
+        MeshDevice* mesh_device,
         const MemoryConfig& mem_config = MemoryConfig{},
         ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
     Tensor to_layout(Layout target_layout, IDevice* worker = nullptr) const;
 
-    Tensor to_layout(Layout target_layout, distributed::MeshDevice* mesh_device) const;
+    Tensor to_layout(Layout target_layout, MeshDevice* mesh_device) const;
 
     Tensor pad(const ttnn::Shape& output_padded_shape, const ttnn::Shape& input_tensor_start, float pad_value) const;
 
@@ -234,10 +232,10 @@ public:
 
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
+    std::shared_ptr<MeshBuffer> mesh_buffer() const;
 
     // TODO: #21099 - Remove the overload `mesh_device()`, and instead use `device()`.
-    distributed::MeshDevice* mesh_device() const;
+    MeshDevice* mesh_device() const;
 
     // Returns the device the tensor is allocated on.
     // Throws if the tensor is not allocated on a device.
@@ -278,7 +276,7 @@ void memcpy(
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 void memcpy(
-    distributed::MeshCommandQueue& queue,
+    MeshCommandQueue& queue,
     void* dst,
     const Tensor& src,
     const std::optional<BufferRegion>& region = std::nullopt,
@@ -287,18 +285,12 @@ void memcpy(
 void memcpy(
     CommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
 void memcpy(
-    distributed::MeshCommandQueue& queue,
-    Tensor& dst,
-    const void* src,
-    const std::optional<BufferRegion>& region = std::nullopt);
+    MeshCommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
 
 void memcpy(
     CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 void memcpy(
-    distributed::MeshCommandQueue& queue,
-    Tensor& dst,
-    const Tensor& src,
-    const std::optional<BufferRegion>& region = std::nullopt);
+    MeshCommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
 void memcpy(
     void* dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt, bool blocking = true);
@@ -308,7 +300,7 @@ void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& reg
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
 // Allocates a tensor on a mesh device through mesh buffer.
-Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
+Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, MeshDevice* mesh_device);
 
 void write_tensor(const Tensor& host_tensor, Tensor device_tensor, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 

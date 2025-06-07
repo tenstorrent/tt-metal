@@ -12,13 +12,11 @@
 
 namespace tt {
 namespace tt_metal {
-namespace distributed {
 class MeshDevice;
-}  // namespace distributed
 }  // namespace tt_metal
 }  // namespace tt
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 class MeshEvent {
 public:
@@ -39,4 +37,4 @@ private:
     MeshCoordinateRange device_range_;
 };
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

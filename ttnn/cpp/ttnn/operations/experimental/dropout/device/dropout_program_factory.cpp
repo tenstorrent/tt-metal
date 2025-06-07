@@ -356,7 +356,7 @@ DropoutMeshWorkloadFactory::cached_mesh_workload_t DropoutMeshWorkloadFactory::c
     tensor_return_value_t& output) {
     TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
 
-    tt::tt_metal::distributed::MeshWorkload workload;
+    tt::tt_metal::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
         for (const auto& mesh_coord : mesh_coord_range) {

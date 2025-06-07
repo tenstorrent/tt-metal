@@ -45,7 +45,7 @@ enum class HalProgrammableCoreType;
 }  // namespace tt_metal
 }  // namespace tt
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 namespace {
 
 // Returns an intersecting range from `programs` if it exists, otherwise returns std::nullopt.
@@ -467,4 +467,4 @@ uint32_t MeshWorkload::get_cb_size(
     return pimpl_->get_cb_size(mesh_device, logical_core, core_type);
 }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

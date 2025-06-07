@@ -640,7 +640,7 @@ void EdmLineFabricOpInterface::set_firmware_context_switch_interval(size_t inter
 }
 
 void initialize_edm_fabric(
-    distributed::MeshDevice* mesh_device,
+    MeshDevice* mesh_device,
     bool wrap_fabric_around_mesh,
     std::optional<size_t> context_switch_interval_override,
     Topology topology) {
@@ -722,7 +722,7 @@ void initialize_edm_fabric(
     }
 }
 
-void teardown_edm_fabric(distributed::MeshDevice* mesh_device, bool wrap_fabric_around_mesh, Topology topology) {
+void teardown_edm_fabric(MeshDevice* mesh_device, bool wrap_fabric_around_mesh, Topology topology) {
     auto teardown = [topology](const std::vector<IDevice*>& line_view) {
         std::vector<tt::tt_metal::Program> programs(line_view.size());
         std::vector<tt::tt_metal::Program*> program_ptrs;

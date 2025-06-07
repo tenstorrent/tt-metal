@@ -7,9 +7,9 @@
 #include <tt_stl/strong_type.hpp>
 #include <cstdint>
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 // Identifier for a mesh trace.
 using MeshTraceId = tt::stl::StrongType<uint32_t, struct MeshTraceIdTag>;
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

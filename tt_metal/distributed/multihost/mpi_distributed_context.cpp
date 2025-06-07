@@ -20,7 +20,7 @@
 #define OMPI_HAS_ULFM 0
 #endif
 
-namespace tt::tt_metal::distributed::multihost {
+namespace tt::tt_metal::multihost {
 
 /* ----------------------------- helpers ---------------------------------- */
 
@@ -528,4 +528,4 @@ MPIContext::~MPIContext() {
         MPI_Comm_free(&comm_);
     }
 }
-}  // namespace tt::tt_metal::distributed::multihost
+}  // namespace tt::tt_metal::multihost

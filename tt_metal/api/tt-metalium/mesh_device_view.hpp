@@ -16,7 +16,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/shape2d.hpp>
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 // Forward declaration of MeshDevice
 class MeshDevice;
@@ -112,4 +112,4 @@ private:
     std::optional<Shape2D> shape_2d_;
 };
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

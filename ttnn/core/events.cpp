@@ -15,10 +15,9 @@
 namespace ttnn::events {
 
 using ::tt::tt_metal::EnqueueRecordEvent;
+using ::tt::tt_metal::EnqueueRecordEventToHost;
 using ::tt::tt_metal::EnqueueWaitForEvent;
-using ::tt::tt_metal::distributed::EnqueueRecordEventToHost;
-using ::tt::tt_metal::distributed::EnqueueWaitForEvent;
-using ::tt::tt_metal::distributed::EventSynchronize;
+using ::tt::tt_metal::EventSynchronize;
 
 std::shared_ptr<tt::tt_metal::Event> record_event(
     tt::tt_metal::IDevice* device, QueueId cq_id, const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids) {

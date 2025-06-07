@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <cstring>
 
-namespace tt::tt_metal::distributed::multihost {
+namespace tt::tt_metal::multihost {
 // ---------------------------------------------------------------------
 //                           Context implementation
 // ---------------------------------------------------------------------
@@ -119,4 +119,4 @@ void SingleHostContext::revoke_and_shrink() {
     TT_THROW("method revoke_and_shrink is unsupported for single-host distributed contexts.");
 }
 
-}  // namespace tt::tt_metal::distributed::multihost
+}  // namespace tt::tt_metal::multihost

@@ -42,7 +42,7 @@ class IDevice;
 
 namespace {
 
-void run_create_tensor_test(tt::tt_metal::distributed::MeshDevice* device, const ttnn::Shape& input_shape) {
+void run_create_tensor_test(tt::tt_metal::MeshDevice* device, const ttnn::Shape& input_shape) {
     MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
     const ttnn::QueueId io_cq = ttnn::DefaultQueueId;
@@ -62,7 +62,7 @@ void run_create_tensor_test(tt::tt_metal::distributed::MeshDevice* device, const
     ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
     auto input_buffer = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(device, tensor_spec);
 
-    auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {tt::tt_metal::distributed::MeshCoordinate{0, 0}}};
+    auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {tt::tt_metal::MeshCoordinate{0, 0}}};
 
     Tensor input_tensor = Tensor(input_storage, tensor_spec, ReplicateTensor{});
 

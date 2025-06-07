@@ -6,11 +6,11 @@
 #include "common/multihost_test_tools.hpp"
 #include <thread>
 
-using tt::tt_metal::distributed::multihost::Color;
-using tt::tt_metal::distributed::multihost::DistributedContext;
-using tt::tt_metal::distributed::multihost::DistributedException;
-using tt::tt_metal::distributed::multihost::Key;
-using tt::tt_metal::distributed::multihost::Rank;
+using tt::tt_metal::multihost::Color;
+using tt::tt_metal::multihost::DistributedContext;
+using tt::tt_metal::multihost::DistributedException;
+using tt::tt_metal::multihost::Key;
+using tt::tt_metal::multihost::Rank;
 
 TEST(FaultTolerance, ShrinkAfterRankFailure) {
     //----------------------------------------------------------------------

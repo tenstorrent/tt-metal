@@ -24,7 +24,7 @@ namespace ttnn::distributed {
 namespace {
 
 using ::tt::tt_metal::DistributedHostBuffer;
-using ::tt::tt_metal::distributed::MeshContainer;
+using ::tt::tt_metal::MeshContainer;
 
 // Increments `indices` in-place given `limits`, to support row-major order iteration.
 bool increment_indices(const tt::stl::SmallVector<int>& limits, tt::stl::SmallVector<int>& indices) {

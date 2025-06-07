@@ -14,7 +14,7 @@
 #include "modules/layer_norm_module.hpp"
 #include "modules/positional_embeddings.hpp"
 
-namespace ttml::models::distributed::gpt2 {
+namespace ttml::models::gpt2 {
 
 using models::gpt2::PositionalEmbeddingType;
 using models::gpt2::RunnerType;
@@ -40,4 +40,4 @@ public:
 [[nodiscard]] std::shared_ptr<DistributedTransformer> create(const TransformerConfig& config);
 [[nodiscard]] std::shared_ptr<DistributedTransformer> create(const YAML::Node& config);
 
-}  // namespace ttml::models::distributed::gpt2
+}  // namespace ttml::models::gpt2

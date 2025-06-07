@@ -2404,8 +2404,8 @@ void set_go_signal_noc_data_on_dispatch(
 }
 
 template uint32_t program_base_addr_on_core<ProgramImpl, IDevice*>(ProgramImpl&, IDevice*, HalProgrammableCoreType);
-template uint32_t program_base_addr_on_core<distributed::MeshWorkloadImpl, distributed::MeshDevice*>(
-    distributed::MeshWorkloadImpl&, distributed::MeshDevice*, HalProgrammableCoreType);
+template uint32_t program_base_addr_on_core<MeshWorkloadImpl, MeshDevice*>(
+    MeshWorkloadImpl&, MeshDevice*, HalProgrammableCoreType);
 }  // namespace program_dispatch
 
 }  // namespace tt::tt_metal

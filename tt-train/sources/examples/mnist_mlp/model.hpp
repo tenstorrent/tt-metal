@@ -13,6 +13,6 @@ public:
     ttml::autograd::TensorPtr operator()(ttml::autograd::TensorPtr tensor);
 
 private:
-    std::shared_ptr<ttml::modules::distributed::ColumnParallelLinear> m_linear1;
-    std::shared_ptr<ttml::modules::distributed::RowParallelLinear> m_linear2;
+    std::shared_ptr<ttml::modules::ColumnParallelLinear> m_linear1;
+    std::shared_ptr<ttml::modules::RowParallelLinear> m_linear2;
 };

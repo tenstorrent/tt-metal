@@ -944,7 +944,7 @@ void LoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, const TraceDes
  * */
 // clang-format on
 void DumpMeshDeviceProfileResults(
-    distributed::MeshDevice& mesh_device,
+    MeshDevice& mesh_device,
     ProfilerDumpState state = ProfilerDumpState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
 

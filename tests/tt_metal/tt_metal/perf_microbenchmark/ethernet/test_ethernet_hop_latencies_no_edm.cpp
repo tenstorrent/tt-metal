@@ -38,11 +38,11 @@
 #include "umd/device/types/xy_pair.h"
 
 using tt::tt_metal::IDevice;
-using tt::tt_metal::distributed::MeshCoordinate;
-using tt::tt_metal::distributed::MeshDevice;
-using tt::tt_metal::distributed::MeshDeviceConfig;
-using tt::tt_metal::distributed::MeshDeviceView;
-using tt::tt_metal::distributed::MeshShape;
+using tt::tt_metal::MeshCoordinate;
+using tt::tt_metal::MeshDevice;
+using tt::tt_metal::MeshDeviceConfig;
+using tt::tt_metal::MeshDeviceView;
+using tt::tt_metal::MeshShape;
 
 class T3000TestDevice {
 public:

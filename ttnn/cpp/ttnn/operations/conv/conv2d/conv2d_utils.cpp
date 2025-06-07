@@ -1468,7 +1468,7 @@ template ttnn::Tensor fold_tensor<IDevice>(
 
 template ttnn::Tensor fold_tensor<MeshDevice>(
     const ttnn::Tensor& tensor,
-    tt::tt_metal::distributed::MeshDevice* device,
+    tt::tt_metal::MeshDevice* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 4> padding_n4,

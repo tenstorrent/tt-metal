@@ -10,7 +10,7 @@
 
 #include <tt-metalium/buffer_types.hpp>
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 class MeshDevice;
 }
 
@@ -36,7 +36,7 @@ struct DeviceInfo {
     size_t cb_limit;
 };
 
-DeviceInfo get_device_info(tt::tt_metal::distributed::MeshDevice* device);
+DeviceInfo get_device_info(tt::tt_metal::MeshDevice* device);
 
 struct BufferInfo {
     uint32_t device_id;
@@ -45,7 +45,7 @@ struct BufferInfo {
     tt::tt_metal::BufferType buffer_type;
 };
 
-std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices);
+std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::MeshDevice*>& devices);
 
 struct BufferPageInfo {
     uint32_t device_id;
@@ -59,5 +59,5 @@ struct BufferPageInfo {
     tt::tt_metal::BufferType buffer_type;
 };
 
-std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices);
+std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::MeshDevice*>& devices);
 }  // namespace ttnn::reports

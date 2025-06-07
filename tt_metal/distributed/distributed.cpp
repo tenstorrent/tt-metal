@@ -12,7 +12,7 @@
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 MeshWorkload CreateMeshWorkload() { return MeshWorkload(); }
 
@@ -88,4 +88,4 @@ void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_devi
     mesh_cq.finish(sub_device_ids);
 }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

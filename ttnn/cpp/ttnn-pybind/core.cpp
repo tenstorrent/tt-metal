@@ -54,7 +54,7 @@ void py_module(py::module& module) {
     py::class_<tt::tt_metal::LightMetalReplay>(module, "LightMetalReplay")
         .def_static(
             "create",
-            [](LightMetalBinary binary, distributed::MeshDevice* device = nullptr) {
+            [](LightMetalBinary binary, MeshDevice* device = nullptr) {
                 return std::make_unique<tt::tt_metal::LightMetalReplay>(std::move(binary), device);
             },
             py::arg("binary"),

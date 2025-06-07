@@ -5,7 +5,7 @@
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "impl/context/metal_context.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 std::pair<MeshSocket, MeshSocket> MeshSocket::create_sockets(
     const std::shared_ptr<MeshDevice>& sender,
@@ -35,4 +35,4 @@ std::shared_ptr<MeshBuffer> MeshSocket::get_config_buffer() const { return confi
 
 const SocketConfig& MeshSocket::get_config() const { return config_; }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

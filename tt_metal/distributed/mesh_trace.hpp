@@ -8,7 +8,7 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 #include "trace/trace_buffer.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 // MeshTrace capture consists of 3 steps:
 // 1. Staging: Workload dispatch commands are recorded inside a host data structure
@@ -81,4 +81,4 @@ public:
     static void populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<MeshTraceBuffer>& trace_buffer);
 };
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

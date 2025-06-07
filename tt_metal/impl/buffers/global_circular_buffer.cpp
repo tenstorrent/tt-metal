@@ -75,7 +75,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = shard_parameters,
     };
-    cb_buffer_ = distributed::AnyBuffer::create(cb_buffer_shard_config);
+    cb_buffer_ = AnyBuffer::create(cb_buffer_shard_config);
 
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     // is_sender, receiver_val, fifo_start_addr, fifo_size, fifo_ptr, noc_xy coords, and pages_sent
@@ -92,7 +92,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(shard_parameters),
     };
-    cb_config_buffer_ = distributed::AnyBuffer::create(cb_config_buffer_shard_config);
+    cb_config_buffer_ = AnyBuffer::create(cb_config_buffer_shard_config);
 
     // Write the config buffer to the device
     // Only block for the slow dispatch case
@@ -134,8 +134,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         }
     }
     if (auto mesh_buffer = cb_config_buffer_.get_mesh_buffer()) {
-        distributed::EnqueueWriteMeshBuffer(
-            mesh_buffer->device()->mesh_command_queue(), mesh_buffer, cb_config_host_buffer, false);
+        EnqueueWriteMeshBuffer(mesh_buffer->device()->mesh_command_queue(), mesh_buffer, cb_config_host_buffer, false);
     } else {
         if (device_->using_slow_dispatch()) {
             detail::WriteToBuffer(*cb_config_buffer_.get_buffer(), cb_config_host_buffer);

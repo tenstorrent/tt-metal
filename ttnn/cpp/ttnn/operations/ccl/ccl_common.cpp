@@ -105,10 +105,7 @@ SenderRecieverConfig get_device_sender_receiver_config(
 }
 
 SenderRecieverConfig get_device_sender_receiver_config_in_ring(
-    const MeshCoordinate& mesh_coord,
-    const distributed::MeshDevice* mesh_device,
-    uint32_t cluster_axis,
-    int ring_size) {
+    const MeshCoordinate& mesh_coord, const MeshDevice* mesh_device, uint32_t cluster_axis, int ring_size) {
     SenderRecieverConfig config;
     const auto& mesh_view = mesh_device->get_view();
     TT_FATAL(

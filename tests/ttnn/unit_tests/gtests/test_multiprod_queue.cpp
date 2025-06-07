@@ -102,8 +102,8 @@ TEST_F(MultiProducerCommandQueueTest, DISABLED_EventSync) {
     const ttnn::QueueId write_cq = ttnn::DefaultQueueId;
     const ttnn::QueueId read_cq = ttnn::QueueId(1);
 
-    std::optional<tt::tt_metal::distributed::MeshEvent> write_event;
-    std::optional<tt::tt_metal::distributed::MeshEvent> read_event;
+    std::optional<tt::tt_metal::MeshEvent> write_event;
+    std::optional<tt::tt_metal::MeshEvent> read_event;
     std::mutex event_mutex;
 
     Tensor device_tensor = create_device_tensor(tensor_spec, device);

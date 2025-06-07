@@ -8,7 +8,7 @@
 
 RemoteOptimizer::RemoteOptimizer(ttml::serialization::NamedParameters parameters, int aggregator_rank) :
     ttml::optimizers::OptimizerBase(std::move(parameters)) {
-    m_aggregator_rank = ttml::core::distributed::Rank{aggregator_rank};
+    m_aggregator_rank = ttml::core::Rank{aggregator_rank};
     m_sorted_parameters = SortedParameters(m_parameters.begin(), m_parameters.end());
 
     auto workers_and_aggregator_ranks =
@@ -51,14 +51,14 @@ void RemoteOptimizer::send_gradients() {
     for (auto& [name, tensor_ptr] : m_sorted_parameters) {
         if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
             auto grad = tensor_ptr->get_grad();
-            ttml::core::distributed::send_tensor(*m_distributed_ctx, grad, m_aggregator_rank);
+            ttml::core::send_tensor(*m_distributed_ctx, grad, m_aggregator_rank);
         }
     }
 }
 void RemoteOptimizer::receive_weights() {
     for (auto& [name, tensor_ptr] : m_sorted_parameters) {
         auto tensor = tensor_ptr->get_value();
-        ttml::core::distributed::broadcast_tensor(*m_distributed_ctx, tensor, m_aggregator_rank);
+        ttml::core::broadcast_tensor(*m_distributed_ctx, tensor, m_aggregator_rank);
         tensor_ptr->set_value(tensor);
     }
 }

@@ -50,7 +50,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/util.hpp>
 
-namespace tt::tt_metal::distributed::test {
+namespace tt::tt_metal::test {
 namespace {
 
 // Helper functions that return MeshCoordinateRange spanning various parts of the T3000 device.
@@ -116,7 +116,7 @@ TEST_F(MeshTraceTestSuite, Sanity) {
         std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
         for (int i = 0; i < num_workloads_per_trace * num_traces; i++) {
             auto workload = std::make_shared<MeshWorkload>();
-            auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+            auto programs = tt::tt_metal::test::utils::create_random_programs(
                 1, mesh_device_->compute_with_storage_grid_size(), seed);
             AddProgramToMeshWorkload(*workload, std::move(*programs[0]), all_devices);
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
@@ -167,22 +167,22 @@ TEST_F(MeshTraceTestT3000, EltwiseBinaryMeshTrace) {
     MeshCoordinateRange col_2({0, 3}, {1, 3});
 
     // Create first workload: running addition on top row and multiplication on bottom row
-    auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
-        mesh_device_, src0_bufs, src1_bufs, intermed_bufs_0);
+    auto programs =
+        tt::tt_metal::test::utils::create_eltwise_bin_programs(mesh_device_, src0_bufs, src1_bufs, intermed_bufs_0);
     auto mesh_workload = CreateMeshWorkload();
     AddProgramToMeshWorkload(mesh_workload, std::move(*programs[0]), row_0);
     AddProgramToMeshWorkload(mesh_workload, std::move(*programs[1]), row_1);
     // Create second workload: running addition on top row (src1 + intermed0) and multiplication on
     // bottom row (src1 * intermed0)
-    auto programs_1 = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
+    auto programs_1 = tt::tt_metal::test::utils::create_eltwise_bin_programs(
         mesh_device_, intermed_bufs_0, src1_bufs, intermed_bufs_1);
     auto mesh_workload_1 = CreateMeshWorkload();
     AddProgramToMeshWorkload(mesh_workload_1, std::move(*programs_1[1]), row_0);
     AddProgramToMeshWorkload(mesh_workload_1, std::move(*programs_1[0]), row_1);
     // Create third workload: running addition on 1st col (src1 + intermed1), multiplication on
     // second col (src1 * intermed1) and subtraction on the third col( src1 - intermed1)
-    auto programs_2 = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
-        mesh_device_, intermed_bufs_1, src1_bufs, output_bufs);
+    auto programs_2 =
+        tt::tt_metal::test::utils::create_eltwise_bin_programs(mesh_device_, intermed_bufs_1, src1_bufs, output_bufs);
     auto mesh_workload_2 = CreateMeshWorkload();
     AddProgramToMeshWorkload(mesh_workload_2, std::move(*programs_2[0]), col_0);
     AddProgramToMeshWorkload(mesh_workload_2, std::move(*programs_2[1]), col_1);
@@ -514,8 +514,8 @@ TEST_F(MeshTraceTestSuite, MeshTraceAsserts) {
     srand(seed);
     MeshCoordinateRange all_devices(mesh_device_->shape());
     auto workload = std::make_shared<MeshWorkload>();
-    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-        1, mesh_device_->compute_with_storage_grid_size(), seed);
+    auto programs =
+        tt::tt_metal::test::utils::create_random_programs(1, mesh_device_->compute_with_storage_grid_size(), seed);
     AddProgramToMeshWorkload(*workload, std::move(*programs[0]), all_devices);
     auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
     EXPECT_THROW(EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, true), std::runtime_error);
@@ -540,7 +540,7 @@ void run_heterogenous_trace_sweep(
         for (int i = 0; i < num_workloads; i++) {
             auto workload = std::make_shared<MeshWorkload>();
             for (auto& program_grid : workload_grid) {
-                auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+                auto programs = tt::tt_metal::test::utils::create_random_programs(
                     1, mesh_device->compute_with_storage_grid_size(), seed);
                 AddProgramToMeshWorkload(*workload, std::move(*programs[0]), program_grid);
             }
@@ -733,4 +733,4 @@ INSTANTIATE_TEST_SUITE_P(
                                                        {MeshCoordinateRange({0, 1}, {3, 3})}})));
 
 }  // namespace
-}  // namespace tt::tt_metal::distributed::test
+}  // namespace tt::tt_metal::test

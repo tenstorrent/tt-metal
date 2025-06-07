@@ -24,17 +24,13 @@
 namespace tt {
 namespace tt_metal {
 class Program;
-namespace distributed {
 class MeshDevice;
-}  // namespace distributed
 }  // namespace tt_metal
 }  // namespace tt
 
 namespace tt::tt_metal {
 
 class IDevice;
-
-namespace distributed {
 
 MeshWorkload CreateMeshWorkload();
 
@@ -123,5 +119,4 @@ void Synchronize(
 
 void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
-}  // namespace distributed
 }  // namespace tt::tt_metal

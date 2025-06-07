@@ -51,7 +51,7 @@ struct ProgramCommandSequence;
 }  // namespace tt_metal
 }  // namespace tt
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 struct MeshReadEventDescriptor {
     ReadEventDescriptor single_device_descriptor;
@@ -891,4 +891,4 @@ void FDMeshCommandQueue::update_launch_messages_for_device_profiler(
 #endif
 }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

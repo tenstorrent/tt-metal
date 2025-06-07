@@ -8,7 +8,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 class MeshWorkloadImpl;
 
@@ -49,4 +49,4 @@ private:
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
     friend FDMeshCommandQueue;
 };
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

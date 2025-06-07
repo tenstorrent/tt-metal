@@ -129,7 +129,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
     // Without this, the convolution operation will fail due to L1_SMALL Out of Memory error
     const size_t l1_small_size = 16384;
 
-    auto device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(
+    auto device = tt::tt_metal::MeshDevice::create_unit_mesh(
         /*device_id=*/0, l1_small_size);
 
     try {

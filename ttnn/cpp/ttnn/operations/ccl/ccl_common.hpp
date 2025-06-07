@@ -42,7 +42,7 @@ SenderRecieverConfig get_device_sender_receiver_config(
 
 // Returns `SenderRecieverConfig` for a given device in a ring topology with a given cluster axis.
 SenderRecieverConfig get_device_sender_receiver_config_in_ring(
-    const MeshCoordinate& mesh_coord, const distributed::MeshDevice* mesh_device, uint32_t cluster_axis, int ring_size);
+    const MeshCoordinate& mesh_coord, const MeshDevice* mesh_device, uint32_t cluster_axis, int ring_size);
 
 // Returns a vector of devices that the given tensor is stored on.
 std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor);

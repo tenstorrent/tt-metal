@@ -12,8 +12,7 @@ namespace tt::tt_metal {
 
 DeviceStorage::DeviceStorage(std::shared_ptr<Buffer> buffer_) { buffer = std::move(buffer_); }
 
-DeviceStorage::DeviceStorage(
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords_) :
+DeviceStorage::DeviceStorage(std::shared_ptr<MeshBuffer> mesh_buffer_, std::vector<MeshCoordinate> coords_) :
     coords(std::move(coords_)), mesh_buffer(std::move(mesh_buffer_)) {}
 
 Buffer* DeviceStorage::get_buffer() const {
@@ -24,7 +23,7 @@ Buffer* DeviceStorage::get_buffer() const {
     return this->buffer.get();
 }
 
-std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer() const {
+std::shared_ptr<MeshBuffer> DeviceStorage::get_mesh_buffer() const {
     TT_FATAL(mesh_buffer != nullptr, "Mesh buffer is not allocated");
     return mesh_buffer;
 }

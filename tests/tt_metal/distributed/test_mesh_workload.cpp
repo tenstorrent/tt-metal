@@ -52,7 +52,7 @@
 #include "umd/device/tt_core_coordinates.h"
 #include <tt-metalium/util.hpp>
 
-namespace tt::tt_metal::distributed::test {
+namespace tt::tt_metal::test {
 namespace {
 
 using ::testing::HasSubstr;
@@ -213,7 +213,7 @@ TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
 TEST_F(MeshWorkloadTestSuite, OverlappingProgramRanges) {
     MeshWorkload workload;
 
-    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+    auto programs = tt::tt_metal::test::utils::create_random_programs(
         /*num_programs=*/2, mesh_device_->compute_with_storage_grid_size(), /*seed=*/0);
     uint32_t num_rows_in_workload = mesh_device_->num_rows() / 2;
     auto mesh_workload = CreateMeshWorkload();
@@ -239,7 +239,7 @@ TEST_F(MeshWorkloadTestT3000, SimultaneousMeshWorkloads) {
 
     log_info("Create MeshWorkloads with multiple programs each");
 
-    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+    auto programs = tt::tt_metal::test::utils::create_random_programs(
         num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
     std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
 
@@ -260,7 +260,7 @@ TEST_F(MeshWorkloadTestT3000, SimultaneousMeshWorkloads) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
-    programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+    programs = tt::tt_metal::test::utils::create_random_programs(
         num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
     for (int i = 0; i < num_programs; i += 4) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
@@ -275,7 +275,7 @@ TEST_F(MeshWorkloadTestT3000, SimultaneousMeshWorkloads) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
-    programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+    programs = tt::tt_metal::test::utils::create_random_programs(
         num_heterogeneous_programs, mesh_device_->compute_with_storage_grid_size(), seed);
     for (int i = 0; i < num_heterogeneous_programs; i += 8) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
@@ -327,7 +327,7 @@ TEST_F(MeshWorkloadTestTG, SimultaneousMeshWorkloads) {
 
     log_info(tt::LogTest, "Compile and load {} MeshWorkloads", 2 * (num_programs_0 + num_programs_1));
 
-    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+    auto programs = tt::tt_metal::test::utils::create_random_programs(
         num_programs_0, mesh_device_->compute_with_storage_grid_size(), seed);
 
     for (int i = 0; i < num_programs_0; i += 2) {
@@ -340,7 +340,7 @@ TEST_F(MeshWorkloadTestTG, SimultaneousMeshWorkloads) {
         mesh_workloads.push_back(random_workload);
     }
 
-    programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+    programs = tt::tt_metal::test::utils::create_random_programs(
         num_programs_0, mesh_device_->compute_with_storage_grid_size(), seed);
 
     for (int i = 0; i < num_programs_0; i += 2) {
@@ -353,7 +353,7 @@ TEST_F(MeshWorkloadTestTG, SimultaneousMeshWorkloads) {
         mesh_workloads.push_back(random_workload);
     }
 
-    programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+    programs = tt::tt_metal::test::utils::create_random_programs(
         num_programs_1, mesh_device_->compute_with_storage_grid_size(), seed);
 
     for (int i = 0; i < num_programs_1; i += 4) {
@@ -371,7 +371,7 @@ TEST_F(MeshWorkloadTestTG, SimultaneousMeshWorkloads) {
         mesh_workloads.push_back(random_workload);
     }
 
-    programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+    programs = tt::tt_metal::test::utils::create_random_programs(
         num_programs_1, mesh_device_->compute_with_storage_grid_size(), seed);
     for (int i = 0; i < num_programs_1; i += 8) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
@@ -414,7 +414,7 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
     log_info("Create {} MeshWorkloads", num_programs);
-    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+    auto programs = tt::tt_metal::test::utils::create_random_programs(
         num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
     std::mt19937 rng(seed);
     std::uniform_int_distribution<int> gen_col(1, mesh_device_->num_cols());
@@ -454,8 +454,8 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
 
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
 
-    auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
-        mesh_device_, src0_bufs, src1_bufs, output_bufs);
+    auto programs =
+        tt::tt_metal::test::utils::create_eltwise_bin_programs(mesh_device_, src0_bufs, src1_bufs, output_bufs);
     uint32_t num_rows_in_workload = mesh_device_->num_rows() / 2;
     auto mesh_workload = CreateMeshWorkload();
     MeshCoordinateRange devices_0(
@@ -718,4 +718,4 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
 }
 
 }  // namespace
-}  // namespace tt::tt_metal::distributed::test
+}  // namespace tt::tt_metal::test

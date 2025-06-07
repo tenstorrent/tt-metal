@@ -14,7 +14,7 @@
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
 
-namespace ttnn::distributed::test {
+namespace ttnn::test {
 
 using ::testing::Each;
 using ::testing::ElementsAre;
@@ -52,10 +52,10 @@ TEST_P(AggregateTensorTest, Roundtrip) {
         }
     }
 
-    Tensor aggregated_tensor = aggregate_as_tensor(tensors, AllGatherTensor{});
+    Tensor aggregated_tensor = distributed::aggregate_as_tensor(tensors, AllGatherTensor{});
     EXPECT_TRUE(aggregated_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
 
-    const auto tensor_shards = get_device_tensors(aggregated_tensor);
+    const auto tensor_shards = distributed::get_device_tensors(aggregated_tensor);
     ASSERT_EQ(tensor_shards.size(), test_data.size());
 
     size_t i = 0;
@@ -72,7 +72,7 @@ TEST_F(TensorDistributionTest, DistributeToDevice) {
     Tensor input_tensor = Tensor::from_vector(
         std::vector<float>{42.F, 13.F, -99.F}, get_tensor_spec(ttnn::Shape{1, 1, 1, 3}, DataType::FLOAT32));
 
-    auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
+    auto mapper = distributed::replicate_tensor_to_mesh_mapper(*mesh_device_);
 
     // If no device is provided, the tensor is kept on host.
     EXPECT_TRUE(distribute_tensor(input_tensor, *mapper).storage_type() == StorageType::MULTI_DEVICE_HOST);
@@ -84,10 +84,10 @@ TEST_F(TensorDistributionTest, SingleDeviceTensorReplication) {
     Tensor input_tensor = Tensor::from_vector(
         std::vector<float>{42.F, 13.F, -99.F}, get_tensor_spec(ttnn::Shape{1, 1, 1, 3}, DataType::FLOAT32));
 
-    auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
+    auto mapper = distributed::replicate_tensor_to_mesh_mapper(*mesh_device_);
     Tensor replicated_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
-    std::vector<Tensor> device_tensors = get_device_tensors(replicated_tensor);
+    std::vector<Tensor> device_tensors = distributed::get_device_tensors(replicated_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
     for (const auto& device_tensor : device_tensors) {
         EXPECT_THAT(device_tensor.to_vector<float>(), ElementsAre(42.F, 13.F, -99.F));
@@ -102,13 +102,13 @@ TEST_F(TensorDistributionT3000Test, Shard1DInvalidDim) {
         std::vector<float>(num_devices, 0), get_tensor_spec(ttnn::Shape{1, 1, 1, num_devices}, DataType::FLOAT32));
 
     EXPECT_ANY_THROW({
-        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, -1);
-        Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+        auto mapper = distributed::shard_tensor_to_mesh_mapper(*mesh_device_, -1);
+        Tensor sharded_tensor = distributed::distribute_tensor(input_tensor, *mapper, *mesh_device_);
     });
 
     EXPECT_ANY_THROW({
-        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 4);
-        Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+        auto mapper = distributed::shard_tensor_to_mesh_mapper(*mesh_device_, 4);
+        Tensor sharded_tensor = distributed::distribute_tensor(input_tensor, *mapper, *mesh_device_);
     });
 }
 
@@ -122,16 +122,16 @@ TEST_F(TensorDistributionT3000Test, Shard1DFewerShardsThanDevices) {
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, num_devices - 1, 3, 1}, DataType::FLOAT32));
 
-    auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+    auto mapper = distributed::shard_tensor_to_mesh_mapper(*mesh_device_, 1);
+    Tensor sharded_tensor = distributed::distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
-    std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
+    std::vector<Tensor> device_tensors = distributed::get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices() - 1);
     for (int i = 0; i < device_tensors.size(); i++) {
         EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i * 1.F, i * 2.F, i * 3.F));
     }
 
-    auto composer = concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
+    auto composer = distributed::concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
     Tensor concatenated_tensor = aggregate_tensor(sharded_tensor, *composer);
 
     Tensor expected_tensor =
@@ -148,16 +148,16 @@ TEST_F(TensorDistributionT3000Test, Shard1D) {
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, num_devices, 3, 1}, DataType::FLOAT32));
 
-    auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+    auto mapper = distributed::shard_tensor_to_mesh_mapper(*mesh_device_, 1);
+    Tensor sharded_tensor = distributed::distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
-    std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
+    std::vector<Tensor> device_tensors = distributed::get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
     for (int i = 0; i < device_tensors.size(); i++) {
         EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i * 1.F, i * 2.F, i * 3.F));
     }
 
-    auto composer = concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
+    auto composer = distributed::concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
     Tensor concatenated_tensor = aggregate_tensor(sharded_tensor, *composer);
 
     Tensor expected_tensor =
@@ -179,15 +179,15 @@ TEST_P(TensorDistributionT3000Test2D, FullyReplicated) {
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, num_rows, num_cols, 1}, DataType::FLOAT32));
 
-    auto mapper = create_mesh_mapper(
+    auto mapper = distributed::create_mesh_mapper(
         *mesh_device_,
-        MeshMapperConfig{
-            .placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Replicate{}},
+        distributed::MeshMapperConfig{
+            .placements = {distributed::MeshMapperConfig::Replicate{}, distributed::MeshMapperConfig::Replicate{}},
         },
-        MeshShape(num_rows, num_cols));
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+        distributed::MeshShape(num_rows, num_cols));
+    Tensor sharded_tensor = distributed::distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
-    std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
+    std::vector<Tensor> device_tensors = distributed::get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), num_devices);
 
     for (int i = 0; i < device_tensors.size(); i++) {
@@ -214,15 +214,15 @@ TEST_P(TensorDistributionT3000Test2D, ReplicateDim) {
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, num_rows, num_cols, 1}, DataType::FLOAT32));
 
-    auto mapper = create_mesh_mapper(
+    auto mapper = distributed::create_mesh_mapper(
         *mesh_device_,
-        MeshMapperConfig{
-            .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Replicate{}},
+        distributed::MeshMapperConfig{
+            .placements = {distributed::MeshMapperConfig::Shard{1}, distributed::MeshMapperConfig::Replicate{}},
         },
-        MeshShape(num_rows, num_cols));
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+        distributed::MeshShape(num_rows, num_cols));
+    Tensor sharded_tensor = distributed::distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
-    std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
+    std::vector<Tensor> device_tensors = distributed::get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), num_devices);
 
     {
@@ -248,15 +248,15 @@ TEST_P(TensorDistributionT3000Test2D, ShardDims) {
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, num_rows, num_cols, 3}, DataType::FLOAT32));
 
-    auto mapper = create_mesh_mapper(
+    auto mapper = distributed::create_mesh_mapper(
         *mesh_device_,
-        MeshMapperConfig{
-            .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Shard{2}},
+        distributed::MeshMapperConfig{
+            .placements = {distributed::MeshMapperConfig::Shard{1}, distributed::MeshMapperConfig::Shard{2}},
         },
-        MeshShape(num_rows, num_cols));
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+        distributed::MeshShape(num_rows, num_cols));
+    Tensor sharded_tensor = distributed::distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
-    std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
+    std::vector<Tensor> device_tensors = distributed::get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), num_devices);
     for (int i = 0; i < device_tensors.size(); i++) {
         EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i * 1.F, i * 2.F, i * 3.F));
@@ -264,10 +264,10 @@ TEST_P(TensorDistributionT3000Test2D, ShardDims) {
 
     auto composer = create_mesh_composer(
         *mesh_device_,
-        MeshComposerConfig{
+        distributed::MeshComposerConfig{
             .dims = {0, 2},
         },
-        MeshShape(num_rows, num_cols));
+        distributed::MeshShape(num_rows, num_cols));
     Tensor concatenated_tensor = aggregate_tensor(sharded_tensor, *composer);
 
     Tensor expected_tensor =
@@ -283,8 +283,8 @@ INSTANTIATE_TEST_SUITE_P(
 TEST_F(TensorDistributionT3000Test, NdMapperInvalidShape) {
     EXPECT_ANY_THROW(create_mesh_mapper(
         *mesh_device_,
-        MeshMapperConfig{
-            .placements = {MeshMapperConfig::Replicate{}},
+        distributed::MeshMapperConfig{
+            .placements = {distributed::MeshMapperConfig::Replicate{}},
         },
         MeshShape{1, 9}));
 }
@@ -301,10 +301,10 @@ TEST_F(TensorDistributionT3000Test, NdMapperUnevenSharding) {
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols - 1, 3}, DataType::FLOAT32));
 
-    auto mapper = create_mesh_mapper(
+    auto mapper = distributed::create_mesh_mapper(
         *mesh_device_,
-        MeshMapperConfig{
-            .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Shard{2}},
+        distributed::MeshMapperConfig{
+            .placements = {distributed::MeshMapperConfig::Shard{1}, distributed::MeshMapperConfig::Shard{2}},
         });
 
     EXPECT_ANY_THROW({ Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_); });
@@ -314,22 +314,25 @@ TEST_F(TensorDistributionT3000Test, NdMapperInvalidPlacements) {
     // Too few placements.
     EXPECT_ANY_THROW(create_mesh_mapper(
         *mesh_device_,
-        MeshMapperConfig{
-            .placements = {MeshMapperConfig::Replicate{}},
+        distributed::MeshMapperConfig{
+            .placements = {distributed::MeshMapperConfig::Replicate{}},
         }));
 
     // Too many placements.
     EXPECT_ANY_THROW(create_mesh_mapper(
         *mesh_device_,
-        MeshMapperConfig{
-            .placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{1}, MeshMapperConfig::Shard{2}},
+        distributed::MeshMapperConfig{
+            .placements =
+                {distributed::MeshMapperConfig::Replicate{},
+                 distributed::MeshMapperConfig::Shard{1},
+                 distributed::MeshMapperConfig::Shard{2}},
         }));
 }
 
 TEST_F(TensorDistributionT3000Test, NdComposerInvalidShape) {
     EXPECT_ANY_THROW(create_mesh_composer(
         *mesh_device_,
-        MeshComposerConfig{
+        distributed::MeshComposerConfig{
             .dims = {0, 1, 2},
         },
         MeshShape{1, 9}));
@@ -338,7 +341,7 @@ TEST_F(TensorDistributionT3000Test, NdComposerInvalidShape) {
 TEST_F(TensorDistributionT3000Test, NdComposerInvalidDims) {
     EXPECT_ANY_THROW(create_mesh_composer(
         *mesh_device_,
-        MeshComposerConfig{
+        distributed::MeshComposerConfig{
             .dims = {0, 1, 2, 3},
         }));
 }
@@ -346,17 +349,17 @@ TEST_F(TensorDistributionT3000Test, NdComposerInvalidDims) {
 TEST_F(TensorDistributionT3000Test, NdComposerUnevenComposition) {
     Tensor input_tensor = Tensor::from_vector(
         std::vector<float>{42.F, 13.F, -99.F}, get_tensor_spec(ttnn::Shape{1, 1, 1, 3}, DataType::FLOAT32));
-    auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
+    auto mapper = distributed::replicate_tensor_to_mesh_mapper(*mesh_device_);
     Tensor replicated_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
-    std::vector<Tensor> device_tensors = get_device_tensors(replicated_tensor);
+    std::vector<Tensor> device_tensors = distributed::get_device_tensors(replicated_tensor);
 
     auto composer = create_mesh_composer(
         *mesh_device_,
-        MeshComposerConfig{
+        distributed::MeshComposerConfig{
             .dims = {0, 1},
         },
-        MeshShape(2, 3));
+        distributed::MeshShape(2, 3));
 
     EXPECT_ANY_THROW({ Tensor aggregated_tensor = aggregate_tensor(replicated_tensor, *composer); });
 }
@@ -375,20 +378,20 @@ TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
     Tensor input_tensor = Tensor::from_vector(
         test_data, get_tensor_spec(ttnn::Shape{kOuterDim, kNumRows, kNumCols, kInnerDim}, DataType::FLOAT32));
 
-    auto mapper = create_mesh_mapper(
+    auto mapper = distributed::create_mesh_mapper(
         *mesh_device_,
-        MeshMapperConfig{
+        distributed::MeshMapperConfig{
             .placements =
                 {
-                    MeshMapperConfig::Replicate{},
-                    MeshMapperConfig::Shard{2},
-                    MeshMapperConfig::Shard{1},
+                    distributed::MeshMapperConfig::Replicate{},
+                    distributed::MeshMapperConfig::Shard{2},
+                    distributed::MeshMapperConfig::Shard{1},
                 },
         },
-        MeshShape(2, 2, 2));
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+        distributed::MeshShape(2, 2, 2));
+    Tensor sharded_tensor = distributed::distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
-    std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
+    std::vector<Tensor> device_tensors = distributed::get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
     for (const auto& tensor : device_tensors) {
         EXPECT_EQ(tensor.get_logical_shape(), ttnn::Shape({kOuterDim, 1, 2, kInnerDim}));
@@ -402,13 +405,13 @@ TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
 
     auto composer = create_mesh_composer(
         *mesh_device_,
-        MeshComposerConfig{
+        distributed::MeshComposerConfig{
             .dims = {0, 2, 1},
         },
-        MeshShape(2, 2, 2));
+        distributed::MeshShape(2, 2, 2));
     Tensor aggregated_tensor = aggregate_tensor(sharded_tensor, *composer);
     EXPECT_EQ(aggregated_tensor.get_logical_shape(), ttnn::Shape({2 * kOuterDim, kNumRows, kNumCols, kInnerDim}));
     EXPECT_THAT(aggregated_tensor.to_vector<float>(), Pointwise(FloatEq(), expected_data));
 }
 
-}  // namespace ttnn::distributed::test
+}  // namespace ttnn::test

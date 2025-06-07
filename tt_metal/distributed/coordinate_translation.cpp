@@ -17,7 +17,7 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/cluster_descriptor_types.h>
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translation_map() {
     static tt::stl::Indestructible<MeshContainer<PhysicalMeshCoordinate>> kTranslationMap([]() {
@@ -54,4 +54,4 @@ const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translat
     return kTranslationMap.get();
 }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

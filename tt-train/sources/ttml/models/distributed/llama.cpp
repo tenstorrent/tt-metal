@@ -14,7 +14,7 @@
 #include "ops/rope_op.hpp"
 #include "ops/unary_ops.hpp"
 
-namespace ttml::models::distributed::llama {
+namespace ttml::models::llama {
 
 namespace {
 
@@ -99,11 +99,11 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
         /*rope_scaling_params=*/rope_scaling_params);
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        blocks.push_back(std::make_shared<modules::distributed::DistributedLlamaBlock>(
+        blocks.push_back(std::make_shared<modules::DistributedLlamaBlock>(
             embedding_dim, num_heads, num_groups, m_rope_params, dropout_prob));
     }
     ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
-    fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
+    fc = std::make_shared<ttml::modules::ColumnParallelLinear>(
         embedding_dim, vocab_size, /* has_bias */ false, /* gather_output */ true);
 
     create_name("llama");
@@ -143,4 +143,4 @@ std::shared_ptr<DistributedLlama> create(const YAML::Node& config) {
     return std::make_shared<DistributedLlama>(llama_config);
 }
 
-}  // namespace ttml::models::distributed::llama
+}  // namespace ttml::models::llama

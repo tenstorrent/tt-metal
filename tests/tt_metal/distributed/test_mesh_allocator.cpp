@@ -12,7 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
-namespace tt::tt_metal::distributed::test {
+namespace tt::tt_metal::test {
 
 using MeshAllocatorTest = GenericMeshDeviceFixture;
 
@@ -34,4 +34,4 @@ TEST_F(MeshAllocatorTest, BasicAllocationSanityCheck) {
     EXPECT_EQ(buffer->buffer_type(), buffer_type);
 }
 
-}  // namespace tt::tt_metal::distributed::test
+}  // namespace tt::tt_metal::test

@@ -20,7 +20,7 @@
 #include <tt_stl/span.hpp>
 #include "tt_metal/distributed/coordinate_translation.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 class SystemMesh::Impl {
 private:
@@ -205,4 +205,4 @@ std::vector<chip_id_t> SystemMesh::get_mapped_physical_device_ids(
     return pimpl_->get_mapped_physical_device_ids(shape, offset);
 }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

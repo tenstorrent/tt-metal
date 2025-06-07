@@ -39,7 +39,7 @@ protected:
         if (!check_board_is_n300()) {
             GTEST_SKIP() << "Skipping N300 specific tests";
         }
-        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
+        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::MeshShape(1, 2));
         ttml::autograd::ctx().open_device();
     }
 
@@ -54,7 +54,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
     bool has_bias = true;
     bool input_is_parallel = false;
 
-    auto layer = ttml::modules::distributed::RowParallelLinear(in_features, out_features, has_bias, input_is_parallel);
+    auto layer = ttml::modules::RowParallelLinear(in_features, out_features, has_bias, input_is_parallel);
     auto parameters = layer.parameters();
     EXPECT_EQ(parameters.size(), 1UL + static_cast<size_t>(has_bias));
 
@@ -97,7 +97,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
     bool has_bias = false;
     bool input_is_parallel = false;
 
-    auto layer = ttml::modules::distributed::RowParallelLinear(in_features, out_features, has_bias, input_is_parallel);
+    auto layer = ttml::modules::RowParallelLinear(in_features, out_features, has_bias, input_is_parallel);
     auto parameters = layer.parameters();
     EXPECT_EQ(parameters.size(), 1UL + static_cast<size_t>(has_bias));
 
@@ -134,7 +134,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasInputParallel) {
     bool has_bias = true;
     bool input_is_parallel = true;
 
-    auto layer = ttml::modules::distributed::RowParallelLinear(in_features, out_features, has_bias, input_is_parallel);
+    auto layer = ttml::modules::RowParallelLinear(in_features, out_features, has_bias, input_is_parallel);
     auto parameters = layer.parameters();
     EXPECT_EQ(parameters.size(), 1UL + static_cast<size_t>(has_bias));
 
@@ -173,7 +173,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasInputParallel) {
     bool has_bias = false;
     bool input_is_parallel = true;
 
-    auto layer = ttml::modules::distributed::RowParallelLinear(in_features, out_features, has_bias, input_is_parallel);
+    auto layer = ttml::modules::RowParallelLinear(in_features, out_features, has_bias, input_is_parallel);
     auto parameters = layer.parameters();
     EXPECT_EQ(parameters.size(), 1UL + static_cast<size_t>(has_bias));
 
@@ -207,7 +207,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasAllGather) {
     bool has_bias = true;
     bool use_all_gather = true;
 
-    auto layer = ttml::modules::distributed::ColumnParallelLinear(in_features, out_features, has_bias, use_all_gather);
+    auto layer = ttml::modules::ColumnParallelLinear(in_features, out_features, has_bias, use_all_gather);
     auto parameters = layer.parameters();
     EXPECT_EQ(parameters.size(), 1UL + static_cast<size_t>(has_bias));
 
@@ -248,7 +248,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasAllGather) {
     bool has_bias = false;
     bool use_all_gather = true;
 
-    auto layer = ttml::modules::distributed::ColumnParallelLinear(in_features, out_features, has_bias, use_all_gather);
+    auto layer = ttml::modules::ColumnParallelLinear(in_features, out_features, has_bias, use_all_gather);
     auto parameters = layer.parameters();
     EXPECT_EQ(parameters.size(), 1UL + static_cast<size_t>(has_bias));
 
@@ -283,7 +283,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNoAllGather) {
     bool has_bias = true;
     bool use_all_gather = false;
 
-    auto layer = ttml::modules::distributed::ColumnParallelLinear(in_features, out_features, has_bias, use_all_gather);
+    auto layer = ttml::modules::ColumnParallelLinear(in_features, out_features, has_bias, use_all_gather);
     auto parameters = layer.parameters();
     EXPECT_EQ(parameters.size(), 1UL + static_cast<size_t>(has_bias));
 
@@ -332,7 +332,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNoAllGather) {
     bool has_bias = false;
     bool use_all_gather = false;
 
-    auto layer = ttml::modules::distributed::ColumnParallelLinear(in_features, out_features, has_bias, use_all_gather);
+    auto layer = ttml::modules::ColumnParallelLinear(in_features, out_features, has_bias, use_all_gather);
     auto parameters = layer.parameters();
     EXPECT_EQ(parameters.size(), 1UL + static_cast<size_t>(has_bias));
 
@@ -380,7 +380,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
 
     auto generator = ttml::autograd::ctx().get_generator();
 
-    auto layer = ttml::modules::distributed::RowParallelLinear(in_features, out_features, has_bias, input_is_parallel);
+    auto layer = ttml::modules::RowParallelLinear(in_features, out_features, has_bias, input_is_parallel);
     auto parameters = layer.parameters();
     EXPECT_EQ(parameters.size(), 1UL + static_cast<size_t>(has_bias));
 
@@ -447,7 +447,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
 
     auto generator = ttml::autograd::ctx().get_generator();
 
-    auto layer = ttml::modules::distributed::ColumnParallelLinear(in_features, out_features, has_bias, use_all_gather);
+    auto layer = ttml::modules::ColumnParallelLinear(in_features, out_features, has_bias, use_all_gather);
     auto parameters = layer.parameters();
     EXPECT_EQ(parameters.size(), 1UL + static_cast<size_t>(has_bias));
 
@@ -514,7 +514,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
 
     auto generator = ttml::autograd::ctx().get_generator();
 
-    auto layer = ttml::modules::distributed::ColumnParallelLinear(in_features, out_features, has_bias, use_all_gather);
+    auto layer = ttml::modules::ColumnParallelLinear(in_features, out_features, has_bias, use_all_gather);
     auto parameters = layer.parameters();
     EXPECT_EQ(parameters.size(), 1UL + static_cast<size_t>(has_bias));
 

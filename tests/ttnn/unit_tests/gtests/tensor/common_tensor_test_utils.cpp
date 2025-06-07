@@ -26,9 +26,7 @@ class Shape;
 namespace test_utils {
 
 void test_tensor_on_device(
-    const ttnn::Shape& input_shape,
-    const tt::tt_metal::TensorLayout& layout,
-    tt::tt_metal::distributed::MeshDevice* device) {
+    const ttnn::Shape& input_shape, const tt::tt_metal::TensorLayout& layout, tt::tt_metal::MeshDevice* device) {
     using namespace tt::tt_metal;
 
     const ttnn::QueueId io_cq = ttnn::DefaultQueueId;
@@ -69,7 +67,7 @@ void test_tensor_on_device(
 }
 
 void test_tensor_on_device(const ttnn::Shape& input_shape, const tt::tt_metal::TensorLayout& layout) {
-    auto device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(0);
+    auto device = tt::tt_metal::MeshDevice::create_unit_mesh(0);
     test_tensor_on_device(input_shape, layout, device.get());
 }
 

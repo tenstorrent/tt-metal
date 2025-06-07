@@ -24,7 +24,7 @@ struct ReduceScatter {
     const std::optional<size_t> user_defined_num_buffers_per_channel;
     const std::optional<uint32_t> cluster_axis;
     const std::vector<IDevice*> devices;
-    const distributed::MeshDevice* mesh_device = nullptr;
+    const MeshDevice* mesh_device = nullptr;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;

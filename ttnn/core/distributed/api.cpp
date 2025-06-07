@@ -138,7 +138,7 @@ Tensor aggregate_as_tensor(
 }
 
 std::vector<int> get_t3k_physical_device_ids_ring() {
-    using namespace tt::tt_metal::distributed;
+    using namespace tt::tt_metal;
     auto& instance = SystemMesh::instance();
     auto num_devices = instance.get_shape().mesh_size();
     TT_FATAL(num_devices == 8, "T3000 ring topology only works with 8 devices");

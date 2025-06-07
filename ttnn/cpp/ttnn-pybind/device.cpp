@@ -494,7 +494,7 @@ void device_module(py::module& m_device) {
     m_device.def(
         "synchronize_device",
         [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            tt::tt_metal::distributed::Synchronize(
+            tt::tt_metal::Synchronize(
                 device, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
         },
         synchronize_device_doc.data(),

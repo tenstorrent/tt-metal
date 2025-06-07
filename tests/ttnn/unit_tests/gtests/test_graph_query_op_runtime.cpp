@@ -42,8 +42,8 @@ namespace ttnn::operations::binary::test {
 
 class TTNNFixtureWithTraceEnabledDevice : public ::testing::Test {
 protected:
-    tt::tt_metal::distributed::MeshDevice* device_ = nullptr;
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
+    tt::tt_metal::MeshDevice* device_ = nullptr;
+    std::shared_ptr<tt::tt_metal::MeshDevice> device_holder_;
     tt::ARCH arch_ = tt::ARCH::Invalid;
     size_t num_devices_ = 0;
 

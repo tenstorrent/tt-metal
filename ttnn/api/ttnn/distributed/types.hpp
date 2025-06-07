@@ -13,14 +13,14 @@
 
 namespace ttnn::distributed {
 
-using MeshShape = tt::tt_metal::distributed::MeshShape;
-using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
-using MeshCoordinateRange = tt::tt_metal::distributed::MeshCoordinateRange;
-using MeshCoordinateRangeSet = tt::tt_metal::distributed::MeshCoordinateRangeSet;
-using MeshDevice = tt::tt_metal::distributed::MeshDevice;
-using SystemMesh = tt::tt_metal::distributed::SystemMesh;
-using MeshDeviceView = tt::tt_metal::distributed::MeshDeviceView;
-using MeshDeviceConfig = tt::tt_metal::distributed::MeshDeviceConfig;
+using MeshShape = tt::tt_metal::MeshShape;
+using MeshCoordinate = tt::tt_metal::MeshCoordinate;
+using MeshCoordinateRange = tt::tt_metal::MeshCoordinateRange;
+using MeshCoordinateRangeSet = tt::tt_metal::MeshCoordinateRangeSet;
+using MeshDevice = tt::tt_metal::MeshDevice;
+using SystemMesh = tt::tt_metal::SystemMesh;
+using MeshDeviceView = tt::tt_metal::MeshDeviceView;
+using MeshDeviceConfig = tt::tt_metal::MeshDeviceConfig;
 
 }  // namespace ttnn::distributed
 

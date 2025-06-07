@@ -39,16 +39,16 @@
 
 #include "gtest/gtest.h"
 
-namespace ttnn::distributed::test {
+namespace ttnn::test {
 
 using namespace tt;
 using namespace tt_metal;
 
-using tt::tt_metal::distributed::MeshCoordinate;
-using tt::tt_metal::distributed::MeshDevice;
-using tt::tt_metal::distributed::MeshDeviceConfig;
-using tt::tt_metal::distributed::MeshDeviceView;
-using tt::tt_metal::distributed::MeshShape;
+using tt::tt_metal::MeshCoordinate;
+using tt::tt_metal::MeshDevice;
+using tt::tt_metal::MeshDeviceConfig;
+using tt::tt_metal::MeshDeviceView;
+using tt::tt_metal::MeshShape;
 
 // Custom Fixture using 1D Fabric on a Multi-CQ MeshDevice
 class T3000MultiCQFabricMeshDeviceFixture : public T3000MultiCQMeshDeviceFixture {
@@ -391,4 +391,4 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
     log_info(tt::LogTest, "Finished");
 }
 
-}  // namespace ttnn::distributed::test
+}  // namespace ttnn::test

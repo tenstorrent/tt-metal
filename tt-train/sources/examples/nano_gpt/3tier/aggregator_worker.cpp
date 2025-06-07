@@ -16,8 +16,8 @@
 #include "tokenizers/char_tokenizer.hpp"
 
 using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
-using Rank = ttml::core::distributed::Rank;
-using Tag = ttml::core::distributed::Tag;
+using Rank = ttml::core::Rank;
+using Tag = ttml::core::Tag;
 
 void send_aggregated_gradients_from_workers_to_optimizer(
     const ttml::autograd::DistributedContext &workers_and_aggregator_ctx,
@@ -32,15 +32,14 @@ void send_aggregated_gradients_from_workers_to_optimizer(
 
         // TODO: allow usage of tensor from model parameters (avoids redundant storage of a model)
         auto tensor = ttnn::empty_like(tensor_ptr->get_value());
-        ttml::core::distributed::recv_tensor(workers_and_aggregator_ctx, tensor, ttml::core::distributed::Rank{0});
+        ttml::core::recv_tensor(workers_and_aggregator_ctx, tensor, ttml::core::Rank{0});
         for (int worker_id = 1; worker_id < workers; ++worker_id) {
             auto tensor_to_add = ttnn::empty_like(tensor_ptr->get_value());
-            ttml::core::distributed::recv_tensor(
-                workers_and_aggregator_ctx, tensor_to_add, ttml::core::distributed::Rank{worker_id});
+            ttml::core::recv_tensor(workers_and_aggregator_ctx, tensor_to_add, ttml::core::Rank{worker_id});
             tensor = ttnn::add(tensor, tensor_to_add);
         }
         tensor = ttnn::multiply(tensor, 1.0F / static_cast<float>(workers));
-        ttml::core::distributed::send_tensor(aggregator_and_optimizer_ctx, tensor, optimizer_rank);
+        ttml::core::send_tensor(aggregator_and_optimizer_ctx, tensor, optimizer_rank);
     }
 }
 
@@ -52,11 +51,9 @@ void send_weights_from_optimizer_to_workers(
     Rank optimizer_rank{*aggregator_and_optimizer_ctx.rank() + 1};
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
         auto tensor = tensor_ptr->get_value();
-        ttml::core::distributed::recv_tensor(
-            aggregator_and_optimizer_ctx, tensor, ttml::core::distributed::Rank{optimizer_rank});
+        ttml::core::recv_tensor(aggregator_and_optimizer_ctx, tensor, ttml::core::Rank{optimizer_rank});
 
-        ttml::core::distributed::broadcast_tensor(
-            workers_and_aggregator_ctx, tensor, workers_and_aggregator_ctx.rank());
+        ttml::core::broadcast_tensor(workers_and_aggregator_ctx, tensor, workers_and_aggregator_ctx.rank());
     }
 }
 
@@ -98,7 +95,7 @@ int main(int argc, char **argv) {
 
     auto create_model = [enable_tp](const auto &config) -> std::shared_ptr<ttml::autograd::ModuleBase> {
         if (enable_tp) {
-            return ttml::models::distributed::gpt2::create(config);
+            return ttml::models::gpt2::create(config);
         }
         return ttml::models::gpt2::create(config);
     };

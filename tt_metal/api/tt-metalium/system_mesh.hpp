@@ -18,7 +18,7 @@ class Indestructible;
 }  // namespace stl
 }  // namespace tt
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 // SystemMesh creates a virtualization over the physical devices in the system.
 // It creates a logical mesh of devices and manages the mapping between logical and physical device coordinates.
@@ -56,4 +56,4 @@ public:
         const MeshShape& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
 };
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

@@ -7,7 +7,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/fabric_types.hpp>
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 enum class SocketEndpoint : uint8_t { SENDER, RECEIVER };
 
@@ -32,4 +32,4 @@ void write_socket_configs(
 // Given a MeshDevice and a logical device coordinate, determine the device's physical mesh id
 uint32_t get_physical_mesh_id(MeshDevice* mesh_device, const MeshCoordinate& coord);
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

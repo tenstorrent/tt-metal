@@ -122,20 +122,19 @@ tt::tt_metal::Tensor ones_like(const tt::tt_metal::Tensor& tensor) {
 }
 
 tt::tt_metal::Tensor empty(
-    const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const ttnn::MemoryConfig& memory_config) {
+    const ttnn::Shape& shape, ttnn::MeshDevice* device, const ttnn::MemoryConfig& memory_config) {
     return ttnn::empty(shape, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, device, memory_config);
 }
 
-tt::tt_metal::Tensor full(
-    const ttnn::Shape& shape, float value, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
+tt::tt_metal::Tensor full(const ttnn::Shape& shape, float value, ttnn::MeshDevice* device, ttnn::DataType dtype) {
     return ttnn::full(shape, value, dtype, ttnn::Layout::TILE, std::ref(*device));
 }
 
-tt::tt_metal::Tensor zeros(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
+tt::tt_metal::Tensor zeros(const ttnn::Shape& shape, ttnn::MeshDevice* device, ttnn::DataType dtype) {
     return core::full(shape, 0.F, device, dtype);
 }
 
-tt::tt_metal::Tensor ones(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
+tt::tt_metal::Tensor ones(const ttnn::Shape& shape, ttnn::MeshDevice* device, ttnn::DataType dtype) {
     return core::full(shape, 1.F, device, dtype);
 }
 
@@ -187,10 +186,7 @@ template tt::tt_metal::Tensor from_xtensors_to_host<int32_t, tt::tt_metal::DataT
 
 template <>
 tt::tt_metal::Tensor from_vector<float, ttnn::DataType::BFLOAT16>(
-    const std::vector<float>& buffer,
-    const ttnn::Shape& shape,
-    ttnn::distributed::MeshDevice* device,
-    ttnn::Layout layout) {
+    const std::vector<float>& buffer, const ttnn::Shape& shape, ttnn::MeshDevice* device, ttnn::Layout layout) {
     assert(device != nullptr);
     const ttnn::DataType data_type = ttnn::DataType::BFLOAT16;
     ttnn::MemoryConfig output_mem_config{};
@@ -223,10 +219,7 @@ tt::tt_metal::Tensor from_vector<float, ttnn::DataType::BFLOAT16>(
 // it is expected that tilize will be fixed in the after next tt-metal main update
 template <>
 tt::tt_metal::Tensor from_vector<float, ttnn::DataType::FLOAT32>(
-    const std::vector<float>& buffer,
-    const ttnn::Shape& shape,
-    ttnn::distributed::MeshDevice* device,
-    ttnn::Layout layout) {
+    const std::vector<float>& buffer, const ttnn::Shape& shape, ttnn::MeshDevice* device, ttnn::Layout layout) {
     auto tensor = from_vector<float, ttnn::DataType::BFLOAT16>(buffer, shape, device, layout);
     return ttnn::typecast(tensor, ttnn::DataType::FLOAT32);
 }
@@ -236,10 +229,7 @@ From vector uint32 doesn't support tilize_with_zero_padding on device
 */
 template <>
 tt::tt_metal::Tensor from_vector<uint32_t, ttnn::DataType::UINT32>(
-    const std::vector<uint32_t>& buffer,
-    const ttnn::Shape& shape,
-    ttnn::distributed::MeshDevice* device,
-    ttnn::Layout layout) {
+    const std::vector<uint32_t>& buffer, const ttnn::Shape& shape, ttnn::MeshDevice* device, ttnn::Layout layout) {
     ttnn::MemoryConfig output_mem_config{};
     auto volume = shape.volume();
     if (buffer.size() != volume) {
@@ -266,10 +256,7 @@ From vector int32 doesn't support tilize_with_zero_padding on device
 */
 template <>
 tt::tt_metal::Tensor from_vector<int32_t, ttnn::DataType::INT32>(
-    const std::vector<int32_t>& buffer,
-    const ttnn::Shape& shape,
-    ttnn::distributed::MeshDevice* device,
-    ttnn::Layout layout) {
+    const std::vector<int32_t>& buffer, const ttnn::Shape& shape, ttnn::MeshDevice* device, ttnn::Layout layout) {
     ttnn::MemoryConfig output_mem_config{};
     auto volume = shape.volume();
     if (buffer.size() != volume) {
@@ -310,7 +297,7 @@ void print_tensor_stats(const tt::tt_metal::Tensor& tensor, const std::string& n
 template <class T, ttnn::DataType TensorType>
 tt::tt_metal::Tensor from_xtensor(
     const xt::xarray<T>& tensor,
-    ttnn::distributed::MeshDevice* device,
+    ttnn::MeshDevice* device,
     const XTensorToMeshVariant<T>& composer,
     ttnn::Layout layout) {
     auto sharded_tensors = std::visit([&tensor](auto&& arg) { return arg.map(tensor); }, composer);
@@ -334,19 +321,19 @@ tt::tt_metal::Tensor from_xtensor(
 
 template tt::tt_metal::Tensor from_xtensor<float, ttnn::DataType::BFLOAT16>(
     const xt::xarray<float>& tensor,
-    ttnn::distributed::MeshDevice* device,
+    ttnn::MeshDevice* device,
     const XTensorToMeshVariant<float>& composer,
     ttnn::Layout layout);
 
 template tt::tt_metal::Tensor from_xtensor<int32_t, ttnn::DataType::INT32>(
     const xt::xarray<int32_t>& tensor,
-    ttnn::distributed::MeshDevice* device,
+    ttnn::MeshDevice* device,
     const XTensorToMeshVariant<int32_t>& composer,
     ttnn::Layout layout);
 
 template tt::tt_metal::Tensor from_xtensor<uint32_t, ttnn::DataType::UINT32>(
     const xt::xarray<uint32_t>& tensor,
-    ttnn::distributed::MeshDevice* device,
+    ttnn::MeshDevice* device,
     const XTensorToMeshVariant<uint32_t>& composer,
     ttnn::Layout layout);
 

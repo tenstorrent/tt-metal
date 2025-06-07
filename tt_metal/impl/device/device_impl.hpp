@@ -188,8 +188,8 @@ public:
 
     bool is_mmio_capable() const override;
     // TODO #20966: Remove these APIs
-    std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
-    void set_mesh_device(std::shared_ptr<distributed::MeshDevice> mesh_device) { this->mesh_device = mesh_device; };
+    std::shared_ptr<MeshDevice> get_mesh_device() override;
+    void set_mesh_device(std::shared_ptr<MeshDevice> mesh_device) { this->mesh_device = mesh_device; };
 
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
@@ -233,7 +233,7 @@ private:
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
     // TODO #20966: Remove this member
-    std::weak_ptr<distributed::MeshDevice> mesh_device;
+    std::weak_ptr<MeshDevice> mesh_device;
 
     // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;

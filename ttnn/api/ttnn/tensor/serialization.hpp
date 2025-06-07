@@ -14,7 +14,7 @@ namespace tt::tt_metal {
 void dump_tensor(
     const std::string& file_name, const Tensor& tensor, const std::unordered_map<std::string, std::string>& strategy);
 
-Tensor load_tensor(const std::string& file_name, distributed::MeshDevice* device = nullptr);
+Tensor load_tensor(const std::string& file_name, MeshDevice* device = nullptr);
 
 void dump_memory_config(FILE* output_file, const MemoryConfig& memory_config);
 void dump_memory_config(const std::string& file_name, const MemoryConfig& memory_config);
@@ -29,6 +29,6 @@ MemoryConfig load_memory_config(const std::string& file_name);
 // 2. Metadata includes data offsets and sizes for tensor / tensor shards (multi device context).
 // TODO: #22259 - the format is not yet finalized, and is not stable. Avoid using it in production.
 void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor);
-Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDevice* device = nullptr);
+Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device = nullptr);
 
 }  // namespace tt::tt_metal

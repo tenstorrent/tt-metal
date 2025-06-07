@@ -35,13 +35,11 @@ struct UnaryWithParam;
 }  // namespace ttnn
 namespace tt {
 namespace tt_metal {
-namespace distributed {
 class MeshDevice;
-}  // namespace distributed
 }  // namespace tt_metal
 }  // namespace tt
 
-namespace ttnn::distributed::test {
+namespace ttnn::test {
 
 static constexpr size_t TEST_WORKERS_SUBDEVICE_INDEX = 0;
 static constexpr size_t TEST_EDM_FABRIC_SUBDEVICE_INDEX = 1;
@@ -160,7 +158,7 @@ std::tuple<
     ttnn::global_semaphore::MultiDeviceGlobalSemaphore,
     ttnn::global_semaphore::MultiDeviceGlobalSemaphore,
     ttnn::global_semaphore::MultiDeviceGlobalSemaphore>
-create_global_semaphores(std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, IDevice* device) {
+create_global_semaphores(std::shared_ptr<tt::tt_metal::MeshDevice>& mesh_device, IDevice* device) {
     auto from_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
         mesh_device->get_devices(),
         device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
@@ -190,4 +188,4 @@ create_global_semaphores(std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&
         to_remote_multi_device_global_semaphore,
         multi_device_global_semaphore};
 }
-}  // namespace ttnn::distributed::test
+}  // namespace ttnn::test

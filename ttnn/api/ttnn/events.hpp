@@ -15,7 +15,7 @@
 
 namespace ttnn {
 
-using MeshEvent = tt::tt_metal::distributed::MeshEvent;
+using MeshEvent = tt::tt_metal::MeshEvent;
 
 namespace events {
 

@@ -16,14 +16,12 @@
 
 namespace tt {
 namespace tt_metal {
-namespace distributed {
 class MeshBuffer;
 class MeshDevice;
-}  // namespace distributed
 }  // namespace tt_metal
 }  // namespace tt
 
-namespace tt::tt_metal::distributed::test::utils {
+namespace tt::tt_metal::test::utils {
 
 std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
     std::shared_ptr<MeshDevice>& mesh_device,
@@ -36,4 +34,4 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
     CoreCoord worker_grid_size,
     uint32_t seed,
     const std::unordered_set<CoreCoord>& active_eth_cores = {});
-}  // namespace tt::tt_metal::distributed::test::utils
+}  // namespace tt::tt_metal::test::utils

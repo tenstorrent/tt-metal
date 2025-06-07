@@ -80,8 +80,7 @@ struct NewInfraWorkloadFactory {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value) {
         return cached_mesh_workload_t(
-            tt::tt_metal::distributed::MeshWorkload(),
-            std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t>());
+            tt::tt_metal::MeshWorkload(), std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t>());
     }
 
     static void override_runtime_arguments(

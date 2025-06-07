@@ -71,7 +71,7 @@ void test_raw_host_memory_pointer() {
     using tt::tt_metal::Tensor;
 
     int device_id = 0;
-    auto device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+    auto device = tt::tt_metal::MeshDevice::create_unit_mesh(device_id);
 
     ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
 

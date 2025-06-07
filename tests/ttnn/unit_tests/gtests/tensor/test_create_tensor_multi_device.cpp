@@ -17,7 +17,7 @@
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace ttnn::distributed::test {
+namespace ttnn::test {
 namespace {
 
 using ::testing::Each;
@@ -43,7 +43,7 @@ TEST_F(MultiDeviceTensorCreationTest, Empty) {
         mesh_device,
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
 
-    EXPECT_THAT(get_device_tensors(mesh_replicated_tensor), SizeIs(mesh_device->num_devices()));
+    EXPECT_THAT(distributed::get_device_tensors(mesh_replicated_tensor), SizeIs(mesh_device->num_devices()));
 }
 
 TEST_F(MultiDeviceTensorCreationTest, EmptyLike) {
@@ -67,7 +67,7 @@ TEST_F(MultiDeviceTensorCreationTest, EmptyLike) {
         *mesh_device,
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt});
 
-    EXPECT_THAT(get_device_tensors(mesh_replicated_tensor), SizeIs(mesh_device->num_devices()));
+    EXPECT_THAT(distributed::get_device_tensors(mesh_replicated_tensor), SizeIs(mesh_device->num_devices()));
 }
 
 TEST_F(MultiDeviceTensorCreationTest, Full) {
@@ -85,7 +85,7 @@ TEST_F(MultiDeviceTensorCreationTest, Full) {
     EXPECT_EQ(mesh_replicated_tensor.get_dtype(), DataType::FLOAT32);
     EXPECT_EQ(mesh_replicated_tensor.get_layout(), Layout::ROW_MAJOR);
 
-    auto device_tensors = get_device_tensors(mesh_replicated_tensor);
+    auto device_tensors = distributed::get_device_tensors(mesh_replicated_tensor);
     EXPECT_THAT(device_tensors, SizeIs(mesh_device->num_devices()));
     for (const auto& device_tensor : device_tensors) {
         auto values = device_tensor.to_vector<float>();
@@ -118,7 +118,7 @@ TEST_F(MultiDeviceTensorCreationTest, FullLike) {
     EXPECT_EQ(mesh_replicated_tensor.get_dtype(), tensor.get_dtype());
     EXPECT_EQ(mesh_replicated_tensor.get_layout(), tensor.get_layout());
 
-    auto device_tensors = get_device_tensors(mesh_replicated_tensor);
+    auto device_tensors = distributed::get_device_tensors(mesh_replicated_tensor);
     EXPECT_THAT(device_tensors, SizeIs(mesh_device->num_devices()));
     for (const auto& device_tensor : device_tensors) {
         auto values = device_tensor.to_vector<float>();
@@ -161,7 +161,7 @@ TEST_F(MultiDeviceTensorCreationTest, FullLikeWithOptTensor) {
     EXPECT_EQ(mesh_replicated_tensor.get_padded_shape(), tensor.get_padded_shape());
     EXPECT_EQ(mesh_replicated_tensor.get_dtype(), tensor.get_dtype());
     EXPECT_EQ(mesh_replicated_tensor.get_layout(), tensor.get_layout());
-    EXPECT_THAT(get_device_tensors(mesh_replicated_tensor), SizeIs(mesh_device->num_devices()));
+    EXPECT_THAT(distributed::get_device_tensors(mesh_replicated_tensor), SizeIs(mesh_device->num_devices()));
 }
 
 TEST_F(MultiDeviceTensorCreationTest, Arange) {
@@ -175,11 +175,11 @@ TEST_F(MultiDeviceTensorCreationTest, Arange) {
         std::ref(*mesh_device));
 
     EXPECT_EQ(tensor.get_logical_shape(), ttnn::Shape({1024}));
-    EXPECT_THAT(get_device_tensors(tensor), SizeIs(mesh_device->num_devices()));
+    EXPECT_THAT(distributed::get_device_tensors(tensor), SizeIs(mesh_device->num_devices()));
 
     std::vector<float> expected(1024);
     std::iota(expected.begin(), expected.end(), 0.0f);
-    for (const auto& device_tensor : get_device_tensors(tensor)) {
+    for (const auto& device_tensor : distributed::get_device_tensors(tensor)) {
         auto values = device_tensor.to_vector<float>();
         EXPECT_THAT(values, SizeIs(1024));
         EXPECT_THAT(values, Pointwise(FloatEq(), expected));
@@ -187,4 +187,4 @@ TEST_F(MultiDeviceTensorCreationTest, Arange) {
 }
 
 }  // namespace
-}  // namespace ttnn::distributed::test
+}  // namespace ttnn::test

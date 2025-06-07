@@ -8,7 +8,7 @@
 
 #include <tt-metalium/mesh_coord.hpp>
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 using chip_id_t = int;
 
@@ -35,4 +35,4 @@ private:
     std::vector<chip_id_t> physical_device_ids_;
 };
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal
