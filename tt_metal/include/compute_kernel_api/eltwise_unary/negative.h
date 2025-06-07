@@ -8,7 +8,7 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_negative.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
