@@ -1,0 +1,32 @@
+ChipSpec: {
+  arch: wormhole_b0,
+  ethernet_ports: {
+    N: 2,
+    E: 2,
+    S: 2,
+    W: 2,
+  }
+}
+
+
+Board: [
+  { name: 2x2,
+    type: Mesh,
+    topology: [2, 2]}
+]
+
+Mesh: [
+{
+  id: 0,
+  board: 2x2,
+  topology: [1, 1],
+  host_ranks: [[0]]},
+{
+  id: 1,
+  board: 2x2,
+  topology: [1, 1],
+  host_ranks: [[0]]}
+]
+
+Graph: [
+]
