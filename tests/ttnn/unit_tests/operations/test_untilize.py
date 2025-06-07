@@ -592,7 +592,7 @@ def test_untilize_multi_core_sharded_to_interleaved(
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True])
+@pytest.mark.parametrize("use_pack_untilize", [True, False])
 @pytest.mark.parametrize("tensor_shape", [[160, 160]])
 @pytest.mark.parametrize(
     "input_memory_layout, input_shard_shape, input_shard_core_grid",
@@ -754,7 +754,7 @@ def test_untilize_multi_core_sharded_to_sharded_different_shard_types(
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True])
+@pytest.mark.parametrize("use_pack_untilize", [True, False])
 @pytest.mark.parametrize("tensor_shape", [[160, 160]])
 @pytest.mark.parametrize(
     "input_memory_layout, input_shard_shape, input_shard_core_grid, output_memory_layout, output_shard_shape, output_shard_core_grid",
@@ -992,7 +992,7 @@ def test_untilize_multi_core_sharded_to_sharded_same_shard_type_different_shard_
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True])
+@pytest.mark.parametrize("use_pack_untilize", [True, False])
 @pytest.mark.parametrize("tensor_shape", [[160, 160]])
 @pytest.mark.parametrize(
     "memory_layout, input_shard_shape, input_shard_core_grid, output_shard_shape, output_shard_core_grid",
@@ -1149,7 +1149,7 @@ def test_untilize_multi_core_sharded_to_sharded_same_shard_type_and_shard_spec(
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True])
+@pytest.mark.parametrize("use_pack_untilize", [True, False])
 @pytest.mark.parametrize("tensor_shape", [[160, 160]])
 @pytest.mark.parametrize(
     "memory_layout, shard_shape, shard_core_grid",
