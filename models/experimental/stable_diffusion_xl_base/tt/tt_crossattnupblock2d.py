@@ -27,6 +27,7 @@ class TtCrossAttnUpBlock2D(nn.Module):
         num_layers = 3
         self.attentions = []
         self.resnets = []
+        self.device = device
 
         for i in range(num_layers):
             self.attentions.append(
@@ -84,6 +85,8 @@ class TtCrossAttnUpBlock2D(nn.Module):
             hidden_states = attn.forward(
                 hidden_states, [B, C, H, W], encoder_hidden_states=encoder_hidden_states, attention_mask=attention_mask
             )
+
+        ttnn.DumpDeviceProfiler(self.device)
 
         if self.upsamplers is not None:
             hidden_states = ttnn.reshape(hidden_states, [B, H, W, C])
