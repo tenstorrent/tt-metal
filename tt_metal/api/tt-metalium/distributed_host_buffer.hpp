@@ -30,19 +30,17 @@ public:
     // consistent with the global shape. `global_buffers` that are remote to this host will be deallocated and ignored
     // for all subsequent operations. Only local buffers will be retained by this `DistributedHostBuffer` instance.
     static DistributedHostBuffer create(
-        const distributed::MeshShape& global_shape,
-        const distributed::MeshShape& local_shape,
-        const distributed::MeshCoordinate& local_offset);
+        const MeshShape& global_shape, const MeshShape& local_shape, const MeshCoordinate& local_offset);
 
     // Returns the shard at the specified `coord`.
     // Returns `std::nullopt` if the index is out of local bounds.
     // Throws if the index is out of global bounds.
-    std::optional<HostBuffer> get_shard(const distributed::MeshCoordinate& coord) const;
+    std::optional<HostBuffer> get_shard(const MeshCoordinate& coord) const;
 
     // Emplaces the shard at the specified `coord`, calling `produce_buffer` to create the buffer only when needed.
     // No-op if the index is out of local bounds.
     // Throws if the index is out of global bounds.
-    void emplace_shard(const distributed::MeshCoordinate& coord, const std::function<HostBuffer()>& produce_buffer);
+    void emplace_shard(const MeshCoordinate& coord, const std::function<HostBuffer()>& produce_buffer);
 
     // `transform` and `apply` functions abstract away the details of the underlying data storage.
     // `linear_index` will be supplied by `DistributedHostBuffer` to indicate the position of the buffer.
@@ -56,26 +54,24 @@ public:
     void apply(const ApplyFn& fn) const;
 
     // Returns the global shape of the buffer.
-    distributed::MeshShape shape() const;
+    MeshShape shape() const;
 
     // Returns the coordinates of populated shards in the buffer.
-    const std::unordered_set<distributed::MeshCoordinate>& shard_coords() const;
+    const std::unordered_set<MeshCoordinate>& shard_coords() const;
 
 private:
-    std::optional<distributed::MeshCoordinate> global_to_local(const distributed::MeshCoordinate& coord) const;
+    std::optional<MeshCoordinate> global_to_local(const MeshCoordinate& coord) const;
 
     DistributedHostBuffer(
-        distributed::MeshShape global_shape,
-        distributed::MeshCoordinate local_offset,
-        distributed::MeshContainer<HostBuffer> local_buffers) :
+        MeshShape global_shape, MeshCoordinate local_offset, MeshContainer<HostBuffer> local_buffers) :
         global_shape_(std::move(global_shape)),
         local_offset_(std::move(local_offset)),
         local_buffers_(std::move(local_buffers)) {}
 
-    distributed::MeshShape global_shape_;
-    distributed::MeshCoordinate local_offset_;
-    distributed::MeshContainer<HostBuffer> local_buffers_;
-    std::unordered_set<distributed::MeshCoordinate> populated_shards_;
+    MeshShape global_shape_;
+    MeshCoordinate local_offset_;
+    MeshContainer<HostBuffer> local_buffers_;
+    std::unordered_set<MeshCoordinate> populated_shards_;
 };
 
 }  // namespace tt::tt_metal

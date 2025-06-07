@@ -59,13 +59,13 @@ struct SubdeviceInfo {
     std::unordered_map<chip_id_t, SubDeviceId> fabric_subdevice_id;
 };
 
-using tt::tt_metal::distributed::MeshContainer;
-using tt::tt_metal::distributed::MeshCoordinate;
-using tt::tt_metal::distributed::MeshDevice;
-using tt::tt_metal::distributed::MeshDeviceConfig;
-using tt::tt_metal::distributed::MeshDeviceView;
-using tt::tt_metal::distributed::MeshShape;
-using tt::tt_metal::distributed::SystemMesh;
+using tt::tt_metal::MeshContainer;
+using tt::tt_metal::MeshCoordinate;
+using tt::tt_metal::MeshDevice;
+using tt::tt_metal::MeshDeviceConfig;
+using tt::tt_metal::MeshDeviceView;
+using tt::tt_metal::MeshShape;
+using tt::tt_metal::SystemMesh;
 
 class BaseFabricFixture {
 protected:

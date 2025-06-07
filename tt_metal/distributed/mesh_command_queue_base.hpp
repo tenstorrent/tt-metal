@@ -8,7 +8,7 @@
 
 #include "tt_metal/common/thread_pool.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 class MeshCommandQueueBase : public MeshCommandQueue {
 protected:
@@ -70,4 +70,4 @@ public:
         bool blocking) override;
 };
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

@@ -22,8 +22,8 @@ public:
     autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
 
 private:
-    std::shared_ptr<distributed::ColumnParallelLinear> m_fc1;
-    std::shared_ptr<distributed::RowParallelLinear> m_fc2;
+    std::shared_ptr<ColumnParallelLinear> m_fc1;
+    std::shared_ptr<RowParallelLinear> m_fc2;
     std::shared_ptr<DropoutLayer> m_dropout;
 };
 

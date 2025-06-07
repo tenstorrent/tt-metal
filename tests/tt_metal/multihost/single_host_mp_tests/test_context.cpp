@@ -8,15 +8,15 @@
 #include <thread>
 
 namespace {
-using Rank = tt::tt_metal::distributed::multihost::Rank;
-using Tag = tt::tt_metal::distributed::multihost::Tag;
-using Size = tt::tt_metal::distributed::multihost::Size;
-using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
-using ReduceOp = tt::tt_metal::distributed::multihost::ReduceOp;
-using Color = tt::tt_metal::distributed::multihost::Color;
-using Key = tt::tt_metal::distributed::multihost::Key;
-using RequestPtr = std::shared_ptr<tt::tt_metal::distributed::multihost::Request>;
-using ContextPtr = std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>;
+using Rank = tt::tt_metal::multihost::Rank;
+using Tag = tt::tt_metal::multihost::Tag;
+using Size = tt::tt_metal::multihost::Size;
+using DistributedContext = tt::tt_metal::multihost::DistributedContext;
+using ReduceOp = tt::tt_metal::multihost::ReduceOp;
+using Color = tt::tt_metal::multihost::Color;
+using Key = tt::tt_metal::multihost::Key;
+using RequestPtr = std::shared_ptr<tt::tt_metal::multihost::Request>;
+using ContextPtr = std::shared_ptr<tt::tt_metal::multihost::DistributedContext>;
 
 tt::stl::Span<std::byte> int_to_byte_span(int* val_ptr) {
     return tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(val_ptr), sizeof(int));
@@ -26,7 +26,7 @@ tt::stl::Span<std::byte> int_to_byte_span(int* val_ptr) {
 TEST(DistributedContextTest, TestSendRecv) {
     // assuming context is already initialized in main with argc, argv
     // in this case we will just get a world context
-    auto context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto context = tt::tt_metal::multihost::DistributedContext::get_current_world();
 
     auto size = context->size();
 
@@ -53,10 +53,10 @@ TEST(DistributedContextTest, TestSendRecv) {
 TEST(DistributedContextTest, AllReduceInt) {
     // assuming context is already initialized in main with argc, argv
     // in this case we will just get a world context
-    auto context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    using Rank = tt::tt_metal::distributed::multihost::Rank;
-    using Tag = tt::tt_metal::distributed::multihost::Tag;
-    using Size = tt::tt_metal::distributed::multihost::Size;
+    auto context = tt::tt_metal::multihost::DistributedContext::get_current_world();
+    using Rank = tt::tt_metal::multihost::Rank;
+    using Tag = tt::tt_metal::multihost::Tag;
+    using Size = tt::tt_metal::multihost::Size;
 
     auto size = context->size();
 
@@ -68,7 +68,7 @@ TEST(DistributedContextTest, AllReduceInt) {
     std::vector<int> result(10);
     tt::stl::Span<int> view(data.data(), data.size());
     tt::stl::Span<int> result_view(result.data(), result.size());
-    context->all_reduce(view, result_view, tt::tt_metal::distributed::multihost::ReduceOp::SUM);
+    context->all_reduce(view, result_view, tt::tt_metal::multihost::ReduceOp::SUM);
     for (int i = 0; i < 10; ++i) {
         int expected = 0;
         for (int j = 0; j < *size; ++j) {

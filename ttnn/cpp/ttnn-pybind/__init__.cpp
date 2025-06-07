@@ -233,7 +233,7 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::core::py_module_types(m_core);
     ttnn::device::py_device_module_types(m_device);
     ttnn::fabric::py_bind_fabric_api(m_fabric);
-    ttnn::distributed::py_module_types(m_multi_device);
+    ttnn::py_module_types(m_multi_device);
     ttnn::events::py_module_types(m_events);
     ttnn::global_circular_buffer::py_module_types(m_global_circular_buffer);
     ttnn::global_semaphore::py_module_types(m_global_semaphore);
@@ -258,7 +258,7 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::activation::py_module(m_activation);
     ttnn::cluster::py_cluster_module(m_cluster);
     ttnn::device::py_device_module(m_device);
-    ttnn::distributed::py_module(m_multi_device);
+    ttnn::py_module(m_multi_device);
     ttnn::events::py_module(m_events);
     ttnn::global_circular_buffer::py_module(m_global_circular_buffer);
     ttnn::global_semaphore::py_module(m_global_semaphore);

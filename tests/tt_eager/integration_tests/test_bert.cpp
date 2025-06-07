@@ -231,7 +231,7 @@ void test_bert() {
     using tt::tt_metal::Tensor;
 
     int device_id = 0;
-    auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+    auto device_owner = tt::tt_metal::MeshDevice::create_unit_mesh(device_id);
     auto device = device_owner.get();
     CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
 

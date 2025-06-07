@@ -11,7 +11,7 @@ namespace ttml::core {
 // should I implement pimpl or its fine
 class MeshDevice {
 public:
-    explicit MeshDevice(tt::tt_metal::distributed::MeshShape shape);
+    explicit MeshDevice(tt::tt_metal::MeshShape shape);
     MeshDevice(MeshDevice&& device) = default;
     MeshDevice(const MeshDevice&) = delete;
 
@@ -19,9 +19,9 @@ public:
     MeshDevice& operator=(MeshDevice&&) = default;
     ~MeshDevice();
 
-    [[nodiscard]] ttnn::distributed::MeshDevice& get_device();
+    [[nodiscard]] ttnn::MeshDevice& get_device();
 
 private:
-    std::shared_ptr<ttnn::distributed::MeshDevice> m_mesh_device;
+    std::shared_ptr<ttnn::MeshDevice> m_mesh_device;
 };
 }  // namespace ttml::core

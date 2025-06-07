@@ -27,25 +27,23 @@ namespace ttnn {
 namespace {
 
 flatbuffers::Offset<flatbuffer::MeshCoordinate> to_flatbuffer(
-    const tt::tt_metal::distributed::MeshCoordinate& coord, flatbuffers::FlatBufferBuilder& builder) {
+    const tt::tt_metal::MeshCoordinate& coord, flatbuffers::FlatBufferBuilder& builder) {
     auto values_vector = builder.CreateVector(std::vector<uint32_t>(coord.coords().begin(), coord.coords().end()));
     return flatbuffer::CreateMeshCoordinate(builder, values_vector);
 }
 
-tt::tt_metal::distributed::MeshCoordinate from_flatbuffer(const flatbuffer::MeshCoordinate* coord) {
-    return tt::tt_metal::distributed::MeshCoordinate(
-        std::vector<uint32_t>(coord->values()->begin(), coord->values()->end()));
+tt::tt_metal::MeshCoordinate from_flatbuffer(const flatbuffer::MeshCoordinate* coord) {
+    return tt::tt_metal::MeshCoordinate(std::vector<uint32_t>(coord->values()->begin(), coord->values()->end()));
 }
 
 flatbuffers::Offset<flatbuffer::MeshShape> to_flatbuffer(
-    const tt::tt_metal::distributed::MeshShape& shape, flatbuffers::FlatBufferBuilder& builder) {
+    const tt::tt_metal::MeshShape& shape, flatbuffers::FlatBufferBuilder& builder) {
     auto dimensions_vector = builder.CreateVector(std::vector<uint32_t>(shape.view().begin(), shape.view().end()));
     return flatbuffer::CreateMeshShape(builder, dimensions_vector);
 }
 
-tt::tt_metal::distributed::MeshShape from_flatbuffer(const flatbuffer::MeshShape* shape) {
-    return tt::tt_metal::distributed::MeshShape(
-        std::vector<uint32_t>(shape->dimensions()->begin(), shape->dimensions()->end()));
+tt::tt_metal::MeshShape from_flatbuffer(const flatbuffer::MeshShape* shape) {
+    return tt::tt_metal::MeshShape(std::vector<uint32_t>(shape->dimensions()->begin(), shape->dimensions()->end()));
 }
 
 tt::tt_metal::HostBuffer create_host_buffer_from_bytes(uint64_t size_bytes, const TensorSpec& spec) {
@@ -176,7 +174,7 @@ Tensor from_flatbuffer(const ttnn::flatbuffer::Tensor* fb_tensor, tt::stl::Span<
             tt::tt_metal::DistributedTensorConfig strategy;
             auto* mesh_shape = sharded->mesh_shape();
             if (mesh_shape != nullptr) {
-                const tt::tt_metal::distributed::MeshShape ttnn_mesh_shape = from_flatbuffer(mesh_shape);
+                const tt::tt_metal::MeshShape ttnn_mesh_shape = from_flatbuffer(mesh_shape);
                 strategy = tt::tt_metal::ShardTensor2D{
                     tt::tt_metal::ShardMesh{.y = ttnn_mesh_shape[0], .x = ttnn_mesh_shape[1]}};
             }

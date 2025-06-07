@@ -10,7 +10,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
-using tt::tt_metal::distributed::MeshDevice;
+using tt::tt_metal::MeshDevice;
 
 namespace ttnn::reports {
 

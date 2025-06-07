@@ -15,7 +15,7 @@ namespace ttml::autograd {
 
 enum class GradMode { ENABLED, DISABLED };
 
-using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
+using DistributedContext = tt::tt_metal::multihost::DistributedContext;
 
 class AutoContext {
 public:
@@ -44,10 +44,10 @@ public:
 
     ~AutoContext() = default;  // to make it work with unique_ptr.
 
-    ttnn::distributed::MeshDevice& get_device();
+    ttnn::MeshDevice& get_device();
 
-    void set_mesh_shape(tt::tt_metal::distributed::MeshShape shape);
-    [[nodiscard]] tt::tt_metal::distributed::MeshShape get_mesh_shape() const;
+    void set_mesh_shape(tt::tt_metal::MeshShape shape);
+    [[nodiscard]] tt::tt_metal::MeshShape get_mesh_shape() const;
 
     void open_device();
 
@@ -65,7 +65,7 @@ private:
     GradMode m_grads_mode = GradMode::ENABLED;
 
     Graph m_graph;
-    tt::tt_metal::distributed::MeshShape m_mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1);
+    tt::tt_metal::MeshShape m_mesh_shape = tt::tt_metal::MeshShape(1, 1);
     std::unique_ptr<core::MeshDevice> m_device;
 
     std::shared_ptr<DistributedContext> m_distributed_context;

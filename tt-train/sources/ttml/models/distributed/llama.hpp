@@ -12,7 +12,7 @@
 #include "ops/rope_op.hpp"
 #include "yaml-cpp/yaml.h"
 
-namespace ttml::models::distributed::llama {
+namespace ttml::models::llama {
 
 using RunnerType = common::transformer::RunnerType;
 using models::llama::LlamaConfig;
@@ -35,4 +35,4 @@ public:
 [[nodiscard]] std::shared_ptr<DistributedLlama> create(const LlamaConfig& config);
 [[nodiscard]] std::shared_ptr<DistributedLlama> create(const YAML::Node& config);
 
-}  // namespace ttml::models::distributed::llama
+}  // namespace ttml::models::llama

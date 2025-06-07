@@ -30,7 +30,7 @@ namespace {
 
 using ::testing::IsEmpty;
 using ::testing::SizeIs;
-using ::tt::tt_metal::distributed::MeshContainer;
+using ::tt::tt_metal::MeshContainer;
 
 TEST(MeshDeviceInitTest, Init1x1Mesh) {
     auto& sys = SystemMesh::instance();
@@ -38,7 +38,7 @@ TEST(MeshDeviceInitTest, Init1x1Mesh) {
     MeshDeviceConfig config(MeshShape(1, 1));
 
     EXPECT_NO_THROW({
-        auto mesh = tt::tt_metal::distributed::MeshDevice::create(
+        auto mesh = tt::tt_metal::MeshDevice::create(
             config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
         mesh->close();
     });

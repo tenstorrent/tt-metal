@@ -51,7 +51,7 @@ private:
 
     // GlobalSemaphore is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions
-    distributed::AnyBuffer buffer_;
+    AnyBuffer buffer_;
     IDevice* device_;
     CoreRangeSet cores_;
 };

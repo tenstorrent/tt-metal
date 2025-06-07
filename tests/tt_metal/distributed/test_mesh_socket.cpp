@@ -72,7 +72,7 @@ void verify_socket_configs(
 }
 
 void test_single_connection_single_device_socket(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md0,
+    const std::shared_ptr<tt::tt_metal::MeshDevice>& md0,
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size,
@@ -219,7 +219,7 @@ void test_single_connection_single_device_socket(
 }
 
 void test_single_device_socket_with_workers(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md0,
+    const std::shared_ptr<tt::tt_metal::MeshDevice>& md0,
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size,
@@ -542,8 +542,8 @@ void test_single_device_socket_with_workers(
 }
 
 void test_single_connection_multi_device_socket(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md0,
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md1,
+    const std::shared_ptr<tt::tt_metal::MeshDevice>& md0,
+    const std::shared_ptr<tt::tt_metal::MeshDevice>& md1,
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size,
@@ -739,8 +739,8 @@ void test_single_connection_multi_device_socket(
 }
 
 void test_single_connection_multi_device_socket_with_workers(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md0,
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md1,
+    const std::shared_ptr<tt::tt_metal::MeshDevice>& md0,
+    const std::shared_ptr<tt::tt_metal::MeshDevice>& md1,
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size) {
@@ -1307,10 +1307,10 @@ std::shared_ptr<Program> create_recv_program(
 }
 
 void test_multi_sender_single_recv(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& sender_0,
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& sender_1,
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& reducer,
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& receiver,
+    const std::shared_ptr<tt::tt_metal::MeshDevice>& sender_0,
+    const std::shared_ptr<tt::tt_metal::MeshDevice>& sender_1,
+    const std::shared_ptr<tt::tt_metal::MeshDevice>& reducer,
+    const std::shared_ptr<tt::tt_metal::MeshDevice>& receiver,
     const std::vector<uint32_t>& link_indices,
     std::size_t socket_fifo_size,
     std::size_t page_size,

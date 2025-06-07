@@ -38,7 +38,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/util.hpp>
 
-namespace tt::tt_metal::distributed::test {
+namespace tt::tt_metal::test {
 namespace {
 
 using MeshBufferTestT3000 = T3000MeshDeviceFixture;
@@ -93,7 +93,7 @@ TEST_F(MeshBufferTestT3000, ShardedBufferInitialization) {
         .buffer_layout = TensorMemoryLayout::INTERLEAVED,
         .bottom_up = false};
 
-    const ShardedBufferConfig buffer_config{
+    const MeshShardedBufferConfig buffer_config{
         .global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 32}};
     EXPECT_EQ(buffer_config.compute_datum_size_bytes(), 2);
     auto sharded_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
@@ -300,7 +300,7 @@ TEST_F(MeshBufferTestT3000, SweepShardAndConcat) {
 
             uint32_t global_buffer_size = global_buffer_shape.height() * global_buffer_shape.width() * sizeof(uint32_t);
 
-            ShardedBufferConfig sharded_config{
+            MeshShardedBufferConfig sharded_config{
                 .global_size = global_buffer_size,
                 .global_buffer_shape = global_buffer_shape,
                 .shard_shape = shard_shape,
@@ -330,19 +330,19 @@ TEST_F(MeshBufferTestSuite, ConfigValidation) {
 
     // Unaligned shard shape
     EXPECT_ANY_THROW(MeshBuffer::create(
-        ShardedBufferConfig{.global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 120}},
+        MeshShardedBufferConfig{.global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 120}},
         device_local_config,
         mesh_device_.get()));
 
     // Number of shards exceeds the number of devices
     EXPECT_ANY_THROW(MeshBuffer::create(
-        ShardedBufferConfig{.global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {16, 16}},
+        MeshShardedBufferConfig{.global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {16, 16}},
         device_local_config,
         mesh_device_.get()));
 
     // Buffer with a global shape of 64x128 distributed across a 2x4 or 2x1 Mesh.
     auto buffer = MeshBuffer::create(
-        ShardedBufferConfig{
+        MeshShardedBufferConfig{
             .global_size = 16 << 10,
             .global_buffer_shape = {128, 256},
             .shard_shape = {128 / mesh_device_->num_rows(), 256 / mesh_device_->num_cols()}},
@@ -415,14 +415,14 @@ TEST_F(MeshBufferTestSuite, RowMajorShardingAndReplication) {
         uint32_t global_buffer_size = global_buffer_shape.height() * global_buffer_shape.width() * sizeof(uint32_t);
         auto shard_orientation = ShardOrientation::ROW_MAJOR;
 
-        ShardedBufferConfig sharded_config{
+        MeshShardedBufferConfig sharded_config{
             .global_size = global_buffer_size,
             .global_buffer_shape = global_buffer_shape,
             .shard_shape = shard_shape,
             .shard_orientation = shard_orientation,
         };
-        // Initialize the ShardedBufferConfig for reading and verifying replicated data
-        ShardedBufferConfig sharded_read_view_config{
+        // Initialize the MeshShardedBufferConfig for reading and verifying replicated data
+        MeshShardedBufferConfig sharded_read_view_config{
             .global_size = global_buffer_read_shape.height() * global_buffer_read_shape.width() * sizeof(uint32_t),
             .global_buffer_shape = global_buffer_read_shape,
             .shard_shape = shard_read_shape,
@@ -468,14 +468,14 @@ TEST_F(MeshBufferTestSuite, ColMajorShardingAndReplication) {
 
         ShardOrientation shard_orientation = ShardOrientation::COL_MAJOR;
 
-        ShardedBufferConfig sharded_config{
+        MeshShardedBufferConfig sharded_config{
             .global_size = global_buffer_size,
             .global_buffer_shape = global_buffer_shape,
             .shard_shape = shard_shape,
             .shard_orientation = shard_orientation,
         };
 
-        ShardedBufferConfig sharded_read_view_config{
+        MeshShardedBufferConfig sharded_read_view_config{
             .global_size = global_buffer_read_shape.height() * global_buffer_read_shape.width() * sizeof(uint32_t),
             .global_buffer_shape = global_buffer_read_shape,
             .shard_shape = shard_read_shape,
@@ -515,7 +515,7 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWrite) {
         .buffer_layout = TensorMemoryLayout::INTERLEAVED,
         .bottom_up = true};
 
-    distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
+    MeshCoordinateRange coord_range(mesh_device_->shape());
 
     uint32_t rows = mesh_device_->num_rows();
     uint32_t cols = mesh_device_->num_cols();
@@ -528,7 +528,7 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWrite) {
                 gen_num_datums(rng) * constants::TILE_WIDTH * cols};
             Shape2D shard_shape = {global_buffer_shape.height() / rows, global_buffer_shape.width() / cols};
             uint32_t global_buffer_size = global_buffer_shape.height() * global_buffer_shape.width() * sizeof(uint32_t);
-            ShardedBufferConfig sharded_config{
+            MeshShardedBufferConfig sharded_config{
                 .global_size = global_buffer_size,
                 .global_buffer_shape = global_buffer_shape,
                 .shard_shape = shard_shape,
@@ -539,7 +539,7 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWrite) {
             std::vector<uint32_t> src_vec =
                 std::vector<uint32_t>(global_buffer_size / num_devices / sizeof(uint32_t), 0);
             std::iota(src_vec.begin(), src_vec.end(), i);
-            std::unordered_map<distributed::MeshCoordinate, std::vector<uint32_t>> dst_vec = {};
+            std::unordered_map<MeshCoordinate, std::vector<uint32_t>> dst_vec = {};
             std::vector<MeshCommandQueue::ShardDataTransfer> input_shards = {};
             std::vector<MeshCommandQueue::ShardDataTransfer> output_shards = {};
 
@@ -562,4 +562,4 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWrite) {
 }
 
 }  // namespace
-}  // namespace tt::tt_metal::distributed::test
+}  // namespace tt::tt_metal::test

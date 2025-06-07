@@ -12,7 +12,7 @@
 #include "assert.hpp"
 #include "device.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 namespace {
 
 void validate_mesh_buffer_config(const MeshBufferConfig& config, const MeshDevice& mesh_device) {
@@ -21,7 +21,7 @@ void validate_mesh_buffer_config(const MeshBufferConfig& config, const MeshDevic
         return;
     }
 
-    const auto& sharded_config = std::get<ShardedBufferConfig>(config);
+    const auto& sharded_config = std::get<MeshShardedBufferConfig>(config);
     const auto [global_buffer_height, global_buffer_width] = sharded_config.global_buffer_shape;
     const auto [shard_height, shard_width] = sharded_config.physical_shard_shape();
 
@@ -59,15 +59,15 @@ void validate_mesh_buffer_config(const MeshBufferConfig& config, const MeshDevic
 
 }  // namespace
 
-uint32_t ShardedBufferConfig::compute_datum_size_bytes() const {
+uint32_t MeshShardedBufferConfig::compute_datum_size_bytes() const {
     return global_size / (global_buffer_shape.height() * global_buffer_shape.width());
 }
 
-std::pair<bool, bool> ShardedBufferConfig::replicated_dims() const {
+std::pair<bool, bool> MeshShardedBufferConfig::replicated_dims() const {
     return {shard_shape.height() == 0, shard_shape.width() == 0};
 }
 
-Shape2D ShardedBufferConfig::physical_shard_shape() const {
+Shape2D MeshShardedBufferConfig::physical_shard_shape() const {
     const auto [shard_height, shard_width] = shard_shape;
     const auto [global_height, global_width] = global_buffer_shape;
     return Shape2D(shard_height == 0 ? global_height : shard_height, shard_width == 0 ? global_width : shard_width);
@@ -83,7 +83,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     const DeviceAddr device_local_size = std::visit(
         tt::stl::overloaded{
             [](const ReplicatedBufferConfig& c) { return c.size; },
-            [mesh_device](const ShardedBufferConfig& config) {
+            [mesh_device](const MeshShardedBufferConfig& config) {
                 const auto [shard_height, shard_width] = config.physical_shard_shape();
                 return config.compute_datum_size_bytes() * shard_height * shard_width;
             }},
@@ -185,7 +185,7 @@ DeviceAddr MeshBuffer::size() const {
     return std::visit(
         tt::stl::overloaded{
             [&](const ReplicatedBufferConfig& config) { return config.size; },
-            [&](const ShardedBufferConfig& config) { return config.global_size; }},
+            [&](const MeshShardedBufferConfig& config) { return config.global_size; }},
         config_);
 }
 
@@ -194,10 +194,10 @@ MeshBufferLayout MeshBuffer::global_layout() const {
                                                                    : MeshBufferLayout::SHARDED;
 }
 
-const ShardedBufferConfig& MeshBuffer::global_shard_spec() const {
+const MeshShardedBufferConfig& MeshBuffer::global_shard_spec() const {
     TT_FATAL(
         global_layout() == MeshBufferLayout::SHARDED, "Can only query the global shard spec for a sharded MeshBuffer");
-    return std::get<ShardedBufferConfig>(config_);
+    return std::get<MeshShardedBufferConfig>(config_);
 }
 
 uint32_t MeshBuffer::datum_size_bytes() const {
@@ -212,7 +212,7 @@ Shape2D MeshBuffer::physical_shard_shape() const {
     TT_FATAL(
         this->global_layout() == MeshBufferLayout::SHARDED,
         "Can only query physical shard shape for buffers sharded across the Mesh");
-    auto sharded_config = std::get<ShardedBufferConfig>(config_);
+    auto sharded_config = std::get<MeshShardedBufferConfig>(config_);
     return sharded_config.physical_shard_shape();
 }
 
@@ -227,25 +227,10 @@ AnyBuffer::AnyBuffer(std::shared_ptr<Buffer> buffer) : buffer_(buffer.get()), ho
 AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) :
     buffer_(buffer->get_reference_buffer()), holder_(std::move(buffer)) {}
 
-AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std::optional<uint64_t> address) {
-    // TODO #20966: Remove single device support and branches + dynamic_cast
-    auto mesh_device = dynamic_cast<MeshDevice*>(config.device);
-    if (!mesh_device) {
-        if (address.has_value()) {
-            return AnyBuffer{CreateBuffer(config, *address)};
-        }
-        return AnyBuffer{CreateBuffer(config)};
-    }
-    MeshBufferConfig mesh_config = ReplicatedBufferConfig{
-        .size = config.size,
-    };
-    DeviceLocalBufferConfig local_config{
-        .page_size = config.page_size,
-        .buffer_type = config.buffer_type,
-        .buffer_layout = config.buffer_layout,
-        .shard_parameters = config.shard_parameters,
-    };
-    return MeshBuffer::create(mesh_config, local_config, mesh_device, address);
+AnyBuffer AnyBuffer::create(const tt::tt_metal::MeshShardedBufferConfig& config, std::optional<uint64_t> address) {
+    // MeshShardedBufferConfig is for MeshBuffer creation only
+    // This should not be called directly - MeshBuffer::create should be used instead
+    TT_THROW("MeshShardedBufferConfig should be used with MeshBuffer::create, not AnyBuffer::create");
 }
 
 AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config, std::optional<uint64_t> address) {
@@ -268,6 +253,14 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config,
     return MeshBuffer::create(mesh_config, local_config, mesh_device, address);
 }
 
+AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std::optional<uint64_t> address) {
+    // Create a regular Buffer for ShardedBufferConfig (non-mesh)
+    if (address.has_value()) {
+        return AnyBuffer{CreateBuffer(config, *address)};
+    }
+    return AnyBuffer{CreateBuffer(config)};
+}
+
 Buffer* AnyBuffer::get_buffer() const { return buffer_; }
 
 bool AnyBuffer::is_mesh_buffer() const { return get_mesh_buffer() != nullptr; }
@@ -282,4 +275,4 @@ std::shared_ptr<MeshBuffer> AnyBuffer::get_mesh_buffer() const {
     return nullptr;
 }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

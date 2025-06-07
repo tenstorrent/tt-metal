@@ -30,13 +30,13 @@ ttnn::global_semaphore::MultiDeviceGlobalSemaphore create_global_semaphore(const
         10);
 }
 
-std::vector<IDevice*> get_line_devices(distributed::MeshDevice* mesh_device) {
+std::vector<IDevice*> get_line_devices(MeshDevice* mesh_device) {
     auto view = mesh_device->get_view();
     return {
-        view.get_device(distributed::MeshCoordinate(0, 0)),
-        view.get_device(distributed::MeshCoordinate(0, 1)),
-        view.get_device(distributed::MeshCoordinate(0, 2)),
-        view.get_device(distributed::MeshCoordinate(0, 3))};
+        view.get_device(MeshCoordinate(0, 0)),
+        view.get_device(MeshCoordinate(0, 1)),
+        view.get_device(MeshCoordinate(0, 2)),
+        view.get_device(MeshCoordinate(0, 3))};
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE

@@ -6,7 +6,7 @@
 
 #include <tt-metalium/mesh_buffer.hpp>
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 // Multi-Dimensional coordinate struct used to access individual cores in a MeshDevice.
 struct MeshCoreCoord {
@@ -74,4 +74,4 @@ private:
     SocketConfig config_;
 };
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

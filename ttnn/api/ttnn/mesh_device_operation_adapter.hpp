@@ -106,7 +106,7 @@ struct MeshDeviceOperationAdapter {
             tensor_return_value_t& tensor_return_value) {
             ProgramFactory program_factory;
 
-            tt::tt_metal::distributed::MeshWorkload mesh_workload;
+            tt::tt_metal::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
             for (const auto& range : tensor_coords.ranges()) {
                 auto cached_program = program_factory.create(attrs, tensor_args, tensor_return_value);
@@ -140,9 +140,7 @@ struct MeshDeviceOperationAdapter {
     };
 
     static tt::stl::hash::hash_t compute_mesh_workload_hash(
-        tt::tt_metal::distributed::MeshDevice* mesh_device,
-        const operation_attributes_t& attrs,
-        const tensor_args_t& tensor_args) {
+        tt::tt_metal::MeshDevice* mesh_device, const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         // Hash the program hash and the tensor coordinates the workload is targeting.
         auto hash = compute_program_hash(attrs, tensor_args);
         for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args)) {

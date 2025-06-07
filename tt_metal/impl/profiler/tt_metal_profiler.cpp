@@ -71,9 +71,7 @@ namespace tt {
 namespace tt_metal {
 
 void DumpMeshDeviceProfileResults(
-    distributed::MeshDevice& mesh_device,
-    ProfilerDumpState state,
-    const std::optional<ProfilerOptionalMetadata>& metadata) {
+    MeshDevice& mesh_device, ProfilerDumpState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     for (IDevice* device : mesh_device.get_devices()) {

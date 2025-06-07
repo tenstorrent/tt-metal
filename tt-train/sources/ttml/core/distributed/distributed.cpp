@@ -24,7 +24,7 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor) {
     }
 
     // all_reduce Mean is not supported, use sum and divide by #devices
-    auto result = ttnn_fixed::distributed::all_reduce(tensor);
+    auto result = ttnn_fixed::all_reduce(tensor);
     result = ttnn::multiply(result, 1.0F / static_cast<float>(devices_count));
     return result;
 }

@@ -365,15 +365,15 @@ void enqueue_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
-    distributed::MeshDevice* mesh_device,
-    tt::tt_metal::distributed::MeshWorkload& workload) {
+    MeshDevice* mesh_device,
+    tt::tt_metal::MeshWorkload& workload) {
     mesh_device_operation_utils::set_runtime_id(workload);
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
         return;
     }
     {
         ZoneScopedN("EnqueueMeshWorkload");
-        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(*cq_id), workload, false);
+        tt::tt_metal::EnqueueMeshWorkload(mesh_device->mesh_command_queue(*cq_id), workload, false);
     }
 
     TracyOpMeshWorkload(

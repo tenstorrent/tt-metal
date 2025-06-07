@@ -89,15 +89,15 @@ protected:
 
 class MeshDeviceFixtureBase : public ::testing::Test {
 public:
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> get_mesh_device() {
+    std::shared_ptr<tt::tt_metal::MeshDevice> get_mesh_device() {
         TT_FATAL(mesh_device_, "MeshDevice not initialized in {}", __FUNCTION__);
         return mesh_device_;
     }
 
 protected:
-    using MeshDevice = ::tt::tt_metal::distributed::MeshDevice;
-    using MeshDeviceConfig = ::tt::tt_metal::distributed::MeshDeviceConfig;
-    using MeshShape = ::tt::tt_metal::distributed::MeshShape;
+    using MeshDevice = ::tt::tt_metal::MeshDevice;
+    using MeshDeviceConfig = ::tt::tt_metal::MeshDeviceConfig;
+    using MeshShape = ::tt::tt_metal::MeshShape;
 
     enum class MeshDeviceType {
         // N150/P150 devices opened as 1x1 meshes.
@@ -182,7 +182,7 @@ protected:
         }
     }
 
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
+    std::shared_ptr<tt::tt_metal::MeshDevice> mesh_device_;
 
 private:
     // Returns the mesh shape for a given mesh device type.

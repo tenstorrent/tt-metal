@@ -51,7 +51,7 @@ void GlobalSemaphore::setup_buffer(uint32_t initial_value, BufferType buffer_typ
         .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(shard_parameters),
     };
-    buffer_ = distributed::AnyBuffer::create(sem_shard_config);
+    buffer_ = AnyBuffer::create(sem_shard_config);
 
     this->reset_semaphore_value(initial_value);
 }
@@ -70,7 +70,7 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_->id());
     } else {
         if (auto mesh_buffer = buffer_.get_mesh_buffer()) {
-            distributed::EnqueueWriteMeshBuffer(mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer);
+            EnqueueWriteMeshBuffer(mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer);
         } else {
             EnqueueWriteBuffer(device_->command_queue(), *buffer_.get_buffer(), host_buffer, false);
         }

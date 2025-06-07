@@ -51,8 +51,8 @@ private:
 
     // GlobalCircularBuffer is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions
-    distributed::AnyBuffer cb_buffer_;
-    distributed::AnyBuffer cb_config_buffer_;
+    AnyBuffer cb_buffer_;
+    AnyBuffer cb_config_buffer_;
     IDevice* device_;
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping_;
     CoreRangeSet sender_cores_;

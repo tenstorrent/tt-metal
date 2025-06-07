@@ -37,15 +37,13 @@ namespace tt_metal {
 class IDevice;
 class SystemMemoryManager;
 class WorkerConfigBufferMgr;
-namespace distributed {
 class MeshDevice;
 class MeshWorkload;
-}  // namespace distributed
 struct ProgramCommandSequence;
 }  // namespace tt_metal
 }  // namespace tt
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 class MeshEvent;
 class MeshTraceDescriptor;
@@ -130,4 +128,4 @@ public:
     virtual void enqueue_trace(const MeshTraceId& trace_id, bool blocking) = 0;
 };
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

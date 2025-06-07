@@ -22,7 +22,7 @@ public:
     const DistributedTensorConfig& get_distributed_tensor_config() const;
 
     // Determines mesh coordinates for the tensor based on the strategy and the mesh shape.
-    std::vector<distributed::MeshCoordinate> determine_distribution(const distributed::MeshShape& mesh_shape) const;
+    std::vector<MeshCoordinate> determine_distribution(const MeshShape& mesh_shape) const;
 
 private:
     Storage storage_;

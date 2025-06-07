@@ -17,7 +17,7 @@ class SystemMemoryManager;
 
 // Utility functions for dispatch MeshWorkloads
 // Used by MeshCommandQueue
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 void write_go_signal(
     uint8_t cq_id,
@@ -29,4 +29,4 @@ void write_go_signal(
     bool send_mcast,
     bool send_unicasts);
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

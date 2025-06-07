@@ -268,7 +268,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
+    tt::tt_metal::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);

@@ -12,10 +12,10 @@
 #include <fmt/format.h>
 namespace multihost::common {
 
-using ContextPtr = std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>;
-using ReduceOp = tt::tt_metal::distributed::multihost::ReduceOp;
-using tt::tt_metal::distributed::multihost::dtype_of_v;
-using tt::tt_metal::distributed::multihost::is_supported_dtype_v;
+using ContextPtr = std::shared_ptr<tt::tt_metal::multihost::DistributedContext>;
+using ReduceOp = tt::tt_metal::multihost::ReduceOp;
+using tt::tt_metal::multihost::dtype_of_v;
+using tt::tt_metal::multihost::is_supported_dtype_v;
 //----------------------------------------------------------------------
 //  internal helpers
 //----------------------------------------------------------------------
@@ -66,10 +66,7 @@ void assert_true_all_ranks(const BoolLike& cond, const ContextPtr& ctx) {
     int local = static_cast<int>(cond ? 1 : 0);
     int global = 0;
     ctx->all_reduce(
-        as_bytes_single(local),
-        as_bytes_single(global),
-        ReduceOp::LAND,
-        tt::tt_metal::distributed::multihost::DType::INT32);
+        as_bytes_single(local), as_bytes_single(global), ReduceOp::LAND, tt::tt_metal::multihost::DType::INT32);
     ASSERT_EQ(global, 1) << "Rank " << *ctx->rank() << " violated collective TRUE condition.";
 }
 
@@ -95,13 +92,13 @@ inline void barrier(const ContextPtr& ctx) { ctx->barrier(); }
 //  multihost test main function
 // ----------------------------------------------------------------------
 inline int multihost_main(int argc, char** argv) {
-    tt::tt_metal::distributed::multihost::DistributedContext::create(argc, argv);
-    using Rank = tt::tt_metal::distributed::multihost::Rank;
-    using Tag = tt::tt_metal::distributed::multihost::Tag;
+    tt::tt_metal::multihost::DistributedContext::create(argc, argv);
+    using Rank = tt::tt_metal::multihost::Rank;
+    using Tag = tt::tt_metal::multihost::Tag;
 
     ::testing::InitGoogleTest(&argc, argv);
 
-    auto ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto ctx = tt::tt_metal::multihost::DistributedContext::get_current_world();
 
     // Skip all tests if lacking fault tolerance.
     if (!ctx->supports_fault_tolerance()) {
@@ -118,7 +115,7 @@ inline int multihost_main(int argc, char** argv) {
     int local_rc = RUN_ALL_TESTS();
 
     // need to make sure that  we get context after the tests, old one could be revoked
-    auto context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto context = tt::tt_metal::multihost::DistributedContext::get_current_world();
     fmt::print("Rank {}: local rc = {}\n", *context->rank(), local_rc);
     // Propagate the worst return code to all ranks
 

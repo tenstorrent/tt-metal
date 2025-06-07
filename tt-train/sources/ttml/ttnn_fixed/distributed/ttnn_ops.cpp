@@ -90,7 +90,7 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
             ttnn::Shape(scattered_shape),
             tt::tt_metal::TensorLayout(tensor.dtype(), tensor.layout(), tensor.memory_config())),
         current_device);
-    auto scattered_tensors = ttnn::distributed::get_device_tensors(scattered_tensor);
+    auto scattered_tensors = ttnn::get_device_tensors(scattered_tensor);
     if (scattered_tensors.size() != num_devices) {
         throw std::logic_error(fmt::format(
             "Number of scattered tensors should be equal to the number of devices. Tensor is not properly replicated."
@@ -103,14 +103,14 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
     ttnn::SmallVector<uint32_t> end{tensor_shape[0], tensor_shape[1], tensor_shape[2], tensor_shape[3]};
     const ttnn::SmallVector<uint32_t> stride{1U, 1U, 1U, 1U};
     size_t idx = 0;
-    for (const auto& tensor_shard : ttnn::distributed::get_device_tensors(tensor)) {
+    for (const auto& tensor_shard : ttnn::get_device_tensors(tensor)) {
         start[dim] = split_size_per_device * idx;
         end[dim] = split_size_per_device * (idx + 1);
 
         ttnn::slice(tensor_shard, start, end, stride, std::nullopt, scattered_tensors[idx]);
         ++idx;
     }
-    return ttnn::distributed::aggregate_as_tensor(scattered_tensors, tt::tt_metal::AllGatherTensor{});
+    return ttnn::aggregate_as_tensor(scattered_tensors, tt::tt_metal::AllGatherTensor{});
 }
 
 }  // namespace ttml::ttnn_fixed::distributed

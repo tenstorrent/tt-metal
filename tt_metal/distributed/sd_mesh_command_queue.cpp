@@ -8,7 +8,7 @@
 #include <mesh_event.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 SDMeshCommandQueue::SDMeshCommandQueue(MeshDevice* mesh_device, uint32_t id) :
     MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool()) {}
@@ -87,4 +87,4 @@ void SDMeshCommandQueue::record_end() { TT_THROW("Not supported for slow dispatc
 
 void SDMeshCommandQueue::enqueue_trace(const MeshTraceId&, bool) { TT_THROW("Not supported for slow dispatch"); }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

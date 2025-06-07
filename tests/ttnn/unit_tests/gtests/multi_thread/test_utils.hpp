@@ -15,7 +15,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
-namespace ttnn::distributed::test {
+namespace ttnn::test {
 
 using namespace tt;
 using namespace tt_metal;
@@ -52,6 +52,6 @@ std::tuple<
     ttnn::global_semaphore::MultiDeviceGlobalSemaphore,
     ttnn::global_semaphore::MultiDeviceGlobalSemaphore,
     ttnn::global_semaphore::MultiDeviceGlobalSemaphore>
-create_global_semaphores(std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, IDevice* device);
+create_global_semaphores(std::shared_ptr<tt::tt_metal::MeshDevice>& mesh_device, IDevice* device);
 
-}  // namespace ttnn::distributed::test
+}  // namespace ttnn::test

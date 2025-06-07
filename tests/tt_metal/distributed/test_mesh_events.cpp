@@ -29,7 +29,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/util.hpp>
 
-namespace tt::tt_metal::distributed::test {
+namespace tt::tt_metal::test {
 namespace {
 
 using MeshEventsTestT3000 = T3000MultiCQMeshDeviceFixture;
@@ -91,7 +91,7 @@ TEST_F(MeshEventsTestT3000, ShardedAsyncIO) {
 
     uint32_t global_buffer_size = global_buffer_shape.height() * global_buffer_shape.width() * sizeof(uint32_t);
 
-    ShardedBufferConfig sharded_config{
+    MeshShardedBufferConfig sharded_config{
         .global_size = global_buffer_size,
         .global_buffer_shape = global_buffer_shape,
         .shard_shape = shard_shape,
@@ -133,8 +133,8 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
 
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
 
-    auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
-        mesh_device_, src0_bufs, src1_bufs, output_bufs);
+    auto programs =
+        tt::tt_metal::test::utils::create_eltwise_bin_programs(mesh_device_, src0_bufs, src1_bufs, output_bufs);
     uint32_t num_rows_in_workload = mesh_device_->num_rows() / 2;
     auto mesh_workload = CreateMeshWorkload();
     MeshCoordinateRange devices_0(
@@ -335,4 +335,4 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
 }
 
 }  // namespace
-}  // namespace tt::tt_metal::distributed::test
+}  // namespace tt::tt_metal::test

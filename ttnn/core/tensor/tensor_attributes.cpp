@@ -32,14 +32,13 @@ const DistributedTensorConfig& TensorAttributes::get_distributed_tensor_config()
     return distributed_tensor_config_;
 }
 
-std::vector<distributed::MeshCoordinate> TensorAttributes::determine_distribution(
-    const distributed::MeshShape& mesh_shape) const {
+std::vector<MeshCoordinate> TensorAttributes::determine_distribution(const MeshShape& mesh_shape) const {
     const auto coord_range = [this, &mesh_shape]() {
         if (auto* shard2d_strategy = std::get_if<ShardTensor2D>(&distributed_tensor_config_)) {
-            distributed::MeshShape distribution_shape(shard2d_strategy->shard_mesh.y, shard2d_strategy->shard_mesh.x);
-            return distributed::MeshCoordinateRange(distribution_shape);
+            MeshShape distribution_shape(shard2d_strategy->shard_mesh.y, shard2d_strategy->shard_mesh.x);
+            return MeshCoordinateRange(distribution_shape);
         } else {
-            return distributed::MeshCoordinateRange(mesh_shape);
+            return MeshCoordinateRange(mesh_shape);
         }
     }();
 
@@ -57,7 +56,7 @@ std::vector<distributed::MeshCoordinate> TensorAttributes::determine_distributio
         num_shards,
         mesh_shape.mesh_size());
 
-    std::vector<distributed::MeshCoordinate> coords;
+    std::vector<MeshCoordinate> coords;
     coords.reserve(num_shards);
     auto coord_it = coord_range.begin();
     for (int i = 0; i < num_shards; ++coord_it, ++i) {

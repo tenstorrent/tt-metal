@@ -6,7 +6,7 @@
 
 #include "mesh_command_queue_base.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 class SDMeshCommandQueue final : public MeshCommandQueueBase {
 protected:
@@ -49,4 +49,4 @@ public:
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
 };
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

@@ -39,7 +39,7 @@ using namespace tt;
 using namespace tt_metal;
 using namespace constants;
 
-void test_tensor_copy_semantics(distributed::MeshDevice* device) {
+void test_tensor_copy_semantics(MeshDevice* device) {
     ttnn::Shape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
     // host tensor to host tensor copy constructor
@@ -97,7 +97,7 @@ void test_tensor_copy_semantics(distributed::MeshDevice* device) {
     TT_FATAL(std::equal(dev_b_data.begin(), dev_b_data.end(), dev_b_copy_data.begin()), "Test Failed");
 }
 
-void test_tensor_move_semantics(distributed::MeshDevice* device) {
+void test_tensor_move_semantics(MeshDevice* device) {
     ttnn::Shape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
     auto random_tensor = ttnn::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), single_tile_shape);
@@ -170,7 +170,7 @@ void test_tensor_move_semantics(distributed::MeshDevice* device) {
     TT_FATAL(std::equal(dev_b_copy_data.begin(), dev_b_copy_data.end(), bfloat_data_five.begin()), "Test Failed");
 }
 
-void test_tensor_deallocate_semantics(distributed::MeshDevice* device) {
+void test_tensor_deallocate_semantics(MeshDevice* device) {
     ttnn::Shape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
     MemoryConfig dram_mem_config =
@@ -209,7 +209,7 @@ void test_tensor_deallocate_semantics(distributed::MeshDevice* device) {
     TT_FATAL(address_f == address_h, "Test Failed");
 }
 
-void test_tensor_deallocate_and_close_device(distributed::MeshDevice* device) {
+void test_tensor_deallocate_and_close_device(MeshDevice* device) {
     ttnn::Shape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
     MemoryConfig dram_mem_config =
@@ -232,7 +232,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+        auto device = tt_metal::MeshDevice::create_unit_mesh(device_id);
 
         test_tensor_copy_semantics(device.get());
 

@@ -34,7 +34,7 @@ struct AllReduceAsync {
     const GlobalSemaphore semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     uint32_t cluster_axis;
-    const distributed::MeshDevice* mesh_device;
+    const MeshDevice* mesh_device;
 
     AllReduceAsync(
         uint32_t num_links,
@@ -45,7 +45,7 @@ struct AllReduceAsync {
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         uint32_t cluster_axis,
-        const distributed::MeshDevice* mesh_device) :
+        const MeshDevice* mesh_device) :
         num_links(num_links),
         ring_size(ring_size),
         dtype(dtype),

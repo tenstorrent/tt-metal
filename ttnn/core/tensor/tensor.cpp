@@ -40,7 +40,7 @@ namespace {
 
 template <typename T>
 Tensor create_owned_tensor_from_row_major_data(
-    std::vector<T>&& data, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id, T pad_value) {
+    std::vector<T>&& data, const TensorSpec& spec, MeshDevice* device, ttnn::QueueId cq_id, T pad_value) {
     auto physical_data = tensor_impl::encode_tensor_data(std::move(data), spec, pad_value);
 
     Tensor output(HostBuffer(std::move(physical_data)), spec);
@@ -178,7 +178,7 @@ template <>
 Tensor Tensor::from_span<float>(
     tt::stl::Span<const float> buffer,
     const TensorSpec& spec,
-    distributed::MeshDevice* device,
+    MeshDevice* device,
     ttnn::QueueId cq_id,
     float pad_value) {
     size_t volume = spec.logical_shape().volume();
@@ -226,11 +226,7 @@ Tensor Tensor::from_span<float>(
 
 template <typename T>
 Tensor Tensor::from_span(
-    tt::stl::Span<const T> buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    T pad_value) {
+    tt::stl::Span<const T> buffer, const TensorSpec& spec, MeshDevice* device, ttnn::QueueId cq_id, T pad_value) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -259,11 +255,7 @@ Tensor Tensor::from_borrowed_data(
 
 template <>
 Tensor Tensor::from_vector<float>(
-    std::vector<float>&& buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    float pad_value) {
+    std::vector<float>&& buffer, const TensorSpec& spec, MeshDevice* device, ttnn::QueueId cq_id, float pad_value) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -277,11 +269,7 @@ Tensor Tensor::from_vector<float>(
 
 template <typename T>
 Tensor Tensor::from_vector(
-    std::vector<T>&& buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    T pad_value) {
+    std::vector<T>&& buffer, const TensorSpec& spec, MeshDevice* device, ttnn::QueueId cq_id, T pad_value) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -348,31 +336,31 @@ std::vector<T> Tensor::to_vector(ttnn::QueueId cq_id) const {
 template Tensor Tensor::from_span<bfloat16>(
     tt::stl::Span<const bfloat16> buffer,
     const TensorSpec& spec,
-    distributed::MeshDevice* device,
+    MeshDevice* device,
     ttnn::QueueId cq_id,
     bfloat16 pad_value);
 template Tensor Tensor::from_span<int32_t>(
     tt::stl::Span<const int32_t> buffer,
     const TensorSpec& spec,
-    distributed::MeshDevice* device,
+    MeshDevice* device,
     ttnn::QueueId cq_id,
     int32_t pad_value);
 template Tensor Tensor::from_span<uint8_t>(
     tt::stl::Span<const uint8_t> buffer,
     const TensorSpec& spec,
-    distributed::MeshDevice* device,
+    MeshDevice* device,
     ttnn::QueueId cq_id,
     uint8_t pad_value);
 template Tensor Tensor::from_span<uint16_t>(
     tt::stl::Span<const uint16_t> buffer,
     const TensorSpec& spec,
-    distributed::MeshDevice* device,
+    MeshDevice* device,
     ttnn::QueueId cq_id,
     uint16_t pad_value);
 template Tensor Tensor::from_span<uint32_t>(
     tt::stl::Span<const uint32_t> buffer,
     const TensorSpec& spec,
-    distributed::MeshDevice* device,
+    MeshDevice* device,
     ttnn::QueueId cq_id,
     uint32_t pad_value);
 template Tensor Tensor::from_borrowed_data<float>(
@@ -414,31 +402,23 @@ template Tensor Tensor::from_borrowed_data<uint32_t>(
 template Tensor Tensor::from_vector<bfloat16>(
     std::vector<bfloat16>&& buffer,
     const TensorSpec& spec,
-    distributed::MeshDevice* device,
+    MeshDevice* device,
     ttnn::QueueId cq_id,
     bfloat16 pad_value);
 template Tensor Tensor::from_vector<int32_t>(
-    std::vector<int32_t>&& buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    int32_t pad_value);
+    std::vector<int32_t>&& buffer, const TensorSpec& spec, MeshDevice* device, ttnn::QueueId cq_id, int32_t pad_value);
 template Tensor Tensor::from_vector<uint8_t>(
-    std::vector<uint8_t>&& buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    ttnn::QueueId cq_id,
-    uint8_t pad_value);
+    std::vector<uint8_t>&& buffer, const TensorSpec& spec, MeshDevice* device, ttnn::QueueId cq_id, uint8_t pad_value);
 template Tensor Tensor::from_vector<uint16_t>(
     std::vector<uint16_t>&& buffer,
     const TensorSpec& spec,
-    distributed::MeshDevice* device,
+    MeshDevice* device,
     ttnn::QueueId cq_id,
     uint16_t pad_value);
 template Tensor Tensor::from_vector<uint32_t>(
     std::vector<uint32_t>&& buffer,
     const TensorSpec& spec,
-    distributed::MeshDevice* device,
+    MeshDevice* device,
     ttnn::QueueId cq_id,
     uint32_t pad_value);
 
@@ -449,13 +429,13 @@ template std::vector<uint16_t> Tensor::to_vector<uint16_t>(ttnn::QueueId cq_id) 
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>(ttnn::QueueId cq_id) const;
 
 Tensor Tensor::to_device(IDevice* target_device, const MemoryConfig& mem_config, QueueId cq_id) const {
-    if (auto mesh_device = dynamic_cast<distributed::MeshDevice*>(target_device)) {
+    if (auto mesh_device = dynamic_cast<MeshDevice*>(target_device)) {
         return to_device(mesh_device, mem_config, cq_id);
     }
     return tensor_ops::tensor_to_device(*this, target_device, mem_config, cq_id);
 }
 
-Tensor Tensor::to_device(distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) const {
+Tensor Tensor::to_device(MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) const {
     return tensor_ops::tensor_to_device(*this, mesh_device, mem_config, cq_id);
 }
 
@@ -476,7 +456,7 @@ Tensor Tensor::to_layout(Layout target_layout, IDevice* worker) const {
     return tensor_ops::tensor_to_layout(*this, target_layout, worker);
 }
 
-Tensor Tensor::to_layout(Layout target_layout, distributed::MeshDevice* mesh_device) const {
+Tensor Tensor::to_layout(Layout target_layout, MeshDevice* mesh_device) const {
     return tensor_ops::tensor_to_layout(*this, target_layout, mesh_device);
 }
 
@@ -556,7 +536,7 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
         tensor_spec.tensor_layout().get_memory_config());
 
     Tensor output;
-    if (distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device)) {
+    if (MeshDevice* mesh_device = dynamic_cast<MeshDevice*>(device)) {
         output = allocate_tensor_on_mesh(tensor_spec, mesh_device);
     } else {
         auto device_buffer = tensor_impl::allocate_buffer_on_device(device, tensor_spec);
@@ -597,16 +577,12 @@ void memcpy(
 }
 
 void memcpy(
-    distributed::MeshCommandQueue& queue,
-    void* dst,
-    const Tensor& src,
-    const std::optional<BufferRegion>& region,
-    bool blocking) {
+    MeshCommandQueue& queue, void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
     TT_FATAL(is_device_tensor(src), "memcpy: src tensor must be on device");
 
     TT_FATAL(queue.device()->num_devices() == 1, "memcpy only supports single device mesh");
-    std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
-        .shard_coord = *distributed::MeshCoordinateRange(queue.device()->shape()).begin(),
+    std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
+        .shard_coord = *MeshCoordinateRange(queue.device()->shape()).begin(),
         .host_data = dst,
         .region = region,
     }};
@@ -636,12 +612,11 @@ void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const std::option
     }
 }
 
-void memcpy(
-    distributed::MeshCommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
+void memcpy(MeshCommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
     TT_FATAL(is_device_tensor(dst), "memcpy: memcpy to non-device tensor is not supported!");
     TT_FATAL(queue.device()->num_devices() == 1, "memcpy only supports single device mesh");
-    std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
-        .shard_coord = *distributed::MeshCoordinateRange(queue.device()->shape()).begin(),
+    std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
+        .shard_coord = *MeshCoordinateRange(queue.device()->shape()).begin(),
         .host_data = const_cast<void*>(src),
         .region = region,
     }};
@@ -676,8 +651,7 @@ void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::opti
     }
 }
 
-void memcpy(
-    distributed::MeshCommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
+void memcpy(MeshCommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
     TT_ASSERT(dst.get_dtype() == src.get_dtype());
     TT_ASSERT(dst.get_layout() == src.get_layout());
 
@@ -710,12 +684,12 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
     }
 }
 
-Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {
+Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, MeshDevice* mesh_device) {
     // Allocate a mesh buffer synchronously.
     auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
-    std::vector<distributed::MeshCoordinate> coords;
+    std::vector<MeshCoordinate> coords;
     coords.reserve(mesh_device->shape().mesh_size());
-    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+    for (const auto& coord : MeshCoordinateRange(mesh_device->shape())) {
         coords.push_back(coord);
     }
     DeviceStorage device_storage(std::move(mesh_buffer), std::move(coords));
@@ -797,14 +771,14 @@ const DeviceStorage& Tensor::device_storage() const {
     return std::get<DeviceStorage>(this->get_storage());
 }
 
-distributed::MeshDevice* Tensor::mesh_device() const {
+MeshDevice* Tensor::mesh_device() const {
     if (this->mesh_device_.has_value()) {
         return this->mesh_device_.value();
     }
     return nullptr;
 }
 
-std::shared_ptr<distributed::MeshBuffer> Tensor::mesh_buffer() const { return device_storage().get_mesh_buffer(); }
+std::shared_ptr<MeshBuffer> Tensor::mesh_buffer() const { return device_storage().get_mesh_buffer(); }
 
 IDevice* Tensor::device() const {
     if (this->mesh_device_.has_value()) {

@@ -57,7 +57,7 @@ void AutoContext::close_device() {
     m_device = nullptr;
 }
 
-ttnn::distributed::MeshDevice& AutoContext::get_device() {
+ttnn::MeshDevice& AutoContext::get_device() {
     if (!m_device) {
         open_device();
     }
@@ -68,14 +68,14 @@ ttnn::distributed::MeshDevice& AutoContext::get_device() {
 AutoContext::AutoContext() : m_generator(m_seed) {
 }
 
-void AutoContext::set_mesh_shape(tt::tt_metal::distributed::MeshShape shape) {
+void AutoContext::set_mesh_shape(tt::tt_metal::MeshShape shape) {
     if (m_device) {
         throw std::runtime_error("set_mesh_shape was called after the device was created.");
     }
     m_mesh_shape = shape;
 }
 
-tt::tt_metal::distributed::MeshShape AutoContext::get_mesh_shape() const {
+tt::tt_metal::MeshShape AutoContext::get_mesh_shape() const {
     return m_mesh_shape;
 }
 

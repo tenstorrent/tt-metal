@@ -9,7 +9,7 @@
 
 #include "tt_metal/hw/inc/socket.h"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -209,7 +209,7 @@ void write_socket_configs(
                 md.downstream_bytes_sent_addr = peer_addr;
                 md.is_sender = is_sender;
             }
-            distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
+            WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }
     } else {
         std::vector<receiver_socket_md> config_data(
@@ -240,7 +240,7 @@ void write_socket_configs(
                 md.upstream_bytes_acked_addr = peer_addr;
                 md.is_sender = is_sender;
             }
-            distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
+            WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }
     }
 }
@@ -251,4 +251,4 @@ uint32_t get_physical_mesh_id(MeshDevice* mesh_device, const MeshCoordinate& coo
     return SystemMesh::instance().get_physical_mesh_id(global_coord);
 }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

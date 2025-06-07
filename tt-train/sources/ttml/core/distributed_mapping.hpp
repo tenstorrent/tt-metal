@@ -20,7 +20,7 @@ std::vector<xt::xarray<T>> chunk(const xt::xarray<T>& tensor, int num_chunks, in
 template <class Derived, typename T>
 class XTensorToMesh {
 public:
-    XTensorToMesh(tt::tt_metal::distributed::MeshShape mesh_shape) : m_mesh_shape(std::move(mesh_shape)) {
+    XTensorToMesh(tt::tt_metal::MeshShape mesh_shape) : m_mesh_shape(std::move(mesh_shape)) {
     }
 
     std::vector<xt::xarray<T>> map(const xt::xarray<T>& tensor) const {
@@ -32,7 +32,7 @@ public:
     }
 
 protected:
-    tt::tt_metal::distributed::MeshShape m_mesh_shape;
+    tt::tt_metal::MeshShape m_mesh_shape;
 
     size_t get_num_devices() const {
         return m_mesh_shape.mesh_size();
@@ -42,7 +42,7 @@ protected:
 template <class Derived, typename T>
 class MeshToXTensor {
 public:
-    MeshToXTensor(tt::tt_metal::distributed::MeshShape mesh_shape) : m_mesh_shape(std::move(mesh_shape)) {
+    MeshToXTensor(tt::tt_metal::MeshShape mesh_shape) : m_mesh_shape(std::move(mesh_shape)) {
     }
 
     std::vector<xt::xarray<T>> compose(const std::vector<xt::xarray<T>>& tensors) const {
@@ -50,15 +50,14 @@ public:
     }
 
 protected:
-    tt::tt_metal::distributed::MeshShape m_mesh_shape;
+    tt::tt_metal::MeshShape m_mesh_shape;
 };
 
 template <typename T>
 class ShardXTensorToMesh : public XTensorToMesh<ShardXTensorToMesh<T>, T> {
 public:
     using Base = XTensorToMesh<ShardXTensorToMesh<T>, T>;
-    ShardXTensorToMesh(tt::tt_metal::distributed::MeshShape mesh_shape, int dim) :
-        Base(std::move(mesh_shape)), m_shard_dim(dim) {
+    ShardXTensorToMesh(tt::tt_metal::MeshShape mesh_shape, int dim) : Base(std::move(mesh_shape)), m_shard_dim(dim) {
     }
 
     std::vector<xt::xarray<T>> map_impl(const xt::xarray<T>& tensor) const {
@@ -80,8 +79,7 @@ class ShardTensor2dMesh : public XTensorToMesh<ShardTensor2dMesh<T>, T> {
 public:
     using Base = XTensorToMesh<ShardTensor2dMesh<T>, T>;
     ShardTensor2dMesh(
-        tt::tt_metal::distributed::MeshShape mesh_shape,
-        const std::pair<std::optional<int>, std::optional<int>>& dims) :
+        tt::tt_metal::MeshShape mesh_shape, const std::pair<std::optional<int>, std::optional<int>>& dims) :
         Base(std::move(mesh_shape)), m_dims(dims) {
         // We trust the provided mesh shape and do not validate against a MeshDevice.
     }
@@ -151,8 +149,7 @@ template <typename T>
 class ConcatMesh2dToTensor : public MeshToXTensor<ConcatMesh2dToTensor<T>, T> {
 public:
     using Base = MeshToXTensor<ConcatMesh2dToTensor<T>, T>;
-    ConcatMesh2dToTensor(
-        tt::tt_metal::distributed::MeshShape mesh_shape, const tt::tt_metal::distributed::MeshShape& dims) :
+    ConcatMesh2dToTensor(tt::tt_metal::MeshShape mesh_shape, const tt::tt_metal::MeshShape& dims) :
         Base(std::move(mesh_shape)), m_dims(dims) {
         if (m_dims[0] == m_dims[1]) {
             throw std::invalid_argument("Dimensions in 'dims' must be different");
@@ -182,14 +179,14 @@ public:
     }
 
 private:
-    tt::tt_metal::distributed::MeshShape m_dims;
+    tt::tt_metal::MeshShape m_dims;
 };
 
 template <typename T>
 class ReplicateXTensorToMesh : public XTensorToMesh<ReplicateXTensorToMesh<T>, T> {
 public:
     using Base = XTensorToMesh<ReplicateXTensorToMesh<T>, T>;
-    ReplicateXTensorToMesh(tt::tt_metal::distributed::MeshShape mesh_shape) : Base(std::move(mesh_shape)) {
+    ReplicateXTensorToMesh(tt::tt_metal::MeshShape mesh_shape) : Base(std::move(mesh_shape)) {
     }
 
     std::vector<xt::xarray<T>> map_impl(const xt::xarray<T>& tensor) const {
@@ -212,8 +209,7 @@ template <typename T>
 class ConcatMeshToXTensor : public MeshToXTensor<ConcatMeshToXTensor<T>, T> {
 public:
     using Base = MeshToXTensor<ConcatMeshToXTensor<T>, T>;
-    ConcatMeshToXTensor(tt::tt_metal::distributed::MeshShape mesh_shape, int dim) :
-        Base(std::move(mesh_shape)), m_concat_dim(dim) {
+    ConcatMeshToXTensor(tt::tt_metal::MeshShape mesh_shape, int dim) : Base(std::move(mesh_shape)), m_concat_dim(dim) {
     }
 
     std::vector<xt::xarray<T>> compose_impl(const std::vector<xt::xarray<T>>& tensors) const {
@@ -228,7 +224,7 @@ template <typename T>
 class VectorMeshToXTensor : public MeshToXTensor<VectorMeshToXTensor<T>, T> {
 public:
     using Base = MeshToXTensor<VectorMeshToXTensor<T>, T>;
-    VectorMeshToXTensor([[maybe_unused]] tt::tt_metal::distributed::MeshShape mesh_shape) : Base(mesh_shape) {
+    VectorMeshToXTensor([[maybe_unused]] tt::tt_metal::MeshShape mesh_shape) : Base(mesh_shape) {
     }
     std::vector<xt::xarray<T>> compose_impl(const std::vector<xt::xarray<T>>& tensors) const {
         return tensors;

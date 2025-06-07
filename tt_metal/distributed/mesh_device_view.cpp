@@ -17,7 +17,7 @@
 #include "shape2d.hpp"
 #include "shape_base.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 namespace {
 
 std::vector<IDevice*> get_devices_from_coordinates(
@@ -223,4 +223,4 @@ std::vector<IDevice*> MeshDeviceView::get_ring_devices() const {
 
 MeshDeviceView::DeviceView MeshDeviceView::get_devices() const { return this->devices_.values(); }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

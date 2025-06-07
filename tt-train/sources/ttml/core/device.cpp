@@ -8,7 +8,7 @@
 
 namespace ttml::core {
 
-Device::Device(int device_index) : m_device(tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_index)) {
+Device::Device(int device_index) : m_device(tt::tt_metal::MeshDevice::create_unit_mesh(device_index)) {
 }
 
 [[nodiscard]] tt::tt_metal::IDevice& Device::get_device() {

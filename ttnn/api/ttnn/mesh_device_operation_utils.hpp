@@ -129,14 +129,14 @@ std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(const TensorArgs& t
 }
 
 // Sets runtime ID for all programs in `workload`.
-inline void set_runtime_id(tt::tt_metal::distributed::MeshWorkload& workload) {
+inline void set_runtime_id(tt::tt_metal::MeshWorkload& workload) {
     for (auto& [_, program] : workload.get_programs()) {
         program.set_runtime_id(ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id());
     }
 }
 
 // Tracks all programs in `workload` and returns true if any program was hooked.
-inline bool track_workload(tt::tt_metal::distributed::MeshWorkload& workload, ttnn::MeshDevice* mesh_device) {
+inline bool track_workload(tt::tt_metal::MeshWorkload& workload, ttnn::MeshDevice* mesh_device) {
     bool hook_program = false;
     for (auto& [_, program] : workload.get_programs()) {
         tt::tt_metal::GraphTracker::instance().track_program(&program, mesh_device);

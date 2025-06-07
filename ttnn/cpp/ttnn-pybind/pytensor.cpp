@@ -382,7 +382,7 @@ Tensor convert_python_tensors_to_tt_tensors(
             pad_value,
             /*force_disable_borrow=*/true));
     }
-    auto output = distributed::aggregate_as_tensor(tt_shards, get_distributed_tensor_config(strategy));
+    auto output = ttnn::distributed::aggregate_as_tensor(tt_shards, get_distributed_tensor_config(strategy));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;

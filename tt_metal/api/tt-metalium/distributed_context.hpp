@@ -12,7 +12,7 @@
 #include <cstdint>
 #include <complex>
 
-namespace tt::tt_metal::distributed::multihost {
+namespace tt::tt_metal::multihost {
 
 enum class ReduceOp : std::uint8_t { SUM, MAX, MIN, PROD, LAND, LOR, BAND, BOR };
 
@@ -232,4 +232,4 @@ public:
 
     virtual ~DistributedContext() = default;
 };
-}  // namespace tt::tt_metal::distributed::multihost
+}  // namespace tt::tt_metal::multihost

@@ -21,9 +21,9 @@ namespace tt::tt_metal {
 
 std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
 
-    const std::shared_ptr<distributed::MeshBuffer>& src0_buf,
-    const std::shared_ptr<distributed::MeshBuffer>& src1_buf,
-    const std::shared_ptr<distributed::MeshBuffer>& output_buf,
+    const std::shared_ptr<MeshBuffer>& src0_buf,
+    const std::shared_ptr<MeshBuffer>& src1_buf,
+    const std::shared_ptr<MeshBuffer>& output_buf,
     uint32_t num_tiles,
     uint32_t single_tile_size,
     uint8_t eltwise_op_index,
@@ -108,7 +108,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
 }
 }  // namespace tt::tt_metal
 
-namespace tt::tt_metal::distributed::test {
+namespace tt::tt_metal::test {
 
 using MeshEndToEndT3kTests = T3000MeshDeviceFixture;
 using ::testing::Each;
@@ -156,7 +156,7 @@ TEST_F(MeshEndToEndT3kTests, ProgramDispatchTest) {
 }
 
 TEST_F(MeshEndToEndT3kTests, BufferRoundtripTest) {
-    using tt::tt_metal::distributed::ShardedBufferConfig;
+    using tt::tt_metal::MeshShardedBufferConfig;
 
     auto& cq = mesh_device_->mesh_command_queue();
 
@@ -176,7 +176,7 @@ TEST_F(MeshEndToEndT3kTests, BufferRoundtripTest) {
         .buffer_type = BufferType::L1,
         .buffer_layout = TensorMemoryLayout::INTERLEAVED,
         .bottom_up = false};
-    auto distributed_buffer_config = ShardedBufferConfig{
+    auto distributed_buffer_config = MeshShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,
         .shard_shape = shard_shape};
@@ -208,7 +208,7 @@ TEST_F(MeshEndToEndT3kTests, UntracedEltwiseAddTest) {
         .buffer_type = BufferType::DRAM,
         .buffer_layout = TensorMemoryLayout::INTERLEAVED,
         .bottom_up = false};
-    auto distributed_buffer_config = tt::tt_metal::distributed::ShardedBufferConfig{
+    auto distributed_buffer_config = tt::tt_metal::MeshShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,
         .shard_shape = shard_shape,
@@ -274,7 +274,7 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseAddTest) {
         .buffer_type = BufferType::DRAM,
         .buffer_layout = TensorMemoryLayout::INTERLEAVED,
         .bottom_up = false};
-    auto distributed_buffer_config = tt::tt_metal::distributed::ShardedBufferConfig{
+    auto distributed_buffer_config = tt::tt_metal::MeshShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,
         .shard_shape = shard_shape,
@@ -341,7 +341,7 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseMulTest) {
         .buffer_type = BufferType::DRAM,
         .buffer_layout = TensorMemoryLayout::INTERLEAVED,
         .bottom_up = false};
-    auto distributed_buffer_config = tt::tt_metal::distributed::ShardedBufferConfig{
+    auto distributed_buffer_config = tt::tt_metal::MeshShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,
         .shard_shape = shard_shape,
@@ -419,7 +419,7 @@ TEST_F(MeshEndToEndT3kTraceTests, SimulEltwiseTest) {
     uint32_t num_tiles_in_mesh =
         num_tiles_per_device * mesh_device_->num_devices();  // The total number of tiles in the distributed memory space
 
-    tt::tt_metal::distributed::ShardedBufferConfig global_buffer_config{
+    tt::tt_metal::MeshShardedBufferConfig global_buffer_config{
         .global_size = single_tile_size * num_tiles_in_mesh,  // Total size of the sharded buffer
         .global_buffer_shape =
             {num_tiles_in_mesh * TILE_WIDTH, TILE_HEIGHT},  // Data represents horizontally concatenated tiles
@@ -541,4 +541,4 @@ TEST_F(MeshEndToEndT3kTraceTests, SimulEltwiseTest) {
     EXPECT_THAT(sub_dst_span, Each(Bfloat16Eq(workload_1_src0_val - workload_1_src1_val)));
 }
 
-}  // namespace ttnn::distributed::test
+}  // namespace tt::tt_metal::test

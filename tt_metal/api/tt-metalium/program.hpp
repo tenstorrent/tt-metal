@@ -44,10 +44,8 @@ uint32_t program_base_addr_on_core(
     WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType core_type);
 }  // namespace program_dispatch
 
-namespace distributed {
 class MeshWorkload;
 class MeshWorkloadImpl;
-}  // namespace distributed
 
 class JitBuildOptions;
 class EnqueueProgramCommand;
@@ -176,8 +174,8 @@ private:
 
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
-    friend distributed::MeshWorkload;
-    friend distributed::MeshWorkloadImpl;
+    friend MeshWorkload;
+    friend MeshWorkloadImpl;
     friend detail::Internal_;
 };
 

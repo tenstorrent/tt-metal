@@ -128,7 +128,7 @@ struct AllGather {
     const ccl::Topology topology;
     std::optional<uint32_t> cluster_axis;
     std::vector<IDevice*> devices;
-    const distributed::MeshDevice* mesh_device = nullptr;
+    const MeshDevice* mesh_device = nullptr;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor> &input_tensors) const;

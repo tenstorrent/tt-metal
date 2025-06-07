@@ -11,7 +11,7 @@
 
 namespace {
 
-using MetalMeshShape = ::tt::tt_metal::distributed::MeshShape;
+using MetalMeshShape = ::tt::tt_metal::MeshShape;
 using ::testing::SizeIs;
 
 template <typename T>

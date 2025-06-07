@@ -101,7 +101,7 @@ int main() {
         .buffer_type = BufferType::DRAM,
         .buffer_layout = TensorMemoryLayout::INTERLEAVED,
         .bottom_up = false};
-    auto distributed_buffer_config = tt::tt_metal::distributed::ShardedBufferConfig{
+    auto distributed_buffer_config = tt::tt_metal::ShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,
         .shard_shape = shard_shape,

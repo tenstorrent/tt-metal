@@ -46,15 +46,11 @@ struct CacheableProgram {
 
 template <typename OutputTensors = Tensors>
 using OverrideRuntimeArgumentsWorkloadCallback = std::function<void(
-    const void* operation,
-    distributed::MeshWorkload&,
-    const Tensors&,
-    const OptionalConstTensors&,
-    const OutputTensors&)>;
+    const void* operation, MeshWorkload&, const Tensors&, const OptionalConstTensors&, const OutputTensors&)>;
 
 template <typename OutputTensors = Tensors>
 struct CacheableMeshWorkload {
-    distributed::MeshWorkload workload;
+    MeshWorkload workload;
 
     // Either one of these callbacks can be set, but not both.
     // TODO: #19569 - `per_program_callbacks` is used to assist old infra migration, which relied on per-program
@@ -544,7 +540,7 @@ public:
 
     void override_runtime_arguments(
         OverrideRuntimeArgumentsWorkloadCallback<OutputTensors>& override_runtime_arguments_callback,
-        distributed::MeshWorkload& workload,
+        MeshWorkload& workload,
         const Tensors& input_tensors,
         const OptionalConstTensors& optional_input_tensors,
         OutputTensors& output_tensors) const {
@@ -771,7 +767,7 @@ public:
         override_runtime_arguments_workload_impl_{
             [](const storage_t& storage,
                OverrideRuntimeArgumentsWorkloadCallback<OutputTensors>& callback,
-               distributed::MeshWorkload& workload,
+               MeshWorkload& workload,
                const Tensors& input_tensors,
                const OptionalConstTensors& optional_input_tensors,
                OutputTensors& output_tensors) -> void {
@@ -995,7 +991,7 @@ private:
     void (*override_runtime_arguments_workload_impl_)(
         const storage_t& value,
         OverrideRuntimeArgumentsWorkloadCallback<OutputTensors>&,
-        distributed::MeshWorkload&,
+        MeshWorkload&,
         const Tensors&,
         const std::vector<std::optional<const Tensor>>&,
         OutputTensors&);

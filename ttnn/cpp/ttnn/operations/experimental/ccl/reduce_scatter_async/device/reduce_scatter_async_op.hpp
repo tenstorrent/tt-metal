@@ -14,7 +14,7 @@ namespace ttnn {
 struct ReduceScatterAsync {
     ReduceScatterAsync(
         std::vector<IDevice*> devices,
-        const distributed::MeshDevice* mesh_device,
+        const MeshDevice* mesh_device,
         const ttnn::operations::binary::BinaryOpType binary_op_type,
         const uint32_t scatter_dim,
         const uint32_t ring_size,
@@ -39,7 +39,7 @@ struct ReduceScatterAsync {
         cluster_axis(cluster_axis) {}
 
     std::vector<IDevice*> devices;
-    const distributed::MeshDevice* mesh_device;
+    const MeshDevice* mesh_device;
     const ttnn::operations::binary::BinaryOpType binary_op_type;
     const uint32_t scatter_dim;
     const uint32_t ring_size;

@@ -32,7 +32,7 @@
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
 
-namespace tt::tt_metal::distributed::test::utils {
+namespace tt::tt_metal::test::utils {
 
 std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
     std::shared_ptr<MeshDevice>& mesh_device,
@@ -406,4 +406,4 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
     return programs;
 }
 
-}  // namespace tt::tt_metal::distributed::test::utils
+}  // namespace tt::tt_metal::test::utils

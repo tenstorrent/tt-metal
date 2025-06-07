@@ -11,8 +11,8 @@
 
 namespace ttml::core::distributed {
 
-using Rank = tt::tt_metal::distributed::multihost::Rank;
-using Tag = tt::tt_metal::distributed::multihost::Tag;
+using Rank = tt::tt_metal::multihost::Rank;
+using Tag = tt::tt_metal::multihost::Tag;
 
 ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor);
 void synchronize_parameters(const serialization::NamedParameters& parameters);

@@ -6,8 +6,8 @@
 
 namespace ttml::core {
 
-MeshDevice::MeshDevice(tt::tt_metal::distributed::MeshShape shape) :
-    m_mesh_device(ttnn::distributed::open_mesh_device(
+MeshDevice::MeshDevice(tt::tt_metal::MeshShape shape) :
+    m_mesh_device(ttnn::open_mesh_device(
         shape,
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
@@ -16,14 +16,14 @@ MeshDevice::MeshDevice(tt::tt_metal::distributed::MeshShape shape) :
     assert(m_mesh_device);
 }
 
-[[nodiscard]] ttnn::distributed::MeshDevice& MeshDevice::get_device() {
+[[nodiscard]] ttnn::MeshDevice& MeshDevice::get_device() {
     assert(m_mesh_device);
     return *m_mesh_device;
 }
 
 MeshDevice::~MeshDevice() {
     assert(m_mesh_device);
-    ttnn::distributed::close_mesh_device(m_mesh_device);
+    ttnn::close_mesh_device(m_mesh_device);
 }
 
 }  // namespace ttml::core

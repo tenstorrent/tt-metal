@@ -39,7 +39,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/util.hpp>
 
-namespace tt::tt_metal::distributed::test {
+namespace tt::tt_metal::test {
 namespace {
 
 namespace tt::tt_metal {
@@ -268,4 +268,4 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceBasicProgramsReuse) {
 }
 }
 }  // namespace
-}  // namespace tt::tt_metal::distributed::test
+}  // namespace tt::tt_metal::test

@@ -8,7 +8,7 @@
 #include <memory>
 #include "api/tt-metalium/distributed_context.hpp"
 
-namespace tt::tt_metal::distributed::multihost {
+namespace tt::tt_metal::multihost {
 
 class MPIContext;
 class MPIRequest;
@@ -124,4 +124,4 @@ private:
     inline static ContextPtr current_world_;
 };
 
-}  // namespace tt::tt_metal::distributed::multihost
+}  // namespace tt::tt_metal::multihost

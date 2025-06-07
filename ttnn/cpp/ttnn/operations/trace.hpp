@@ -11,7 +11,7 @@
 
 namespace ttnn {
 
-using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;
+using MeshTraceId = tt::tt_metal::MeshTraceId;
 
 namespace operations {
 namespace trace {

@@ -59,7 +59,7 @@ struct ProgramCache;
 }  // namespace tt_metal
 }  // namespace tt
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 namespace {
 
 int generate_unique_mesh_id() {
@@ -913,6 +913,6 @@ const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_i
     return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
 }
 
-std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
+std::shared_ptr<MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

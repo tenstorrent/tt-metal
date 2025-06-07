@@ -17,7 +17,7 @@
 
 enum class CoreType;
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 // Use this function to send go signals to a device not running a program.
 // In the MeshWorkload context, a go signal must be sent to each device when
@@ -77,4 +77,4 @@ void write_go_signal(
     sysmem_manager.fetch_queue_reserve_back(cq_id);
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
 }
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

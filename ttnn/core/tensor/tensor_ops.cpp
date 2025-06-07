@@ -45,7 +45,7 @@ Tensor tensor_to_device(
 }
 
 Tensor tensor_to_device(
-    const Tensor& input_tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) {
+    const Tensor& input_tensor, MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, mesh_device, mem_config);
     if (input_tensor.storage_type() == StorageType::DEVICE) {
@@ -90,7 +90,7 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevic
     return output;
 }
 
-Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device) {
+Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, MeshDevice* mesh_device) {
     ZoneScoped;
     TT_FATAL(
         is_cpu_tensor(input_tensor) || is_multi_device_host_tensor(input_tensor),

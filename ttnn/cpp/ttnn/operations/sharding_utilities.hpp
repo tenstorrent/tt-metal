@@ -97,9 +97,7 @@ struct ShardedAccessorArgs {
     std::vector<uint32_t> shapes_and_bank_coords;
 };
 ShardedAccessorArgs get_sharded_accessor_args(
-    const distributed::MeshDevice& mesh_device,
-    const BufferDistributionSpec& buffer_distribution_spec,
-    const CoreType& bank_type);
+    const MeshDevice& mesh_device, const BufferDistributionSpec& buffer_distribution_spec, const CoreType& bank_type);
 
 }  // namespace sharded_accessor_utils
 

@@ -14,7 +14,7 @@
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/utils.hpp>
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 class MeshShape : public ShapeBase {
 public:
@@ -450,41 +450,40 @@ typename MeshContainer<T>::ConstIterator MeshContainer<T>::end() const {
     return ConstIterator(this, coord_range_.end(), shape_.mesh_size());
 }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal
 
 namespace std {
 
 template <typename T>
-struct tuple_size<tt::tt_metal::distributed::detail::MeshCoordinateValueProxy<T>> : std::integral_constant<size_t, 2> {
+struct tuple_size<tt::tt_metal::detail::MeshCoordinateValueProxy<T>> : std::integral_constant<size_t, 2> {};
+
+template <typename T>
+struct tuple_element<0, tt::tt_metal::detail::MeshCoordinateValueProxy<T>> {
+    using type = const tt::tt_metal::MeshCoordinate;
 };
 
 template <typename T>
-struct tuple_element<0, tt::tt_metal::distributed::detail::MeshCoordinateValueProxy<T>> {
-    using type = const tt::tt_metal::distributed::MeshCoordinate;
-};
-
-template <typename T>
-struct tuple_element<1, tt::tt_metal::distributed::detail::MeshCoordinateValueProxy<T>> {
+struct tuple_element<1, tt::tt_metal::detail::MeshCoordinateValueProxy<T>> {
     using type = T;
 };
 
 template <>
-struct hash<tt::tt_metal::distributed::MeshCoordinate> {
-    size_t operator()(const tt::tt_metal::distributed::MeshCoordinate& coord) const noexcept {
+struct hash<tt::tt_metal::MeshCoordinate> {
+    size_t operator()(const tt::tt_metal::MeshCoordinate& coord) const noexcept {
         return tt::stl::hash::hash_objects_with_default_seed(coord.attribute_values());
     }
 };
 
 template <>
-struct hash<tt::tt_metal::distributed::MeshCoordinateRange> {
-    size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRange& range) const noexcept {
+struct hash<tt::tt_metal::MeshCoordinateRange> {
+    size_t operator()(const tt::tt_metal::MeshCoordinateRange& range) const noexcept {
         return tt::stl::hash::hash_objects_with_default_seed(range.attribute_values());
     }
 };
 
 template <>
-struct hash<tt::tt_metal::distributed::MeshCoordinateRangeSet> {
-    size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRangeSet& range_set) const noexcept {
+struct hash<tt::tt_metal::MeshCoordinateRangeSet> {
+    size_t operator()(const tt::tt_metal::MeshCoordinateRangeSet& range_set) const noexcept {
         return tt::stl::hash::hash_objects_with_default_seed(range_set.attribute_values());
     }
 };

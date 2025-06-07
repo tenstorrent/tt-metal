@@ -721,13 +721,13 @@ int main(int argc, char **argv) {
         [enable_tp](auto &&arg) -> Model {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
                 if (enable_tp) {
-                    return ttml::models::distributed::llama::create(arg);
+                    return ttml::models::llama::create(arg);
                 } else {
                     return ttml::models::llama::create(arg);
                 }
             } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>) {
                 if (enable_tp) {
-                    return ttml::models::distributed::gpt2::create(arg);
+                    return ttml::models::gpt2::create(arg);
                 } else {
                     return ttml::models::gpt2::create(arg);
                 }
@@ -875,7 +875,7 @@ int main(int argc, char **argv) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
                 if (!enable_tp) {
-                    ttml::core::distributed::synchronize_parameters(parameters);
+                    ttml::core::synchronize_parameters(parameters);
                 }
 
                 if (config.use_clip_grad_norm) {

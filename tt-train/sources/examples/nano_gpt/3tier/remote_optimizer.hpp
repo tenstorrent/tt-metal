@@ -39,6 +39,6 @@ public:
 private:
     size_t m_steps{0};
     SortedParameters m_sorted_parameters;
-    ttml::core::distributed::Rank m_aggregator_rank{0};
+    ttml::core::Rank m_aggregator_rank{0};
     std::shared_ptr<ttml::autograd::DistributedContext> m_distributed_ctx;
 };

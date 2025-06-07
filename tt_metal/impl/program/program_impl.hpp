@@ -340,8 +340,8 @@ private:
     friend EnqueueProgramCommand;
     friend Program;
     friend Internal_;
-    friend distributed::MeshWorkload;
-    friend distributed::MeshWorkloadImpl;
+    friend MeshWorkload;
+    friend MeshWorkloadImpl;
 };
 
 }  // namespace detail

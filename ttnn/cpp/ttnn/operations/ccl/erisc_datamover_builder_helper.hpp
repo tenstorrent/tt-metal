@@ -129,12 +129,12 @@ private:
 };
 
 void initialize_edm_fabric(
-    distributed::MeshDevice* mesh_device,
+    MeshDevice* mesh_device,
     bool wrap_fabric_around_mesh = false,
     std::optional<size_t> context_switch_interval_override = std::nullopt,
     Topology topology = Topology::Linear);
 void teardown_edm_fabric(
-    distributed::MeshDevice* mesh_device, bool wrap_fabric_around_mesh = false, Topology topology = Topology::Linear);
+    MeshDevice* mesh_device, bool wrap_fabric_around_mesh = false, Topology topology = Topology::Linear);
 
 };  // namespace ccl
 };  // namespace ttnn

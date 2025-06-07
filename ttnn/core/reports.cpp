@@ -17,7 +17,7 @@
 
 namespace ttnn::reports {
 
-DeviceInfo get_device_info(tt::tt_metal::distributed::MeshDevice* device) {
+DeviceInfo get_device_info(tt::tt_metal::MeshDevice* device) {
     DeviceInfo info{};
     const auto& dispatch_core_config = tt::tt_metal::get_dispatch_core_config();
     const auto descriptor =
@@ -46,7 +46,7 @@ DeviceInfo get_device_info(tt::tt_metal::distributed::MeshDevice* device) {
     return info;
 }
 
-std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices) {
+std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::MeshDevice*>& devices) {
     std::vector<BufferInfo> buffer_infos;
     for (auto device : devices) {
         for (const auto& buffer : device->allocator()->get_allocated_buffers()) {
@@ -98,7 +98,7 @@ std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed:
     return buffer_infos;
 }
 
-std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices) {
+std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::MeshDevice*>& devices) {
     std::vector<BufferPageInfo> buffer_page_infos;
     for (auto device : devices) {
         for (const auto& buffer : device->allocator()->get_allocated_buffers()) {

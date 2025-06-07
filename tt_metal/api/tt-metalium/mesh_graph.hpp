@@ -25,10 +25,10 @@ enum class ARCH;
 
 namespace tt::tt_fabric {
 
-using tt::tt_metal::distributed::MeshContainer;
-using tt::tt_metal::distributed::MeshCoordinate;
-using tt::tt_metal::distributed::MeshCoordinateRange;
-using tt::tt_metal::distributed::MeshShape;
+using tt::tt_metal::MeshContainer;
+using tt::tt_metal::MeshCoordinate;
+using tt::tt_metal::MeshCoordinateRange;
+using tt::tt_metal::MeshShape;
 
 struct ChipSpec {
     tt::ARCH arch;

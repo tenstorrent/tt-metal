@@ -21,7 +21,7 @@
 #include "shape_base.hpp"
 #include "small_vector.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 namespace {
 
 // Returns the last valid coordinate for the provided `shape`.
@@ -433,4 +433,4 @@ std::ostream& operator<<(std::ostream& os, const MeshCoordinateRangeSet& range_s
     return os;
 }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

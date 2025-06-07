@@ -53,8 +53,8 @@ public:
 
 class TTNNFixtureWithDevice : public TTNNFixtureBase {
 protected:
-    tt::tt_metal::distributed::MeshDevice* device_ = nullptr;
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
+    tt::tt_metal::MeshDevice* device_ = nullptr;
+    std::shared_ptr<tt::tt_metal::MeshDevice> device_holder_;
 
     void SetUp() override {
         device_holder_ = ttnn::open_mesh_device(/*device_id=*/0, l1_small_size_, trace_region_size_);
@@ -71,8 +71,8 @@ protected:
 
 class MultiCommandQueueSingleDeviceFixture : public TTNNFixtureBase {
 protected:
-    tt::tt_metal::distributed::MeshDevice* device_ = nullptr;
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
+    tt::tt_metal::MeshDevice* device_ = nullptr;
+    std::shared_ptr<tt::tt_metal::MeshDevice> device_holder_;
 
     void SetUp() override {
         check_slow_dispatch();
@@ -83,7 +83,7 @@ protected:
                 tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
             dispatch_core_type = DispatchCoreType::ETH;
         }
-        device_holder_ = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(
+        device_holder_ = tt::tt_metal::MeshDevice::create_unit_mesh(
             0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 2, DispatchCoreConfig{dispatch_core_type});
         device_ = device_holder_.get();
     }
@@ -93,7 +93,7 @@ protected:
 
 class MultiCommandQueueT3KFixture : public TTNNFixtureBase {
 protected:
-    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devs;
+    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::MeshDevice>> devs;
 
     void SetUp() override {
         check_slow_dispatch();
@@ -103,7 +103,7 @@ protected:
         }
 
         // Enable Ethernet Dispatch for Multi-CQ tests.
-        devs = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
+        devs = tt::tt_metal::MeshDevice::create_unit_meshes(
             {0, 1, 2, 3, 4, 5, 6, 7},
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,

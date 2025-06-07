@@ -23,7 +23,7 @@
 
 namespace tt::tt_metal {
 
-using MeshDevice = distributed::MeshDevice;
+using MeshDevice = MeshDevice;
 
 namespace {
 

@@ -311,7 +311,7 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
     fabric_hops[direction] = num_hops;
 
-    tt::tt_metal::distributed::MeshShape mesh_shape;
+    tt::tt_metal::MeshShape mesh_shape;
     std::vector<chan_id_t> eth_chans;
     chan_id_t edm_port;
 
@@ -766,7 +766,7 @@ void RunTestMCastConnAPI(
     fabric_hops[fwd_dir] = fwd_hops;
     fabric_hops[bwd_dir] = bwd_hops;
 
-    tt::tt_metal::distributed::MeshShape mesh_shape;
+    tt::tt_metal::MeshShape mesh_shape;
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
     uint32_t is_2d_fabric = topology == Topology::Mesh;
 

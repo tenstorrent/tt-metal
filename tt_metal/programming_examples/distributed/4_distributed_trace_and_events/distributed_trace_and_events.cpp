@@ -148,7 +148,7 @@ int main() {
         num_tiles_per_device * mesh_device->num_devices();  // The total number of tiles in the distributed memory space
 
     // Specify data layout in distributed memory space - Data will be sharded in row major order across the Virtual Mesh
-    tt::tt_metal::distributed::ShardedBufferConfig global_buffer_config{
+    tt::tt_metal::ShardedBufferConfig global_buffer_config{
         .global_size = single_tile_size * num_tiles_in_mesh,  // Total size of the sharded buffer
         .global_buffer_shape =
             {num_tiles_in_mesh * TILE_WIDTH, TILE_HEIGHT},  // Data represents horizontally concatenated tiles

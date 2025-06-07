@@ -10,14 +10,12 @@
 
 namespace tt {
 namespace tt_metal {
-namespace distributed {
 template <typename T>
 class MeshContainer;
-}  // namespace distributed
 }  // namespace tt_metal
 }  // namespace tt
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 // PhysicalMeshCoordinate is a 2D-coordinate in the physical mesh as defined by the Fabric layer.
 // MeshCoordinate[0] is the mesh_id and MeshCoordinate[1] is the physical_device_id.
@@ -38,4 +36,4 @@ private:
 // Returns a map of all physical mesh coordinates in the system.
 const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translation_map();
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

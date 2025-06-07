@@ -10,7 +10,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include "program/program_impl.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 using RuntimeArgsPerCore = std::vector<std::vector<RuntimeArgsData>>;
 
 class MeshCommandQueue;
@@ -76,4 +76,4 @@ public:
     uint32_t get_cb_base_addr(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_cb_size(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
 };
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

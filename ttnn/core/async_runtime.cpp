@@ -52,21 +52,18 @@ void queue_synchronize(CommandQueue& cq) {
     // Wait for device CQ to finish
     Finish(cq);
 }
-void queue_synchronize(tt::tt_metal::distributed::MeshCommandQueue& cq) { cq.finish(); }
+void queue_synchronize(tt::tt_metal::MeshCommandQueue& cq) { cq.finish(); }
 
 void event_synchronize(const std::shared_ptr<Event>& event) { EventSynchronize(event); }
-void event_synchronize(const tt::tt_metal::distributed::MeshEvent& event) {
-    tt::tt_metal::distributed::EventSynchronize(event);
-}
+void event_synchronize(const tt::tt_metal::MeshEvent& event) { tt::tt_metal::EventSynchronize(event); }
 
 void wait_for_event(CommandQueue& cq, const std::shared_ptr<Event>& event) {
     auto cq_id = cq.id();
     auto cq_worker = cq.device();
     EnqueueWaitForEvent(cq_worker->command_queue(cq_id), event);
 }
-void wait_for_event(
-    tt::tt_metal::distributed::MeshCommandQueue& cq, const tt::tt_metal::distributed::MeshEvent& event) {
-    tt::tt_metal::distributed::EnqueueWaitForEvent(cq, event);
+void wait_for_event(tt::tt_metal::MeshCommandQueue& cq, const tt::tt_metal::MeshEvent& event) {
+    tt::tt_metal::EnqueueWaitForEvent(cq, event);
 }
 
 void record_event(CommandQueue& cq, const std::shared_ptr<Event>& event) {
@@ -74,11 +71,11 @@ void record_event(CommandQueue& cq, const std::shared_ptr<Event>& event) {
     auto cq_worker = cq.device();
     EnqueueRecordEvent(cq_worker->command_queue(cq_id), event);
 }
-tt::tt_metal::distributed::MeshEvent record_event(tt::tt_metal::distributed::MeshCommandQueue& cq) {
-    return tt::tt_metal::distributed::EnqueueRecordEvent(cq);
+tt::tt_metal::MeshEvent record_event(tt::tt_metal::MeshCommandQueue& cq) {
+    return tt::tt_metal::EnqueueRecordEvent(cq);
 }
-tt::tt_metal::distributed::MeshEvent record_event_to_host(tt::tt_metal::distributed::MeshCommandQueue& cq) {
-    return tt::tt_metal::distributed::EnqueueRecordEventToHost(cq);
+tt::tt_metal::MeshEvent record_event_to_host(tt::tt_metal::MeshCommandQueue& cq) {
+    return tt::tt_metal::EnqueueRecordEventToHost(cq);
 }
 
 }  // namespace ttnn

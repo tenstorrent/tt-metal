@@ -67,7 +67,7 @@ class MeshConfigurationTest : public T3KReshapeTestFixture, public ::testing::Wi
 
 TEST_P(MeshConfigurationTest, MeshConfigurations) {
     const auto& shape = GetParam();
-    auto mesh = tt::tt_metal::distributed::MeshDevice::create(
+    auto mesh = tt::tt_metal::MeshDevice::create(
         MeshDeviceConfig(shape),
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
@@ -100,7 +100,7 @@ TEST_P(MeshDeviceReshapeRoundtripTest, ReshapeBetweenConfigurations) {
         GTEST_SKIP() << "Either old or new shape is in line configuration; we test this in From1x4To2x2Invalid";
     }
 
-    auto mesh = tt::tt_metal::distributed::MeshDevice::create(
+    auto mesh = tt::tt_metal::MeshDevice::create(
         MeshDeviceConfig(old_shape),
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
@@ -137,7 +137,7 @@ INSTANTIATE_TEST_SUITE_P(
 using MeshDeviceReshapeTest = T3KReshapeTestFixture;
 
 TEST_F(MeshDeviceReshapeTest, InvalidRequestedShape) {
-    auto& system_mesh = tt::tt_metal::distributed::SystemMesh::instance();
+    auto& system_mesh = tt::tt_metal::SystemMesh::instance();
 
     // Shape too big.
     EXPECT_ANY_THROW(system_mesh.get_mapped_physical_device_ids(MeshShape(9)));
@@ -155,7 +155,7 @@ TEST_F(MeshDeviceReshapeTest, InvalidRequestedShape) {
 }
 
 TEST_F(MeshDeviceReshapeTest, InvalidReshapeDimensions) {
-    auto mesh = tt::tt_metal::distributed::MeshDevice::create(
+    auto mesh = tt::tt_metal::MeshDevice::create(
         MeshDeviceConfig(MeshShape(1, 8)),
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
@@ -171,7 +171,7 @@ TEST_F(MeshDeviceReshapeTest, InvalidReshapeDimensions) {
 }
 
 TEST_F(MeshDeviceReshapeTest, From1x8To2x4ThenBackTo1x8) {
-    auto mesh = tt::tt_metal::distributed::MeshDevice::create(
+    auto mesh = tt::tt_metal::MeshDevice::create(
         MeshDeviceConfig(MeshShape(1, 8)),
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
@@ -203,7 +203,7 @@ TEST_F(MeshDeviceReshapeTest, From1x8To2x4ThenBackTo1x8) {
 }
 
 TEST_F(MeshDeviceReshapeTest, InvalidTotalDeviceCount) {
-    auto mesh = tt::tt_metal::distributed::MeshDevice::create(
+    auto mesh = tt::tt_metal::MeshDevice::create(
         MeshDeviceConfig(MeshShape(1, 8)),
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
@@ -219,7 +219,7 @@ TEST_F(MeshDeviceReshapeTest, InvalidTotalDeviceCount) {
 }
 
 TEST_F(MeshDeviceReshapeTest, From1x4To2x2Invalid) {
-    auto mesh = tt::tt_metal::distributed::MeshDevice::create(
+    auto mesh = tt::tt_metal::MeshDevice::create(
         MeshDeviceConfig(MeshShape(1, 4)),
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
@@ -231,14 +231,14 @@ TEST_F(MeshDeviceReshapeTest, From1x4To2x2Invalid) {
 }
 
 TEST_F(MeshDeviceReshapeTest, From1x4To2x2Valid) {
-    auto& system_mesh = tt::tt_metal::distributed::SystemMesh::instance();
+    auto& system_mesh = tt::tt_metal::SystemMesh::instance();
 
     // Fetch the device ids for a physically connected 2x2 mesh.
     auto physical_device_ids = system_mesh.get_mapped_physical_device_ids(MeshShape(2, 2));
 
     // Supply the physical device ids to the mesh constructor that we know we know is 2x2 physically connected.
     // We will create a 1x4 mesh and then reshape it to 2x2.
-    auto mesh = tt::tt_metal::distributed::MeshDevice::create(
+    auto mesh = tt::tt_metal::MeshDevice::create(
         MeshDeviceConfig(MeshShape(1, 4), /*offset=*/std::nullopt, /*physical_device_ids=*/physical_device_ids),
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
@@ -254,7 +254,7 @@ TEST_F(MeshDeviceReshapeTest, From1x4To2x2Valid) {
 }
 
 TEST_F(MeshDeviceReshapeTest, From2x2To1x4) {
-    auto mesh = tt::tt_metal::distributed::MeshDevice::create(
+    auto mesh = tt::tt_metal::MeshDevice::create(
         MeshDeviceConfig(MeshShape(2, 2)),
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,

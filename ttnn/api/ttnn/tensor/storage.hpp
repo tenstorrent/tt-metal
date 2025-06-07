@@ -25,17 +25,16 @@ struct HostStorage {
 };
 
 struct DeviceStorage {
-    std::vector<distributed::MeshCoordinate> coords;
+    std::vector<MeshCoordinate> coords;
     std::shared_ptr<Buffer> buffer;
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer;
+    std::shared_ptr<MeshBuffer> mesh_buffer;
 
     DeviceStorage() = default;
     DeviceStorage(std::shared_ptr<Buffer> buffer_);
-    DeviceStorage(
-        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords_);
+    DeviceStorage(std::shared_ptr<MeshBuffer> mesh_buffer_, std::vector<MeshCoordinate> coords_);
 
     Buffer* get_buffer() const;
-    std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer() const;
+    std::shared_ptr<MeshBuffer> get_mesh_buffer() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple();
     auto attribute_values() const { return std::forward_as_tuple(); }

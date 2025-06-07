@@ -2350,7 +2350,7 @@ MeshCoordinateRange get_range_from_mesh_coords(const ttnn::MeshCoordinateRangeSe
 
 operation::CacheableMeshWorkload<std::vector<Tensor>> create_homogenous_mesh_workload(
     tt::tt_metal::operation::ProgramWithCallbacks& matmul_program, const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    tt::tt_metal::distributed::MeshWorkload matmul_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+    tt::tt_metal::MeshWorkload matmul_workload = tt::tt_metal::CreateMeshWorkload();
     std::unordered_map<MeshCoordinateRange, MatmulCallback> callbacks = {};
 
     auto workload_device_range = get_range_from_mesh_coords(tensor_coords);
@@ -2473,7 +2473,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                 // DRAM Sharded Matmul generates different programs across devices, since it depends on harvesting.
                 // Account for this by creating a heterogenous MeshWorkload.
                 auto workload_device_range = get_range_from_mesh_coords(tensor_coords);
-                tt::tt_metal::distributed::MeshWorkload dram_sharded_mm_workload;
+                tt::tt_metal::MeshWorkload dram_sharded_mm_workload;
                 std::unordered_map<MeshCoordinateRange, MatmulCallback> callbacks;
 
                 for (const auto& coord : workload_device_range) {

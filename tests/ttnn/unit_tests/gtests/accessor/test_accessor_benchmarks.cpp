@@ -32,14 +32,14 @@ struct InputBufferParams {
     DistributionSpecParams input_shard_spec;
 };
 
-std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_input_mesh_buffer_from_inputs(
-    const InputBufferParams& inputs, tt::tt_metal::distributed::MeshDevice* mesh_device) {
+std::shared_ptr<tt::tt_metal::MeshBuffer> create_replicated_input_mesh_buffer_from_inputs(
+    const InputBufferParams& inputs, tt::tt_metal::MeshDevice* mesh_device) {
     // These values would be passed from tensor correctly based on PageConfig
     const auto host_size_in_bytes = inputs.physical_tensor_shape.volume() * inputs.bytes_per_element;
     const auto page_size = inputs.page_shape.height() * inputs.page_shape.width() * inputs.bytes_per_element;
 
     // Mirrors allocate_mesh_buffer_on_device in ttnn
-    const tt::tt_metal::distributed::ReplicatedBufferConfig mesh_buffer_config{.size = host_size_in_bytes};
+    const tt::tt_metal::ReplicatedBufferConfig mesh_buffer_config{.size = host_size_in_bytes};
 
     // Create input mesh buffer
     auto input_buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
@@ -48,14 +48,14 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_input_m
         inputs.page_shape,
         inputs.input_shard_spec.grid,
         inputs.input_shard_spec.shard_orientation);
-    const tt::tt_metal::distributed::DeviceLocalBufferConfig input_device_local_config{
+    const tt::tt_metal::DeviceLocalBufferConfig input_device_local_config{
         .page_size = page_size,
         .buffer_type = inputs.input_shard_spec.buffer_type,
         .buffer_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
         .shard_parameters = input_buffer_distribution_spec,
     };
     const auto input_mesh_buffer =
-        tt::tt_metal::distributed::MeshBuffer::create(mesh_buffer_config, input_device_local_config, mesh_device);
+        tt::tt_metal::MeshBuffer::create(mesh_buffer_config, input_device_local_config, mesh_device);
 
     return input_mesh_buffer;
 }
@@ -74,7 +74,7 @@ TEST_P(AccessorBenchmarks, Generic) {
     const auto input_mesh_buffer = create_replicated_input_mesh_buffer_from_inputs(params, mesh_device_.get());
 
     // Extract local single-device buffer (ie. shard_view) concepts for testing
-    const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
+    const tt::tt_metal::MeshCoordinate mesh_coordinate{0, 0};
     const auto input_shard_view = input_mesh_buffer->get_device_buffer(mesh_coordinate);
     const auto local_device = input_shard_view->device();
 
@@ -129,9 +129,9 @@ TEST_P(AccessorBenchmarks, Generic) {
         SetRuntimeArgs(program, reader_kernel_id, grid, input_runtime_args);
 
         // Launch program
-        auto mesh_work_load = tt::tt_metal::distributed::CreateMeshWorkload();
+        auto mesh_work_load = tt::tt_metal::CreateMeshWorkload();
         AddProgramToMeshWorkload(
-            mesh_work_load, std::move(program), (tt::tt_metal::distributed::MeshCoordinateRange)mesh_coordinate);
+            mesh_work_load, std::move(program), (tt::tt_metal::MeshCoordinateRange)mesh_coordinate);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_work_load, false);
 
         // Wait for program to finish

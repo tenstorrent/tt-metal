@@ -36,7 +36,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
 
 MeshTraceId MeshTrace::next_id() {
     static std::atomic<uint32_t> global_trace_id{0};
@@ -201,4 +201,4 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
     }
 }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal

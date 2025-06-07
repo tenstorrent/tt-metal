@@ -32,7 +32,7 @@
 #include "ttnn/tensor/types.hpp"
 
 using tt::tt_metal::DataType;
-using tt::tt_metal::distributed::MeshDevice;
+using tt::tt_metal::MeshDevice;
 
 using tt::tt_metal::Layout;
 using tt::tt_metal::Tensor;
@@ -122,7 +122,7 @@ void test_operation_infrastructure() {
     using ttnn::operations::unary::UnaryWithParam;
 
     int device_id = 0;
-    auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+    auto device_owner = tt::tt_metal::MeshDevice::create_unit_mesh(device_id);
     auto device = device_owner.get();
 
     auto shape = ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
@@ -144,7 +144,7 @@ void test_shape_padding() {
     using ttnn::operations::unary::UnaryWithParam;
 
     int device_id = 0;
-    auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+    auto device_owner = tt::tt_metal::MeshDevice::create_unit_mesh(device_id);
     auto device = device_owner.get();
     ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device);
 
@@ -183,7 +183,7 @@ void test_numerically() {
     using ttnn::operations::unary::UnaryWithParam;
 
     int device_id = 0;
-    auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+    auto device_owner = tt::tt_metal::MeshDevice::create_unit_mesh(device_id);
     auto device = device_owner.get();
 
     ttnn::Shape shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
@@ -239,7 +239,7 @@ void test_program_cache() {
     using ttnn::operations::unary::UnaryWithParam;
 
     int device_id = 0;
-    auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+    auto device_owner = tt::tt_metal::MeshDevice::create_unit_mesh(device_id);
     auto device = device_owner.get();
 
     auto run_tests = [&]() {

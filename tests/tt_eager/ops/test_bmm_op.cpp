@@ -47,7 +47,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        auto device_owner = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+        auto device_owner = tt_metal::MeshDevice::create_unit_mesh(device_id);
         auto device = device_owner.get();
 
         ////////////////////////////////////////////////////////////////////////////

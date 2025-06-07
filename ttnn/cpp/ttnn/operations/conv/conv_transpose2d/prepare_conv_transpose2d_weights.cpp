@@ -232,7 +232,7 @@ template ttnn::Tensor prepare_conv_transpose2d_weights(
     std::array<uint32_t, 2> dilation,
     const bool has_bias,
     uint32_t groups,
-    tt::tt_metal::distributed::MeshDevice* device,
+    tt::tt_metal::MeshDevice* device,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     bool mirror_kernel);
@@ -269,7 +269,7 @@ template ttnn::Tensor prepare_conv_transpose2d_bias(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    tt::tt_metal::distributed::MeshDevice* device,
+    tt::tt_metal::MeshDevice* device,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
