@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/fabric_types.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt::tt_fabric {
@@ -19,12 +20,12 @@ namespace tt::tt_fabric {
 using RoutingTable =
     std::vector<std::vector<std::vector<RoutingDirection>>>;  // [mesh_id][chip_id][target_chip_or_mesh_id]
 
-// TODO: first pass at switching over mesh_id_t/chip_id_t to proper struct
+// TODO: first pass at switching over MeshId/chip_id_t to proper struct
 // Need to update the usage in routing table generator
 class FabricNodeId {
 public:
-    explicit FabricNodeId(std::uint32_t mesh_id, std::uint32_t chip_id);
-    std::uint32_t mesh_id = 0;
+    explicit FabricNodeId(MeshId mesh_id, std::uint32_t chip_id);
+    MeshId mesh_id{0};
     std::uint32_t chip_id = 0;
 };
 
@@ -59,8 +60,8 @@ private:
     RoutingTable intra_mesh_table_;
     RoutingTable inter_mesh_table_;
 
-    std::vector<std::vector<std::vector<std::pair<chip_id_t, mesh_id_t>>>> get_paths_to_all_meshes(
-        mesh_id_t src, const InterMeshConnectivity& inter_mesh_connectivity);
+    std::vector<std::vector<std::vector<std::pair<chip_id_t, MeshId>>>> get_paths_to_all_meshes(
+        MeshId src, const InterMeshConnectivity& inter_mesh_connectivity);
     void generate_intramesh_routing_table(const IntraMeshConnectivity& intra_mesh_connectivity);
     // when generating intermesh routing table, we use the intramesh connectivity table to find the shortest path to
     // the exit chip

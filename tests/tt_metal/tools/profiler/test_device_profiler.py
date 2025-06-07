@@ -286,7 +286,7 @@ def test_dispatch_cores():
 @skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [322, 1400, 2100],
+        "Ethernet CQ Dispatch": [322, 541, 1400, 2100],
         "Ethernet CQ Prefetch": [600, 2500],
     }
     devicesData = run_device_profiler_test(
@@ -381,7 +381,7 @@ def test_timestamped_events():
     OP_COUNT = 2
     RISC_COUNT = 5
     ZONE_COUNT = 100
-    WH_ERISC_COUNTS = [0, 1, 5]
+    WH_ERISC_COUNTS = [0, 2, 5]  # N150, N300, T3K
     WH_TENSIX_COUNTS = [72, 64, 56]
     BH_ERISC_COUNTS = [0, 1, 6, 8]
     BH_TENSIX_COUNTS = [130, 120, 110]

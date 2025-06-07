@@ -97,7 +97,7 @@ std::vector<Tensor> post_sort_transform_tensor(
         const ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
         const ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         const ttnn::SmallVector<uint32_t> end_index = {
-            original_lshape[0], original_lshape[1], original_lshape[2], original_lshape[-1]};
+            original_lshape[-4], original_lshape[-3], original_lshape[-2], original_lshape[-1]};
         result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
         result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
     }

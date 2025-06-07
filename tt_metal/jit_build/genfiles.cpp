@@ -6,7 +6,6 @@
 
 #include <circular_buffer_constants.h>
 #include <data_format.hpp>
-#include <jit_build_options.hpp>
 #include <stdint.h>
 #include <tt_backend_api_types.hpp>
 #include <utils.hpp>
@@ -24,6 +23,7 @@
 #include "assert.hpp"
 #include "build.hpp"
 #include "hlk_desc.hpp"
+#include "jit_build_options.hpp"
 #include "jit_build_settings.hpp"
 #include "kernel.hpp"
 #include "logger.hpp"

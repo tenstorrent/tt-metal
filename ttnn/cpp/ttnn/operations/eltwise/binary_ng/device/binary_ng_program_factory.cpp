@@ -142,6 +142,12 @@ public:
             tt::round_up(shard_spec.shape[0], tile_height) / tile_height,
             tt::round_up(shard_spec.shape[1], tile_width) / tile_width};
 
+        TT_FATAL(
+            shard_shape[0] != 0 and shard_shape[1] != 0,
+            "Shard shape must not contain zero dimensions but got {{{}, {}}}",
+            shard_shape[0],
+            shard_shape[1]);
+
         const auto [N, C, Ht, Wt] = get_shape_dims(tensor);
         const auto unrolled_Ht = N * C * Ht;
         last_shard_shape = {
@@ -288,9 +294,9 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             c_num_tiles = num_tiles_per_core_group_2;
         } else {
-            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 13>{0});
+            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 18>{0});
             handle_args(program, writer_kernel_id, core, std::array<uint32_t, 14>{0});
-            handle_args(program, compute_kernel_id, core, std::array<uint32_t, 3>{0});
+            handle_args(program, compute_kernel_id, core, std::array<uint32_t, 4>{0});
             continue;
         }
 
@@ -581,7 +587,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         writer_kernel = kernel_config.writer_kernel;
         compute_kernel = kernel_config.compute_kernel;
     }
-    auto writer_defines = make_dataflow_defines(b_dtype, is_sfpu_op);
+    auto writer_defines = make_dataflow_defines(b_dtype);
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
 
@@ -599,7 +605,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         tt_metal::WriterDataMovementConfig({b_is_dram, c_is_dram, has_sharding}, std::move(writer_defines)));
 
     // READER KERNEL
-    auto reader_defines = make_dataflow_defines(a_dtype, is_sfpu_op);
+    auto reader_defines = make_dataflow_defines(a_dtype);
     reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
     reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
 

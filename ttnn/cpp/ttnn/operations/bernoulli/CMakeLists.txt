@@ -2,6 +2,7 @@ add_library(ttnn_op_bernoulli ${LIB_TYPE})
 add_library(TT::NN::Ops::Bernoulli ALIAS ttnn_op_bernoulli)
 
 target_precompile_headers(ttnn_op_bernoulli REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_bernoulli)
 
 target_sources(
     ttnn_op_bernoulli

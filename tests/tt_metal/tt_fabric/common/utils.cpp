@@ -23,15 +23,15 @@ bool find_device_with_neighbor_in_multi_direction(
     std::unordered_map<RoutingDirection, std::vector<chip_id_t>>& dst_physical_device_ids_by_dir,
     const std::unordered_map<RoutingDirection, uint32_t>& mcast_hops,
     std::optional<RoutingDirection> incoming_direction) {
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     auto devices = fixture->get_devices();
     // Find a device with enough neighbours in the specified direction
     bool connection_found = false;
     for (auto* device : devices) {
-        src_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(device->id());
+        src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
         if (incoming_direction.has_value()) {
-            if (!control_plane->get_intra_chip_neighbors(src_fabric_node_id, incoming_direction.value()).size()) {
+            if (!control_plane.get_intra_chip_neighbors(src_fabric_node_id, incoming_direction.value()).size()) {
                 // This potential source will not have the requested incoming direction, skip
                 continue;
             }
@@ -45,11 +45,11 @@ bool find_device_with_neighbor_in_multi_direction(
             auto& temp_physical_end_device_ids = temp_physical_end_device_ids_by_dir[routing_direction];
             auto curr_fabric_node_id = src_fabric_node_id;
             for (uint32_t i = 0; i < num_hops; i++) {
-                auto neighbors = control_plane->get_intra_chip_neighbors(curr_fabric_node_id, routing_direction);
+                auto neighbors = control_plane.get_intra_chip_neighbors(curr_fabric_node_id, routing_direction);
                 if (neighbors.size() > 0) {
                     temp_end_fabric_node_ids.emplace_back(curr_fabric_node_id.mesh_id, neighbors[0]);
                     temp_physical_end_device_ids.push_back(
-                        control_plane->get_physical_chip_id_from_fabric_node_id(temp_end_fabric_node_ids.back()));
+                        control_plane.get_physical_chip_id_from_fabric_node_id(temp_end_fabric_node_ids.back()));
                     curr_fabric_node_id = temp_end_fabric_node_ids.back();
                 } else {
                     direction_found = false;
@@ -78,17 +78,17 @@ bool find_device_with_neighbor_in_direction(
     chip_id_t& src_physical_device_id,
     chip_id_t& dst_physical_device_id,
     RoutingDirection direction) {
-    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto devices = fixture->get_devices();
     for (auto* device : devices) {
-        src_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(device->id());
+        src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
 
         // Get neighbours within a mesh in the given direction
-        auto neighbors = control_plane->get_intra_chip_neighbors(src_fabric_node_id, direction);
+        auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, direction);
         if (neighbors.size() > 0) {
             src_physical_device_id = device->id();
             dst_fabric_node_id = FabricNodeId(src_fabric_node_id.mesh_id, neighbors[0]);
-            dst_physical_device_id = control_plane->get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
+            dst_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
             return true;
         }
     }
@@ -103,7 +103,7 @@ std::map<FabricNodeId, chip_id_t> get_physical_chip_mapping_from_eth_coords_mapp
         for (std::uint32_t chip_id = 0; chip_id < mesh_graph_eth_coords[mesh_id].size(); chip_id++) {
             const auto& eth_coord = mesh_graph_eth_coords[mesh_id][chip_id];
             physical_chip_ids_mapping.insert(
-                {FabricNodeId(mesh_id, chip_id), cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
+                {FabricNodeId(MeshId{mesh_id}, chip_id), cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
         }
     }
     return physical_chip_ids_mapping;

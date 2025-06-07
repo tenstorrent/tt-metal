@@ -285,6 +285,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             .enable_weights_double_buffer = enable_weights_double_buffer,
             .enable_split_reader = enable_split_reader,
             .enable_subblock_padding = enable_subblock_padding},
+        input_tensor_a.dtype(),
         this->memory_config,
         has_bias,
         is_1d_deptwise_conv(

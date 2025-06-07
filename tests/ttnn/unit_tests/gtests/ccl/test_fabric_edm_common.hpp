@@ -24,7 +24,6 @@
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 #include <tt-metalium/mesh_device.hpp>
@@ -1193,7 +1192,11 @@ void setup_test_with_persistent_fabric(
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     size_t switch_interval = 0,
     bool loopback_on_last_device = false,
-    bool is_galaxy = false) {
+    bool is_galaxy = false,
+    bool en_dateline_sender_extra_buffer = false,
+    bool en_dateline_receiver_extra_buffer = false,
+    bool en_dateline_upstream_sender_extra_buffer = false,
+    bool en_dateline_upstream_receiver_extra_buffer = false) {
     if (enable_persistent_fabric) {
         log_info(tt::LogTest, "Enabling persistent fabric");
         fabric_programs = std::vector<Program>(devices.size());
@@ -1208,7 +1211,17 @@ void setup_test_with_persistent_fabric(
     }
 
     line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
-        devices, fabric_program_ptrs, enable_persistent_fabric, num_links.value_or(1), false, topology, is_galaxy);
+        devices,
+        fabric_program_ptrs,
+        enable_persistent_fabric,
+        num_links.value_or(1),
+        false,
+        topology,
+        is_galaxy,
+        en_dateline_sender_extra_buffer,
+        en_dateline_receiver_extra_buffer,
+        en_dateline_upstream_sender_extra_buffer,
+        en_dateline_upstream_receiver_extra_buffer);
     line_fabric->set_firmware_context_switch_interval(switch_interval);
     if (loopback_on_last_device) {
         for (auto& edm_builder : line_fabric->edm_builders_backward_direction.at(devices.back()->id())) {
@@ -2152,7 +2165,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     auto output_tensor = ttnn::operations::experimental::ccl::all_gather_async(
         input_mesh_tensor,
         dim,
-        multi_device_global_semaphore,
+        {multi_device_global_semaphore},
         num_links,
         operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         ttnn::ccl::Topology::Linear,
@@ -2222,7 +2235,7 @@ void run_ring_all_gather_with_persistent_fabric(
     auto output_tensor = ttnn::operations::experimental::ccl::all_gather_async(
         input_mesh_tensor,
         dim,
-        multi_device_global_semaphore,
+        {multi_device_global_semaphore},
         num_links,
         operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         topology,
@@ -2508,6 +2521,35 @@ void Run1DFabricPacketSendTest(
         case FabricTestMode::RingAsLinear: topology = ttnn::ccl::Topology::Ring; break;
     }
 
+    bool en_dateline_sender_extra_buffer = false;
+    bool en_dateline_receiver_extra_buffer = false;
+    bool en_dateline_upstream_sender_extra_buffer = false;
+    bool en_dateline_upstream_receiver_extra_buffer = false;
+    if (fabric_mode == FabricTestMode::HalfRing) {
+        // HalfRing test is more optimal with extra recv buffer on upstream edm.
+        en_dateline_sender_extra_buffer = true;
+        en_dateline_receiver_extra_buffer = true;
+        en_dateline_upstream_sender_extra_buffer = false;
+        en_dateline_upstream_receiver_extra_buffer = true;
+    } else if (fabric_mode == FabricTestMode::FullRing) {
+        // FullRing is more optimal with extra buffer on both send/recv channels.
+        en_dateline_sender_extra_buffer = false;
+        en_dateline_receiver_extra_buffer = true;
+        en_dateline_upstream_sender_extra_buffer = true;
+        en_dateline_upstream_receiver_extra_buffer = false;
+    } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
+        // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
+        en_dateline_sender_extra_buffer = true;
+        en_dateline_receiver_extra_buffer = true;
+        en_dateline_upstream_sender_extra_buffer = false;
+        en_dateline_upstream_receiver_extra_buffer = false;
+    } else if (fabric_mode == FabricTestMode::RingAsLinear) {
+        en_dateline_sender_extra_buffer = true;
+        en_dateline_receiver_extra_buffer = true;
+        en_dateline_upstream_sender_extra_buffer = true;
+        en_dateline_upstream_receiver_extra_buffer = true;
+    }
+
     auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
 
     // static constexpr size_t source_l1_buffer_address = 1000000;
@@ -2553,7 +2595,11 @@ void Run1DFabricPacketSendTest(
             topology,
             fabric_context_switch_interval,
             false,
-            is_6u_galaxy);
+            is_6u_galaxy,
+            en_dateline_sender_extra_buffer,
+            en_dateline_receiver_extra_buffer,
+            en_dateline_upstream_sender_extra_buffer,
+            en_dateline_upstream_receiver_extra_buffer);
         packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     } else {
         // TODO: get packet header size from control plane after it adds APIs to present this information
@@ -2791,6 +2837,16 @@ void Run1DFabricPacketSendTest(
 
             std::vector<uint32_t> worker_ct_args = {params.line_sync, params.line_sync};
 
+            TT_FATAL(
+                std::any_of(
+                    worker_cores_vec.begin(),
+                    worker_cores_vec.end(),
+                    [&sync_core_coord](const CoreCoord& core) {
+                        return core.x == sync_core_coord.x && core.y == sync_core_coord.y;
+                    }),
+                "Atleast one worker core must be mapped onto sync core: x={}, y={}",
+                sync_core_coord.x,
+                sync_core_coord.y);
             auto worker_kernel_id = tt_metal::CreateKernel(
                 program,
                 "tests/ttnn/unit_tests/gtests/ccl/kernels/edm_fabric_writer.cpp",

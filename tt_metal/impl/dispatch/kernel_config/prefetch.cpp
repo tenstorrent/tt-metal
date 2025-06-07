@@ -1,6 +1,7 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #include "prefetch.hpp"
 
 #include <host_api.hpp>
@@ -8,7 +9,6 @@
 #include <array>
 #include <map>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -18,10 +18,10 @@
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "dispatch/kernel_config/relay_mux.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
 #include "eth_router.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
@@ -36,6 +36,13 @@ void PrefetchKernel::GenerateStaticConfigs() {
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
     auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
+
+    // May be zero if not using dispatch on fabric
+    static_config_.fabric_header_rb_base =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_HEADER_RB);
+    static_config_.fabric_header_rb_entries = tt::tt_metal::DispatchSettings::FABRIC_HEADER_RB_ENTRIES;
+    static_config_.my_fabric_sync_status_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS);
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
@@ -126,14 +133,15 @@ void PrefetchKernel::GenerateStaticConfigs() {
         // Workaround for now. Need downstream to initialize my semaphore. Can't defer creating semaphore yet
         {
             uint32_t downstream_cb_pages;
-            if (tt::tt_metal::MetalContext::instance()
-                    .get_cluster()
-                    .is_galaxy_cluster()) {  // TODO: whys is this hard-coded for galaxy?
+            if (tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
+                downstream_cb_pages = my_dispatch_constants.prefetch_d_buffer_pages();
+            } else if (tt::tt_metal::MetalContext::instance()
+                           .get_cluster()
+                           .is_galaxy_cluster()) {  // TODO: whys is this hard-coded for galaxy?
                 downstream_cb_pages = my_dispatch_constants.mux_buffer_pages(1);
             } else {
                 downstream_cb_pages = my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs());
             }
-
             static_config_.my_downstream_cb_sem_id =
                 tt::tt_metal::CreateSemaphore(*program_, logical_core_, downstream_cb_pages, GetCoreType());
         }
@@ -200,6 +208,11 @@ void PrefetchKernel::GenerateStaticConfigs() {
     } else {
         TT_FATAL(false, "PrefetchKernel must be one of (or both) H and D variants");
     }
+
+    if ((static_config_.is_h_variant.value() ^ static_config_.is_d_variant.value()) &&
+        tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
+        create_edm_connection_sems(edm_connection_attributes_);
+    }
 }
 
 void PrefetchKernel::GenerateDependentConfigs() {
@@ -249,53 +262,68 @@ void PrefetchKernel::GenerateDependentConfigs() {
             dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
             dependent_config_.downstream_dispatch_s_cb_sem_id = UNUSED_SEM_ID;
         }
+        dependent_config_.num_hops = 0;
     } else if (static_config_.is_h_variant.value()) {
         // Upstream, just host so no dispatch core
         TT_ASSERT(upstream_kernels_.size() == 0);
         dependent_config_.upstream_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.upstream_cb_sem_id = 0;  // Used in prefetch_d only
+        // May be overwritten below
+        dependent_config_.num_hops = 0;
 
-        // Downstream
-        // one ROUTER or direct connection to PREFETCH_D if using fabric
-        TT_ASSERT(downstream_kernels_.size() == 1);
-        if (auto router_kernel = dynamic_cast<EthRouterKernel*>(downstream_kernels_[0])) {
-            dependent_config_.downstream_logical_core = router_kernel->GetLogicalCore();
-            dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
-            uint32_t router_idx =
-                router_kernel->GetUpstreamPort(this);  // Need the port that this connects to downstream
-            auto downstream_buffer_size = router_kernel->GetStaticConfig().rx_queue_size_words.value() << 4;
-            dependent_config_.downstream_cb_base =
-                (router_kernel->GetStaticConfig().rx_queue_start_addr_words.value() << 4) +
-                downstream_buffer_size * router_idx;
-            dependent_config_.downstream_cb_sem_id =
-                router_kernel->GetStaticConfig().input_packetize_local_sem[router_idx];
-            dependent_config_.downstream_dispatch_s_cb_sem_id = 0;  // No downstream DISPATCH_S in this case
+        // Process downstream
+        // ROUTER ||
+        // PREFETCH_D ||
+        // FABRIC_MUX
+        for (FDKernel* ds_kernel : downstream_kernels_) {
+            if (auto router_kernel = dynamic_cast<EthRouterKernel*>(ds_kernel)) {
+                dependent_config_.downstream_logical_core = router_kernel->GetLogicalCore();
+                dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
+                uint32_t router_idx =
+                    router_kernel->GetUpstreamPort(this);  // Need the port that this connects to downstream
+                auto downstream_buffer_size = router_kernel->GetStaticConfig().rx_queue_size_words.value() << 4;
+                dependent_config_.downstream_cb_base =
+                    (router_kernel->GetStaticConfig().rx_queue_start_addr_words.value() << 4) +
+                    downstream_buffer_size * router_idx;
+                dependent_config_.downstream_cb_sem_id =
+                    router_kernel->GetStaticConfig().input_packetize_local_sem[router_idx];
+                dependent_config_.downstream_dispatch_s_cb_sem_id = 0;  // No downstream DISPATCH_S in this case
 
-            dependent_config_.downstream_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-            dependent_config_.downstream_cb_pages =
-                downstream_buffer_size / (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
-        } else if (auto prefetch_d = dynamic_cast<PrefetchKernel*>(downstream_kernels_[0])) {
-            TT_ASSERT(
-                prefetch_d->GetStaticConfig().is_d_variant.value() &&
-                !prefetch_d->GetStaticConfig().is_h_variant.value());
+                dependent_config_.downstream_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
+                dependent_config_.downstream_cb_pages =
+                    downstream_buffer_size / (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
+            } else if (auto prefetch_d = dynamic_cast<PrefetchKernel*>(ds_kernel)) {
+                TT_ASSERT(
+                    prefetch_d->GetStaticConfig().is_d_variant.value() &&
+                    !prefetch_d->GetStaticConfig().is_h_variant.value());
 
-            dependent_config_.downstream_logical_core = prefetch_d->GetLogicalCore();
-            dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
-            dependent_config_.downstream_cb_base = prefetch_d->GetStaticConfig().cmddat_q_base.value();
-            dependent_config_.downstream_cb_sem_id = prefetch_d->GetStaticConfig().my_upstream_cb_sem_id.value();
-            dependent_config_.downstream_dispatch_s_cb_sem_id = 0;
+                dependent_config_.downstream_logical_core = prefetch_d->GetLogicalCore();
+                dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
+                dependent_config_.downstream_cb_base = prefetch_d->GetStaticConfig().cmddat_q_base.value();
+                dependent_config_.downstream_cb_sem_id = prefetch_d->GetStaticConfig().my_upstream_cb_sem_id.value();
+                dependent_config_.downstream_dispatch_s_cb_sem_id = 0;
 
-            static_assert(
-                DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE == DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
-            dependent_config_.downstream_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-            dependent_config_.downstream_cb_pages = prefetch_d->GetStaticConfig().cmddat_q_pages.value();
-        } else {
-            TT_FATAL(false, "Path not implemented");
+                static_assert(
+                    DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE ==
+                    DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
+                dependent_config_.downstream_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
+                dependent_config_.downstream_cb_pages = prefetch_d->GetStaticConfig().cmddat_q_pages.value();
+                dependent_config_.num_hops = tt::tt_metal::get_num_hops(device_id_, prefetch_d->GetDeviceId());
+            } else if (auto fabric_mux = dynamic_cast<tt::tt_metal::RelayMux*>(ds_kernel)) {
+                constexpr tt::tt_fabric::FabricMuxChannelType ch_type =
+                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+                tt::tt_metal::assemble_fabric_mux_client_config_args(
+                    node_id_, ch_type, fabric_mux, dependent_config_.fabric_mux_client_config);
+            } else {
+                TT_FATAL(false, "PREFETCH_H Downstream - Unimplemented path");
+            }
         }
     } else if (static_config_.is_d_variant.value()) {
         // Upstream
         // One ROUTER or direct connection to PREFETCH_H if using fabric
         TT_ASSERT(upstream_kernels_.size() == 1);
+        // May be overwritten below
+        dependent_config_.num_hops = 0;
         if (auto router_kernel = dynamic_cast<EthRouterKernel*>(upstream_kernels_[0])) {
             dependent_config_.upstream_logical_core = router_kernel->GetLogicalCore();
             int router_idx = router_kernel->GetDownstreamPort(this);
@@ -304,19 +332,16 @@ void PrefetchKernel::GenerateDependentConfigs() {
         } else if (auto prefetch_h = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0])) {
             dependent_config_.upstream_logical_core = prefetch_h->GetLogicalCore();
             dependent_config_.upstream_cb_sem_id = prefetch_h->GetStaticConfig().my_downstream_cb_sem_id.value();
+            dependent_config_.num_hops = tt::tt_metal::get_num_hops(prefetch_h->GetDeviceId(), device_id_);
         } else {
             TT_FATAL(false, "Path not implemented");
         }
 
-        // Downstream, expect a DISPATCH_D and s DISPATCH_S
-        // Prefetch_d will always be local with dispatch_d
-        if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
-            TT_ASSERT(downstream_kernels_.size() == 2);
-        } else {
-            TT_ASSERT(downstream_kernels_.size() == 1);
-        }
+        // Downstream
+        // DISPATCH_D || DISPATCH_S || FABRIC_MUX
         bool found_dispatch = false;
         bool found_dispatch_s = false;
+        bool found_relay_mux = false;
         for (FDKernel* k : downstream_kernels_) {
             if (auto dispatch_kernel = dynamic_cast<DispatchKernel*>(k)) {
                 TT_ASSERT(!found_dispatch, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
@@ -336,10 +361,19 @@ void PrefetchKernel::GenerateDependentConfigs() {
                 dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
                 dependent_config_.downstream_dispatch_s_cb_sem_id =
                     dispatch_s_kernel->GetStaticConfig().my_dispatch_cb_sem_id;
+            } else if (auto relay_mux = dynamic_cast<tt::tt_metal::RelayMux*>(k)) {
+                TT_ASSERT(!found_relay_mux, "PREFETCH_D kernel has multiple downstream RELAY_MUX kernels.");
+                found_relay_mux = true;
+                constexpr tt::tt_fabric::FabricMuxChannelType ch_type =
+                    tt::tt_fabric::FabricMuxChannelType::HEADER_ONLY_CHANNEL;
+                tt::tt_metal::assemble_fabric_mux_client_config_args(
+                    node_id_, ch_type, relay_mux, dependent_config_.fabric_mux_client_config);
             } else {
                 TT_FATAL(false, "Unrecognized downstream kernel.");
             }
         }
+        // No check needed for found relay mux. A direct connection to PREFETCH_H on the same core
+        // is possible (used in test prefetcher) and does not need tunneling.
         if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
             // Should have found dispatch_s in the downstream kernels
             TT_ASSERT(found_dispatch && found_dispatch_s);
@@ -385,25 +419,41 @@ void PrefetchKernel::CreateKernel() {
         dependent_config_.downstream_dispatch_s_cb_sem_id.value(),
         static_config_.dispatch_s_buffer_size.value(),
         static_config_.dispatch_s_cb_log_page_size.value(),
-        dependent_config_.downstream_mesh_id.value_or(0),
-        dependent_config_.downstream_dev_id.value_or(0),
-        dependent_config_.upstream_mesh_id.value_or(0),
-        dependent_config_.upstream_dev_id.value_or(0),
-        dependent_config_.fabric_router_noc_xy.value_or(0),
-        dependent_config_.outbound_eth_chan.value_or(0),
-        static_config_.client_interface_addr.value_or(0),
         static_config_.ringbuffer_size.value(),
+
+        static_config_.fabric_header_rb_base.value(),
+        static_config_.fabric_header_rb_entries.value(),
+        static_config_.my_fabric_sync_status_addr.value(),
+
+        dependent_config_.fabric_mux_client_config.virtual_x.value_or(0),
+        dependent_config_.fabric_mux_client_config.virtual_y.value_or(0),
+        dependent_config_.fabric_mux_client_config.num_buffers_per_channel.value_or(0),
+        dependent_config_.fabric_mux_client_config.channel_buffer_size_bytes.value_or(0),
+        dependent_config_.fabric_mux_client_config.channel_base_address.value_or(0),
+        dependent_config_.fabric_mux_client_config.connection_info_address.value_or(0),
+        dependent_config_.fabric_mux_client_config.connection_handshake_address.value_or(0),
+        dependent_config_.fabric_mux_client_config.flow_control_address.value_or(0),
+        dependent_config_.fabric_mux_client_config.buffer_index_address.value_or(0),
+        dependent_config_.fabric_mux_client_config.status_address.value_or(0),
+        dependent_config_.fabric_mux_client_config.termination_signal_address.value_or(0),
+        dependent_config_.fabric_mux_client_config.worker_credits_stream_id.value_or(0),
+
+        edm_connection_attributes_.worker_flow_control_sem,
+        edm_connection_attributes_.worker_teardown_sem,
+        edm_connection_attributes_.worker_buffer_index_sem,
+
+        dependent_config_.num_hops.value(),
+
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
     };
-    TT_ASSERT(compile_args.size() == 36);
-    auto my_virtual_core = device_->virtual_core_from_logical_core(logical_core_, GetCoreType());
-    auto upstream_virtual_core =
-        device_->virtual_core_from_logical_core(dependent_config_.upstream_logical_core.value(), GetCoreType());
+
+    auto my_virtual_core = get_virtual_core_coord(logical_core_, GetCoreType());
+    auto upstream_virtual_core = get_virtual_core_coord(dependent_config_.upstream_logical_core.value(), GetCoreType());
     auto downstream_virtual_core =
-        device_->virtual_core_from_logical_core(dependent_config_.downstream_logical_core.value(), GetCoreType());
+        get_virtual_core_coord(dependent_config_.downstream_logical_core.value(), GetCoreType());
     auto downstream_s_virtual_core =
-        device_->virtual_core_from_logical_core(dependent_config_.downstream_s_logical_core.value(), GetCoreType());
+        get_virtual_core_coord(dependent_config_.downstream_s_logical_core.value(), GetCoreType());
 
     auto my_virtual_noc_coords = device_->virtual_noc0_coordinate(noc_selection_.non_dispatch_noc, my_virtual_core);
     auto upstream_virtual_noc_coords =
@@ -472,24 +522,4 @@ void PrefetchKernel::ConfigureCore() {
             device_, logical_core_, prefetch_q_pcie_rd_ptr, prefetch_q_pcie_rd_ptr_addr_data, GetCoreType());
         detail::WriteToDeviceL1(device_, logical_core_, prefetch_q_base, prefetch_q, GetCoreType());
     }
-}
-
-void PrefetchKernel::UpdateArgsForFabric(
-    const CoreCoord& fabric_router_virtual,
-    uint32_t outbound_eth_chan,
-    tt::tt_fabric::mesh_id_t upstream_mesh_id,
-    chip_id_t upstream_dev_id,
-    tt::tt_fabric::mesh_id_t downstream_mesh_id,
-    chip_id_t downstream_dev_id) {
-    dependent_config_.fabric_router_noc_xy =
-        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(fabric_router_virtual.x, fabric_router_virtual.y);
-    dependent_config_.upstream_mesh_id = upstream_mesh_id;
-    dependent_config_.upstream_dev_id = upstream_dev_id;
-    dependent_config_.downstream_mesh_id = downstream_mesh_id;
-    dependent_config_.downstream_dev_id = downstream_dev_id;
-    dependent_config_.outbound_eth_chan = outbound_eth_chan;
-
-    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
-    static_config_.client_interface_addr =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_INTERFACE);
 }

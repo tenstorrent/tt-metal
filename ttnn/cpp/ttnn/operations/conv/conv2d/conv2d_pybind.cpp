@@ -2,22 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
-#include "ttnn-pybind/decorators.hpp"
+#include "conv2d_pybind.hpp"
 
-#include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
-#include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
+#include <array>
+#include <cstdint>
+#include <variant>
+#include <optional>
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
+#include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/types.hpp"
+#include <tt-metalium/constants.hpp>
 
-namespace py = pybind11;
-
-namespace ttnn {
-namespace operations::conv {
-namespace conv2d {
+namespace ttnn::operations::conv::conv2d {
 
 void py_bind_conv2d(py::module& module) {
     bind_registered_operation(
@@ -609,6 +613,4 @@ void py_bind_conv2d(py::module& module) {
             "out_subblock_w_ntiles", [](const OptimizedConvBlockConfig& c) { return c.out_subblock_w_ntiles; });
 }
 
-}  // namespace conv2d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv::conv2d

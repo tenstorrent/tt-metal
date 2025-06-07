@@ -364,7 +364,7 @@ operation::ProgramWithCallbacks padded_slice_rm_multi_core(
         auto src_tensor = input_tensors.at(0);
         auto dst_tensor = output_tensors.at(0);
         TT_FATAL(dst_tensor.is_sharded(), "Output tensor must be sharded");
-        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_tensor.buffer());
+        UpdateDynamicCircularBufferAddress(program, cb_src0, *dst_tensor.buffer());
 
         auto all_runtime_args = get_padded_slice_runtime_args_rm_sharded_output(
             src_tensor, dst_tensor, output_tensor_start, actual_output_shape, iter_cores, max_read_size);

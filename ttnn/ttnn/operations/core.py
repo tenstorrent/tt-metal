@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@ import math
 import pathlib
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import torch
 import ttnn.decorators
 from loguru import logger
 
@@ -275,7 +274,7 @@ def from_torch(
             [-0.761719, 0.53125, -0.652344]], dtype=bfloat16)
     """
     if memory_config is not None and memory_config.is_sharded():
-        if memory_config.shard_spec is None:
+        if memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
             raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
 
     if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
@@ -307,20 +306,10 @@ def _golden_function(tensor, *, torch_rank=None, **kwargs):
     return tensor
 
 
-class TorchTensor(torch.Tensor):
-    @classmethod
-    def __torch_function__(cls, func, types, func_args=(), func_kwargs=None):
-        # this tells torch to treat TorchTensor just like torch.Tensor's.
-        # Otherwise, torch will complain that it doesn't know how to handle it.
-        types = tuple(torch.Tensor if t == TorchTensor else t for t in types)
-        func = ttnn._ttnn.tensor.decorate_external_operation(func, function_name=f"(torch) {func.__name__}")
-        return super().__torch_function__(func, types, func_args, func_kwargs)
-
-
 @ttnn.register_python_operation(name="ttnn.to_torch", golden_function=_golden_function)
 def to_torch(
     tensor: ttnn.Tensor,
-    dtype: Optional[torch.dtype] = None,
+    dtype: Optional["torch.dtype"] = None,
     *,
     torch_rank: Optional[int] = None,
     mesh_composer: Optional[ttnn.MeshToTensor] = None,
@@ -352,6 +341,8 @@ def to_torch(
         tensor([[-0.3008, -0.8438,  0.3242],
                 [ 0.9023, -0.5820,  0.5312]], dtype=torch.bfloat16)
     """
+    import torch
+
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, cq_id=cq_id)
 
@@ -362,10 +353,14 @@ def to_torch(
         raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch.Tensor!")
 
     memory_config = tensor.memory_config()
-    if memory_config.is_sharded() and memory_config.shard_spec is None:
+    if memory_config.is_sharded() and memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
         raise RuntimeError("ttnn.to_torch: Shard spec must not be None for sharded tensors")
 
-    if memory_config.is_sharded() and memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL:
+    if (
+        memory_config.is_sharded()
+        and memory_config.shard_spec is not None
+        and memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL
+    ):
         tensor = tensor.to_torch()
     else:
         if (tensor.layout != ttnn.ROW_MAJOR_LAYOUT) and not (
@@ -381,7 +376,7 @@ def to_torch(
                 raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
             tensor = tensor.squeeze(0)
 
-    torch_tensor = TorchTensor(tensor)
+    torch_tensor = tensor
 
     if dtype is not None:
         torch_tensor = torch_tensor.to(dtype=dtype)
@@ -621,7 +616,7 @@ def as_tensor(
         raise RuntimeError("memory_config must be specified when device is specified")
 
     def torch_to_ttnn(
-        tensor: torch.Tensor,
+        tensor: "torch.Tensor",
         dtype: Optional[ttnn.DataType],
         layout: Optional[ttnn.Layout],
         device: Optional[ttnn.MeshDevice],
@@ -655,7 +650,7 @@ def as_tensor(
     else:
 
         def from_torch_and_dump(
-            tensor: torch.Tensor,
+            tensor: "torch.Tensor",
             dtype: Optional[ttnn.DataType],
             layout: Optional[ttnn.Layout],
             cache_file_name: str,

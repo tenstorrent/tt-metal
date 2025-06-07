@@ -30,7 +30,11 @@ inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DR
 
 inline uint16_t bfloat16(float float_num) {
     uint32_t uint32_data;
-    TT_ASSERT(sizeof float_num == sizeof uint32_data);
+    TT_FATAL(
+        sizeof float_num == sizeof uint32_data,
+        "Float size ({}) must equal uint32 size ({})",
+        sizeof float_num,
+        sizeof uint32_data);
 
     uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
     // just move upper 16 to lower 16 (truncate)
@@ -133,15 +137,22 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
         out0_tiles = 2;
     }
 
-    TT_ASSERT(
-        W <= TILE_WIDTH * in0_tiles &&
-        "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
-    TT_ASSERT(
-        in0_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        intermed0_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
+    TT_FATAL(
+        W <= TILE_WIDTH * in0_tiles,
+        "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now).",
+        W,
+        TILE_WIDTH,
+        in0_tiles);
+    TT_FATAL(
+        in0_tiles % block_size == 0,
+        "Size of buffer ({}) must be divisible by the size of block ({}) used by the reader and compute kernel.",
+        in0_tiles,
+        block_size);
+    TT_FATAL(
+        intermed0_tiles % block_size == 0,
+        "Size of buffer ({}) must be divisible by the size of block ({}) used by the reader and compute kernel.",
+        intermed0_tiles,
+        block_size);
 
     auto grid_size = device->compute_with_storage_grid_size();
     auto
@@ -257,7 +268,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
         } else if (core_group_2.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
         uint32_t in_tile_offset = curr_row * Wt;

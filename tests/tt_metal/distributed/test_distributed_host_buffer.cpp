@@ -60,9 +60,9 @@ TEST(DistributedHostBufferTest, GetBuffer) {
 
     auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset);
 
-    buffer.emplace_shard(distributed::MeshCoordinate(0), HostBuffer(std::vector<int>{1, 2, 3}));
-    buffer.emplace_shard(distributed::MeshCoordinate(1), HostBuffer(std::vector<int>{4, 5, 6}));
-    buffer.emplace_shard(distributed::MeshCoordinate(2), HostBuffer(std::vector<int>{7, 8, 9}));
+    buffer.emplace_shard(distributed::MeshCoordinate(0), []() { return HostBuffer(std::vector<int>{1, 2, 3}); });
+    buffer.emplace_shard(distributed::MeshCoordinate(1), []() { return HostBuffer(std::vector<int>{4, 5, 6}); });
+    buffer.emplace_shard(distributed::MeshCoordinate(2), []() { return HostBuffer(std::vector<int>{7, 8, 9}); });
 
     auto optional_buffer = buffer.get_shard(distributed::MeshCoordinate(0));
     ASSERT_TRUE(optional_buffer.has_value());
@@ -88,12 +88,12 @@ TEST(DistributedHostBufferTest, WithLocalMeshShape) {
     auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset);
     EXPECT_EQ(buffer.shape().mesh_size(), 6);  // 2×3 = 6
 
-    buffer.emplace_shard(distributed::MeshCoordinate(0, 0), HostBuffer(std::vector<int>{1, 2, 3}));
-    buffer.emplace_shard(distributed::MeshCoordinate(0, 1), HostBuffer(std::vector<int>{4, 5, 6}));
-    buffer.emplace_shard(distributed::MeshCoordinate(0, 2), HostBuffer(std::vector<int>{7, 8, 9}));
-    buffer.emplace_shard(distributed::MeshCoordinate(1, 0), HostBuffer(std::vector<int>{10, 11, 12}));
-    buffer.emplace_shard(distributed::MeshCoordinate(1, 1), HostBuffer(std::vector<int>{13, 14, 15}));
-    buffer.emplace_shard(distributed::MeshCoordinate(1, 2), HostBuffer(std::vector<int>{16, 17, 18}));
+    buffer.emplace_shard(distributed::MeshCoordinate(0, 0), []() { return HostBuffer(std::vector<int>{1, 2, 3}); });
+    buffer.emplace_shard(distributed::MeshCoordinate(0, 1), []() { return HostBuffer(std::vector<int>{4, 5, 6}); });
+    buffer.emplace_shard(distributed::MeshCoordinate(0, 2), []() { return HostBuffer(std::vector<int>{7, 8, 9}); });
+    buffer.emplace_shard(distributed::MeshCoordinate(1, 0), []() { return HostBuffer(std::vector<int>{10, 11, 12}); });
+    buffer.emplace_shard(distributed::MeshCoordinate(1, 1), []() { return HostBuffer(std::vector<int>{13, 14, 15}); });
+    buffer.emplace_shard(distributed::MeshCoordinate(1, 2), []() { return HostBuffer(std::vector<int>{16, 17, 18}); });
 
     EXPECT_THAT(
         buffer.shard_coords(),
@@ -137,8 +137,8 @@ TEST(DistributedHostBufferTest, Transform) {
     auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset);
     EXPECT_EQ(buffer.shape().mesh_size(), 2);
 
-    buffer.emplace_shard(distributed::MeshCoordinate(0), HostBuffer(std::vector<int>{1, 2, 3}));
-    buffer.emplace_shard(distributed::MeshCoordinate(1), HostBuffer(std::vector<int>{4, 5, 6}));
+    buffer.emplace_shard(distributed::MeshCoordinate(0), []() { return HostBuffer(std::vector<int>{1, 2, 3}); });
+    buffer.emplace_shard(distributed::MeshCoordinate(1), []() { return HostBuffer(std::vector<int>{4, 5, 6}); });
 
     auto transformed_buffer = buffer.transform([](const HostBuffer& buffer) {
         auto span = buffer.view_as<int>();
@@ -166,9 +166,9 @@ TEST(DistributedHostBufferTest, TransformWithLocalShape) {
     auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset);
     EXPECT_EQ(buffer.shape().mesh_size(), 3);  // 3×1 = 3
 
-    buffer.emplace_shard(distributed::MeshCoordinate(0, 0), HostBuffer(std::vector<int>{1, 2, 3}));
-    buffer.emplace_shard(distributed::MeshCoordinate(1, 0), HostBuffer(std::vector<int>{4, 5, 6}));
-    buffer.emplace_shard(distributed::MeshCoordinate(2, 0), HostBuffer(std::vector<int>{7, 8, 9}));
+    buffer.emplace_shard(distributed::MeshCoordinate(0, 0), []() { return HostBuffer(std::vector<int>{1, 2, 3}); });
+    buffer.emplace_shard(distributed::MeshCoordinate(1, 0), []() { return HostBuffer(std::vector<int>{4, 5, 6}); });
+    buffer.emplace_shard(distributed::MeshCoordinate(2, 0), []() { return HostBuffer(std::vector<int>{7, 8, 9}); });
 
     auto transformed_buffer = buffer.transform([](const HostBuffer& buffer) {
         auto span = buffer.view_as<int>();
@@ -196,8 +196,8 @@ TEST(DistributedHostBufferTest, Apply) {
     auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset);
     EXPECT_EQ(buffer.shape().mesh_size(), 2);
 
-    buffer.emplace_shard(distributed::MeshCoordinate(0), HostBuffer(std::vector<int>{1, 2, 3}));
-    buffer.emplace_shard(distributed::MeshCoordinate(1), HostBuffer(std::vector<int>{4, 5, 6}));
+    buffer.emplace_shard(distributed::MeshCoordinate(0), []() { return HostBuffer(std::vector<int>{1, 2, 3}); });
+    buffer.emplace_shard(distributed::MeshCoordinate(1), []() { return HostBuffer(std::vector<int>{4, 5, 6}); });
 
     std::vector<std::vector<int>> values;
     buffer.apply([&values](const HostBuffer& buffer) {
@@ -218,9 +218,9 @@ TEST(DistributedHostBufferTest, ApplyWithLocalShape) {
     auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset);
     EXPECT_EQ(buffer.shape().mesh_size(), 3);  // 3×1 = 3
 
-    buffer.emplace_shard(distributed::MeshCoordinate(0, 0), HostBuffer(std::vector<int>{1, 2, 3}));
-    buffer.emplace_shard(distributed::MeshCoordinate(1, 0), HostBuffer(std::vector<int>{4, 5, 6}));
-    buffer.emplace_shard(distributed::MeshCoordinate(2, 0), HostBuffer(std::vector<int>{7, 8, 9}));
+    buffer.emplace_shard(distributed::MeshCoordinate(0, 0), []() { return HostBuffer(std::vector<int>{1, 2, 3}); });
+    buffer.emplace_shard(distributed::MeshCoordinate(1, 0), []() { return HostBuffer(std::vector<int>{4, 5, 6}); });
+    buffer.emplace_shard(distributed::MeshCoordinate(2, 0), []() { return HostBuffer(std::vector<int>{7, 8, 9}); });
 
     std::vector<std::vector<int>> values;
     buffer.apply([&values](const HostBuffer& buffer) {

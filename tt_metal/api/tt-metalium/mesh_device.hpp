@@ -33,7 +33,6 @@
 #include <tt-metalium/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <umd/device/types/arch.h>
-#include <tt-metalium/work_executor_types.hpp>
 
 enum class CoreType;
 namespace tt {
@@ -54,7 +53,6 @@ namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
 class ThreadPool;
-class ProgramCache;
 class TraceDescriptor;
 
 namespace distributed {
