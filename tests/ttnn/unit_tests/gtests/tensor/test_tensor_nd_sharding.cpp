@@ -196,9 +196,9 @@ TEST_F(NDShardingPerfTests, TestBatchShardingPerf) {
         return measure_to_device_time_ns(tensor_spec);
     }();
 
-    tt::log_info("Batch ND sharding time: {} ns", batch_nd_sharding_time_ns);
-    tt::log_info("Small shards ND sharding time: {} ns", small_shards_nd_sharding_time_ns);
-    tt::log_info("Block 2D sharding time: {} ns", block_2d_sharding_time_ns);
+    log_info(tt::LogTest, "Batch ND sharding time: {} ns", batch_nd_sharding_time_ns);
+    log_info(tt::LogTest, "Small shards ND sharding time: {} ns", small_shards_nd_sharding_time_ns);
+    log_info(tt::LogTest, "Block 2D sharding time: {} ns", block_2d_sharding_time_ns);
 
     EXPECT_TRUE(batch_nd_sharding_time_ns < block_2d_sharding_time_ns * 4);
     EXPECT_TRUE(small_shards_nd_sharding_time_ns < block_2d_sharding_time_ns * 4);
