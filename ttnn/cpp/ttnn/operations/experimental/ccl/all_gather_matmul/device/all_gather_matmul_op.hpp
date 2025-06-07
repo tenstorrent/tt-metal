@@ -59,7 +59,7 @@ struct AllGatherMatmul {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
     static constexpr auto attribute_names = std::forward_as_tuple("all_gather_struct", "all_gather_core_grid_offset");
-    const auto attribute_values() const {
+    auto attribute_values() const {
         return std::forward_as_tuple(this->all_gather_struct, this->all_gather_core_grid_offset);
     }
 };
@@ -120,6 +120,7 @@ std::vector<Tensor> all_gather_matmul(
     const std::vector<Tensor>& weight_tensors,
     const uint32_t dim,
     const CoreCoord all_gather_core_grid_offset,
+    const std::optional<const Tensor>& bias = std::nullopt,
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config_ag = std::nullopt,
     const std::optional<size_t> user_defined_num_workers = std::nullopt,

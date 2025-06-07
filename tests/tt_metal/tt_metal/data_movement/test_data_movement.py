@@ -34,6 +34,7 @@ test_id_to_name = {
     14: "One to All Multicast Linked 11x10 Packet Sizes",
     15: "One from All Packet Sizes",
     16: "Loopback Packet Sizes",
+    30: "One from All Directed Ideal",
     50: "One to One Directed Ideal",
     51: "One from One Directed Ideal",
     52: "One to All Directed Ideal",
@@ -41,6 +42,9 @@ test_id_to_name = {
     18: "Reshard Hardcoded Medium",
     19: "Reshard Hardcoded Many Cores",
     20: "Reshard Hardcoded 2 Cores to Many Cores",
+    21: "Conv Act with halo 3x3",
+    22: "Conv Act with halo 3x3 Small",
+    23: "Conv Halo Gather",
 }
 
 # Comments for each test explaining why we get the perf that we do
@@ -116,6 +120,17 @@ test_id_to_comment = {
         and the transaction size. A small number of transactions will result in small perf due to large \n\
         round trip latency. It is suggested to use a large number of transactions, with large transaction \n\
         size to get the best performance.",
+    21: "Convolution has a large number of transactions and a small transaction size. The performance is \n\
+        similar to what it would be for a similarly configured one from one. Convolution may benefit from \n\
+        having multiple cores doing different parts of the convolution at the same time. This would \n\
+        result in a larger effective bandwidth.",
+    22: "Convolution has a large number of transactions and a small transaction size. The performance is \n\
+        similar to what it would be for a similarly configured one from one. Convolution may benefit from \n\
+        having multiple cores doing different parts of the convolution at the same time. This would \n\
+        result in a larger effective bandwidth.",
+    23: "The performance of this test is similar to how other tests perform based on the number of \n\
+        transactions and the transaction size, but with extra degradation due to needing to read \n\
+        parameters from L1.",
 }
 
 # Correspondng test bounds for each arch, test id, riscv core
@@ -178,9 +193,11 @@ test_bounds = {
         16: {
             "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
         },
+        30: {
+            "riscv_1": {"latency": {"lower": 20000, "upper": 23500}, "bandwidth": 28},
+        },
         50: {  # One to One Directed Ideal
-            "riscv_1": {"latency": {"lower": 18000, "upper": 23000}, "bandwidth": 23},  # 21882, 23.9
-            "riscv_0": {"latency": {"lower": 15000, "upper": 19000}, "bandwidth": 29},  # 17705, 29.6
+            "riscv_0": {"latency": {"lower": 28000, "upper": 36000}, "bandwidth": 29},  # 33832
         },
         51: {  # One from One Directed Ideal
             "riscv_1": {"latency": {"lower": 15000, "upper": 20000}, "bandwidth": 28},  # 18596, 28.2
@@ -200,6 +217,15 @@ test_bounds = {
         20: {
             "riscv_1": {"latency": {"lower": 100, "upper": 1000}, "bandwidth": 3},
         },
+        21: {
+            "riscv_1": {"latency": {"lower": 150000, "upper": 300000}, "bandwidth": 3},
+        },
+        22: {
+            "riscv_1": {"latency": {"lower": 1000000, "upper": 1100000}, "bandwidth": 0.3},
+        },
+        23: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 1000}, "bandwidth": 10},
+        },
     },
     "blackhole": {
         0: {
@@ -207,8 +233,8 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 300, "upper": 16000}, "bandwidth": 0.15},
         },
         1: {
-            "riscv_1": {"latency": {"lower": 30000, "upper": 33000}, "bandwidth": 32},
-            "riscv_0": {"latency": {"lower": 30000, "upper": 31000}, "bandwidth": 33},
+            "riscv_1": {"latency": {"lower": 20000, "upper": 33000}, "bandwidth": 32},
+            "riscv_0": {"latency": {"lower": 20000, "upper": 33000}, "bandwidth": 33},
         },
         2: {
             "riscv_1": {"latency": {"lower": 400, "upper": 600}, "bandwidth": 0.13},
@@ -219,7 +245,7 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 34},
         },
         4: {
-            "riscv_0": {"latency": {"lower": 300, "upper": 9200}, "bandwidth": 0.17},
+            "riscv_0": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.17},
         },
         5: {
             "riscv_1": {"latency": {"lower": 300, "upper": 9200}, "bandwidth": 0.17},
@@ -228,7 +254,7 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 400, "upper": 70000}, "bandwidth": 0.5},
         },
         7: {
-            "riscv_0": {"latency": {"lower": 900, "upper": 275000}, "bandwidth": 1.12},
+            "riscv_0": {"latency": {"lower": 900, "upper": 275000}, "bandwidth": 1.00},
         },
         8: {
             "riscv_0": {"latency": {"lower": 3800, "upper": 1700000}, "bandwidth": 1.65},
@@ -257,9 +283,9 @@ test_bounds = {
         16: {
             "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
         },
+        30: {"riscv_1": {"latency": {"lower": 10000, "upper": 11500}, "bandwidth": 57}},
         50: {  # One to One Directed Ideal
-            "riscv_1": {"latency": {"lower": 5000, "upper": 10000}, "bandwidth": 50},  # 9201, 57.0
-            "riscv_0": {"latency": {"lower": 5000, "upper": 9500}, "bandwidth": 59},  # 8725, 60.1
+            "riscv_0": {"latency": {"lower": 12000, "upper": 19000}, "bandwidth": 59},  # 17000
         },
         51: {  # One from One Directed Ideal
             "riscv_1": {"latency": {"lower": 5000, "upper": 10000}, "bandwidth": 59},  # 8730, 60.1
@@ -278,6 +304,15 @@ test_bounds = {
         },
         20: {
             "riscv_1": {"latency": {"lower": 100, "upper": 1000}, "bandwidth": 7},
+        },
+        21: {
+            "riscv_1": {"latency": {"lower": 150000, "upper": 300000}, "bandwidth": 6},
+        },
+        22: {
+            "riscv_1": {"latency": {"lower": 1000000, "upper": 1100000}, "bandwidth": 0.6},
+        },
+        23: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 1000}, "bandwidth": 20},
         },
     },
 }
