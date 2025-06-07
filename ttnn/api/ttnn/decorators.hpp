@@ -25,18 +25,18 @@ using OptionalConstTensors = tt::tt_metal::operation::OptionalConstTensors;
 namespace detail {
 
 // Get "add" from "ttnn::add"
-static const std::string base_name(const std::string& cpp_fully_qualified_name) {
+static std::string base_name(const std::string& cpp_fully_qualified_name) {
     auto last_token = cpp_fully_qualified_name.substr(cpp_fully_qualified_name.rfind("::") + 2);
     return last_token;
 }
 
 // Convert "ttnn::add" to "add_t"
-static const std::string class_name(const std::string& cpp_fully_qualified_name) {
+static std::string class_name(const std::string& cpp_fully_qualified_name) {
     return base_name(cpp_fully_qualified_name) + "_t";
 }
 
 // Convert "ttnn::add" to "ttnn.add"
-static const std::string python_fully_qualified_name(const std::string& cpp_fully_qualified_name) {
+static std::string python_fully_qualified_name(const std::string& cpp_fully_qualified_name) {
     auto replace = [](const std::string& input, const std::string& from, const std::string& to) {
         if (from.empty()) {
             return input;
@@ -76,13 +76,13 @@ struct registered_operation_t {
     static constexpr auto is_primitive = PrimitiveOperationConcept<operation_t>;
 
     // Get "add" from "ttnn::add"
-    const std::string base_name() const { return detail::base_name(std::string{cpp_fully_qualified_name}); }
+    std::string base_name() const { return detail::base_name(std::string{cpp_fully_qualified_name}); }
 
     // Convert "ttnn::add" to "add_t"
-    const std::string class_name() const { return detail::class_name(std::string{cpp_fully_qualified_name}); }
+    std::string class_name() const { return detail::class_name(std::string{cpp_fully_qualified_name}); }
 
     // Convert "ttnn::add" to "ttnn.add"
-    const std::string python_fully_qualified_name() const {
+    std::string python_fully_qualified_name() const {
         return detail::python_fully_qualified_name(std::string{cpp_fully_qualified_name});
     }
 
