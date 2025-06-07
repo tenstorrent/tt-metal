@@ -2,11 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import ttnn
 from typing import Union, Tuple
-
-from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 
 
 def get_shard_grid_from_num_cores(ncores: Union[int, Tuple[int, int]], device) -> ttnn.CoreRangeSet:
