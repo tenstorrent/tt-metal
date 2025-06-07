@@ -26,7 +26,12 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
-    const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
+    const Tensor& input_tensor,
+    const Tensor& output,
+    const uint32_t stride_h,
+    const uint32_t stride_w,
+    const uint32_t pad_h,
+    const uint32_t pad_w) {
     // Get device and create a new program
     auto device = input_tensor.device();
     auto program = tt::tt_metal::CreateProgram();
@@ -227,7 +232,12 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
 }
 
 Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
-    const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
+    const Tensor& input_tensor,
+    const Tensor& output,
+    const uint32_t stride_h,
+    const uint32_t stride_w,
+    const uint32_t pad_h,
+    const uint32_t pad_w) {
     auto device = input_tensor.device();
     auto program = tt::tt_metal::CreateProgram();
 
@@ -250,6 +260,9 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     uint32_t num_cores_x = compute_grid_size.x;
     uint32_t num_cores_y = compute_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
+
+    uint32_t output_bhw = output.get_logical_shape()[0] * output.get_logical_shape()[1] * output.get_logical_shape()[2];
+    uint32_t output_bhw_per_core = (output_bhw + num_cores_total - 1) / num_cores_total;
 
     tt::log_debug("input_tensor_shape: {}", input_tensor.get_padded_shape());
     tt::log_debug("output_tensor_shape: {}", output.get_padded_shape());
@@ -307,6 +320,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
              input_height,
              stride_h,
              stride_w,
+             pad_h,
+             pad_w,
              stick_nbytes,
              cb_src0_index,
              src_stick_size_is_power_of_two,
@@ -318,10 +333,12 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
         CoreCoord core = cores[i];
         uint32_t start_input_work = i * work_per_core;
         uint32_t end_input_work = std::min(start_input_work + work_per_core, total_input_work);
-
+        uint32_t start_padding_work = i * output_bhw_per_core;
+        uint32_t end_padding_work = std::min(start_padding_work + output_bhw_per_core, output_bhw);
         std::vector<uint32_t> reader_runtime_args = {
             src0_buffer->address(), stick_nbytes, end_input_work - start_input_work + 1, start_input_work};
-        std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), start_input_work, end_input_work};
+        std::vector<uint32_t> writer_runtime_args = {
+            dst_buffer->address(), start_input_work, end_input_work, start_padding_work, end_padding_work};
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
@@ -338,11 +355,21 @@ Fold::MultiCoreDRAMFold::cached_program_t Fold::MultiCoreDRAMFold::create(
     if (tensor_args.input_tensor.get_layout() == Layout::TILE) {
         tt::log_debug("Fold operation with DRAM tiled input");
         return fold_multi_core_tiled_interleaved(
-            tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
+            tensor_args.input_tensor,
+            output_tensor,
+            operation_attributes.stride_h,
+            operation_attributes.stride_w,
+            operation_attributes.pad_h,
+            operation_attributes.pad_w);
     }
     tt::log_debug("Fold operation with DRAM row major input");
     return fold_multi_core_row_major_interleaved(
-        tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
+        tensor_args.input_tensor,
+        output_tensor,
+        operation_attributes.stride_h,
+        operation_attributes.stride_w,
+        operation_attributes.pad_h,
+        operation_attributes.pad_w);
 }
 
 void Fold::MultiCoreDRAMFold::override_runtime_arguments(

@@ -323,12 +323,12 @@ Tensor FoldOperation::invoke(
         }
     }
     if (input_tensor.memory_config().is_dram()) {
-        if (pad_h != 0 || pad_w != 0 || pad_c != 0) {
-            TT_THROW("Padding is not supported for DRAM folding");
+        if (pad_c != 0) {
+            TT_THROW("Padding in c dimension not supported for DRAM folding");
         }
         auto batch_size = input_tensor.get_logical_shape()[0];
-        auto input_height = input_tensor.get_logical_shape()[1];
-        auto input_width = input_tensor.get_logical_shape()[2];
+        auto input_height = input_tensor.get_logical_shape()[1] + pad_h;
+        auto input_width = input_tensor.get_logical_shape()[2] + pad_w;
         auto in_channels = input_tensor.get_logical_shape()[3];
         auto output_tensor =
             ttnn::prim::fold(queue_id, input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
