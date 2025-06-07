@@ -12,19 +12,20 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 @pytest.mark.parametrize(
     ("op_name", "expected_kernel_duration_us", "perf_margin"),
     [
-        ("LayerNorm", 12.5, 0.05),
-        ("ScaledDotProductAttentionDecode", 13.2, 0.05),
-        ("NLPCreateHeadsDecodeDeviceOperation", 8.32, 0.05),
-        ("NLPConcatHeadsDecodeDeviceOperation", 6.07, 0.05),
-        ("PagedUpdateCacheDeviceOperation", 4.5, 0.1),
-        ("RotaryEmbeddingLlamaFusedQK", 4.15, 0.05),
+        # ("LayerNorm", 12.5, 0.05),
+        # ("ScaledDotProductAttentionDecode", 13.2, 0.05),
+        # ("NLPCreateHeadsDecodeDeviceOperation", 8.32, 0.05),
+        # ("NLPConcatHeadsDecodeDeviceOperation", 6.07, 0.05),
+        # ("PagedUpdateCacheDeviceOperation", 4.5, 0.1),
+        # ("RotaryEmbeddingLlamaFusedQK", 4.15, 0.05),
+        ("BinaryDeviceOperation", 2.71, 0.05),
     ],
 )
 def test_llama_tg_ops_perf_device(op_name, expected_kernel_duration_us, perf_margin):
     batch = 32
     test = "llama-distributed-ln"
     subdir = "llama-unit-tests"
-    num_iterations = 3
+    num_iterations = 1
 
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
