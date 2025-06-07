@@ -49,7 +49,7 @@
 #include "kernel_types.hpp"
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
 #include "profiler_optional_metadata.hpp"
 #include "profiler_paths.hpp"
@@ -184,7 +184,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     tt_metal_device_profiler_map.at(device_id).dumpResults(
         device, cores, ProfilerDumpState::FORCE_UMD_READ, ProfilerDataBufferSource::L1);
 
-    log_info("SYNC PROGRAM FINISH IS DONE ON {}", device_id);
+    log_info(tt::LogMetal, "SYNC PROGRAM FINISH IS DONE ON {}", device_id);
     if ((smallestHostime[device_id] == 0) || (smallestHostime[device_id] > hostStartTime)) {
         smallestHostime[device_id] = hostStartTime;
     }
@@ -287,6 +287,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     }
     log_file.close();
     log_info(
+        tt::LogMetal,
         "Host sync data for device: {}, cpu_start:{}, delay:{}, freq:{} Hz",
         device_id,
         smallestHostime[device_id],
@@ -303,9 +304,10 @@ void setShift(int device_id, int64_t shift, double scale, std::tuple<double, dou
     if (std::isnan(scale)) {
         return;
     }
-    log_info("Device sync data for device: {}, delay: {} ns, freq scale: {}", device_id, shift, scale);
+    log_info(tt::LogMetal, "Device sync data for device: {}, delay: {} ns, freq scale: {}", device_id, shift, scale);
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
         log_warning(
+            tt::LogMetal,
             "Note that tracy mid-run push is enabled. This means device-device sync is not as accurate. "
             "Please do not use tracy mid-run push for sensitive device-device event analysis.");
     }
@@ -368,7 +370,7 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
         TT_FATAL(
             fabric_config != FabricConfig::DISABLED,
             "Cannot support device to device synchronization when TT-Fabric is disabled.");
-        log_info("Calling {} when TT-Fabric is enabled. This may take a while", __FUNCTION__);
+        log_info(tt::LogMetal, "Calling {} when TT-Fabric is enabled. This may take a while", __FUNCTION__);
 
         constexpr std::uint16_t sample_count = 240;
         constexpr std::uint16_t sample_size = 16;
@@ -394,7 +396,10 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
 
         if (device_id_receiver != device_id_receiver_curr) {
             log_warning(
-                "No eth connection could be found between device {} and {}", device_id_sender, device_id_receiver);
+                tt::LogMetal,
+                "No eth connection could be found between device {} and {}",
+                device_id_sender,
+                device_id_receiver);
             return;
         }
 
@@ -420,7 +425,7 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
             tt::tt_metal::detail::CompileProgram(device_sender, program_sender);
             tt::tt_metal::detail::CompileProgram(device_receiver, program_receiver);
         } catch (std::exception& e) {
-            log_error("Failed compile: {}", e.what());
+            log_error(tt::LogMetal, "Failed compile: {}", e.what());
             throw e;
         }
         tt_metal::detail::LaunchProgram(
@@ -784,7 +789,7 @@ void DumpDeviceProfileResults(
                             curr_core.x,
                             curr_core.y);
                         TracyMessageC(msg.c_str(), msg.size(), tracy::Color::Tomato3);
-                        log_warning(msg.c_str());
+                        log_warning(tt::LogMetal, "{}", msg);
                     }
                     dispatchCores.erase(dispatchCores.begin());
                 }

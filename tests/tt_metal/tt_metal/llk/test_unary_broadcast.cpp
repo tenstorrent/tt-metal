@@ -28,7 +28,7 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
@@ -354,6 +354,7 @@ TEST_F(DeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
                     .out1_t = (out0_t_ == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp8_b};
 
                 log_info(
+                    tt::LogTest,
                     "Testing UNARY BROADCAST BCAST_DIM_0={} in0_t={} out0_t={} | BCAST_DIM_1={} in1_t={} out1_t={}",
                     broadcast_dim_to_type.at(test_config.broadcast_dim_0),
                     test_config.in0_t,

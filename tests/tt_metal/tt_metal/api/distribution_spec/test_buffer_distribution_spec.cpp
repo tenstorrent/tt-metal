@@ -270,7 +270,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         tt::test_utils::generate_uniform_random_vector<uint8_t>(0, UINT8_MAX, host_size_in_bytes / sizeof(uint8_t));
 
     if (cq_write) {
-        tt::log_info("Writing with: FDMeshCommandQueue enqueue_write_shards");
+        log_info(tt::LogTest, "Writing with: FDMeshCommandQueue enqueue_write_shards");
         std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
             .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
             .host_data = const_cast<void*>(reinterpret_cast<const void*>(src.data())),
@@ -278,7 +278,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, shard_data_transfer, /*blocking=*/false);
         Finish(mesh_device_->mesh_command_queue());
     } else {
-        tt::log_info("Writing with: WriteToBuffer (equivalent to SDMeshCommandQueue enqueue_write_shards)");
+        log_info(tt::LogTest, "Writing with: WriteToBuffer (equivalent to SDMeshCommandQueue enqueue_write_shards)");
         tt::tt_metal::detail::WriteToBuffer(*shard_view, src);
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(local_device->id());
     }
@@ -317,7 +317,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
     std::vector<uint8_t> dst(host_size_in_bytes / sizeof(uint8_t), 0);
 
     if (cq_read) {
-        tt::log_info("Reading with: FDMeshCommandQueue enqueue_read_shards");
+        log_info(tt::LogTest, "Reading with: FDMeshCommandQueue enqueue_read_shards");
         std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
             .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
             .host_data = const_cast<void*>(reinterpret_cast<const void*>(dst.data())),
@@ -325,7 +325,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         mesh_device_->mesh_command_queue().enqueue_read_shards(shard_data_transfer, mesh_buffer, /*blocking=*/false);
         Finish(mesh_device_->mesh_command_queue());
     } else {
-        tt::log_info("Reading with: ReadFromBuffer (equivalent to SDMeshCommandQueue enqueue_read_shards)");
+        log_info(tt::LogTest, "Reading with: ReadFromBuffer (equivalent to SDMeshCommandQueue enqueue_read_shards)");
         tt::tt_metal::detail::ReadFromBuffer(*shard_view, dst);
     }
 

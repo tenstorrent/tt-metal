@@ -9,7 +9,7 @@
 #include "fabric/fabric_mux_config.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hal_types.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "tt_align.hpp"
 #include "tt_metal.hpp"
 #include "umd/device/tt_core_coordinates.h"

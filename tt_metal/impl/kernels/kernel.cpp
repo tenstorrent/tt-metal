@@ -24,7 +24,7 @@
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_memory.h"

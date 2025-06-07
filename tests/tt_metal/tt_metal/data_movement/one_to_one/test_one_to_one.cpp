@@ -61,12 +61,12 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     // Checks that both master and subordinate cores have the same L1 base address and size
     if (master_l1_info.base_address != subordinate_l1_info.base_address ||
         master_l1_info.size != subordinate_l1_info.size) {
-        log_error("Mismatch in L1 address or size between master and subordinate cores");
+        log_error(tt::LogTest, "Mismatch in L1 address or size between master and subordinate cores");
         return false;
     }
     // Check if the L1 size is sufficient for the test configuration
     if (master_l1_info.size < total_size_bytes) {
-        log_error("Insufficient L1 size for the test configuration");
+        log_error(tt::LogTest, "Insufficient L1 size for the test configuration");
         return false;
     }
     // Assigns a "safe" L1 local address for the master and subordinate cores
@@ -105,7 +105,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     SetRuntimeArgs(program, sender_kernel, master_core_set, {physical_subordinate_core.x, physical_subordinate_core.y});
 
     // Assign unique id
-    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     /* ================ RUNNING THE PROGRAM ================ */
@@ -137,10 +137,10 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
         packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
 
     if (!pcc) {
-        log_error("PCC Check failed");
-        log_info("Golden vector");
+        log_error(tt::LogTest, "PCC Check failed");
+        log_info(tt::LogTest, "Golden vector");
         print_vector<uint32_t>(packed_golden);
-        log_info("Output vector");
+        log_info(tt::LogTest, "Output vector");
         print_vector<uint32_t>(packed_output);
     }
 

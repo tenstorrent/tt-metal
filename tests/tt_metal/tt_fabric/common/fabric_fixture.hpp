@@ -21,7 +21,7 @@ class ControlPlaneFixture : public ::testing::Test {
        void SetUp() override {
            auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
            if (not slow_dispatch) {
-               tt::log_info(
+               log_info(
                    tt::LogTest,
                    "Control plane test suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
                GTEST_SKIP();
@@ -47,9 +47,9 @@ public:
     void SetUpDevices(tt_metal::FabricConfig fabric_config) {
         slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch_) {
-            tt::log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
+            log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
         } else {
-            tt::log_info(tt::LogTest, "Running fabric api tests with fast dispatch");
+            log_info(tt::LogTest, "Running fabric api tests with fast dispatch");
         }
         // Set up all available devices
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());

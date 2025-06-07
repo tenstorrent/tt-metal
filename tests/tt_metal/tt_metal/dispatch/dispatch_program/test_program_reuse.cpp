@@ -47,7 +47,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/semaphore.hpp>

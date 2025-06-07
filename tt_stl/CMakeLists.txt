@@ -38,6 +38,7 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         span
         fmt::fmt-header-only
+        tt-logger::tt-logger
 )
 
 target_precompile_headers(

@@ -12,7 +12,7 @@
 #include <optional>
 
 #include "assert.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt {

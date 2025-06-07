@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "tt-metalium/assert.hpp"
-#include "tt-metalium/logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/shape.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -440,6 +440,7 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
 
     if (tt_metal::is_device_tensor(conv_weight_tensor)) {
         log_warning(
+            tt::LogOp,
             "Prepare weights for Conv2D with groups > 1 expects weights on host, but they are on device. The op will "
             "move them back to host.");
     }
@@ -484,6 +485,7 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
                                                                                                     : output_dtype;
     if (tt_metal::is_device_tensor(conv_weight_tensor)) {
         log_warning(
+            tt::LogOp,
             "Prepare weights for Depthwise Conv1D expects weights on host, but they are on device. The op will move "
             "them back to host.");
     }
@@ -1156,6 +1158,7 @@ ttnn::Tensor prepare_conv_weights(
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
     if (weights_format != "OIHW") {
         log_warning(
+            tt::LogOp,
             "PyTorch expects Conv2D Weights in OIHW format, but got {}. If you have passed the correct weights, then "
             "make sure that the weights_format string is set to \"OIHW\".",
             weights_format);

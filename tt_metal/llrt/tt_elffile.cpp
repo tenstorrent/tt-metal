@@ -17,7 +17,7 @@
 #include <iterator>
 #include <map>
 
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 // Verify some knowledge of, and compatibilty with, RiscV
 #ifndef EM_RISCV

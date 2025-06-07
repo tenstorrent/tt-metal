@@ -28,7 +28,7 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/semaphore.hpp>
@@ -96,7 +96,7 @@ std::tuple<uint32_t, uint32_t> get_core_count() {
         core_x = 12;
         core_y = 9;
     } else {
-        log_fatal("Unexpected ARCH_NAME {}", arch_name);
+        log_fatal(tt::LogTest, "Unexpected ARCH_NAME {}", arch_name);
         exit(0);
     }
     return std::make_tuple(core_x, core_y);
@@ -166,27 +166,28 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
     info.use_trace = test_args::has_command_option(input_args, "-tr");
     info.dispatch_from_eth = test_args::has_command_option(input_args, "-de");
     if (info.kernel_size < MIN_KERNEL_SIZE_BYTES) {
-        log_fatal("Minimum kernel size is {} bytes", MIN_KERNEL_SIZE_BYTES);
+        log_fatal(tt::LogTest, "Minimum kernel size is {} bytes", MIN_KERNEL_SIZE_BYTES);
         exit(0);
     }
     if (info.n_cbs > MAX_CBS) {
-        log_fatal("CB count must be 0..{}", MAX_CBS);
+        log_fatal(tt::LogTest, "CB count must be 0..{}", MAX_CBS);
         exit(0);
     }
     if (info.n_args > MAX_ARGS) {
-        log_fatal("Runtime arg count must be 0..{}", MAX_ARGS);
+        log_fatal(tt::LogTest, "Runtime arg count must be 0..{}", MAX_ARGS);
         exit(0);
     }
     if (info.n_common_args > MAX_ARGS) {
-        log_fatal("Common Runtime arg count must be 0..{}", MAX_ARGS);
+        log_fatal(tt::LogTest, "Common Runtime arg count must be 0..{}", MAX_ARGS);
         exit(0);
     }
     if (info.n_sems > NUM_SEMAPHORES) {
-        log_fatal("Sem count must be 0..{}", NUM_SEMAPHORES);
+        log_fatal(tt::LogTest, "Sem count must be 0..{}", NUM_SEMAPHORES);
         exit(0);
     }
     if (info.n_kgs > core_x + 1) {
-        log_fatal("This test uses columns for kernel groups so number of kernel groups must be <= x core range");
+        log_fatal(
+            tt::LogTest, "This test uses columns for kernel groups so number of kernel groups must be <= x core range");
         exit(0);
     }
     info.brisc_enabled = !test_args::has_command_option(input_args, "-b");
@@ -199,10 +200,11 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
 
     if (info.nfast_kernels != 0 && info.slow_kernel_cycles <= info.fast_kernel_cycles) {
         log_error(
+            tt::LogTest,
             "The number of fast kernels is non-zero, but slow_kernel_ cycles ({}) is <= fast_kernel_cycles ({})",
             info.slow_kernel_cycles,
             info.fast_kernel_cycles);
-        log_error("For meaningful results, run multiple fast kernels between single slow kernels");
+        log_error(tt::LogTest, "For meaningful results, run multiple fast kernels between single slow kernels");
         exit(0);
     }
 }
@@ -299,6 +301,7 @@ bool initialize_program(
         auto erisc_cores = device->get_active_ethernet_cores(true);
         if (info.erisc_count > erisc_cores.size()) {
             log_fatal(
+                tt::LogTest,
                 "Requested number of erisc cores {} exceeds actual erisc core count {}",
                 info.erisc_count,
                 erisc_cores.size());
@@ -466,7 +469,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
         pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
