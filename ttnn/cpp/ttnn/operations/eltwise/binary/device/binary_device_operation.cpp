@@ -305,16 +305,16 @@ tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
             attributes,
             program_factory.index(),
             input_tensor_a.dtype(),
-            std::get<DeviceStorage>(input_tensor_a.storage()).memory_config(),
+            input_tensor_a.memory_config(),
             input_tensor_b->dtype(),
-            std::get<DeviceStorage>(input_tensor_b->storage()).memory_config());
+            input_tensor_b->memory_config());
     }
 
     return operation::hash_operation<BinaryDeviceOperation>(
         attributes,
         program_factory.index(),
         input_tensor_a.dtype(),
-        std::get<DeviceStorage>(input_tensor_a.storage()).memory_config());
+        input_tensor_a.memory_config());
 }
 
 operation::OpPerformanceModelGeneral<BinaryDeviceOperation::tensor_return_value_t> BinaryDeviceOperation::create_op_performance_model(
