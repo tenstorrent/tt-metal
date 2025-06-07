@@ -1,5 +1,5 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
@@ -8,10 +8,11 @@
 
 namespace NAMESPACE {
 void MAIN {
-    constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
-    constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
-    constexpr uint32_t src_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(3);
+    const uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
+
+    constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(0);
+    constexpr uint32_t src_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(2);
 
     untilize_init(src_cb_id, out_cb_id);
 

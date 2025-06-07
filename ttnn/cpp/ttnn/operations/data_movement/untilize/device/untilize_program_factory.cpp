@@ -805,7 +805,10 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
 
     // Compute compile-time args
     std::vector<uint32_t> compute_compile_time_args = {
-        (uint32_t)num_tiles_per_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
+        (uint32_t)num_blocks_per_core,
+        (uint32_t)num_tiles_per_block,
+        (uint32_t)src0_cb_index,
+        (uint32_t)output_cb_index};
 
     // Compute kernel
     std::string compute_kernel;
@@ -838,12 +841,8 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
         uint32_t num_tiles_to_write = num_tiles_per_block * num_blocks_per_core;
         std::vector<uint32_t> writer_run_time_args = {num_tiles_to_write};
 
-        // Compute run-time args
-        std::vector<uint32_t> compute_run_time_args = {num_blocks_per_core};
-
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
-        tt::tt_metal::SetRuntimeArgs(program, untilize_kernel_id, core, compute_run_time_args);
     }
 
     auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
@@ -1098,12 +1097,13 @@ operation::ProgramWithCallbacks untilize_multi_core(
     if (num_tiles_per_input_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize ||
         a.get_dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel =
-            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+        compute_kernel = std::string(
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
-        compute_kernel =
-            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+        compute_kernel = std::string(
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
+            "pack_untilize_variable_num_blocks.cpp");
     }
 
     // Compute compile-time args and kernel
@@ -1443,7 +1443,7 @@ operation::ProgramWithCallbacks untilize_single_core(
     // Compute compile-time args
     uint32_t num_blocks = num_columns_of_blocks * num_blocks_per_column_row * num_blocks_across_height;
     std::vector<uint32_t> compute_compile_time_args = {
-        (uint32_t)num_tiles_per_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
+        (uint32_t)num_blocks, (uint32_t)num_tiles_per_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
 
     // Compute kernel
     auto untilize_kernel_id = tt::tt_metal::CreateKernel(
@@ -1469,13 +1469,9 @@ operation::ProgramWithCallbacks untilize_single_core(
         shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
     }
 
-    // Compute run-time args
-    std::vector<uint32_t> compute_run_time_args = {num_blocks};
-
     // Set run-time args
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
-    tt::tt_metal::SetRuntimeArgs(program, untilize_kernel_id, core, compute_run_time_args);
 
     auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
                                            writer_kernel_id = unary_writer_kernel_id](
