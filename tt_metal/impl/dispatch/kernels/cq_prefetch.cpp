@@ -16,7 +16,6 @@
 //  Using the normal NoC APIs for writes and/or inline_dw_writes are not allowed on this kernel.
 //
 
-#include "compile_time_args.h"
 #include "dataflow_api.h"
 #include "dataflow_api_addrgen.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
