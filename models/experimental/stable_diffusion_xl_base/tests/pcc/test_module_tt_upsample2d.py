@@ -17,14 +17,14 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 )
 
 
-@pytest.mark.parametrize("input_shape, up_block_id, pcc", [((1, 1280, 32, 32), 0, 0.995), ((1, 640, 64, 64), 1, 0.998)])
+@pytest.mark.parametrize("input_shape, up_block_id", [((1, 1280, 32, 32), 0), ((1, 640, 64, 64), 1)])
 @pytest.mark.parametrize("stride", [(1, 1)])
 @pytest.mark.parametrize("padding", [(1, 1)])
 @pytest.mark.parametrize("dilation", [(1, 1)])
 @pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_upsample2d(
-    device, input_shape, pcc, conv_weights_dtype, up_block_id, stride, padding, dilation, use_program_cache, reset_seeds
+    device, input_shape, conv_weights_dtype, up_block_id, stride, padding, dilation, use_program_cache, reset_seeds
 ):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
@@ -64,5 +64,5 @@ def test_upsample2d(
     del unet
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
     logger.info(f"PCC is {pcc_message}")

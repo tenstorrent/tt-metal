@@ -1,5 +1,14 @@
 # Yolov4 Demo
 
+## Platforms:
+    WH N150/N300
+**Note:** On N300 ,Make sure to use `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` with the pytest.
+
+Or, make sure to set the following environment variable in the terminal:
+```
+export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+```
+
 ## How to run yolov4
 
 ### Model performant running with Trace+2CQ
@@ -7,12 +16,12 @@
 #### For 320x320:
 - end-2-end perf is 80 FPS
   ```bash
-  pytest models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution0-True-1-act_dtype0-weight_dtype0-device_params0]
+  pytest models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution0-1-act_dtype0-weight_dtype0-device_params0]
   ```
 #### For 640x640:
 - end-2-end perf is 30 FPS
   ```bash
-  pytest models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution1-True-1-act_dtype0-weight_dtype0-device_params0]
+  pytest models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution1-1-act_dtype0-weight_dtype0-device_params0]
   ```
 
 

@@ -35,6 +35,7 @@ message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG")
+
 # Defining build types is the pervue of the top-level project
 if(PROJECT_IS_TOP_LEVEL)
     include(sanitizers)
@@ -91,6 +92,9 @@ endif()
 include(compilers)
 CHECK_COMPILERS()
 
+# TODO(afuller): Re-enable this after we sort out compatibility with old tools.
+# include(linking)
+
 # We're not currently using C++20 modules, so don't bother scanning for them
 set(CMAKE_CXX_SCAN_FOR_MODULES FALSE)
 
@@ -108,8 +112,10 @@ message(STATUS "Build Programming Examples: ${BUILD_PROGRAMMING_EXAMPLES}")
 message(STATUS "Build TT METAL Tests: ${TT_METAL_BUILD_TESTS}")
 message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
 message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
+message(STATUS "Build with LTO: ${TT_LTO_ENABLED}")
 message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
 message(STATUS "Build with LightMetal Trace Enabled: ${TT_ENABLE_LIGHT_METAL_TRACE}")
+message(STATUS "Build with Multihost Distributed Compute: ${ENABLE_DISTRIBUTED}")
 
 ############################################################################################################################
 
@@ -122,35 +128,15 @@ if(ENABLE_BUILD_TIME_TRACE)
     endif()
 endif()
 
-############################################################################################################################
-# Find all required libraries to build
-############################################################################################################################
 include(CPM)
 if(CMAKE_VERSION VERSION_LESS 3.25)
     # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
     add_subdirectory(third_party)
+    add_subdirectory(tt_metal/third_party)
 else()
     add_subdirectory(third_party SYSTEM)
+    add_subdirectory(tt_metal/third_party SYSTEM)
 endif()
-
-if(WITH_PYTHON_BINDINGS)
-    set(Python3_FIND_STRATEGY LOCATION)
-    find_package(
-        Python3
-        COMPONENTS
-            Interpreter
-            Development
-    )
-    message(STATUS "Python3 include dirs: ${Python3_INCLUDE_DIRS}")
-endif()
-
-find_library(NUMA_LIBRARY NAMES numa)
-if(NOT NUMA_LIBRARY)
-    message(FATAL_ERROR "NUMA library not found")
-endif()
-
-# Bring in UMD and all it's dependencies
-add_subdirectory(tt_metal/third_party)
 
 ############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
@@ -170,7 +156,6 @@ target_link_libraries(
 
 add_compile_options(
     "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-mavx2>"
-    -fno-lto # FIXME: This seems to be here for ttnn; it should go to TTNN, then.
     -fPIC
     -fvisibility-inlines-hidden
     -Wall

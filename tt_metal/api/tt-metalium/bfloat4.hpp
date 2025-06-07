@@ -10,9 +10,6 @@
 #include <optional>
 #include <vector>
 
-// TODO: empty struct to facilitate Tensor template logic. Reconsider how/why templating is supported in Tensor
-struct bfloat4_b {};
-
 constexpr int log2(int n) {
     int log = 0;
     while (n >>= 1) {

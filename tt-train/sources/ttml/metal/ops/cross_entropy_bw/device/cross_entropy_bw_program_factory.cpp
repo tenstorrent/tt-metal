@@ -164,14 +164,14 @@ void assign_per_core_runtime_args(
             TT_FATAL(false, "Core not in specified core ranges");
         }
 
-        // Reader kernel: (input_addr, gamma_addr, number_of_rows, offset_in_rows)
+        // Reader kernel: (input_addr, target_addr, number_of_rows, offset_in_rows)
         SetRuntimeArgs(
             program,
             kernels.reader,
             core,
             {input_buffer->address(), target_buffer->address(), num_rows_per_core, num_rows_written});
 
-        // Writer kernel: (dst_addr, dst_rms_addr number_of_rows, offset_in_rows)
+        // Writer kernel: (dst_addr, number_of_rows, offset_in_rows)
         SetRuntimeArgs(program, kernels.writer, core, {output_buffer->address(), num_rows_per_core, num_rows_written});
 
         num_rows_written += num_rows_per_core;
@@ -419,10 +419,10 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
 
     return cached_program_t{
         std::move(program),
-        {/* rmsnorm_fw_reader_kernel_id  = */ kernels.reader,
-         /* rmsnorm_fw_writer_kernel_id  = */ kernels.writer,
-         /* rmsnorm_fw_kernel_group_1_id = */ kernels.compute_group_1,
-         /* rmsnorm_fw_kernel_group_2_id = */ kernels.compute_group_2,
+        {/* cross_entropy_bw_reader_kernel_id  = */ kernels.reader,
+         /* cross_entropy_bw_writer_kernel_id  = */ kernels.writer,
+         /* cross_entropy_bw_kernel_group_1_id = */ kernels.compute_group_1,
+         /* cross_entropy_bw_kernel_group_2_id = */ kernels.compute_group_2,
          /* core_group_1              = */ core_group_1,
          /* core_group_2              = */ core_group_2,
          /* num_cores                 = */ num_cores,

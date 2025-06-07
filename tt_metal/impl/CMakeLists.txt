@@ -7,7 +7,6 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/distribution_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_distribution_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer.cpp
@@ -58,7 +57,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/demux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/eth_router.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/eth_tunneler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/fabric_router_vc.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/relay_mux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/util/dispatch_settings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_logging.cpp
@@ -125,8 +124,7 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/debug
         ${CMAKE_CURRENT_SOURCE_DIR}/profiler
         ${PROJECT_SOURCE_DIR}/tt_metal/include
-    PRIVATE
-        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
 )
+target_include_directories(impl SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast)

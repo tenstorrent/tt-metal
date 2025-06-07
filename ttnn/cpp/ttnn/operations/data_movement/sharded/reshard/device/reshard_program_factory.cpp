@@ -23,17 +23,17 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
     const auto& output_buffer_page_mapping = *output_buffer->get_buffer_page_mapping();
     const auto& input_buffer_page_mapping = *input_buffer->get_buffer_page_mapping();
 
-    const auto& output_shard_to_host_mapping = output_buffer_page_mapping.dev_page_to_host_page_mapping_;
-    const auto& input_page_to_local_page_mapping = input_buffer_page_mapping.host_page_to_local_shard_page_mapping_;
-    const auto& host_page_to_input_page_mapping = input_buffer_page_mapping.host_page_to_dev_page_mapping_;
+    const auto& output_shard_to_host_mapping = output_buffer_page_mapping.dev_page_to_host_page_mapping;
+    const auto& input_page_to_local_page_mapping = input_buffer_page_mapping.host_page_to_local_shard_page_mapping;
+    const auto& host_page_to_input_page_mapping = input_buffer_page_mapping.host_page_to_dev_page_mapping;
 
-    auto output_cores = output_buffer_page_mapping.all_cores_;
+    auto output_cores = output_buffer_page_mapping.all_cores;
     // First get output_core to vector< pair<input_core, input_page> (num_pages_in_output)
     std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page(
         output_cores.size());
 
     for (uint32_t output_page_id = 0; output_page_id < output_buffer->num_dev_pages(); output_page_id++) {
-        auto output_core_id = output_buffer_page_mapping.dev_page_to_core_mapping_[output_page_id];
+        auto output_core_id = output_buffer_page_mapping.dev_page_to_core_mapping[output_page_id];
         TT_ASSERT(output_core_id < output_cores.size());
         auto host_page = output_shard_to_host_mapping[output_page_id];
         std::optional<std::pair<CoreCoord, uint32_t>> mapped_page = std::nullopt;
@@ -41,7 +41,7 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
             auto input_page = host_page_to_input_page_mapping[host_page.value()];
             auto local_input_page = input_page_to_local_page_mapping[host_page.value()];
             auto input_core =
-                input_buffer_page_mapping.all_cores_[input_buffer_page_mapping.dev_page_to_core_mapping_[input_page]];
+                input_buffer_page_mapping.all_cores[input_buffer_page_mapping.dev_page_to_core_mapping[input_page]];
             mapped_page = std::make_optional<std::pair<CoreCoord, uint32_t>>({input_core, local_input_page});
         }
         output_core_to_vector_input_core_page[output_core_id].push_back(mapped_page);
@@ -51,7 +51,7 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
     std::unordered_map<CoreCoord, std::vector<PageStride>> ret_map;
     ret_map.reserve(output_cores.size());
 
-    auto output_core_host_page_indices = output_buffer_page_mapping.core_host_page_indices_;
+    auto output_core_host_page_indices = output_buffer_page_mapping.core_host_page_indices;
     auto device = input_buffer->device();
     auto full_grid = device->compute_with_storage_grid_size();
     CoreCoord end_core = (*output_buffer->shard_spec().grid().ranges().rbegin()).end_coord;

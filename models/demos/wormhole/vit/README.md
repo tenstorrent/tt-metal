@@ -23,7 +23,8 @@ To run the demo for question answering using the Bloom model, follow these instr
 
   ```sh
 build_metal.sh --enable-profiler # need build to enable the profiler
-./tt_metal/tools/profiler/profile_this.py -n vit -c "pytest --disable-warnings models/demos/wormhole/vit/demo/demo_vit_ttnn_inference_device_OPs.py"
+./tt_metal/tools/profiler/profile_this.py -n vit -c "pytest --disable-warnings models/demos/wormhole/vit/demo/test_vit_device_perf.py::test_vit_device_ops" # to manually inspect ops
+pytest models/demos/wormhole/vit/demo/test_vit_device_perf.py::test_vit_perf_device # to get an automated report of samples/s
   ```
 
 -  For Imagenet-21K to test inference accuracy, use the following command to run the demo:
@@ -35,7 +36,7 @@ build_metal.sh --enable-profiler # need build to enable the profiler
 
 ## Results
 
-- Model runtime (host end-2-end) is 1100 FPS
+- Model runtime (host end-2-end) is ~1370 FPS
 - The Imagenet-21K inference accuracy is 80%
 
 ---

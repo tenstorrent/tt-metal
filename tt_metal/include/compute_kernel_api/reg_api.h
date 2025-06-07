@@ -64,7 +64,6 @@ ALWI void tile_regs_wait() { PACK((llk_packer_wait_for_math_done())); }
 [[deprecated("Use tile_regs_release() instead")]]
 ALWI void release_dst() {
     MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
-
     PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
 }
 

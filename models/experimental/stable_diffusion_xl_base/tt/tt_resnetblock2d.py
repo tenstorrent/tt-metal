@@ -65,7 +65,7 @@ class TtResnetBlock2D(nn.Module):
 
         if split_in > 1:
             self.norm_1_blocks = 16
-            self.norm_core_grid_1 = ttnn.CoreGrid(y=4 if split_in == 2 else 2, x=1)
+            self.norm_core_grid_1 = ttnn.CoreGrid(y=2 if "up_blocks.2.resnets.0" in module_path else 4, x=1)
             self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
                 device, norm_weights_1, norm_bias_1, self.norm_core_grid_1.y
             )
@@ -100,9 +100,11 @@ class TtResnetBlock2D(nn.Module):
                 device,
                 conv_weights_1,
                 conv_bias_1,
-                model_config.conv_w_dtype,
+                self.conv1_config.weights_dtype,
                 split_in,
                 split_out,
+                fp32_dest_acc_en=(self.conv1_config.weights_dtype == ttnn.bfloat8_b)
+                and (self.conv1_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
             )
         else:
             (
@@ -114,7 +116,9 @@ class TtResnetBlock2D(nn.Module):
                 device,
                 conv_weights_1,
                 conv_bias_1,
-                model_config.conv_w_dtype,
+                self.conv1_config.weights_dtype,
+                fp32_dest_acc_en=(self.conv1_config.weights_dtype == ttnn.bfloat8_b)
+                and (self.conv1_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
             )
 
         self.conv2_config = model_config.get_conv_config(conv_path=f"{module_path}.conv2")
@@ -127,7 +131,9 @@ class TtResnetBlock2D(nn.Module):
             device,
             conv_weights_2,
             conv_bias_2,
-            model_config.conv_w_dtype,
+            self.conv2_config.weights_dtype,
+            fp32_dest_acc_en=(self.conv2_config.weights_dtype == ttnn.bfloat8_b)
+            and (self.conv2_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         )
 
         if conv_shortcut:

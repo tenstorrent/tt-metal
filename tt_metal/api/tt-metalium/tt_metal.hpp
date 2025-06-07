@@ -18,6 +18,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <umd/device/tt_core_coordinates.h>

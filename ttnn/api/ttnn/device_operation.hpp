@@ -20,7 +20,6 @@
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <type_traits>
-#include "tools/profiler/op_profiler.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"

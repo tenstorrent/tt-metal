@@ -90,7 +90,7 @@ struct Conv3dConfig {
         "groups",
         "compute_with_storage_grid_size");
 
-    const auto attribute_values() const {
+    auto attribute_values() const {
         return std::forward_as_tuple(
             this->dtype,
             this->weights_dtype,

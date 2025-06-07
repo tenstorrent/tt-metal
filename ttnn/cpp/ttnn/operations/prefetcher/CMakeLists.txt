@@ -2,6 +2,7 @@ add_library(ttnn_op_prefetcher ${LIB_TYPE})
 add_library(TT::NN::Ops::Prefetcher ALIAS ttnn_op_prefetcher)
 
 target_precompile_headers(ttnn_op_prefetcher REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_prefetcher)
 
 target_sources(
     ttnn_op_prefetcher
