@@ -142,7 +142,7 @@ public:
 
     const string& get_out_path() const { return this->out_path_; };
     const string& get_target_name() const { return this->target_name_; };
-    const string get_target_out_path(const string& kernel_name) const {
+    string get_target_out_path(const string& kernel_name) const {
         return this->out_path_ + kernel_name + target_full_path_;
     }
 };

@@ -14,7 +14,7 @@ struct MultiDeviceGlobalSemaphore {
     std::vector<GlobalSemaphore> global_semaphores;
 
     static constexpr auto attribute_names = std::forward_as_tuple("global_semaphores");
-    const auto attribute_values() const { return std::forward_as_tuple(this->global_semaphores); }
+    auto attribute_values() const { return std::forward_as_tuple(this->global_semaphores); }
 };
 
 // Single Device Creation API

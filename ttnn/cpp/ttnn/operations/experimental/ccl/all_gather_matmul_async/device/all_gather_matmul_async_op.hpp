@@ -65,7 +65,7 @@ struct AllGatherMatmulAsync {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("matmul_struct", "all_gather_core_grid_offset");
-    const auto attribute_values() const {
+    auto attribute_values() const {
         return std::forward_as_tuple(this->matmul_struct, this->all_gather_core_grid_offset);
     }
 };
