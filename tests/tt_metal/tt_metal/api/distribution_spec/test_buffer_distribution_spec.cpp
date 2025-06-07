@@ -34,7 +34,7 @@ struct MeshBufferAllocationExpected {
 };
 
 struct MeshBufferReadWriteExpected {
-    using ExplicitCorePageMapping = std::vector<std::vector<std::optional<uint32_t>>>;
+    using ExplicitCorePageMapping = std::vector<std::vector<uint32_t>>;
     ExplicitCorePageMapping explicit_core_page_mapping;
 };
 
@@ -299,9 +299,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         }
         for (size_t empty_core_idx = expected_page_mapping.size(); empty_core_idx < page_mapping.size();
              empty_core_idx++) {
-            EXPECT_EQ(
-                page_mapping[empty_core_idx],
-                std::vector<std::optional<uint32_t>>(page_mapping[empty_core_idx].size()));
+            EXPECT_EQ(page_mapping[empty_core_idx], std::vector<uint32_t>(page_mapping[empty_core_idx].size()));
         }
 
         for (size_t i = 0; i < cores.size(); i++) {
@@ -318,7 +316,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
                 if (!page_mapping[i][core_page]) {
                     continue;
                 }
-                const auto host_page = page_mapping[i][core_page].value();
+                const auto host_page = page_mapping[i][core_page];
                 EXPECT_EQ(
                     std::memcmp(
                         src_ptr + host_page * page_size,
@@ -372,13 +370,13 @@ INSTANTIATE_TEST_SUITE_P(
                 MeshBufferReadWriteExpected{
                     .explicit_core_page_mapping = {
                         {0, 1},
-                        {2, std::nullopt},
+                        {2, 0},
                         {3, 4},
-                        {5, std::nullopt},
+                        {5, 0},
                         {6, 7},
-                        {8, std::nullopt},
+                        {8, 0},
                         {9, 10},
-                        {11, std::nullopt},
+                        {11, 0},
                     },
                 },
             },
@@ -397,10 +395,10 @@ INSTANTIATE_TEST_SUITE_P(
                 },
                 MeshBufferReadWriteExpected{
                     .explicit_core_page_mapping = {
-                        {0, 1, std::nullopt, 2, 3, std::nullopt},
-                        {4, 5, std::nullopt, 6, 7, std::nullopt},
-                        {8, 9, std::nullopt, 10, 11, std::nullopt},
-                        {12, 13, std::nullopt, 14, 15, std::nullopt},
+                        {0, 1, 0, 2, 3, 0},
+                        {4, 5, 0, 6, 7, 0},
+                        {8, 9, 0, 10, 11, 0},
+                        {12, 13, 0, 14, 15, 0},
                     },
                 },
             },
@@ -418,8 +416,8 @@ INSTANTIATE_TEST_SUITE_P(
                 },
                 MeshBufferReadWriteExpected{
                     .explicit_core_page_mapping = {
-                        {0, 2, 4, std::nullopt, 6, 8, 10, std::nullopt},
-                        {1, 3, 5, std::nullopt, 7, 9, 11, std::nullopt},
+                        {0, 2, 4, 0, 6, 8, 10, 0},
+                        {1, 3, 5, 0, 7, 9, 11, 0},
                     },
                 },
             },
@@ -439,15 +437,15 @@ INSTANTIATE_TEST_SUITE_P(
                 MeshBufferReadWriteExpected{
                     .explicit_core_page_mapping = {
                         {0, 1, 3, 4, 30, 31, 33, 34},
-                        {2, std::nullopt, 5, std::nullopt, 32, std::nullopt, 35, std::nullopt},
-                        {6, 7, 9, 10, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                        {8, std::nullopt, 11, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                        {12, 13, 15, 16, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                        {14, std::nullopt, 17, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                        {18, 19, 21, 22, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                        {20, std::nullopt, 23, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                        {24, 25, 27, 28, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                        {26, std::nullopt, 29, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt}
+                        {2, 0, 5, 0, 32, 0, 35, 0},
+                        {6, 7, 9, 10, 0, 0, 0, 0},
+                        {8, 0, 11, 0, 0, 0, 0, 0},
+                        {12, 13, 15, 16, 0, 0, 0, 0},
+                        {14, 0, 17, 0, 0, 0, 0, 0},
+                        {18, 19, 21, 22, 0, 0, 0, 0},
+                        {20, 0, 23, 0, 0, 0, 0, 0},
+                        {24, 25, 27, 28, 0, 0, 0, 0},
+                        {26, 0, 29, 0, 0, 0, 0, 0}
                     },
                 },
             },
@@ -466,11 +464,11 @@ INSTANTIATE_TEST_SUITE_P(
                 },
                 MeshBufferReadWriteExpected{
                     .explicit_core_page_mapping = {
-                        {0, 1, 3, 4, 12, 13, 15, 16, 26, std::nullopt, 29, std::nullopt, 38, std::nullopt, 41, std::nullopt, 54, 55, 57, 58, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                        {2, std::nullopt, 5, std::nullopt, 14, std::nullopt, 17, std::nullopt, 30, 31, 33, 34, 42, 43, 45, 46, 56, std::nullopt, 59, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                        {6, 7, 9, 10, 18, 19, 21, 22, 32, std::nullopt, 35, std::nullopt, 44, std::nullopt, 47, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                        {8, std::nullopt, 11, std::nullopt, 20, std::nullopt, 23, std::nullopt, 48, 49, 51, 52, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-                        {24, 25, 27, 28, 36, 37, 39, 40, 50, std::nullopt, 53, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt}
+                        {0, 1, 3, 4, 12, 13, 15, 16, 26, 0, 29, 0, 38, 0, 41, 0, 54, 55, 57, 58, 0, 0, 0, 0},
+                        {2, 0, 5, 0, 14, 0, 17, 0, 30, 31, 33, 34, 42, 43, 45, 46, 56, 0, 59, 0, 0, 0, 0, 0},
+                        {6, 7, 9, 10, 18, 19, 21, 22, 32, 0, 35, 0, 44, 0, 47, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+                        {8, 0, 11, 0, 20, 0, 23, 0, 48, 49, 51, 52, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+                        {24, 25, 27, 28, 36, 37, 39, 40, 50, 0, 53, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
                     },
                 },
             })  // Values

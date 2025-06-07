@@ -580,7 +580,7 @@ std::pair<uint32_t, uint32_t> calculate_pages_to_process_in_shard(
     uint32_t starting_host_page_idx,
     uint32_t ending_host_page_idx) {
     TT_ASSERT(!buffer.is_nd_sharded());
-    const std::vector<std::optional<uint32_t>> core_host_pages = buffer_page_mapping->core_host_page_indices[core_id];
+    const std::vector<uint32_t> core_host_pages = buffer_page_mapping->core_host_page_indices[core_id];
     TT_ASSERT(std::is_sorted(core_host_pages.begin(), core_host_pages.end()));
 
     auto is_host_page_within_region = [&](const std::optional<uint32_t> host_page) {
@@ -601,8 +601,8 @@ std::pair<uint32_t, uint32_t> calculate_pages_to_process_in_shard(
         return {0, 0};
     }
 
-    const uint32_t start_host_page = **(core_start_host_page_it);
-    const uint32_t end_host_page = **(core_end_host_page_it);
+    const uint32_t start_host_page = *(core_start_host_page_it);
+    const uint32_t end_host_page = *(core_end_host_page_it);
     TT_ASSERT(end_host_page >= start_host_page);
 
     uint32_t num_dev_pages_to_process;
@@ -614,7 +614,7 @@ std::pair<uint32_t, uint32_t> calculate_pages_to_process_in_shard(
         num_dev_pages_to_process =
             num_dev_pages_in_shard - buffer_page_mapping->host_page_to_local_shard_page_mapping[start_host_page];
     } else {
-        const uint32_t host_page_after_end_host_page = **(core_end_host_page_it - 1);
+        const uint32_t host_page_after_end_host_page = *(core_end_host_page_it - 1);
         num_dev_pages_to_process =
             buffer_page_mapping->host_page_to_local_shard_page_mapping[host_page_after_end_host_page] -
             buffer_page_mapping->host_page_to_local_shard_page_mapping[start_host_page];

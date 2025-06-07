@@ -15,7 +15,7 @@ namespace tt::tt_metal {
 
 struct BufferPageMapping {
     std::vector<CoreCoord> all_cores;
-    std::vector<std::vector<std::optional<uint32_t>>> core_host_page_indices;
+    std::vector<std::vector<uint32_t>> core_host_page_indices;
     std::vector<uint32_t> dev_page_to_core_mapping;
 
     // some dev pages don't have mapping to host (in case of padding)
