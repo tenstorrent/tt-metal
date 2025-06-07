@@ -110,6 +110,8 @@ void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const MeshEvent& event);
 
 void EventSynchronize(const MeshEvent& event);
 
+bool EventQuery(const MeshEvent& event);
+
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id);
 
 void EndTraceCapture(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace_id);
