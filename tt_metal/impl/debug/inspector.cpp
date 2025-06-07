@@ -9,7 +9,7 @@
 #include "jit_build/jit_build_options.hpp"
 #include "program.hpp"
 #include <memory>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal {
 

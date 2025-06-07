@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <chrono>
 #include <ctime>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal::inspector {
 
