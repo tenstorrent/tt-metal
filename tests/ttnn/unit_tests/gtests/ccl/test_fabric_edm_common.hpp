@@ -3301,16 +3301,16 @@ void Run1DFullMeshFabricPacketSendTest(
                 // TODO: Move out of loop so we can check ahead of time if sync core needs to be moved in order
                 //       to support optimal worker core placement
                 worker_cores_per_axis[axis] = {};
-                if ((use_tg or is_6u_galaxy) and topology == ttnn::ccl::Topology::Linear) {
-                    std::vector<CoreCoord> ethernet_cores_virtual =
-                        compute_top_row_ethernet_cores(device, worker_config);
-                    worker_cores_per_axis[axis] = get_optimal_worker_core_placement(
-                        device, ethernet_cores_virtual, params.num_links[axis], params.first_link_offset[axis]);
-                } else {
-                    worker_cores_per_axis[axis] = CoreRangeSet(CoreRange(
-                        CoreCoord(params.first_link_offset[axis], axis * 4),
-                        CoreCoord(params.num_links[axis] - 1, axis * 5)));
-                }
+                // if ((use_tg or is_6u_galaxy) and topology == ttnn::ccl::Topology::Linear) {
+                //     std::vector<CoreCoord> ethernet_cores_virtual =
+                //         compute_top_row_ethernet_cores(device, worker_config);
+                //     worker_cores_per_axis[axis] = get_optimal_worker_core_placement(
+                //         device, ethernet_cores_virtual, params.num_links[axis], params.first_link_offset[axis]);
+                // } else {
+                worker_cores_per_axis[axis] = CoreRangeSet(CoreRange(
+                    CoreCoord(params.first_link_offset[axis], axis * 4),
+                    CoreCoord(params.num_links[axis] - 1, axis * 5)));
+                // }
                 auto worker_cores_vec = corerange_to_cores(worker_cores_per_axis[axis], std::nullopt, false);
                 std::for_each(worker_cores_vec.begin(), worker_cores_vec.end(), [&](const CoreCoord& core) {
                     worker_cores_per_device[device->id()].push_back(core);
