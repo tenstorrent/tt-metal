@@ -486,7 +486,7 @@ int main(int argc, char** argv) {
                 0x410,                                                                  // 2: dest_noc_offset
                 router_phys_core.x,                                                     // 3: router_x
                 router_phys_core.y,                                                     // 4: router_y
-                (dev_r_mesh_id << 16 | dev_r_chip_id),                                  // 5: mesh and chip id
+                (*dev_r_mesh_id << 16 | dev_r_chip_id),                                  // 5: mesh and chip id
                 0xd0000,                                                                // 6: space in rx's L1
                 gk_interface_addr,                                                      // 7: gk_message_addr_l
                 tx_gk_noc_offset,                                                       // 8: gk_message_addr_h

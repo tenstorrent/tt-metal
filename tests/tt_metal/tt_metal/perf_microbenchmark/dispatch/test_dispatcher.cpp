@@ -597,6 +597,10 @@ int main(int argc, char** argv) {
             host_completion_queue_wr_ptr,
             dev_completion_queue_wr_ptr,
             dev_completion_queue_rd_ptr,
+            MetalContext::instance().dispatch_mem_map(CoreType::WORKER).get_dispatch_stream_index(0),
+            0,  // unused for single device - used to "virtualize" the number of eth cores across devices
+            0,  // unused for single device - used to "virtualize" the number of eth cores across devices
+            0,  // unused for single device - used to "virtualize" the number of eth cores across devices
             0,
             0,
             0,
@@ -605,9 +609,17 @@ int main(int argc, char** argv) {
             0,
             0,
             0,
-            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
-            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
-            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
             true,  // is_dram_variant
             true,  // is_host_variant
         };

@@ -63,7 +63,7 @@ def prepare_conv_params(
     bias,
     dtype,
     fp32_dest_acc_en=False,
-    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
     packer_l1_acc=False,
 ):
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -94,7 +94,7 @@ def prepare_split_conv_params(
     split_in,
     split_out,
     fp32_dest_acc_en=False,
-    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
 ):
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),

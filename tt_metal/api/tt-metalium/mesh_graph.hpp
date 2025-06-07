@@ -7,6 +7,7 @@
 #include <magic_enum/magic_enum.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/fabric_types.hpp>
 #include <tt_stl/reflection.hpp>
 #include <umd/device/types/arch.h>                      // tt::ARCH
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
@@ -46,7 +47,8 @@ enum class RoutingDirection {
     E = 2,
     S = 4,
     W = 8,
-    C = 16,  // Centre, means that destination is same as source
+    C = 16,     // Centre, means that destination is same as source
+    NONE = 32,  // No direction, means that destination is not reachable
 };
 
 struct RouterEdge {
@@ -65,8 +67,7 @@ struct hash_pair {
 };
 
 using port_id_t = std::pair<RoutingDirection, uint32_t>;
-using mesh_id_t = uint32_t;
-using InterMeshConnectivity = std::vector<std::vector<std::unordered_map<mesh_id_t, RouterEdge>>>;
+using InterMeshConnectivity = std::vector<std::vector<std::unordered_map<MeshId, RouterEdge>>>;
 using IntraMeshConnectivity = std::vector<std::vector<std::unordered_map<chip_id_t, RouterEdge>>>;
 
 class MeshGraph {
@@ -83,16 +84,16 @@ public:
     const ChipSpec& get_chip_spec() const { return chip_spec_; }
 
     // TODO: remove the ns/ew apis
-    std::uint32_t get_mesh_ns_size(mesh_id_t mesh_id) const { return mesh_shapes_[mesh_id].first; }
-    std::uint32_t get_mesh_ew_size(mesh_id_t mesh_id) const { return mesh_shapes_[mesh_id].second; }
-    MeshShape get_mesh_shape(mesh_id_t mesh_id) const {
-        return MeshShape{mesh_shapes_[mesh_id].first, mesh_shapes_[mesh_id].second};
+    std::uint32_t get_mesh_ns_size(MeshId mesh_id) const { return mesh_shapes_[*mesh_id].first; }
+    std::uint32_t get_mesh_ew_size(MeshId mesh_id) const { return mesh_shapes_[*mesh_id].second; }
+    MeshShape get_mesh_shape(MeshId mesh_id) const {
+        return MeshShape{mesh_shapes_[*mesh_id].first, mesh_shapes_[*mesh_id].second};
     }
-    const MeshContainer<std::uint32_t>& get_host_ranks(mesh_id_t mesh_id) const { return mesh_host_ranks_[mesh_id]; }
-    const MeshCoordinateRange& get_host_rank_coord_range(mesh_id_t mesh_id, std::uint32_t host_rank) const {
-        return host_rank_coord_ranges_[mesh_id][host_rank];
+    const MeshContainer<std::uint32_t>& get_host_ranks(MeshId mesh_id) const { return mesh_host_ranks_[*mesh_id]; }
+    const MeshCoordinateRange& get_host_rank_coord_range(MeshId mesh_id, std::uint32_t host_rank) const {
+        return host_rank_coord_ranges_[*mesh_id][host_rank];
     }
-    const std::vector<mesh_id_t>& get_mesh_ids() const { return mesh_ids_; }
+    const std::vector<MeshId>& get_mesh_ids() const { return mesh_ids_; }
 
 private:
     std::unordered_map<chip_id_t, RouterEdge> get_valid_connections(
@@ -100,9 +101,9 @@ private:
     void initialize_from_yaml(const std::string& mesh_graph_desc_file_path);
 
     void add_to_connectivity(
-        mesh_id_t src_mesh_id,
+        MeshId src_mesh_id,
         chip_id_t src_chip_id,
-        chip_id_t dest_mesh_id,
+        MeshId dest_mesh_id,
         chip_id_t dest_chip_id,
         RoutingDirection port_direction);
 
@@ -110,7 +111,7 @@ private:
     std::vector<std::pair<std::uint32_t, std::uint32_t>> mesh_shapes_;
     IntraMeshConnectivity intra_mesh_connectivity_;
     InterMeshConnectivity inter_mesh_connectivity_;
-    std::vector<mesh_id_t> mesh_ids_;
+    std::vector<MeshId> mesh_ids_;
     std::vector<MeshContainer<std::uint32_t>> mesh_host_ranks_;
     std::vector<std::vector<MeshCoordinateRange>> host_rank_coord_ranges_;
 };

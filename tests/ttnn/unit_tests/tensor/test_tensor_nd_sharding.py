@@ -15,36 +15,35 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, assert_with_pc
         ([3, 4, 5], [3, 4, 5], ttnn.ROW_MAJOR_LAYOUT),  # All data on a single core
         ([3, 4, 5], [3, 4, 1], ttnn.ROW_MAJOR_LAYOUT),  # Each core gets full batch and height dimension
         ([3, 4, 5], [3, 1, 5], ttnn.ROW_MAJOR_LAYOUT),  # Each core gets full batch and width dimension
-        (
-            [3, 4, 5],
-            [1, 4, 5],
-            ttnn.ROW_MAJOR_LAYOUT,
-        ),  # Each core gets full height and width dimension, aka 1 batch per core
+        ([3, 4, 5], [1, 4, 5], ttnn.ROW_MAJOR_LAYOUT),  # Each core gets full height and width dimension
         ([3, 4, 5], [3, 1, 1], ttnn.ROW_MAJOR_LAYOUT),  # Each core gets full batch dimension
         ([3, 4, 5], [1, 4, 1], ttnn.ROW_MAJOR_LAYOUT),  # Each core gets full height dimension
         ([3, 4, 5], [1, 1, 5], ttnn.ROW_MAJOR_LAYOUT),  # Each core gets full width dimension
-        (
-            [3, 4, 5],
-            [1, 1, 1],
-            ttnn.ROW_MAJOR_LAYOUT,
-        ),  # Data is distributed equally across all cores, no dimenions preserved
+        ([3, 4, 5], [1, 1, 1], ttnn.ROW_MAJOR_LAYOUT),  # Data is distributed equally across all cores
         # Tile Layout
-        ([3, 4 * 32, 5 * 32], [3, 4 * 32, 5 * 32], ttnn.TILE_LAYOUT),  # All data on a single core
-        ([3, 4 * 32, 5 * 32], [3, 4 * 32, 32], ttnn.TILE_LAYOUT),  # Each core gets full batch and height dimension
-        ([3, 4 * 32, 5 * 32], [3, 32, 5 * 32], ttnn.TILE_LAYOUT),  # Each core gets full batch and width dimension
-        (
-            [3, 4 * 32, 5 * 32],
-            [1, 4 * 32, 5 * 32],
-            ttnn.TILE_LAYOUT,
-        ),  # Each core gets full height and width dimension, aka 1 batch per core
-        ([3, 4 * 32, 5 * 32], [3, 32, 32], ttnn.TILE_LAYOUT),  # Each core gets full batch dimension
-        ([3, 4 * 32, 5 * 32], [1, 4 * 32, 32], ttnn.TILE_LAYOUT),  # Each core gets full height dimension
-        ([3, 4 * 32, 5 * 32], [1, 32, 5 * 32], ttnn.TILE_LAYOUT),  # Each core gets full width dimension
-        (
-            [3, 4 * 32, 5 * 32],
-            [1, 32, 32],
-            ttnn.TILE_LAYOUT,
-        ),  # Data is distributed equally across all cores, no dimenions preserved
+        ([3, 128, 160], [3, 128, 160], ttnn.TILE_LAYOUT),  # All data on a single core
+        ([3, 128, 160], [3, 128, 32], ttnn.TILE_LAYOUT),  # Each core gets full batch and height dimension
+        ([3, 128, 160], [3, 32, 160], ttnn.TILE_LAYOUT),  # Each core gets full batch and width dimension
+        ([3, 128, 160], [1, 128, 160], ttnn.TILE_LAYOUT),  # Each core gets full height and width dimension
+        ([3, 128, 160], [3, 32, 32], ttnn.TILE_LAYOUT),  # Each core gets full batch dimension
+        ([3, 128, 160], [1, 128, 32], ttnn.TILE_LAYOUT),  # Each core gets full height dimension
+        ([3, 128, 160], [1, 32, 160], ttnn.TILE_LAYOUT),  # Each core gets full width dimension
+        ([3, 128, 160], [1, 32, 32], ttnn.TILE_LAYOUT),  # Data is distributed equally across all cores
+        # Uneven shards
+        ([30, 40, 55], [30, 40, 10], ttnn.ROW_MAJOR_LAYOUT),
+        ([30, 45, 50], [30, 10, 50], ttnn.ROW_MAJOR_LAYOUT),
+        ([35, 40, 50], [10, 40, 50], ttnn.ROW_MAJOR_LAYOUT),
+        ([30, 45, 50], [30, 10, 50], ttnn.ROW_MAJOR_LAYOUT),
+        ([35, 40, 50], [10, 40, 50], ttnn.ROW_MAJOR_LAYOUT),
+        ([35, 45, 50], [10, 10, 50], ttnn.ROW_MAJOR_LAYOUT),
+        ([35, 45, 55], [10, 10, 10], ttnn.ROW_MAJOR_LAYOUT),
+        ([3, 128, 165], [3, 128, 32], ttnn.TILE_LAYOUT),
+        ([3, 130, 160], [3, 32, 160], ttnn.TILE_LAYOUT),
+        ([5, 128, 160], [2, 128, 160], ttnn.TILE_LAYOUT),
+        ([3, 130, 165], [3, 32, 32], ttnn.TILE_LAYOUT),
+        ([5, 128, 165], [2, 128, 32], ttnn.TILE_LAYOUT),
+        ([5, 130, 160], [2, 32, 160], ttnn.TILE_LAYOUT),
+        ([5, 130, 165], [2, 32, 32], ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])

@@ -43,7 +43,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
-    uint32_t dim = find_scatter_dim(input_tensor.get_padded_shape(), input_tensor.active_physical_devices().size());
+    uint32_t dim =
+        find_scatter_dim(input_tensor.get_padded_shape(), ttnn::ccl::get_active_physical_devices(input_tensor).size());
     ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter(
         input_tensor,
         dim,
@@ -57,7 +58,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     return ttnn::operations::experimental::ccl::all_gather_async(
         scattered_tensor,
         dim,
-        gather_multi_device_global_semaphore,
+        {gather_multi_device_global_semaphore},
         num_preferred_links.value_or(1),
         out_memory_config,
         topology,
@@ -89,7 +90,7 @@ std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
     return ttnn::operations::experimental::ccl::all_gather_async(
         scattered_tensors,
         dim,
-        gather_multi_device_global_semaphore,
+        {gather_multi_device_global_semaphore},
         num_preferred_links.value_or(1),
         out_memory_config,
         topology,
@@ -132,7 +133,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         cluster_axis,
         mesh_device,
         topology,
-        gather_multi_device_global_semaphore,
+        {gather_multi_device_global_semaphore},
         std::nullopt,  // persistent_output_tensor
         out_memory_config,
         num_preferred_links,
@@ -175,7 +176,7 @@ std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
         cluster_axis,
         mesh_device,
         topology,
-        gather_multi_device_global_semaphore,
+        {gather_multi_device_global_semaphore},
         std::nullopt,  // persistent_output_tensor
         out_memory_config,
         num_preferred_links,

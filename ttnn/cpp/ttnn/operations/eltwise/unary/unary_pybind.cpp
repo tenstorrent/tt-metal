@@ -553,13 +553,13 @@ void bind_unary_operation_with_int_parameter(
         ttnn::pybind_overload_t{
             [](const unary_operation_t& self,
                const Tensor& input_tensor,
-               const int parameter,
+               const std::optional<int>& parameter,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
                QueueId queue_id) { return self(queue_id, input_tensor, parameter, memory_config, output_tensor); },
             py::arg("input_tensor"),
-            py::arg(parameter_name.c_str()),
             py::kw_only(),
+            py::arg(parameter_name.c_str()) = 0,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
@@ -2275,9 +2275,9 @@ void py_module(py::module& module) {
         module,
         ttnn::round,
         "decimals",
-        "no. of decimal places to round off to [supported range -6 to 7]",
+        "No. of decimal places to round off to [supported range -6 to 7], Defaults to 0.",
         R"doc(Round the input tensor to `decimals` decimal places.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_composite_int(
         module,
         ttnn::polygamma,

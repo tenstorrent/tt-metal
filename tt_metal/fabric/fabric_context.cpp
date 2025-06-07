@@ -16,11 +16,11 @@
 
 namespace tt::tt_fabric {
 
-std::unordered_map<mesh_id_t, bool> FabricContext::check_for_wrap_around_mesh() const {
-    std::unordered_map<mesh_id_t, bool> wrap_around_mesh;
+std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() const {
+    std::unordered_map<MeshId, bool> wrap_around_mesh;
 
-    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    auto mesh_ids = control_plane->get_user_physical_mesh_ids();
+    auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mesh_ids = control_plane.get_user_physical_mesh_ids();
     for (const auto& mesh_id : mesh_ids) {
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG) {
             // skip wrapping around mesh for TG since the corner chips connected to the gateway will be
@@ -32,7 +32,7 @@ std::unordered_map<mesh_id_t, bool> FabricContext::check_for_wrap_around_mesh() 
         const uint32_t corner_chip_id = 0;
         uint32_t corner_chip_connections = 0;
         for (const auto& direction : FabricContext::routing_directions) {
-            if (!control_plane->get_intra_chip_neighbors(FabricNodeId(mesh_id, corner_chip_id), direction).empty()) {
+            if (!control_plane.get_intra_chip_neighbors(FabricNodeId(mesh_id, corner_chip_id), direction).empty()) {
                 corner_chip_connections++;
             }
         }
@@ -90,12 +90,20 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
 
     this->router_config_ =
         std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(this->channel_buffer_size_bytes_, this->topology_);
+    // disable upstream buffering optimization for now for device init.
+    auto dateline_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
+        .edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline,
+        .enable_dateline_sender_extra_buffer_slots = false,
+        .enable_dateline_receiver_extra_buffer_slots = true,
+        .enable_dateline_upstream_sender_extra_buffer_slots = false,
+        .enable_dateline_upstream_receiver_extra_buffer_slots = false,
+    };
     this->dateline_router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
-        this->channel_buffer_size_bytes_, this->topology_, true);
+        this->channel_buffer_size_bytes_, this->topology_, dateline_edm_options);
     set_routing_mode(this->topology_, this->fabric_config_);
 }
 
-bool FabricContext::is_wrap_around_mesh(mesh_id_t mesh_id) const {
+bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {
     auto it = this->wrap_around_mesh_.find(mesh_id);
     TT_FATAL(it != this->wrap_around_mesh_.end(), "Querying wrap around mesh for an unknown mesh id");
     return it->second;

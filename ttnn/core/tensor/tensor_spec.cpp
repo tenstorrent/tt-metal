@@ -246,16 +246,6 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
         return std::nullopt;
     }
 
-    // Detect single bank case
-    if (nd_shard_shape == padded_shape()) {
-        return MemoryConfig::create_with_prepopulated_shard_specs(
-            TensorMemoryLayout::SINGLE_BANK,
-            mem_config.buffer_type(),
-            ShardSpec(nd_shard_spec.grid, physical_shape(), nd_shard_spec.orientation),
-            mem_config.nd_shard_spec(),
-            mem_config.created_with_nd_shard_spec());
-    }
-
     ShardSpec shard_spec(
         nd_shard_spec.grid,
         {nd_shard_shape.volume() / nd_shard_shape[-1], nd_shard_shape[-1]},

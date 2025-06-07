@@ -2,6 +2,7 @@ add_library(ttnn_op_moreh ${LIB_TYPE})
 add_library(TT::NN::Ops::Moreh ALIAS ttnn_op_moreh)
 
 target_precompile_headers(ttnn_op_moreh REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_moreh)
 
 target_sources(
     ttnn_op_moreh

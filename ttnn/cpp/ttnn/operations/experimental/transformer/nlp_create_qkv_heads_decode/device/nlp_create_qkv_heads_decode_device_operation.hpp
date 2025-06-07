@@ -75,7 +75,7 @@ struct NLPCreateHeadsDecodeDeviceOperation {
         "input_on_subcoregrids",
         "slice_size",
         "output_mem_config");
-    const auto attribute_values() const {
+    auto attribute_values() const {
         return std::forward_as_tuple(
             this->num_q_heads,
             this->num_kv_heads,

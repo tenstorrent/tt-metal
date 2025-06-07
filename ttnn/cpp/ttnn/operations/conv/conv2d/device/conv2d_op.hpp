@@ -74,7 +74,8 @@ struct Conv2dConfig {
     // Increased perf, but increased L1 usage.
     bool enable_act_double_buffer = false;
 
-    // Used on for block sharded convolutions
+    // Doubles the size of the CBs for weights.
+    // Increased perf, but increased L1 usage.
     bool enable_weights_double_buffer = false;
 
     // Only for height sharding.
@@ -119,7 +120,7 @@ struct Conv2dConfig {
         "enable_subblock_padding",
         "in_place",
         "enable_kernel_stride_folding");
-    const auto attribute_values() const {
+    auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->dtype),
             std::cref(this->weights_dtype),
@@ -280,7 +281,7 @@ struct OptimizedConvNew {
         "enable_weights_double_buffer",
         "enable_split_reader",
         "enable_subblock_padding");
-    const auto attribute_values() const {
+    auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->parallelization_config),
             std::cref(this->block_config),

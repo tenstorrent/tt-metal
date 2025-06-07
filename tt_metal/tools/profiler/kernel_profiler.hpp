@@ -252,8 +252,9 @@ __attribute__((noinline)) void finish_profiler() {
     if (profiler_control_buffer[PROFILER_DONE] == 1) {
         return;
     }
-    while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
-        invalidate_l1_cache();
+    bool do_noc = true;
+    if (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
+        do_noc = false;
     }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
@@ -268,7 +269,6 @@ __attribute__((noinline)) void finish_profiler() {
         if (profiler_control_buffer[deviceIndex]) {
             uint32_t currEndIndex = profiler_control_buffer[deviceIndex] + profiler_control_buffer[hostIndex];
 
-            bool do_noc = false;
             uint32_t dram_offset = 0;
             uint32_t send_size = 0;
             if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
@@ -279,7 +279,6 @@ __attribute__((noinline)) void finish_profiler() {
 
                 send_size = profiler_control_buffer[deviceIndex] * sizeof(uint32_t);
 
-                do_noc = true;
                 profiler_control_buffer[hostIndex] = currEndIndex;
             } else if (profiler_control_buffer[RUN_COUNTER] < 1) {
                 dram_offset = (core_flat_id % profiler_core_count_per_dram) * MAX_RISCV_PER_CORE *
@@ -288,9 +287,9 @@ __attribute__((noinline)) void finish_profiler() {
 
                 send_size = CUSTOM_MARKERS * sizeof(uint32_t);
 
-                do_noc = true;
                 mark_dropped_timestamps(hostIndex);
             } else {
+                do_noc = false;
                 mark_dropped_timestamps(hostIndex);
             }
 
@@ -304,7 +303,6 @@ __attribute__((noinline)) void finish_profiler() {
                 profiler_noc_async_write_posted(
                     reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex]), dram_bank_dst_noc_addr, send_size);
             }
-            profiler_control_buffer[deviceIndex] = 0;
         }
     }
 
@@ -323,8 +321,8 @@ __attribute__((noinline)) void quick_push() {
     mark_time_at_index_inlined(wIndex, hash);
     wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
 
-    while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
-        invalidate_l1_cache();
+    if (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
+        return;
     }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];

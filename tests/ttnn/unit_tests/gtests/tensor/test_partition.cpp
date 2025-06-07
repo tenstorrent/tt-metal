@@ -25,7 +25,7 @@
 #include <setjmp.h>
 
 #include "ttnn/tensor/xtensor/partition.hpp"
-
+#include "ttnn/tensor/xtensor/conversion_utils.hpp"
 namespace tt {
 namespace tt_metal {
 class Tensor;
@@ -38,6 +38,7 @@ namespace {
 using ::testing::SizeIs;
 using ::tt::tt_metal::Tensor;
 using ::ttnn::experimental::xtensor::chunk;
+using ::ttnn::experimental::xtensor::chunk_ndim;
 using ::ttnn::experimental::xtensor::concat;
 
 TEST(PartitionTest, ChunkBasicNonDivisible3) {
@@ -66,6 +67,19 @@ TEST(PartitionTest, ChunkBasicLessChunksThanProvided) {
     EXPECT_EQ(chunks[2].shape()[0], 3u);  // next chunk size 3
     EXPECT_EQ(chunks[3].shape()[0], 3u);  // next chunk size 3
     EXPECT_EQ(chunks[4].shape()[0], 1u);  // last chunk size 1
+}
+
+TEST(PartitionTest, ChunkFewerChunksThanRequested) {
+    xt::xarray<float> tensor = xt::arange<float>(5);
+
+    auto chunks = chunk(tensor, 7, 0);
+
+    ASSERT_THAT(chunks, SizeIs(5));
+    EXPECT_EQ(chunks[0].shape()[0], 1u);
+    EXPECT_EQ(chunks[1].shape()[0], 1u);
+    EXPECT_EQ(chunks[2].shape()[0], 1u);
+    EXPECT_EQ(chunks[3].shape()[0], 1u);
+    EXPECT_EQ(chunks[4].shape()[0], 1u);
 }
 
 TEST(PartitionTest, DefaultAxis) {
@@ -178,35 +192,16 @@ TEST(PartitionTest, EmptyInput) {
     EXPECT_TRUE(xt::allclose(concat(input, 0), xt::xarray<int>{}));
 }
 
-TEST(PartitionTest, ShardSpans) {
-    constexpr size_t kNumChunks = 64;
-    constexpr size_t kChunkSize = 4 << 10;
-    std::vector<float> test_data;
-    for (int i = 0; i < kNumChunks * kChunkSize; i++) {
-        test_data.push_back(i);
-    }
-
-    auto chunks = chunk(tt::stl::Span(test_data), ttnn::Shape{kNumChunks, kChunkSize}, kNumChunks);
-
-    EXPECT_THAT(chunks, SizeIs(kNumChunks));
-    for (int i = 0; i < kNumChunks; i++) {
-        const auto& [chunk_span, shape] = chunks[i];
-        EXPECT_THAT(chunk_span, SizeIs(kChunkSize));
-        EXPECT_EQ(shape, ttnn::Shape({1, kChunkSize}));
-        for (int j = 0; j < kChunkSize; j++) {
-            EXPECT_EQ(chunk_span[j], i * kChunkSize + j);
-        }
-    }
-}
-
 TEST(PartitionTest, ChunkDoesNotAccessData) {
     //  Create a read-protected memory region, and point `tt::stl::Span` to it.
     //  `chunk` should not access the data, and should only calculate offsets and shapes.
     const long page_size = sysconf(_SC_PAGESIZE);
     ASSERT_NE(page_size, -1);
 
-    const size_t total_size = 10 * page_size;
-    const int num_chunks = 10;
+    constexpr int kDim0Size = 10;
+    constexpr int kDim1Size = 17;
+    const ttnn::Shape shape({kDim0Size, kDim1Size, page_size});
+    const size_t total_size = shape.volume();
 
     // With `PROT_NONE`, the mapped memory cannot be accessed.
     void* mapped_mem = mmap(
@@ -227,6 +222,8 @@ TEST(PartitionTest, ChunkDoesNotAccessData) {
     ASSERT_EQ(sigaction(SIGSEGV, &new_action, &old_action), 0);
 
     tt::stl::Span<const uint8_t> protected_span(static_cast<uint8_t*>(mapped_mem), total_size);
+    auto xexpr = xt::adapt(
+        protected_span.data(), total_size, xt::no_ownership(), std::vector<size_t>(shape.cbegin(), shape.cend()));
 
     // Verify that our set up actually works by attempting to read the protected memory region, and catching a segfault.
     bool segfault_occurred = false;
@@ -239,12 +236,13 @@ TEST(PartitionTest, ChunkDoesNotAccessData) {
     EXPECT_TRUE(segfault_occurred);
 
     if (sigsetjmp(jmp_env, /*savemask=*/1) == 0) {
-        auto chunks = chunk(protected_span, ttnn::Shape({total_size}), num_chunks);
+        auto chunks = chunk(xexpr, /*num_chunks=*/kDim1Size, /*dim=*/1);
 
-        EXPECT_THAT(chunks, SizeIs(num_chunks));
-        for (const auto& [chunk_span, chunk_shape] : chunks) {
-            EXPECT_THAT(chunk_span, SizeIs(page_size));
-            EXPECT_EQ(chunk_shape, ttnn::Shape({page_size}));
+        EXPECT_THAT(chunks, SizeIs(kDim1Size));
+        for (const auto& chunked_xexpr : chunks) {
+            EXPECT_THAT(chunked_xexpr, SizeIs(kDim0Size * page_size));
+            EXPECT_EQ(
+                experimental::xtensor::get_shape_from_xarray(chunked_xexpr), ttnn::Shape({kDim0Size, 1, page_size}));
         }
     } else {
         FAIL() << "segfault occurred when calling `chunk`";
@@ -253,6 +251,196 @@ TEST(PartitionTest, ChunkDoesNotAccessData) {
     // Cleanup.
     ASSERT_EQ(sigaction(SIGSEGV, &old_action, nullptr), 0);
     ASSERT_EQ(munmap(mapped_mem, total_size), 0);
+}
+
+TEST(PartitionTest, ChunkNdimEmpty) {
+    xt::xarray<float> tensor = xt::arange<float>(24);
+    tensor.reshape({2, 3, 4});
+
+    auto chunks = chunk_ndim(tensor, {}, {});
+
+    ASSERT_THAT(chunks, SizeIs(1));
+    EXPECT_TRUE(xt::allclose(chunks[0], tensor));
+}
+
+TEST(PartitionTest, ChunkNdimMismatchedSizes) {
+    xt::xarray<float> tensor = xt::arange<float>(24);
+    tensor.reshape({2, 3, 4});
+
+    EXPECT_ANY_THROW(chunk_ndim(tensor, {2, 3}, {0}));
+    EXPECT_ANY_THROW(chunk_ndim(tensor, {2}, {0, 1}));
+}
+
+TEST(PartitionTest, ChunkNdimNegativeChunks) {
+    xt::xarray<float> tensor = xt::arange<float>(24);
+    tensor.reshape({2, 3, 4});
+
+    EXPECT_ANY_THROW(chunk_ndim(tensor, {-1, 2}, {0, 1}));
+    EXPECT_ANY_THROW(chunk_ndim(tensor, {2, 0}, {0, 1}));
+}
+
+TEST(PartitionTest, ChunkNdimNonUniqueDims) {
+    xt::xarray<float> tensor = xt::arange<float>(24);
+    tensor.reshape({2, 3, 4});
+
+    EXPECT_ANY_THROW(chunk_ndim(tensor, {2, 2}, {0, 0}));
+    EXPECT_ANY_THROW(chunk_ndim(tensor, {2, 2, 3}, {0, 1, 0}));
+}
+
+TEST(PartitionTest, ChunkNdimDimsOutOfRange) {
+    xt::xarray<float> tensor = xt::arange<float>(24);
+    tensor.reshape({2, 3, 4});
+
+    EXPECT_ANY_THROW(chunk_ndim(tensor, {2}, {3}));
+    EXPECT_ANY_THROW(chunk_ndim(tensor, {2}, {-1}));
+    EXPECT_ANY_THROW(chunk_ndim(tensor, {2, 2}, {0, 5}));
+}
+
+TEST(PartitionTest, ChunkNdimRowMajorOrder) {
+    xt::xarray<float> tensor = xt::arange<float>(24);
+    tensor.reshape({2, 3, 4});
+
+    auto chunks = chunk_ndim(tensor, {2, 2}, {0, 1});
+
+    ASSERT_THAT(chunks, SizeIs(4));
+
+    // Expected order: [0,0], [0,1], [1,0], [1,1] in row-major
+    // [0,0]: first half of dim 0, first half of dim 1
+    EXPECT_TRUE(xt::allclose(chunks[0], xt::view(tensor, xt::range(0, 1), xt::range(0, 2), xt::all())));
+    // [0,1]: first half of dim 0, second half of dim 1
+    EXPECT_TRUE(xt::allclose(chunks[1], xt::view(tensor, xt::range(0, 1), xt::range(2, 3), xt::all())));
+    // [1,0]: second half of dim 0, first half of dim 1
+    EXPECT_TRUE(xt::allclose(chunks[2], xt::view(tensor, xt::range(1, 2), xt::range(0, 2), xt::all())));
+    // [1,1]: second half of dim 0, second half of dim 1
+    EXPECT_TRUE(xt::allclose(chunks[3], xt::view(tensor, xt::range(1, 2), xt::range(2, 3), xt::all())));
+}
+
+TEST(PartitionTest, ChunkNdimFewerChunksThanRequested) {
+    xt::xarray<float> tensor = xt::arange<float>(12);
+    tensor.reshape({3, 4});
+
+    // Request 5 chunks along dim 0 (size 3), 6 chunks along dim 1 (size 4)
+    auto chunks = chunk_ndim(tensor, {5, 6}, {0, 1});
+
+    // Should get 3*4 = 12 chunks (capped by actual dimension sizes)
+    ASSERT_THAT(chunks, SizeIs(12));
+
+    // Each chunk should be 1x1
+    for (const auto& chunk : chunks) {
+        EXPECT_EQ(chunk.shape()[0], 1u);
+        EXPECT_EQ(chunk.shape()[1], 1u);
+    }
+
+    for (size_t i = 0; i < 3; ++i) {
+        for (size_t j = 0; j < 4; ++j) {
+            size_t chunk_idx = i * 4 + j;
+            EXPECT_FLOAT_EQ(chunks[chunk_idx](0, 0), tensor(i, j));
+        }
+    }
+}
+
+TEST(PartitionTest, ChunkNdimBasicMultiDim) {
+    xt::xarray<int> tensor = xt::arange<int>(60);
+    tensor.reshape({3, 4, 5});
+
+    auto chunks = chunk_ndim(tensor, {2, 2}, {0, 2});
+
+    ASSERT_THAT(chunks, SizeIs(4));
+
+    // Check shapes: dim 0 split into [2,1], dim 2 split into [3,2]
+    EXPECT_EQ(chunks[0].shape()[0], 2u);  // [0,0]
+    EXPECT_EQ(chunks[0].shape()[2], 3u);
+
+    EXPECT_EQ(chunks[1].shape()[0], 2u);  // [0,1]
+    EXPECT_EQ(chunks[1].shape()[2], 2u);
+
+    EXPECT_EQ(chunks[2].shape()[0], 1u);  // [1,0]
+    EXPECT_EQ(chunks[2].shape()[2], 3u);
+
+    EXPECT_EQ(chunks[3].shape()[0], 1u);  // [1,1]
+    EXPECT_EQ(chunks[3].shape()[2], 2u);
+
+    EXPECT_TRUE(xt::allclose(chunks[0], xt::view(tensor, xt::range(0, 2), xt::all(), xt::range(0, 3))));
+    EXPECT_TRUE(xt::allclose(chunks[1], xt::view(tensor, xt::range(0, 2), xt::all(), xt::range(3, 5))));
+    EXPECT_TRUE(xt::allclose(chunks[2], xt::view(tensor, xt::range(2, 3), xt::all(), xt::range(0, 3))));
+    EXPECT_TRUE(xt::allclose(chunks[3], xt::view(tensor, xt::range(2, 3), xt::all(), xt::range(3, 5))));
+}
+
+TEST(PartitionTest, ChunkNdimSingleDimension) {
+    xt::xarray<float> tensor = xt::arange<float>(10);
+
+    auto chunks = chunk_ndim(tensor, {3}, {0});
+
+    ASSERT_THAT(chunks, SizeIs(3));
+    EXPECT_EQ(chunks[0].shape()[0], 4u);
+    EXPECT_EQ(chunks[1].shape()[0], 4u);
+    EXPECT_EQ(chunks[2].shape()[0], 2u);
+
+    EXPECT_TRUE(xt::allclose(chunks[0], xt::view(tensor, xt::range(0, 4))));
+    EXPECT_TRUE(xt::allclose(chunks[1], xt::view(tensor, xt::range(4, 8))));
+    EXPECT_TRUE(xt::allclose(chunks[2], xt::view(tensor, xt::range(8, 10))));
+}
+
+TEST(PartitionTest, ChunkNdimThreeDimensions) {
+    xt::xarray<double> tensor = xt::arange<double>(24);
+    tensor.reshape({2, 3, 4});
+
+    auto chunks = chunk_ndim(tensor, {2, 2, 2}, {0, 1, 2});
+
+    ASSERT_THAT(chunks, SizeIs(8));
+
+    // In row-major order with dims {0, 1, 2}, chunks are ordered as:
+    // [0]: (0,0,0), [1]: (0,0,1), [2]: (0,1,0), [3]: (0,1,1)
+    // [4]: (1,0,0), [5]: (1,0,1), [6]: (1,1,0), [7]: (1,1,1)
+
+    // Verify dimension 0 chunks
+    for (size_t i = 0; i < 4; ++i) {
+        EXPECT_EQ(chunks[i].shape()[0], 1u);      // first half of dim 0
+        EXPECT_EQ(chunks[i + 4].shape()[0], 1u);  // second half of dim 0
+    }
+
+    // Verify dimension 1 chunks - every 2 chunks alternate between dim1=0 and dim1=1
+    for (size_t i = 0; i < 8; i += 4) {
+        EXPECT_EQ(chunks[i].shape()[1], 2u);      // (x,0,0) - first half of dim 1
+        EXPECT_EQ(chunks[i + 1].shape()[1], 2u);  // (x,0,1) - first half of dim 1
+        EXPECT_EQ(chunks[i + 2].shape()[1], 1u);  // (x,1,0) - second half of dim 1
+        EXPECT_EQ(chunks[i + 3].shape()[1], 1u);  // (x,1,1) - second half of dim 1
+    }
+
+    // Verify dimension 2 chunks - alternates every chunk
+    for (size_t i = 0; i < 8; i += 2) {
+        EXPECT_EQ(chunks[i].shape()[2], 2u);      // (x,x,0) - first half of dim 2
+        EXPECT_EQ(chunks[i + 1].shape()[2], 2u);  // (x,x,1) - second half of dim 2
+    }
+
+    EXPECT_TRUE(xt::allclose(chunks[0], xt::view(tensor, xt::range(0, 1), xt::range(0, 2), xt::range(0, 2))));
+    EXPECT_TRUE(xt::allclose(chunks[1], xt::view(tensor, xt::range(0, 1), xt::range(0, 2), xt::range(2, 4))));
+    EXPECT_TRUE(xt::allclose(chunks[2], xt::view(tensor, xt::range(0, 1), xt::range(2, 3), xt::range(0, 2))));
+    EXPECT_TRUE(xt::allclose(chunks[3], xt::view(tensor, xt::range(0, 1), xt::range(2, 3), xt::range(2, 4))));
+    EXPECT_TRUE(xt::allclose(chunks[4], xt::view(tensor, xt::range(1, 2), xt::range(0, 2), xt::range(0, 2))));
+    EXPECT_TRUE(xt::allclose(chunks[5], xt::view(tensor, xt::range(1, 2), xt::range(0, 2), xt::range(2, 4))));
+    EXPECT_TRUE(xt::allclose(chunks[6], xt::view(tensor, xt::range(1, 2), xt::range(2, 3), xt::range(0, 2))));
+    EXPECT_TRUE(xt::allclose(chunks[7], xt::view(tensor, xt::range(1, 2), xt::range(2, 3), xt::range(2, 4))));
+}
+
+TEST(PartitionTest, ChunkNdimNonContiguousDims) {
+    xt::xarray<int> tensor = xt::arange<int>(120);
+    tensor.reshape({2, 3, 4, 5});
+
+    auto chunks = chunk_ndim(tensor, {2, 2}, {0, 2});
+
+    ASSERT_THAT(chunks, SizeIs(4));
+
+    // Verify dimensions 1 and 3 remain unchanged
+    for (const auto& chunk : chunks) {
+        EXPECT_EQ(chunk.shape()[1], 3u);
+        EXPECT_EQ(chunk.shape()[3], 5u);
+    }
+
+    EXPECT_TRUE(xt::allclose(chunks[0], xt::view(tensor, xt::range(0, 1), xt::all(), xt::range(0, 2), xt::all())));
+    EXPECT_TRUE(xt::allclose(chunks[1], xt::view(tensor, xt::range(0, 1), xt::all(), xt::range(2, 4), xt::all())));
+    EXPECT_TRUE(xt::allclose(chunks[2], xt::view(tensor, xt::range(1, 2), xt::all(), xt::range(0, 2), xt::all())));
+    EXPECT_TRUE(xt::allclose(chunks[3], xt::view(tensor, xt::range(1, 2), xt::all(), xt::range(2, 4), xt::all())));
 }
 
 }  // namespace

@@ -40,7 +40,9 @@ class TtUpsample2D(nn.Module):
             device,
             weights,
             bias,
-            model_config.conv_w_dtype,
+            self.conv_config.weights_dtype,
+            fp32_dest_acc_en=(self.conv_config.weights_dtype == ttnn.bfloat8_b)
+            and (self.conv_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         )
 
     def interpolate(self, hidden_states):

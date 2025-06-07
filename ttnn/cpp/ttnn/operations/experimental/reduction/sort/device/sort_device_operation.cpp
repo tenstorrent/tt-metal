@@ -8,9 +8,18 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::reduction::sort {
 
+constexpr uint32_t WT_THRESHOLD = 64;
+
 SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    return sort::program::SortProgramFactory{};
+    const auto input_tensor_shape = tensor_args.input_tensor.get_padded_shape();
+    const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
+    const uint32_t Wt = input_tensor_shape[3] / tile_width;
+    if (Wt > WT_THRESHOLD) {
+        // Multi-core implementation
+        return sort::program::SortProgramFactorySingleRowMultiCore{};
+    }
+    return sort::program::SortProgramFactorySingleRowSingleCore{};
 }
 
 void SortDeviceOperation::validate_on_program_cache_hit(
@@ -35,15 +44,6 @@ void SortDeviceOperation::validate_on_program_cache_miss(
 
     const auto device = tensor_args.input_tensor.device();
     const auto l1_mem_size_bytes = device->l1_size_per_core();
-
-    // NOTE: This will be updated when support for sorting a single row on multicore is implemented.
-    // Issue: https://github.com/tenstorrent/tt-metal/issues/21187
-    TT_FATAL(
-        row_memory_size_bytes < l1_mem_size_bytes,
-        "Row memory size {} bytes exceeds L1 memory size {} bytes. "
-        "Consider using a smaller input tensor or increasing the L1 memory size.",
-        row_memory_size_bytes,
-        l1_mem_size_bytes);
 
     TT_FATAL(
         tensor_args.input_tensor.buffer() != nullptr,

@@ -31,7 +31,7 @@ struct Pad {
         "pad_value",
         "output_mem_config",
         "use_multicore");
-    const auto attribute_values() const {
+    auto attribute_values() const {
         return std::forward_as_tuple(
             this->output_logical_shape,
             this->output_padded_shape,
