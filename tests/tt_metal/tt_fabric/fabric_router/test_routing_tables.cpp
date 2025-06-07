@@ -118,6 +118,7 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kControlPlaneInit) {
 }
 
 TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kFabricRoutes) {
+    std::srand(std::time(nullptr));  // Seed the RNG
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
@@ -125,23 +126,19 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kFabricRoutes) {
         t3k_mesh_graph_desc_path.string(), get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
     auto& control_plane = global_control_plane->get_local_node_control_plane();
     control_plane.configure_routing_tables_for_fabric_ethernet_channels();
-    // TODO: Query this
-    constexpr uint32_t num_routing_planes = 2;
     for (const auto& src_mesh : control_plane.get_user_physical_mesh_ids()) {
         for (const auto& dst_mesh : control_plane.get_user_physical_mesh_ids()) {
             auto src_mesh_shape = control_plane.get_physical_mesh_shape(src_mesh);
-            auto src_mesh_size = src_mesh_shape[0] * src_mesh_shape[1];
+            auto src_mesh_size = src_mesh_shape.mesh_size();
             auto dst_mesh_shape = control_plane.get_physical_mesh_shape(dst_mesh);
-            auto dst_mesh_size = dst_mesh_shape[0] * dst_mesh_shape[1];
-            auto valid_chans = control_plane.get_valid_eth_chans_on_routing_plane(
-                FabricNodeId(src_mesh, std::rand() % src_mesh_size), std::rand() % num_routing_planes);
-            EXPECT_GT(valid_chans.size(), 0);
-            for (auto chan : valid_chans) {
-                auto path = control_plane.get_fabric_route(
-                    FabricNodeId(src_mesh, std::rand() % src_mesh_size),
-                    FabricNodeId(dst_mesh, std::rand() % dst_mesh_size),
-                    chan);
-                EXPECT_EQ(path.size() > 0, true);
+            auto dst_mesh_size = dst_mesh_shape.mesh_size();
+            auto src_fabric_node_id = FabricNodeId(src_mesh, std::rand() % src_mesh_size);
+            auto active_fabric_eth_channels = control_plane.get_active_fabric_eth_channels(src_fabric_node_id);
+            EXPECT_GT(active_fabric_eth_channels.size(), 0);
+            for (auto [chan, direction] : active_fabric_eth_channels) {
+                auto dst_fabric_node_id = FabricNodeId(dst_mesh, std::rand() % dst_mesh_size);
+                auto path = control_plane.get_fabric_route(src_fabric_node_id, dst_fabric_node_id, chan);
+                EXPECT_EQ(src_fabric_node_id == dst_fabric_node_id ? path.size() == 0 : path.size() > 0, true);
             }
         }
     }
