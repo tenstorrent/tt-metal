@@ -162,7 +162,7 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         args,
         program_factory.index(),
         input_tensor.dtype(),
-        std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
+        input_tensor.memory_config(),
         input_shape.volume());
 
     return hash;

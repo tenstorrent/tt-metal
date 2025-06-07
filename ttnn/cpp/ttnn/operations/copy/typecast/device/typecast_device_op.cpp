@@ -118,11 +118,7 @@ tt::stl::hash::hash_t TypecastDeviceOperation::compute_program_hash(
 
     auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<TypecastDeviceOperation>(
-        args,
-        program_factory.index(),
-        input_tensor.dtype(),
-        std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
-        input_shape.volume());
+        args, program_factory.index(), input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
 
     return hash;
 }
