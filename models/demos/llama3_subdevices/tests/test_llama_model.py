@@ -198,8 +198,10 @@ def test_llama_model_inference(
 
         page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper, per_device_group=True)
 
-        paged_attention_config = PagedAttentionConfig(**page_params)
-
+        paged_attention_config = PagedAttentionConfig(
+            block_size=page_params["page_block_size"],
+            max_num_blocks=page_params["page_max_num_blocks"],
+        )
     # Load TTNN model
     tt_model = TtTransformer(
         args=model_args,

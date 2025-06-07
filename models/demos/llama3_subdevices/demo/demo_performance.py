@@ -119,8 +119,10 @@ def run_llama3_decode_performance(
 
         page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper)
 
-        paged_attention_config = PagedAttentionConfig(**page_params)
-
+        paged_attention_config = PagedAttentionConfig(
+            block_size=page_params["page_block_size"],
+            max_num_blocks=page_params["page_max_num_blocks"],
+        )
         logger.info("Page table tensor done")
 
     # Load TTNN Llama3.1 model
@@ -449,14 +451,6 @@ def test_llama_decode_performance(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
-
-    if paged_attention:
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
-    else:
-        paged_attention_config = None
 
     return run_llama3_decode_performance(
         user_input=input_prompts,
