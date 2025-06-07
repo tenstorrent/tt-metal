@@ -12,6 +12,7 @@ from models.demos.llama3_subdevices.tt.llama_common import (
     HostEmbedding,
     encode_prompt_llama_instruct,
     PagedAttentionConfig,
+    PagedAttention,
 )
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOptimizations
@@ -151,25 +152,16 @@ def test_llama_model_inference(
     paged_attention_config = None
 
     if paged_attention:
+        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+
+        paged_attn = PagedAttention(page_params, model_args)
+
+        page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper)
+
         paged_attention_config = PagedAttentionConfig(
             block_size=page_params["page_block_size"],
             max_num_blocks=page_params["page_max_num_blocks"],
         )
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
-        )
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-
     # Load TTNN model
     tt_model = TtTransformer(
         args=model_args,
@@ -256,7 +248,7 @@ def test_llama_model_inference(
                                         dims=(1, 3) if model_args.is_galaxy else (0, 1),
                                         mesh_shape=model_args.cluster_shape,
                                     ),
-                                )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
+                                )[paged_attn.reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
                                 .reshape(
                                     model_args.max_batch_size,
                                     paged_attention_config.max_num_blocks // model_args.max_batch_size,
@@ -278,7 +270,7 @@ def test_llama_model_inference(
                                         dims=(1, 0) if model_args.is_galaxy else (0, 1),
                                         mesh_shape=model_args.cluster_shape,
                                     ),
-                                )[reverse_permutation]
+                                )[paged_attn.reverse_permutation]
                                 .reshape(
                                     model_args.max_batch_size,
                                     paged_attention_config.max_num_blocks // model_args.max_batch_size,
