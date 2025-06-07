@@ -19,7 +19,7 @@ namespace tt::tt_metal {
 using namespace tt;
 
 TEST(DevicePool, DevicePoolOpenClose) {
-    std::vector<chip_id_t> device_ids{0};
+    std::vector<chip_id_t> device_ids{*tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin()};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
     const auto& dispatch_core_config = tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
@@ -47,7 +47,7 @@ TEST(DevicePool, DevicePoolOpenClose) {
 }
 
 TEST(DevicePool, DevicePoolReconfigDevices) {
-    std::vector<chip_id_t> device_ids{0};
+    std::vector<chip_id_t> device_ids{*tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin()};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
     int worker_l1_size = 0;
