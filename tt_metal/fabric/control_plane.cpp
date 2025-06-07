@@ -28,7 +28,7 @@
 #include "fabric_host_interface.h"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
 #include "mesh_graph.hpp"
 #include "metal_soc_descriptor.h"
@@ -1091,7 +1091,7 @@ void ControlPlane::print_ethernet_channels() const {
 
 void ControlPlane::set_routing_mode(uint16_t mode) {
     if (!(this->routing_mode_ == 0 || this->routing_mode_ == mode)) {
-        tt::log_warning(
+        log_warning(
             tt::LogFabric,
             "Control Plane: Routing mode already set to {}. Setting to {}",
             (uint16_t)this->routing_mode_,

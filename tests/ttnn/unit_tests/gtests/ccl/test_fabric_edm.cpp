@@ -11,7 +11,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/fabric_edm_packet_header.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
 
 // Global state for daemon mode
@@ -60,18 +60,18 @@ static std::tuple<tt::tt_fabric::NocSendType, bool> get_noc_send_type(const std:
 static int baseline_validate_test_environment(const WriteThroughputStabilityTestWithPersistentFabricParams& params) {
     uint32_t min_test_num_devices = 8;
     if (tt::tt_metal::GetNumAvailableDevices() < min_test_num_devices) {
-        tt::log_warning("This test can only be run on T3000 or TG devices");
+        log_warning(tt::LogTest, "This test can only be run on T3000 or TG devices");
         return 1;
     }
 
     uint32_t galaxy_num_devices = 32;
     if (params.num_links > 2 && tt::tt_metal::GetNumAvailableDevices() < galaxy_num_devices) {
-        tt::log_warning("This test with {} links can only be run on Galaxy systems", params.num_links);
+        log_warning(tt::LogTest, "This test with {} links can only be run on Galaxy systems", params.num_links);
         return 1;
     }
 
     if (tt::tt_metal::GetNumAvailableDevices() == min_test_num_devices && params.num_links > 1 && params.line_size > 4) {
-        tt::log_warning("T3000 cannot run multi-link with more than 4 devices");
+        log_warning(tt::LogTest, "T3000 cannot run multi-link with more than 4 devices");
         return 1;
     }
 
@@ -107,7 +107,7 @@ static int run_single_test(TestParams& test_params, const std::string& test_mode
         }
         return 0;
     } catch (const std::exception& e) {
-        tt::log_error("Test failed: {}", e.what());
+        log_error(tt::LogTest, "Test failed: {}", e.what());
         return 1;
     }
 }
@@ -192,7 +192,7 @@ static TestParams parse_pipe_separated_params(const std::string& params_str, con
 }
 
 static void run_daemon_mode() {
-    tt::log_info("Starting fabric EDM daemon mode...");
+    log_info(tt::LogTest, "Starting fabric EDM daemon mode...");
 
     // Setup signal handlers
     signal(SIGINT, signal_handler);
@@ -204,12 +204,12 @@ static void run_daemon_mode() {
         TT_THROW("Failed to create named pipe: {}", daemon_pipe_path);
     }
 
-    tt::log_info("Daemon listening on pipe: {}", daemon_pipe_path);
+    log_info(tt::LogTest, "Daemon listening on pipe: {}", daemon_pipe_path);
 
     while (daemon_running) {
         std::ifstream pipe(daemon_pipe_path);
         if (!pipe.is_open()) {
-            tt::log_warning("Failed to open pipe, retrying...");
+            log_warning(tt::LogTest, "Failed to open pipe, retrying...");
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
@@ -217,13 +217,13 @@ static void run_daemon_mode() {
         std::string command;
         if (std::getline(pipe, command)) {
             if (command == "SHUTDOWN") {
-                tt::log_info("Received shutdown command");
+                log_info(tt::LogTest, "Received shutdown command");
                 break;
             } else if (command.starts_with("TEST:")) {
                 std::string test_params_str = command.substr(5);
                 size_t separator_pos = test_params_str.find(':');
                 if (separator_pos == std::string::npos) {
-                    tt::log_error("Invalid test command format");
+                    log_error(tt::LogTest, "Invalid test command format");
                     continue;
                 }
 
@@ -246,17 +246,17 @@ static void run_daemon_mode() {
                     auto rc = baseline_validate_test_environment(test_params.params);
                     int result;
                     if (rc != 0) {
-                        tt::log_warning("Test environment validation failed");
+                        log_warning(tt::LogTest, "Test environment validation failed");
                         result = 1;  // Return 1 for environment validation failure
                     } else {
                         result = run_single_test(test_params, test_mode);
                     }
 
                     write_result_to_pipe(result);
-                    tt::log_info("Test completed with result: {}", result);
+                    log_info(tt::LogTest, "Test completed with result: {}", result);
 
                 } catch (const std::exception& e) {
-                    tt::log_error("Error running test: {}", e.what());
+                    log_error(tt::LogTest, "Error running test: {}", e.what());
                     write_result_to_pipe(1);  // Write error result
                 }
             }
@@ -270,7 +270,7 @@ static void run_daemon_mode() {
     // Cleanup
     unlink(daemon_pipe_path.c_str());
     unlink((daemon_pipe_path + "_result").c_str());
-    tt::log_info("Daemon shutdown complete");
+    log_info(tt::LogTest, "Daemon shutdown complete");
 }
 
 int main(int argc, char** argv) {
