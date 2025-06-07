@@ -29,6 +29,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/buffer_page_mapping.hpp>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_soc_descriptor.h>
 #include <umd/device/types/xy_pair.h>
@@ -162,20 +163,6 @@ struct ShardedBufferConfig {
 
 bool is_sharded(const TensorMemoryLayout& layout);
 
-struct BufferPageMapping {
-    std::vector<CoreCoord> all_cores_;
-    std::vector<uint32_t> core_bank_indices_;
-    std::vector<std::vector<uint32_t>> core_host_page_indices_;
-    std::vector<uint32_t> dev_page_to_core_mapping_;
-
-    // some dev pages don't have mapping to host (in case of padding)
-    std::vector<std::optional<uint32_t>> dev_page_to_host_page_mapping_;
-    std::vector<uint32_t> host_page_to_dev_page_mapping_;
-    std::unordered_map<CoreCoord, uint32_t> core_to_core_id_;
-    std::vector<uint32_t> host_page_to_local_shard_page_mapping_;
-    std::vector<std::array<uint32_t, 2>> core_shard_shape_;
-};
-
 struct BufferRegion {
     DeviceAddr offset = 0;
     DeviceAddr size = 0;
@@ -267,24 +254,7 @@ public:
     // SHARDED API STARTS HERE
     // If buffer contains BufferDistributionSpec, it is considered ND sharded
     bool is_nd_sharded() const;
-
-    /* BankDataMapping is a struct that provides an explicit mapping of data per bank:
-     * - banks: Logical coordinates of banks to use
-     * - bank_mapping_in_bytes: Mapping of data in bytes for each bank; it is a list of ChunkMapping which contains:
-     *   - src: host address offset in bytes
-     *   - dst: bank address offset in bytes
-     *   - size: size of data in bytes
-     * Some notes:
-     * - Size of banks and bank_mapping_in_bytes must be equal, with each bank having a corresponding mapping
-     * - Each TargetData is a list of ChunkMapping which fully describes all data relevant to that bank
-     * - In Buffer, all ChunkMapping are in bytes and takes into account page size and aligned page size
-     * - Also see DistributionSpec class for more details about TargetData and ChunkMapping
-     */
-    struct BankDataMapping {
-        std::vector<CoreCoord> banks;
-        std::vector<DistributionSpec::TargetData> bank_mapping_in_bytes;
-    };
-    BankDataMapping get_bank_data_mapping();
+    const std::optional<BufferDistributionSpec>& buffer_distribution_spec() const;
 
     // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
 
@@ -354,7 +324,6 @@ private:
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
 
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
-    std::optional<std::vector<DistributionSpec::TargetData>> bank_mapping_in_bytes_ = std::nullopt;
 
     size_t unique_id_ = 0;
     static std::atomic<size_t> next_unique_id;

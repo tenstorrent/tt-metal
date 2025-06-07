@@ -40,6 +40,7 @@ target_sources(
             api/tt-metalium/blockfloat_common.hpp
             api/tt-metalium/buffer.hpp
             api/tt-metalium/buffer_distribution_spec.hpp
+            api/tt-metalium/buffer_page_mapping.hpp
             api/tt-metalium/buffer_types.hpp
             api/tt-metalium/circular_buffer.hpp
             api/tt-metalium/circular_buffer_constants.h
@@ -54,7 +55,6 @@ target_sources(
             api/tt-metalium/device.hpp
             api/tt-metalium/device_pool.hpp
             api/tt-metalium/dispatch_core_common.hpp
-            api/tt-metalium/distribution_spec.hpp
             api/tt-metalium/event.hpp
             api/tt-metalium/fabric_host_interface.h
             api/tt-metalium/fabric_edm_packet_header.hpp
