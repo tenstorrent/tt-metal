@@ -42,7 +42,8 @@ namespace tt {
     X(Dispatch)      \
     X(Fabric)        \
     X(Metal)         \
-    X(MetalTrace)
+    X(MetalTrace)    \
+    X(Inspector)
 
 enum LogType : uint32_t {
 // clang-format off
