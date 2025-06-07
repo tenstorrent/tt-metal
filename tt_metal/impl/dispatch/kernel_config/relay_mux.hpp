@@ -128,8 +128,9 @@ void assemble_2d_fabric_packet_header_args(Configuration& config, int my_device_
     config.to_dev_id = dst_fabric_node_id.chip_id;
     config.router_direction = router_direction;
 
-    log_info(
-        "Src {} -> Dst {}: Src Chip {}, Mesh Shape {}, Dst Mesh Id {}, Dst Chip Id {} Router Direction {}",
+    log_debug(
+        "assemble_2d_fabric_packet_header_args: Src {} -> Dst {}: Src Chip {}, Mesh Shape {}, Dst Mesh Id {}, Dst Chip "
+        "Id {} Router Direction {}",
         my_device_id,
         destination_device_id,
         src_fabric_node_id.chip_id,

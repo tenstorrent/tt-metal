@@ -235,7 +235,7 @@ void process_write_host_h(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
     // We will send the cmd back in the first X bytes, this makes the logic of reserving/pushing completion queue
     // pages much simpler since we are always sending writing full pages (except for last page)
     uint32_t length = cmd->write_linear_host.length;
-    DPRINT << "process_write_host_h: " << length << ENDL();
+    // DPRINT << "process_write_host_h: " << length << ENDL();
     uint32_t data_ptr = cmd_ptr;
 #if !defined(FABRIC_RELAY)
     cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, pcie_noc_xy, 0);
