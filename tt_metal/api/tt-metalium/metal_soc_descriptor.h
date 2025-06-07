@@ -29,6 +29,8 @@ public:
     std::vector<CoreCoord> dram_view_worker_cores;  // per channel preferred worker endpoint
     std::vector<CoreCoord> dram_view_eth_cores;     // per dram view preferred eth endpoint
     std::vector<size_t> dram_view_address_offsets;  // starting address offset
+    std::vector<size_t> dram_view_eth_endpoints;    // eth endpoint for each dram view
+    std::vector<size_t> dram_view_worker_endpoints;  // worker endpoint for each dram view
 
     uint64_t dram_core_size;
     uint64_t dram_view_size;

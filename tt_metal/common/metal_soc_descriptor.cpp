@@ -112,6 +112,8 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     this->dram_view_eth_cores.clear();
     this->dram_view_worker_cores.clear();
     this->dram_view_address_offsets.clear();
+    this->dram_view_eth_endpoints.clear();
+    this->dram_view_worker_endpoints.clear();
 
     for (const auto& dram_view : device_descriptor_yaml["dram_views"]) {
         size_t channel = dram_view["channel"].as<size_t>();
@@ -144,6 +146,8 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
             get_dram_core_for_channel(channel, worker_endpoint, CoordSystem::TRANSLATED);
         this->dram_view_worker_cores.push_back({worker_endpoint_coord.x, worker_endpoint_coord.y});
         this->dram_view_address_offsets.push_back(address_offset);
+        this->dram_view_eth_endpoints.push_back(eth_endpoint);
+        this->dram_view_worker_endpoints.push_back(worker_endpoint);
     }
 }
 

@@ -77,7 +77,7 @@ profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 def get_device_freq():
     setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = profiler_log_path
-    deviceData = import_log_run_stats(setup)
+    # deviceData = import_log_run_stats(setup)
     freq = 1350  # deviceData["deviceInfo"]["freq"]
     return freq
 
@@ -155,7 +155,7 @@ matmul_configs = [
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("num_warmup_iterations", [5])
-@pytest.mark.parametrize("num_measurement_iterations", [100])
+@pytest.mark.parametrize("num_measurement_iterations", [100000])
 def test_matmul_2d_host_perf(
     device,
     grid_size,

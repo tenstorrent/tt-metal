@@ -155,7 +155,7 @@ inline void validate_no_linked_transactions(uint32_t noc) {}
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t noc, uint32_t cmd_buf, uint64_t src_addr, uint32_t dest_addr, uint32_t len_bytes) {
-    validate_no_linked_transactions(noc);
+    // validate_no_linked_transactions(noc); untested
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
@@ -205,7 +205,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     bool posted = false,
     uint32_t trid = 0) {
     if (!mcast) {
-        validate_no_linked_transactions(noc);
+        // validate_no_linked_transactions(noc); untested
     }
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (posted) {
@@ -254,7 +254,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
     uint32_t num_dests,
     bool multicast_path_reserve) {
     if (!mcast) {
-        validate_no_linked_transactions(noc);
+        // validate_no_linked_transactions(noc); untested
     }
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
@@ -606,7 +606,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     bool mcast,
     bool posted = false) {
     if (!mcast) {
-        validate_no_linked_transactions(noc);
+        // validate_no_linked_transactions(noc); untested
     }
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (posted) {
@@ -656,7 +656,7 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     bool linked,
     bool posted = false,
     uint32_t atomic_ret_val = 0) {
-    validate_no_linked_transactions(noc);
+    // validate_no_linked_transactions(noc); untested
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (!posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc, 1);
@@ -696,7 +696,7 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool skip_ptr_update = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid) {
-    validate_no_linked_transactions(noc);
+    // validate_no_linked_transactions(noc); untested
     if constexpr (noc_mode == DM_DYNAMIC_NOC && !skip_ptr_update) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }

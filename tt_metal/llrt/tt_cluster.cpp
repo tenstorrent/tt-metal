@@ -370,7 +370,12 @@ void Cluster::start_driver(tt_device_params &device_params) const {
         }
     }
 
-    this->driver_->start_device(device_params);
+    // should this api accept dram_channel + associated noc port...? for debug purposes just pick one of the endpoints
+    // since they are all the same on BH
+    auto chip_id = *(this->driver_->get_target_mmio_device_ids().begin());
+    uint32_t dram_noc_port = this->get_soc_desc(chip_id).dram_view_worker_endpoints.at(0);
+
+    this->driver_->start_device(device_params, dram_noc_port);
 }
 
 Cluster::~Cluster() {
@@ -785,7 +790,10 @@ void Cluster::dram_barrier(chip_id_t chip_id) const {
     for (uint32_t channel = 0; channel < this->get_soc_desc(chip_id).get_num_dram_channels(); channel++) {
         dram_channels.insert(channel);
     }
-    this->driver_->dram_membar(chip_id, dram_channels);
+    // should this api accept dram_channel + associated noc port...? for debug purposes just pick one of the endpoints
+    // since they are all the same on BH
+    uint32_t dram_noc_port = this->get_soc_desc(chip_id).dram_view_worker_endpoints.at(0);
+    this->driver_->dram_membar(chip_id, dram_channels, dram_noc_port);
 }
 
 // L1 barrier is used to implement host-to-device synchronization and should be used when all previous writes to L1 need
