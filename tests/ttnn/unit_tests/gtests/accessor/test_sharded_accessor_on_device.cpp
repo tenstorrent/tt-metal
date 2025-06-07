@@ -16,6 +16,8 @@
 #include "ttnn/cpp/ttnn/operations/sharding_utilities.hpp"
 
 namespace sharded_accessor_device_tests {
+using tt::tt_metal::sharded_accessor_utils::ArgConfig;
+using tt::tt_metal::sharded_accessor_utils::ArgsConfig;
 
 struct InputOutputBufferParams {
     tt::tt_metal::Shape physical_tensor_shape;
@@ -31,6 +33,7 @@ struct InputOutputBufferParams {
     };
     DistributionSpecParams input_shard_spec;
     DistributionSpecParams output_shard_spec;
+    ArgsConfig crta_config = ArgsConfig{};
 };
 
 std::array<std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>, 2>
@@ -166,32 +169,30 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
         auto c_in0_config = CircularBufferConfig(aligned_page_size * num_tiles, {{cb_in0_idx, data_format}})
                                 .set_page_size(cb_in0_idx, aligned_page_size);
         auto cb_in0_id = CreateCircularBuffer(program, grid, c_in0_config);
-
         // Set up compile-time args for reader kernel
         const auto& input_buffer_distribution_spec =
             std::get<BufferDistributionSpec>(input_mesh_buffer->device_local_config().shard_parameters.value());
         const auto input_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
-            *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type());
-        std::vector<uint32_t> input_compile_time_args = {
-            input_sharded_accessor_args.rank, input_sharded_accessor_args.num_banks};
+            *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type(), params.crta_config);
+        // In case you need rank or num_banks, you can call input_sharded_accessor_args.get_rank() or
+        // input_sharded_accessor_args.get_num_banks()
+        std::vector<uint32_t> input_compile_time_args;
         input_compile_time_args.insert(
             input_compile_time_args.end(),
-            input_sharded_accessor_args.shapes_and_bank_coords.cbegin(),
-            input_sharded_accessor_args.shapes_and_bank_coords.cend());
+            input_sharded_accessor_args.compile_time_args.cbegin(),
+            input_sharded_accessor_args.compile_time_args.cend());
         input_compile_time_args.push_back(cb_in0_idx);
-        input_compile_time_args.push_back(aligned_page_size);
 
         // Set up compile-time args for writer kernel
         const auto& output_buffer_distribution_spec =
             std::get<BufferDistributionSpec>(output_mesh_buffer->device_local_config().shard_parameters.value());
         const auto output_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
-            *mesh_device_, output_buffer_distribution_spec, output_shard_view->core_type());
-        std::vector<uint32_t> output_compile_time_args = {
-            output_sharded_accessor_args.rank, output_sharded_accessor_args.num_banks};
+            *mesh_device_, output_buffer_distribution_spec, output_shard_view->core_type(), params.crta_config);
+        std::vector<uint32_t> output_compile_time_args;
         output_compile_time_args.insert(
             output_compile_time_args.end(),
-            output_sharded_accessor_args.shapes_and_bank_coords.cbegin(),
-            output_sharded_accessor_args.shapes_and_bank_coords.cend());
+            output_sharded_accessor_args.compile_time_args.cbegin(),
+            output_sharded_accessor_args.compile_time_args.cend());
         output_compile_time_args.push_back(cb_in0_idx);
         output_compile_time_args.push_back(aligned_page_size);
 
@@ -203,7 +204,8 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
-                .compile_args = input_compile_time_args});
+                .compile_args = input_compile_time_args,
+            });
 
         // Create writer kernel
         KernelHandle writer_kernel_id = CreateKernel(
@@ -213,19 +215,29 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_1,
                 .noc = NOC::RISCV_1_default,
-                .compile_args = output_compile_time_args});
+                .compile_args = output_compile_time_args,
+            });
 
         // Set up runtime args for reader kernel
         std::vector<uint32_t> input_runtime_args = {
             input_bank_base_address,
         };
-        SetRuntimeArgs(program, reader_kernel_id, grid, input_runtime_args);
+        input_runtime_args.insert(
+            input_runtime_args.end(),
+            input_sharded_accessor_args.runtime_args.cbegin(),
+            input_sharded_accessor_args.runtime_args.cend());
+        input_runtime_args.push_back(aligned_page_size);  // Reader has page size as runtime, writer as compile-time arg
+        SetCommonRuntimeArgs(program, reader_kernel_id, input_runtime_args);
 
         // Set up runtime args for writer kernel
         std::vector<uint32_t> output_runtime_args = {
             output_bank_base_address,
         };
-        SetRuntimeArgs(program, writer_kernel_id, grid, output_runtime_args);
+        output_runtime_args.insert(
+            output_runtime_args.end(),
+            output_sharded_accessor_args.runtime_args.cbegin(),
+            output_sharded_accessor_args.runtime_args.cend());
+        SetCommonRuntimeArgs(program, writer_kernel_id, output_runtime_args);
 
         // Launch program
         auto mesh_work_load = tt::tt_metal::distributed::CreateMeshWorkload();
@@ -273,14 +285,10 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    ShardedAccessorTests,
-    ShardedAccessorTestsOnDevice,
+std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
     // Test cases are similar to MeshBufferReadWriteTests in test_buffer_distribution_spec.cpp
     // - Output distribution spec is something different from input distribution spec
-    ::testing::Values(
-        // BLOCK sharding; tile layout
-        // page size = 32 x 32 x 2 = 2048 bytes (eg. bfloat16, uint16, etc...)
+    std::vector<InputOutputBufferParams> base_params{
         InputOutputBufferParams{
             .physical_tensor_shape = tt::tt_metal::Shape{2, 64, 96},
             .page_shape = tt::tt_metal::Shape2D{32, 32},
@@ -396,4 +404,33 @@ INSTANTIATE_TEST_SUITE_P(
                     .shard_orientation = ShardOrientation::ROW_MAJOR,
                     .buffer_type = BufferType::L1,
                 },
-        }));
+        }};
+
+    std::vector<InputOutputBufferParams> test_params;
+    for (const auto& base_param : base_params) {
+        // All combinations of runtime/static arguments
+        for (uint8_t i = 0; i < 8; ++i) {
+            // Rank and number of banks are compile time args for now
+            ArgsConfig config = ArgConfig::CTA;
+            if (i & 1) {
+                config = config | ArgConfig::TensorShapeCRTA;
+            }
+            if (i & 2) {
+                config = config | ArgConfig::ShardShapeCRTA;
+            }
+            if (i & 4) {
+                config = config | ArgConfig::BankCoordsCRTA;
+            }
+            auto p = base_param;
+            p.crta_config = config;
+            TT_FATAL(
+                !(p.crta_config.test(ArgConfig::RankCRTA) || p.crta_config.test(ArgConfig::NumBanksCRTA)),
+                "Rank and number of banks must be compile time args for sharded accessor tests!");
+            test_params.push_back(p);
+        }
+    }
+    return test_params;
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ShardedAccessorTests, ShardedAccessorTestsOnDevice, testing::ValuesIn(get_sharded_accessor_test_params()));

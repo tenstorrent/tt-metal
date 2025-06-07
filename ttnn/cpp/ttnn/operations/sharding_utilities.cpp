@@ -751,27 +751,110 @@ ShardingConfig get_specs_for_sharding_partition(
 }
 
 namespace sharded_accessor_utils {
+
+uint32_t ShardedAccessorArgs::get_rank() const {
+    // if rank is runtime time
+    if (args_config.test(ArgConfig::RankCRTA)) {
+        return runtime_args[0];
+    } else {
+        return compile_time_args[1];
+    }
+}
+
+uint32_t ShardedAccessorArgs::get_num_banks() const {
+    // if num_banks is runtime time
+    if (args_config.test(ArgConfig::NumBanksCRTA)) {
+        return runtime_args[1];
+    } else {
+        return compile_time_args[2];
+    }
+}
+
+tt::stl::Span<const uint32_t> ShardedAccessorArgs::get_tensor_shape() const {
+    // if tensor_shape is runtime time
+    auto rank = get_rank();
+    bool rank_crta = args_config.test(ArgConfig::RankCRTA);
+    bool num_banks_crta = args_config.test(ArgConfig::NumBanksCRTA);
+    if (args_config.test(ArgConfig::TensorShapeCRTA)) {
+        size_t offset = rank_crta + num_banks_crta;
+        return tt::stl::Span<const uint32_t>(runtime_args.data() + offset, rank);
+    } else {
+        size_t offset = 1 + !rank_crta + !num_banks_crta;
+        return tt::stl::Span<const uint32_t>(compile_time_args.data() + offset, rank);
+    }
+}
+tt::stl::Span<const uint32_t> ShardedAccessorArgs::get_shard_shape() const {
+    // if shard_shape is runtime time
+    auto rank = get_rank();
+    bool rank_crta = args_config.test(ArgConfig::RankCRTA);
+    bool num_banks_crta = args_config.test(ArgConfig::NumBanksCRTA);
+    bool tensor_shape_crta = args_config.test(ArgConfig::TensorShapeCRTA);
+    if (args_config.test(ArgConfig::ShardShapeCRTA)) {
+        size_t offset = rank_crta + num_banks_crta + rank * tensor_shape_crta;
+        return tt::stl::Span<const uint32_t>(runtime_args.data() + offset, rank);
+    } else {
+        size_t offset = 1 + !rank_crta + !num_banks_crta + rank * !tensor_shape_crta;
+        return tt::stl::Span<const uint32_t>(compile_time_args.data() + offset, rank);
+    }
+}
+tt::stl::Span<const uint32_t> ShardedAccessorArgs::get_bank_coords() const {
+    // if bank_coords is runtime time
+    auto rank = get_rank();
+    bool rank_crta = args_config.test(ArgConfig::RankCRTA);
+    bool num_banks_crta = args_config.test(ArgConfig::NumBanksCRTA);
+    bool tensor_shape_crta = args_config.test(ArgConfig::TensorShapeCRTA);
+    bool shard_shape_crta = args_config.test(ArgConfig::ShardShapeCRTA);
+    if (args_config.test(ArgConfig::BankCoordsCRTA)) {
+        size_t offset = rank_crta + num_banks_crta + rank * (tensor_shape_crta + shard_shape_crta);
+        return tt::stl::Span<const uint32_t>(runtime_args.data() + offset, get_num_banks());
+    } else {
+        size_t offset = 1 + !rank_crta + !num_banks_crta + rank * (!tensor_shape_crta + !shard_shape_crta);
+        return tt::stl::Span<const uint32_t>(compile_time_args.data() + offset, get_num_banks());
+    }
+}
+
 ShardedAccessorArgs get_sharded_accessor_args(
     const distributed::MeshDevice& mesh_device,
     const BufferDistributionSpec& buffer_distribution_spec,
-    const CoreType& bank_type) {
+    const CoreType& bank_type,
+    const ArgsConfig& args_config) {
     const auto& tensor_shape = buffer_distribution_spec.get_tensor_shape_in_pages();
     const auto& shard_shape = buffer_distribution_spec.get_shard_shape_in_pages();
     const auto& bank_coords = buffer_distribution_spec.get_cores();
 
-    std::vector<uint32_t> shapes_and_bank_coords;
-    shapes_and_bank_coords.reserve(tensor_shape.size() + shard_shape.size() + bank_coords.size());
-    shapes_and_bank_coords.insert(shapes_and_bank_coords.end(), tensor_shape.cbegin(), tensor_shape.cend());
-    shapes_and_bank_coords.insert(shapes_and_bank_coords.end(), shard_shape.cbegin(), shard_shape.cend());
+    auto rank_rt = args_config.test(ArgConfig::RankCRTA);
+    auto num_banks_rt = args_config.test(ArgConfig::NumBanksCRTA);
+    auto tensor_shape_rt = args_config.test(ArgConfig::TensorShapeCRTA);
+    auto shard_shape_rt = args_config.test(ArgConfig::ShardShapeCRTA);
+    auto bank_coords_rt = args_config.test(ArgConfig::BankCoordsCRTA);
 
-    // Pack each virtual coordinate as a 32-bit value with 16 bits for x and 16 bits for y
+    size_t n_compile_time_args = 1 + !rank_rt + !num_banks_rt + tensor_shape.size() * !tensor_shape_rt +
+                                 shard_shape.size() * !shard_shape_rt +
+                                 bank_coords.size() * !bank_coords_rt;  // +1 for the crta config
+    size_t n_runtime_args = rank_rt + num_banks_rt + tensor_shape.size() * tensor_shape_rt +
+                            shard_shape.size() * shard_shape_rt + bank_coords.size() * bank_coords_rt;
+    std::vector<uint32_t> compile_time_args;
+    std::vector<uint32_t> runtime_args;
+    compile_time_args.reserve(n_compile_time_args);
+    runtime_args.reserve(n_runtime_args);
+    compile_time_args.push_back(args_config.raw());
+    auto& rank_args = rank_rt ? runtime_args : compile_time_args;
+    auto& num_banks_args = num_banks_rt ? runtime_args : compile_time_args;
+    auto& tensor_shape_args = tensor_shape_rt ? runtime_args : compile_time_args;
+    auto& shard_shape_args = shard_shape_rt ? runtime_args : compile_time_args;
+    auto& bank_coords_args = bank_coords_rt ? runtime_args : compile_time_args;
+
+    rank_args.push_back(tensor_shape.size());
+    num_banks_args.push_back(bank_coords.size());
+    tensor_shape_args.insert(tensor_shape_args.end(), tensor_shape.cbegin(), tensor_shape.cend());
+    shard_shape_args.insert(shard_shape_args.end(), shard_shape.cbegin(), shard_shape.cend());
+
     for (const auto& bank_coord : bank_coords) {
         const auto virtual_coord = mesh_device.virtual_core_from_logical_core(bank_coord, bank_type);
-        shapes_and_bank_coords.push_back((virtual_coord.x << 16) | (virtual_coord.y & 0xFFFF));
+        bank_coords_args.push_back((virtual_coord.x << 16) | (virtual_coord.y & 0xFFFF));
     }
 
-    return {
-        .rank = tensor_shape.size(), .num_banks = bank_coords.size(), .shapes_and_bank_coords = shapes_and_bank_coords};
+    return {.compile_time_args = compile_time_args, .runtime_args = runtime_args};
 }
 
 }  // namespace sharded_accessor_utils

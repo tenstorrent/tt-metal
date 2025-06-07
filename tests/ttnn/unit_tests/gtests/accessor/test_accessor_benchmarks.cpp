@@ -98,19 +98,41 @@ TEST_P(AccessorBenchmarks, Generic) {
         const auto aligned_page_size = input_shard_view->aligned_page_size();
 
         // Set up sharded accessor compile-time args for reader kernel
+        using tt::tt_metal::sharded_accessor_utils::ArgConfig;
         const auto& input_buffer_distribution_spec =
             std::get<BufferDistributionSpec>(input_mesh_buffer->device_local_config().shard_parameters.value());
-        const auto input_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
-            *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type());
-        std::vector<uint32_t> input_compile_time_args = {
-            (uint32_t)data_format,
-            aligned_page_size,
-            input_sharded_accessor_args.rank,
-            input_sharded_accessor_args.num_banks};
+        const auto input_sharded_accessor_args_cta = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
+            *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type(), ArgConfig::CTA);
+        const auto input_sharded_accessor_args_rta_DDS =
+            tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
+                *mesh_device_,
+                input_buffer_distribution_spec,
+                input_shard_view->core_type(),
+                ArgConfig::TensorShapeCRTA | ArgConfig::ShardShapeCRTA);
+        auto input_sharded_accessor_args_rta_SSD = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
+            *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type(), ArgConfig::BankCoordsCRTA);
+        auto input_sharded_accessor_args_rta_DDD = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
+            *mesh_device_,
+            input_buffer_distribution_spec,
+            input_shard_view->core_type(),
+            ArgConfig::TensorShapeCRTA | ArgConfig::ShardShapeCRTA | ArgConfig::BankCoordsCRTA);
+        std::vector<uint32_t> input_compile_time_args = {(uint32_t)data_format, aligned_page_size};
         input_compile_time_args.insert(
             input_compile_time_args.end(),
-            input_sharded_accessor_args.shapes_and_bank_coords.cbegin(),
-            input_sharded_accessor_args.shapes_and_bank_coords.cend());
+            input_sharded_accessor_args_cta.compile_time_args.cbegin(),
+            input_sharded_accessor_args_cta.compile_time_args.cend());
+        input_compile_time_args.insert(
+            input_compile_time_args.end(),
+            input_sharded_accessor_args_rta_DDS.compile_time_args.cbegin(),
+            input_sharded_accessor_args_rta_DDS.compile_time_args.cend());
+        input_compile_time_args.insert(
+            input_compile_time_args.end(),
+            input_sharded_accessor_args_rta_SSD.compile_time_args.cbegin(),
+            input_sharded_accessor_args_rta_SSD.compile_time_args.cend());
+        input_compile_time_args.insert(
+            input_compile_time_args.end(),
+            input_sharded_accessor_args_rta_DDD.compile_time_args.cbegin(),
+            input_sharded_accessor_args_rta_DDD.compile_time_args.cend());
 
         // Create reader kernel
         KernelHandle reader_kernel_id = CreateKernel(
@@ -126,7 +148,23 @@ TEST_P(AccessorBenchmarks, Generic) {
         std::vector<uint32_t> input_runtime_args = {
             input_bank_base_address,
         };
-        SetRuntimeArgs(program, reader_kernel_id, grid, input_runtime_args);
+        input_runtime_args.insert(
+            input_runtime_args.end(),
+            input_sharded_accessor_args_cta.runtime_args.cbegin(),
+            input_sharded_accessor_args_cta.runtime_args.cend());
+        input_runtime_args.insert(
+            input_runtime_args.end(),
+            input_sharded_accessor_args_rta_DDS.runtime_args.cbegin(),
+            input_sharded_accessor_args_rta_DDS.runtime_args.cend());
+        input_runtime_args.insert(
+            input_runtime_args.end(),
+            input_sharded_accessor_args_rta_SSD.runtime_args.cbegin(),
+            input_sharded_accessor_args_rta_SSD.runtime_args.cend());
+        input_runtime_args.insert(
+            input_runtime_args.end(),
+            input_sharded_accessor_args_rta_DDD.runtime_args.cbegin(),
+            input_sharded_accessor_args_rta_DDD.runtime_args.cend());
+        SetCommonRuntimeArgs(program, reader_kernel_id, input_runtime_args);
 
         // Launch program
         auto mesh_work_load = tt::tt_metal::distributed::CreateMeshWorkload();
@@ -182,6 +220,21 @@ INSTANTIATE_TEST_SUITE_P(
                 },
         },
         InputBufferParams{
+            .test_name = "rank_4",
+            .physical_tensor_shape = tt::tt_metal::Shape{5, 5, 160, 160},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{3, 3, 96, 96},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                    .buffer_type = BufferType::L1,
+                },
+        },
+        InputBufferParams{
             .test_name = "rank_5",
             .physical_tensor_shape = tt::tt_metal::Shape{5, 5, 5, 160, 160},
             .page_shape = tt::tt_metal::Shape2D{32, 32},
@@ -191,6 +244,21 @@ INSTANTIATE_TEST_SUITE_P(
             .input_shard_spec =
                 InputBufferParams::DistributionSpecParams{
                     .physical_shard_shape = tt::tt_metal::Shape{3, 3, 3, 96, 96},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                    .buffer_type = BufferType::L1,
+                },
+        },
+        InputBufferParams{
+            .test_name = "rank_6",
+            .physical_tensor_shape = tt::tt_metal::Shape{3, 3, 3, 3, 160, 160},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{2, 2, 2, 2, 96, 96},
                     .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
                     .shard_orientation = ShardOrientation::ROW_MAJOR,
                     .buffer_type = BufferType::L1,
