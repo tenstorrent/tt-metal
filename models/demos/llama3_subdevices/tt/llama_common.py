@@ -18,9 +18,9 @@ class HostEmbedding(torch.nn.Module):
 
 # Default configuration for Paged Attention
 class PagedAttentionConfig:
-    def __init__(self, page_block_size=32, page_max_num_blocks=1024):
-        self.page_block_size = page_block_size
-        self.page_max_num_blocks = page_max_num_blocks
+    def __init__(self, block_size=32, max_num_blocks=1024):
+        self.block_size = block_size
+        self.max_num_blocks = max_num_blocks
 
 
 # Helper class for Page Attention, uses above PagedAttentionConfig
