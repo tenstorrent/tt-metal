@@ -59,7 +59,7 @@ uint32_t get_preferred_noc(
     return use_dedicated_noc ? 1 : noc;
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
+ttnn::operations::matmul::matmul_shared_variables_t process_program_mcast_in0(
     tt_metal::Program& program,
     const tt::tt_metal::Tensor& a,
     tt_metal::IDevice* device,
@@ -893,87 +893,19 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
                 program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_0_default
         }
     }
-
-    auto override_runtime_arguments_callback =
-        [mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
-         mm_kernel_in1_sender_writer_id,
-         cb_src1,
-         cb_src2,
-         cb_src3,
-         cb_output,
-         start_core,
-         cores,
-         num_cores_with_work](
-            const void* operation,
-            tt::tt_metal::Program& program,
-            const std::vector<tt::tt_metal::Tensor>& input_tensors,
-            const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
-            const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-            TT_FATAL(
-                input_tensors.size() + optional_input_tensors.size() == 3,
-                "Total number of input tensors (required ({}) + optional ({})) must be 3",
-                input_tensors.size(),
-                optional_input_tensors.size());
-            TT_FATAL(output_tensors.size() == 1, "Number of output tensors ({}) must be 1", output_tensors.size());
-
-            auto src_buffer_a = input_tensors.at(0).buffer();
-            auto src_buffer_b = input_tensors.at(1).buffer();
-            auto bias_tensor = optional_input_tensors.at(0);
-
-            std::optional<tt::tt_metal::Buffer*> bias_buffer;
-            if (bias_tensor.has_value()) {
-                bias_buffer = bias_tensor.value().buffer();
-            }
-
-            auto dst_buffer = output_tensors.at(0).buffer();
-
-            bool src0_sharded = input_tensors[0].is_sharded();
-            bool src1_sharded = input_tensors[1].is_sharded();
-            bool out_sharded = output_tensors[0].is_sharded();
-
-            // Manually unroll sender core
-            if (src0_sharded) {
-                UpdateDynamicCircularBufferAddress(program, cb_src2, *src_buffer_a);
-            } else {
-                // in0 sender
-                auto& reader_sender_runtime_args =
-                    GetRuntimeArgs(program, mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id, start_core);
-                reader_sender_runtime_args[0] = src_buffer_a->address();
-            }
-
-            if (src1_sharded) {
-                UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer_b);
-            }
-
-            if (bias_tensor.has_value() && bias_tensor.value().is_sharded()) {
-                UpdateDynamicCircularBufferAddress(program, cb_src3, *bias_buffer.value());
-            }
-
-            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_sender_writer_id);
-
-            for (uint32_t i = 0; i < num_cores_with_work; ++i) {
-                const auto& core = cores[i];
-
-                auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
-
-                // in1 sender
-                writer_runtime_args[0] = src_buffer_b->address();
-                writer_runtime_args[6] = dst_buffer->address();
-                if (bias_tensor.has_value()) {
-                    writer_runtime_args[17] = (*bias_buffer)->address();
-                }
-            }
-
-            if (out_sharded) {
-                UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return ttnn::operations::matmul::matmul_shared_variables_t{
+        {mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id, mm_kernel_in1_sender_writer_id},
+        {cb_src1, cb_src2, cb_src3, cb_output},
+        false,
+        start_core,
+        cores,
+        num_cores_with_work,
+        ttnn::operations::matmul::mcast_in0};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
-    tt::tt_metal::Program& program,
+
+ttnn::operations::matmul::matmul_shared_variables_t process_program_mcast_in1(
+    tt_metal::Program& program,
     const tt::tt_metal::Tensor& a,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
@@ -1650,93 +1582,19 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
         };
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args);  // RISCV_1_default
     }
-
-    auto override_runtime_arguments_callback =
-        [mm_kernel_in0_sender_id,
-         mm_kernel_in1_sender_writer_id,
-         mm_kernel_in1_receiver_writer_id,
-         extract_shard_sub_blocks,
-         cb_src0,
-         cb_src2,
-         cb_output,
-         start_core,
-         cores](
-            const void* operation,
-            tt::tt_metal::Program& program,
-            const std::vector<tt::tt_metal::Tensor>& input_tensors,
-            const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
-            const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-            TT_FATAL(
-                input_tensors.size() + optional_input_tensors.size() == 3,
-                "Total number of input tensors (required ({}) + optional ({})) must be 3",
-                input_tensors.size(),
-                optional_input_tensors.size());
-            TT_FATAL(output_tensors.size() == 1, "Number of output tensors ({}) must be 1", output_tensors.size());
-
-            auto src_buffer_a = input_tensors.at(0).buffer();
-            auto src_buffer_b = input_tensors.at(1).buffer();
-            auto bias_tensor = optional_input_tensors.at(0);
-
-            std::optional<tt::tt_metal::Buffer*> bias_buffer;
-            if (bias_tensor.has_value()) {
-                bias_buffer = bias_tensor.value().buffer();
-            }
-
-            auto dst_buffer = output_tensors.at(0).buffer();
-
-            bool src0_sharded = input_tensors[0].is_sharded();
-            bool out_sharded = output_tensors[0].is_sharded();
-
-            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in0_sender_id);
-
-            // Manually unroll sender core
-            {
-                // in0 sender
-                auto& reader_runtime_args = reader_runtime_args_by_core[start_core.x][start_core.y];
-                reader_runtime_args[0] = src_buffer_a->address();
-
-                // in1 sender
-                auto& sender_writer_runtime_args = GetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, start_core);
-                sender_writer_runtime_args[0] = src_buffer_b->address();
-                sender_writer_runtime_args[6] = dst_buffer->address();
-                if (bias_tensor.has_value()) {
-                    sender_writer_runtime_args[17] = (*bias_buffer)->address();
-                }
-            }
-
-            auto& receiver_writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_receiver_writer_id);
-
-            for (uint32_t i = 1; i < cores.size(); ++i) {
-                const CoreCoord& core = cores[i];
-
-                auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
-
-                auto& writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
-
-                // in0 sender
-                reader_runtime_args[0] = src_buffer_a->address();
-                // in1 receiver
-                writer_runtime_args[2] = dst_buffer->address();
-            }
-
-            if (src0_sharded) {
-                if (extract_shard_sub_blocks) {
-                    UpdateDynamicCircularBufferAddress(program, cb_src2, *src_buffer_a);
-                } else {
-                    UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
-                }
-            }
-
-            if (out_sharded) {
-                UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
-            }
-        };
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return ttnn::operations::matmul::matmul_shared_variables_t{
+        {mm_kernel_in0_sender_id, mm_kernel_in1_sender_writer_id, mm_kernel_in1_receiver_writer_id},
+        {cb_src0, cb_src2, cb_output},
+        extract_shard_sub_blocks,
+        start_core,
+        cores,
+        0,
+        ttnn::operations::matmul::mcast_in1};
 }
 
 enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
-tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
+ttnn::operations::matmul::matmul_shared_variables_t process_program_gather_in0(
     tt_metal::Program& program,
     const tt::tt_metal::Tensor& a,
     const std::vector<tt::tt_metal::Tensor>& b_tensors,
@@ -1747,6 +1605,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     bool packer_l1_acc,
     bool dst_full_sync_en,
     CoreCoord compute_with_storage_grid_size,
+    uint32_t base_cb_index,
     uint32_t B,
     uint32_t M,
     uint32_t N,
@@ -1771,7 +1630,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     bool untilize_out,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    bool ignore_subdevice) {
     const auto b = b_tensors[0];
     const auto num_output_cb = out_buffers.size();
     const auto batch = b_tensors.size();
@@ -1783,17 +1643,20 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     constexpr bool row_major = true;
     CoreRangeSet all_worker_cores = a.shard_spec().value().grid;
     CoreRangeSet non_idle_cores = all_worker_cores.merge(hop_cores);
-    auto subdevice_cores = device->worker_cores(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
-    std::vector<CoreRange> non_idle_cores_vec;
-    for (auto& cr : subdevice_cores.ranges()) {
-        auto intersection = non_idle_cores.intersection(cr);
-        if (intersection.size() > 0) {
-            non_idle_cores_vec.push_back(intersection.bounding_box());
+    CoreRangeSet all_cores = non_idle_cores;
+    if (!ignore_subdevice) {
+        std::vector<CoreRange> non_idle_cores_vec;
+        auto subdevice_cores = device->worker_cores(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX,
+            sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+        for (auto& cr : subdevice_cores.ranges()) {
+            auto intersection = non_idle_cores.intersection(cr);
+            if (intersection.size() > 0) {
+                non_idle_cores_vec.push_back(intersection.bounding_box());
+            }
         }
+        all_cores = CoreRangeSet(non_idle_cores_vec);
     }
-    CoreRangeSet all_cores = CoreRangeSet(non_idle_cores_vec);
     std::vector<CoreRange> ring_list = all_worker_cores.ranges();
     std::vector<CoreRange> hop_list = hop_cores.ranges();
     ring_list.insert(ring_list.end(), hop_list.begin(), hop_list.end());
@@ -1892,7 +1755,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
     /* Create circular buffers */
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
+    uint32_t src0_cb_index = base_cb_index;
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size)
@@ -1900,11 +1763,11 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
             .set_globally_allocated_address(*in0_buffer);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
-    uint32_t src1_cb_index = tt::CBIndex::c_1;
+    uint32_t src1_cb_index = base_cb_index + 1;
     tt::tt_metal::CBHandle cb_src1;
+    uint32_t remote_cb_index = tt::CBIndex::c_31;
     if (use_global_cb) {
         uint32_t in1_block_size_bytes = in1_single_tile_size * in1_block_num_tiles;
-        uint32_t remote_cb_index = tt::CBIndex::c_31;
         tt_metal::CircularBufferConfig remote_cb_config =
             tt_metal::CircularBufferConfig((global_cb->size() / in1_block_size_bytes) * in1_block_size_bytes);
         remote_cb_config.remote_index(remote_cb_index)
@@ -1923,29 +1786,29 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
         cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     }
 
-    uint32_t src2_cb_index = tt::CBIndex::c_2;
+    uint32_t src2_cb_index = base_cb_index + 2;
     tt_metal::CircularBufferConfig src2_cb_config =
         tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
             .set_page_size(src2_cb_index, in2_single_tile_size)
             .set_tile_dims(src2_cb_index, in0_tile);
     auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
 
-    uint32_t sync_cb_index = tt::CBIndex::c_3;
+    uint32_t sync_cb_index = base_cb_index + 3;
     uint32_t sync_cb_size_bytes = 16;
     tt_metal::CircularBufferConfig sync_cb_config =
         tt_metal::CircularBufferConfig(sync_cb_size_bytes, {{sync_cb_index, DataFormat::UInt16}})
             .set_page_size(sync_cb_index, sync_cb_size_bytes);
     auto cb_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
 
-    uint32_t sync_cb2_index = tt::CBIndex::c_4;
+    uint32_t sync_cb2_index = base_cb_index + 4;
     uint32_t sync_cb2_size_bytes = 16;
     tt_metal::CircularBufferConfig sync_cb2_config =
         tt_metal::CircularBufferConfig(sync_cb2_size_bytes, {{sync_cb2_index, DataFormat::UInt16}})
             .set_page_size(sync_cb2_index, sync_cb2_size_bytes);
     auto cb2_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
 
-    uint32_t output_cb_index = tt::CBIndex::c_5;  // output operands start at index 16
-    uint32_t interm0_cb_index = tt::CBIndex::c_6;
+    uint32_t output_cb_index = base_cb_index + 5;  // output operands start at index 16
+    uint32_t interm0_cb_index = base_cb_index + 6;
     tt_metal::CircularBufferConfig interm0_cb_config =
         tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
     tt_metal::CircularBufferConfig output_cb_config =
@@ -2024,6 +1887,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
         (std::uint32_t)batch,       // batch
         (std::uint32_t)ring_size,   // ring_size
         (std::uint32_t)in0_signal_semaphore_id,
+        (std::uint32_t)src0_cb_index,
+        (std::uint32_t)src2_cb_index,
     };
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
@@ -2038,6 +1903,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
         (std::uint32_t)in1_block_page_size_last,
         (std::uint32_t)in1_block_width_num_pages,
         (std::uint32_t)in1_shard_width_in_dram,
+        (std::uint32_t)src1_cb_index,
+        (std::uint32_t)sync_cb_index,
+        (std::uint32_t)sync_cb2_index,
+        (std::uint32_t)remote_cb_index,
     };
 
     /* compute kernel args */
@@ -2068,7 +1937,14 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
         untilize_out,             // untilize_out
         in1_is_dram_interleaved,  // in1_is_dram_interleaved
         in1_is_dram_sharded,      // in1_is_dram_sharded
+        0,                        // to be overwritten by size of static ct vars
+        src0_cb_index,
+        src1_cb_index,
+        src2_cb_index,
+        sync_cb_index,
+        sync_cb2_index,
     };
+    compute_kernel_args.at(18) = compute_kernel_args.size();
     for (uint32_t i = 0; i < num_output_cb; ++i) {
         compute_kernel_args.push_back(output_cb_indices[i]);
     }
@@ -2314,63 +2190,222 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
         mm_kernel_args.push_back((std::uint32_t)core_type);
         tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_kernel_args);
     }
+    std::vector<tt::tt_metal::CBHandle> shared_cbs = {cb_src0, cb_src1};
+    shared_cbs.insert(shared_cbs.end(), cb_outputs.begin(), cb_outputs.end());
 
-    auto override_runtime_arguments_callback =
-        [mm_kernel_in0_id, mm_kernel_in1_sender_writer_id, cb_src0, cb_src1, cb_outputs, num_cores, all_cores_vec](
-            const void* operation,
-            tt::tt_metal::Program& program,
-            const std::vector<tt::tt_metal::Tensor>& input_tensors,
-            const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
-            const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-            auto& global_cb = static_cast<const ttnn::operations::matmul::Matmul*>(operation)->global_cb;
+    return ttnn::operations::matmul::matmul_shared_variables_t{
+        {mm_kernel_in1_sender_writer_id},
+        shared_cbs,
+        false,
+        CoreCoord{0, 0},
+        all_cores_vec,
+        0,
+        ttnn::operations::matmul::gather_in0};
+}
 
-            if (!global_cb.has_value()) {
-                TT_FATAL(
-                    input_tensors.size() + optional_input_tensors.size() == 3,
-                    "Total number of input tensors (required ({}) + optional ({})) must be 3",
-                    input_tensors.size(),
-                    optional_input_tensors.size());
-                TT_FATAL(output_tensors.size() == 1, "Number of output tensors ({}) must be 1", output_tensors.size());
-            }
+inline void override_program_mcast_in1(
+    const ttnn::operations::matmul::matmul_shared_variables_t& shared_variables,
+    const void* operation,
+    tt_metal::Program& program,
+    const std::vector<tt::tt_metal::Tensor>& input_tensors,
+    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+    const std::vector<tt::tt_metal::Tensor>& output_tensors) {
+    TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
+    TT_ASSERT(output_tensors.size() == 1);
 
-            auto src_buffer_a = input_tensors[0].buffer();
-            auto src_buffer_b = input_tensors[1].buffer();
-            auto dst_buffer = output_tensors[0].buffer();
+    auto src_buffer_a = input_tensors.at(0).buffer();
+    auto src_buffer_b = input_tensors.at(1).buffer();
+    auto bias_tensor = optional_input_tensors.at(0);
 
-            bool src0_sharded = input_tensors[0].is_sharded();
-            bool src1_sharded = input_tensors[1].is_sharded();
-            bool out_sharded = output_tensors[0].is_sharded();
+    std::optional<tt::tt_metal::Buffer*> bias_buffer;
+    if (bias_tensor.has_value()) {
+        bias_buffer = bias_tensor.value().buffer();
+    }
 
-            // Manually unroll sender core
-            if (src0_sharded) {
-                UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
-            }
-            if (src1_sharded) {
-                if (!global_cb.has_value() && !src_buffer_b->is_dram()) {
-                    UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer_b);
-                }
-            }
-            if (out_sharded) {
-                for (uint32_t i = 0; i < cb_outputs.size(); ++i) {
-                    const auto& cb_output = cb_outputs[i];
-                    const auto& out_buffer = output_tensors[i].buffer();
-                    UpdateDynamicCircularBufferAddress(program, cb_output, *out_buffer);
-                }
-            }
+    auto dst_buffer = output_tensors.at(0).buffer();
 
-            if (not src1_sharded) {
-                auto& writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_sender_writer_id);
-                for (uint32_t i = 0; i < all_cores_vec.size(); ++i) {
-                    const auto& core = all_cores_vec[i];
-                    auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
+    bool src0_sharded = input_tensors[0].is_sharded();
+    bool out_sharded = output_tensors[0].is_sharded();
 
-                    /* in1 */
-                    writer_runtime_args[1] = src_buffer_b->address();
-                }
-            }
-        };
+    auto& reader_runtime_args_by_core = GetRuntimeArgs(program, shared_variables.kernels.at(0));
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    // Manually unroll sender core
+    {
+        // in0 sender
+        auto& reader_runtime_args =
+            reader_runtime_args_by_core[shared_variables.start_core.x][shared_variables.start_core.y];
+        reader_runtime_args[0] = src_buffer_a->address();
+
+        // in1 sender
+        auto& sender_writer_runtime_args =
+            GetRuntimeArgs(program, shared_variables.kernels.at(1), shared_variables.start_core);
+        sender_writer_runtime_args[0] = src_buffer_b->address();
+        sender_writer_runtime_args[6] = dst_buffer->address();
+        if (bias_tensor.has_value()) {
+            sender_writer_runtime_args[17] = (*bias_buffer)->address();
+        }
+    }
+
+    auto& receiver_writer_runtime_args_by_core = GetRuntimeArgs(program, shared_variables.kernels.at(2));
+
+    for (uint32_t i = 1; i < shared_variables.cores.size(); ++i) {
+        const CoreCoord& core = shared_variables.cores[i];
+
+        auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
+
+        auto& writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
+
+        // in0 sender
+        reader_runtime_args[0] = src_buffer_a->address();
+        // in1 receiver
+        writer_runtime_args[2] = dst_buffer->address();
+    }
+
+    if (src0_sharded) {
+        if (shared_variables.conditional) {
+            UpdateDynamicCircularBufferAddress(program, shared_variables.cbs.at(1), *src_buffer_a);
+        } else {
+            UpdateDynamicCircularBufferAddress(program, shared_variables.cbs.at(0), *src_buffer_a);
+        }
+    }
+
+    if (out_sharded) {
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cbs.at(2), *dst_buffer);
+    }
+}
+
+inline void override_program_mcast_in0(
+    const ttnn::operations::matmul::matmul_shared_variables_t& shared_variables,
+    const void* operation,
+    tt_metal::Program& program,
+    const std::vector<tt::tt_metal::Tensor>& input_tensors,
+    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+    const std::vector<tt::tt_metal::Tensor>& output_tensors) {
+    TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
+    TT_ASSERT(output_tensors.size() == 1);
+
+    auto src_buffer_a = input_tensors.at(0).buffer();
+    auto src_buffer_b = input_tensors.at(1).buffer();
+    auto bias_tensor = optional_input_tensors.at(0);
+
+    std::optional<tt::tt_metal::Buffer*> bias_buffer;
+    if (bias_tensor.has_value()) {
+        bias_buffer = bias_tensor.value().buffer();
+    }
+
+    auto dst_buffer = output_tensors.at(0).buffer();
+
+    bool src0_sharded = input_tensors[0].is_sharded();
+    bool src1_sharded = input_tensors[1].is_sharded();
+    bool out_sharded = output_tensors[0].is_sharded();
+
+    // Manually unroll sender core
+    if (src0_sharded) {
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cbs.at(1), *src_buffer_a);
+    } else {
+        // in0 sender
+        auto& reader_sender_runtime_args =
+            GetRuntimeArgs(program, shared_variables.kernels.at(0), shared_variables.start_core);
+        reader_sender_runtime_args[0] = src_buffer_a->address();
+    }
+
+    if (src1_sharded) {
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cbs.at(0), *src_buffer_b);
+    }
+
+    if (bias_tensor.has_value() && bias_tensor.value().is_sharded()) {
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cbs.at(2), *bias_buffer.value());
+    }
+
+    auto& writer_runtime_args_by_core = GetRuntimeArgs(program, shared_variables.kernels.at(1));
+
+    for (uint32_t i = 0; i < shared_variables.num_cores_with_work; ++i) {
+        const auto& core = shared_variables.cores[i];
+
+        auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
+
+        // in1 sender
+        writer_runtime_args[0] = src_buffer_b->address();
+        writer_runtime_args[6] = dst_buffer->address();
+        if (bias_tensor.has_value()) {
+            writer_runtime_args[17] = (*bias_buffer)->address();
+        }
+    }
+
+    if (out_sharded) {
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cbs.at(3), *dst_buffer);
+    }
+}
+
+inline void override_program_gather_in0(
+    const ttnn::operations::matmul::matmul_shared_variables_t& shared_variables,
+    const void* operation,
+    tt_metal::Program& program,
+    const std::vector<tt::tt_metal::Tensor>& input_tensors,
+    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+    const std::vector<tt::tt_metal::Tensor>& output_tensors) {
+    auto& global_cb = static_cast<const ttnn::operations::matmul::Matmul*>(operation)->global_cb;
+
+    auto src_buffer_a = input_tensors[0].buffer();
+    auto src_buffer_b = input_tensors[1].buffer();
+    auto dst_buffer = output_tensors[0].buffer();
+
+    bool src0_sharded = input_tensors[0].is_sharded();
+    bool src1_sharded = input_tensors[1].is_sharded();
+    bool out_sharded = output_tensors[0].is_sharded();
+
+    // Manually unroll sender core
+    if (src0_sharded) {
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cbs[0], *src_buffer_a);
+    }
+    if (src1_sharded) {
+        if (!global_cb.has_value() && !src_buffer_b->is_dram()) {
+            UpdateDynamicCircularBufferAddress(program, shared_variables.cbs[1], *src_buffer_b);
+        }
+    }
+    if (out_sharded) {
+        for (uint32_t i = 0; i < shared_variables.cbs.size() - 2; ++i) {
+            // cbs 0 and 1 contain cb_src0 and cb_src1
+            // the rest contains the actual output cbs
+            const auto& cb_output = shared_variables.cbs[i + 2];
+            const auto& out_buffer = output_tensors[i].buffer();
+            UpdateDynamicCircularBufferAddress(program, cb_output, *out_buffer);
+        }
+    }
+
+    if (not src1_sharded) {
+        auto& writer_runtime_args_by_core = GetRuntimeArgs(program, shared_variables.kernels.at(0));
+        for (uint32_t i = 0; i < shared_variables.cores.size(); ++i) {
+            const auto& core = shared_variables.cores[i];
+            auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
+
+            /* in1 */
+            writer_runtime_args[1] = src_buffer_b->address();
+        }
+    }
+}
+
+void override_program(
+    const ttnn::operations::matmul::matmul_shared_variables_t& shared_variables,
+    const void* operation,
+    tt_metal::Program& program,
+    const std::vector<tt::tt_metal::Tensor>& input_tensors,
+    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+    const std::vector<tt::tt_metal::Tensor>& output_tensors) {
+    switch (shared_variables.type) {
+        case ttnn::operations::matmul::mcast_in0:
+            override_program_mcast_in0(
+                shared_variables, operation, program, input_tensors, optional_input_tensors, output_tensors);
+            break;
+        case ttnn::operations::matmul::gather_in0:
+            override_program_gather_in0(
+                shared_variables, operation, program, input_tensors, optional_input_tensors, output_tensors);
+            break;
+        case ttnn::operations::matmul::mcast_in1:
+            override_program_mcast_in1(
+                shared_variables, operation, program, input_tensors, optional_input_tensors, output_tensors);
+            break;
+    }
 }
 
 }  // namespace reuse_mcast_1d_optimized_helpers
@@ -2381,8 +2416,8 @@ namespace operations {
 
 namespace matmul {
 
-tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
-    tt::tt_metal::Program& program,
+ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcast_1d_optimized_(
+    tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
@@ -2406,7 +2441,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    uint32_t start_cb_index,
+    bool ignore_subdevice) {
     const auto b = b_tensors[0];
     const auto output = output_tensors[0];
 
@@ -2511,7 +2548,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
         for (const auto& output_tensor : output_tensors) {
             out_buffers.push_back(output_tensor.buffer());
         }
-        return reuse_mcast_1d_optimized_helpers::create_program_gather_in0(
+        return reuse_mcast_1d_optimized_helpers::process_program_gather_in0(
             program,
             a,
             b_tensors,
@@ -2522,6 +2559,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
             packer_l1_acc,
             dst_full_sync_en,
             compute_with_storage_grid_size,
+            start_cb_index,
             B,
             Mt,
             Nt,
@@ -2546,11 +2584,12 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
             untilize_out,
             global_cb,
             num_global_cb_receivers,
-            sub_device_id);
+            sub_device_id,
+            ignore_subdevice);
     }
-
+    TT_FATAL(start_cb_index == tt::CBIndex::c_0, "mcast does not support a non-zero start cb index");
     if (mcast_in0) {
-        return reuse_mcast_1d_optimized_helpers::create_program_mcast_in0(
+        return reuse_mcast_1d_optimized_helpers::process_program_mcast_in0(
             program,
             a,
             device,
@@ -2591,7 +2630,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
             untilize_out,
             fused_op_signaler);
     } else {
-        return reuse_mcast_1d_optimized_helpers::create_program_mcast_in1(
+        return reuse_mcast_1d_optimized_helpers::process_program_mcast_in1(
             program,
             a,
             device,
@@ -2658,7 +2697,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     tt_metal::Program program{}; /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
 
-    return matmul_multi_core_reuse_mcast_1d_optimized_(
+    ttnn::operations::matmul::matmul_shared_variables_t shared_vars = matmul_multi_core_reuse_mcast_1d_optimized_(
         program,
         a,
         b_tensors,
@@ -2683,11 +2722,25 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
         empty_fused_op_signaler,
         global_cb,
         num_global_cb_receivers,
-        sub_device_id);
+        sub_device_id,
+        tt::CBIndex::c_0,
+        false);
+    auto override_runtime_arguments_callback =
+        [shared_vars](
+            const void* operation,
+            tt_metal::Program& program,
+            const std::vector<tt::tt_metal::Tensor>& input_tensors,
+            const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+            const std::vector<tt::tt_metal::Tensor>& output_tensors) {
+            reuse_mcast_1d_optimized_helpers::override_program(
+                shared_vars, operation, program, input_tensors, optional_input_tensors, output_tensors);
+        };
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
-    tt::tt_metal::Program& program,
+ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcast_1d_optimized_expander(
+    tt_metal::Program& program,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
@@ -2698,7 +2751,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    uint32_t start_cb_index,
+    bool ignore_subdevice) {
     MatmulMultiCoreReuseMultiCast1DProgramConfig config =
         std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
 
@@ -2727,7 +2782,52 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
         fused_op_signaler,
         global_cb,
         config.num_global_cb_receivers,
-        sub_device_id);
+        sub_device_id,
+        start_cb_index,
+        ignore_subdevice);
+}
+
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
+    tt_metal::Program& program,
+    const Tensor& a,
+    const std::vector<Tensor>& b_tensors,
+    const std::optional<const Tensor>& bias,
+    const std::vector<Tensor>& output_tensors,
+    bool broadcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const MatmulProgramConfig& program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    ttnn::operations::matmul::matmul_shared_variables_t shared_vars =
+        matmul_multi_core_reuse_mcast_1d_optimized_expander(
+            program,
+            a,
+            b_tensors,
+            bias,
+            output_tensors,
+            broadcast_batch,
+            compute_kernel_config,
+            program_config,
+            untilize_out,
+            fused_op_signaler,
+            global_cb,
+            sub_device_id,
+            tt::CBIndex::c_0,
+            false);
+    auto override_runtime_arguments_callback =
+        [shared_vars](
+            const void* operation,
+            tt_metal::Program& program,
+            const std::vector<tt::tt_metal::Tensor>& input_tensors,
+            const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+            const std::vector<tt::tt_metal::Tensor>& output_tensors) {
+            reuse_mcast_1d_optimized_helpers::override_program(
+                shared_vars, operation, program, input_tensors, optional_input_tensors, output_tensors);
+        };
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 }  // namespace matmul
