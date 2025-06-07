@@ -188,14 +188,14 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     uint32_t gamma_single_tile_size = tt::tt_metal::detail::TileSize(gamma_cb_data_format);
     uint32_t bfloat16_tile_size = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 
-    tt::log_debug("in_data_format: {}", in_data_format);
-    tt::log_debug("res_data_format: {}", residual_data_format);
-    tt::log_debug("out_data_format: {}", out_data_format);
-    tt::log_debug("cb_data_format: {}", cb_data_format);
-    tt::log_debug("gamma_cb_data_format: {}", gamma_cb_data_format);
-    tt::log_debug("math_fidelity: {}", math_fidelity);
-    tt::log_debug("math_approx_mode: {}", math_approx_mode);
-    tt::log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
+    log_debug(tt::LogOp, "res_data_format: {}", residual_data_format);
+    log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
+    log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
+    log_debug(tt::LogOp, "gamma_cb_data_format: {}", gamma_cb_data_format);
+    log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
+    log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
+    log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
     // tensor shape
     const auto shape = a.get_padded_shape();
@@ -237,7 +237,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         storage_core_noc_x.push_back((std::uint32_t)mesh_device->worker_core_from_logical_core(core).x);
         storage_core_noc_y.push_back((std::uint32_t)mesh_device->worker_core_from_logical_core(core).y);
 
-        tt::log_debug(
+        log_debug(
+            tt::LogOp,
             "Storage core: ({}, {}), physical coords: ({}, {})",
             core.x,
             core.y,
@@ -901,7 +902,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
 
-        tt::log_debug("core: {}, {}", core.x, core.y);
+        log_debug(tt::LogOp, "core: {}, {}", core.x, core.y);
 
         uint32_t width_index = 0;
         width_index = i;
@@ -1065,7 +1066,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
                 std::min(num_tiles_left_on_current_worker_core, num_tiles_available_at_current_storage_core);
             current_worker_num_segments_to_write_back += 1;
 
-            tt::log_debug(
+            log_debug(
+                tt::LogOp,
                 "New segment for worker core {}, Worker core offset: {}, Storage core offset: {}, Num tiles to "
                 "write "
                 "back: {}",

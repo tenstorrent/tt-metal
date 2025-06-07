@@ -13,7 +13,7 @@
 #include "core_coord.hpp"
 #include "core_descriptor.hpp"
 #include "dispatch_core_common.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.h>
 

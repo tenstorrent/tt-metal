@@ -12,7 +12,7 @@
 #include "assert.hpp"
 #include "control_plane.hpp"
 #include <tt_stl/indestructible.hpp>
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/cluster_descriptor_types.h>
@@ -27,7 +27,7 @@ const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translat
         TT_FATAL(!mesh_ids.empty(), "There are no user physical meshes in the system found by control plane.");
 
         if (mesh_ids.size() > 1) {
-            tt::log_warning(LogMetal, "Only one user physical mesh is supported, using the first one");
+            log_warning(LogMetal, "Only one user physical mesh is supported, using the first one");
         }
 
         const auto mesh_id = mesh_ids.front();

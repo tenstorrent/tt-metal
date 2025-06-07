@@ -130,7 +130,7 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
         tt::test_utils::generate_uniform_random_vector<uint8_t>(0, UINT8_MAX, host_size_in_bytes / sizeof(uint8_t));
 
     {
-        tt::log_info("Writing input buffer to device");
+        log_info(tt::LogTest, "Writing input buffer to device");
         std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
             .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
             .host_data = const_cast<void*>(reinterpret_cast<const void*>(src.data())),
@@ -149,7 +149,7 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
      *   - For row major layout, need to handle shard shapes with different widths (ie. last dim) properly
      */
     {
-        tt::log_info("Creating single-core reshard program");
+        log_info(tt::LogTest, "Creating single-core reshard program");
         auto program = CreateProgram();
 
         constexpr CoreCoord grid = {0, 0};
@@ -234,9 +234,9 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_work_load, false);
 
         // Wait for program to finish
-        tt::log_info("Program launched!");
+        log_info(tt::LogTest, "Program launched!");
         Finish(mesh_device_->mesh_command_queue());
-        tt::log_info("Program finished!");
+        log_info(tt::LogTest, "Program finished!");
     }
 
     // Initialize dst vector
@@ -244,7 +244,7 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
 
     // Validate output buffer matches src vector
     {
-        tt::log_info("Validating output buffer matches src vector");
+        log_info(tt::LogTest, "Validating output buffer matches src vector");
         std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
             .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
             .host_data = const_cast<void*>(reinterpret_cast<const void*>(dst.data())),
@@ -259,7 +259,7 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
 
     // Validate input buffer matches src vector (ie. unmodified after kernel read/writes)
     {
-        tt::log_info("Validating input buffer matches src vector (as a sanity check)");
+        log_info(tt::LogTest, "Validating input buffer matches src vector (as a sanity check)");
         std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
             .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
             .host_data = const_cast<void*>(reinterpret_cast<const void*>(dst.data())),

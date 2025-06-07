@@ -34,7 +34,7 @@
 // Do we really want to expose Hal like this?
 // This looks like an API level test
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "umd/device/types/xy_pair.h"
@@ -133,10 +133,10 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
 
     auto input_buf_noc_xy = get_core_coord_for_test(input_buffer);
     auto output_buf_noc_xy = get_core_coord_for_test(output_buffer);
-    log_info("Input/Output Buffer mem type: {}", magic_enum::enum_name(buffer_mem_type));
-    log_info("Input Buffer NOC XY: {}", input_buf_noc_xy);
-    log_info("Output Buffer NOC XY: {}", output_buf_noc_xy);
-    log_info("Local scratch buffer addr: {:#x}", buffer_addr);
+    log_info(tt::LogTest, "Input/Output Buffer mem type: {}", magic_enum::enum_name(buffer_mem_type));
+    log_info(tt::LogTest, "Input Buffer NOC XY: {}", input_buf_noc_xy);
+    log_info(tt::LogTest, "Output Buffer NOC XY: {}", output_buf_noc_xy);
+    log_info(tt::LogTest, "Local scratch buffer addr: {:#x}", buffer_addr);
 
     // A copy kernel, we'll feed it incorrect inputs to test sanitization.
     KernelHandle dram_copy_kernel;

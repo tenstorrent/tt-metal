@@ -8,7 +8,7 @@
 #include <buffer.hpp>
 #include <event.hpp>
 #include <host_api.hpp>
-#include <logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_metal.hpp>
 #include <chrono>
 #include <fstream>

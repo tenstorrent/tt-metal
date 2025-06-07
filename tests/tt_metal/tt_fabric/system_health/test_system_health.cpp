@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <utility>
 
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"

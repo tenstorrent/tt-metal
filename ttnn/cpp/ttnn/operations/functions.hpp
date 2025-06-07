@@ -488,7 +488,7 @@ static bool nearly_equal(float a, float b, float epsilon = 1e-5f, float abs_thre
     auto norm = std::min((std::abs(a) + std::abs(b)), std::numeric_limits<float>::max());
     auto result = diff < std::max(abs_threshold, epsilon * norm);
     if (not result) {
-        tt::log_error(tt::LogTest, "{} != {}", a, b);
+        log_error(tt::LogTest, "{} != {}", a, b);
     }
     return result;
 }

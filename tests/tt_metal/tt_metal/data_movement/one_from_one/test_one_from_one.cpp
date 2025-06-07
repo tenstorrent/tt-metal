@@ -103,7 +103,7 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
         program, requestor_kernel, master_core_set, {physical_subordinate_core.x, physical_subordinate_core.y});
 
     // Assign unique id
-    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Input
@@ -125,10 +125,10 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
         packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
 
     if (!pcc) {
-        log_error("PCC Check failed");
-        log_info("Golden vector");
+        log_error(tt::LogTest, "PCC Check failed");
+        log_info(tt::LogTest, "Golden vector");
         print_vector<uint32_t>(packed_golden);
-        log_info("Output vector");
+        log_info(tt::LogTest, "Output vector");
         print_vector<uint32_t>(packed_output);
     }
 

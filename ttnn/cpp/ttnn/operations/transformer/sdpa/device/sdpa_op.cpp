@@ -313,7 +313,7 @@ operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_m
     auto& output_tensor = output_tensors.at(0);
 
     if (output_tensor.storage_type() != StorageType::DEVICE) {
-        tt::log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
+        log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
     }
 
     // calculate arch specific parameters
@@ -322,7 +322,7 @@ operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_m
                     ? output_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
-        tt::log_warning(tt::LogOp, "SDPA perf model does not support tt::arch '{}'", magic_enum::enum_name(arch));
+        log_warning(tt::LogOp, "SDPA perf model does not support tt::arch '{}'", magic_enum::enum_name(arch));
         return operation::OpPerformanceModel(input_tensors, output_tensors, 0);
     }
 

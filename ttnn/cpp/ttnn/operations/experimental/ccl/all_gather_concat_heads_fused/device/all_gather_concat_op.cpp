@@ -81,7 +81,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program_at
     const ttnn::MeshCoordinate& mesh_coord,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
+    log_debug(tt::LogOp, "DEBUG: create_program is called");
 
     const auto& input_tensor = input_tensors[0];
     auto mesh_device = input_tensor.mesh_device();

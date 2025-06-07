@@ -9,7 +9,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/constants.hpp>
 
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "ttnn_test_fixtures.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -152,10 +152,10 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
     auto shard_spec = device_input_tensor.shard_spec().value();
     TT_FATAL(shard_spec.grid == all_cores, "shard spec grid should be same as all_cores");
 
-    tt::log_info(tt::LogTest, "Running ttnn unary relu sharded");
+    log_info(tt::LogTest, "Running ttnn unary relu sharded");
     auto golden = ttnn::relu(device_input_tensor).cpu();
 
-    tt::log_info(tt::LogTest, "Running generic_op unary relu sharded");
+    log_info(tt::LogTest, "Running generic_op unary relu sharded");
     auto act_df = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor.get_dtype());
     auto out_df = tt::tt_metal::datatype_to_dataformat_converter(device_output_tensor.get_dtype());
     uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
@@ -246,7 +246,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
         {"ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD"},
     };
 
-    tt::log_info(tt::LogTest, "Running ttnn binary add interleaved");
+    log_info(tt::LogTest, "Running ttnn binary add interleaved");
     ttnn::Shape shape{11, 9, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
     auto input_tensor_a = ttnn::random::random(shape, DataType::BFLOAT16);
     auto input_tensor_b = ttnn::random::random(shape, DataType::BFLOAT16);
@@ -255,7 +255,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
 
     auto golden = ttnn::add(device_input_tensor_a, device_input_tensor_b).cpu().to_layout(Layout::ROW_MAJOR);
 
-    tt::log_info(tt::LogTest, "Running generic add interleaved");
+    log_info(tt::LogTest, "Running generic add interleaved");
 
     // Data movement kernel needs output tensor address to be passed as a runtime argument.
     auto device_output_tensor =
@@ -420,7 +420,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
 }
 
 TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
-    tt::log_info(tt::LogTest, "Running ttnn matmul");
+    log_info(tt::LogTest, "Running ttnn matmul");
     uint32_t Mt_original = 10;
     uint32_t Kt_original = 2;
     uint32_t Nt_original = 4;
@@ -443,7 +443,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
         matmul::MatmulMultiCoreProgramConfig{}  // program_config to indicate we want multi-core
     );
 
-    tt::log_info(tt::LogTest, "Running matmul generic test");
+    log_info(tt::LogTest, "Running matmul generic test");
 
     // Parameters for matmul call - copy paste from matmul_multi_core in bmm_op_multi_core.cpp
     bool bcast_batch = false;
@@ -550,7 +550,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
     uint32_t dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(uint32_t)output_cb_index, dst_is_dram};
 
-    tt::log_info(tt::LogTest, "num_cores: {}, num_core_x: {}, num_core_y: {}", num_cores, num_cores_x, num_cores_y);
+    log_info(tt::LogTest, "num_cores: {}, num_core_x: {}, num_core_y: {}", num_cores, num_cores_x, num_cores_y);
     KernelDescriptor::RuntimeArgs reader_rt_args_per_core(
         num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
     KernelDescriptor::RuntimeArgs writer_rt_args_per_core(
@@ -587,7 +587,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
 
         writer_rt_args_per_core[core_x][core_y] = {dst_addr, num_output_tiles_per_core, num_tiles_written};
 
-        tt::log_info(
+        log_info(
             tt::LogTest,
             "core: {}, reader_rt_args {}, writer_rt_args {}",
             core,
@@ -628,7 +628,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
         Kt,                                // Kt
         num_output_tiles_per_core_group_2  // Nt
     };
-    tt::log_info(tt::LogTest, "core_group_1: {}, core_group_2: {}", core_group_1.ranges(), core_group_2.ranges());
+    log_info(tt::LogTest, "core_group_1: {}, core_group_2: {}", core_group_1.ranges(), core_group_2.ranges());
     tt::tt_metal::KernelDescriptor compute_kernel_descriptor_1 = {
         .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         .core_ranges = core_group_1,
@@ -764,9 +764,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
         .cbs = {input_cb_descriptor, output_cb_descriptor},
     };
 
-    tt::log_info(tt::LogTest, "Running ttnn unary exp");
+    log_info(tt::LogTest, "Running ttnn unary exp");
     Tensor golden = ttnn::exp(device_input_tensor);
-    tt::log_info(tt::LogTest, "Running generic_op unary exp");
+    log_info(tt::LogTest, "Running generic_op unary exp");
     Tensor device_output = ttnn::generic_op(std::vector{device_input_tensor, device_output_tensor}, program_descriptor);
 
     auto allclose = ttnn::allclose<bfloat16>(golden.cpu(), device_output.cpu());

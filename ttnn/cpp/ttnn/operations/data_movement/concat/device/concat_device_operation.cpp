@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/run_operation.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -67,7 +67,8 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
         }
     }
     if (warn_about_alignment) {
-        tt::log_warning(
+        log_warning(
+            tt::LogOp,
             "ttnn.concat: Tile padding along concatenated dim ({}) is not "
             "directly supported. ttnn.concat will proceed by converting to "
             "row-major then retilizing. This may have adverse performance impacts.",

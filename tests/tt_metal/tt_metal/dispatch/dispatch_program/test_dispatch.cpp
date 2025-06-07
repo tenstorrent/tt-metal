@@ -23,7 +23,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
@@ -172,7 +172,7 @@ TEST_F(DispatchFixture, EthTestInitLocalMemory) {
     // This test will hang/assert if there is a failure
 
     if (not this->slow_dispatch_) {
-        tt::log_warning("Skipping fast dispatch test until active eth memory map is fixed");
+        log_warning(tt::LogTest, "Skipping fast dispatch test until active eth memory map is fixed");
         return;
     }
 

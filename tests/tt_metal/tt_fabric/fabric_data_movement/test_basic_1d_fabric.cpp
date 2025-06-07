@@ -251,10 +251,10 @@ void RunTestLineMcast(
 
     // Launch sender and receiver programs and wait for them to finish
     for (auto& [dev, recv_program] : recv_programs) {
-        log_info("Run receiver on: {}", dev->id());
+        log_info(tt::LogTest, "Run receiver on: {}", dev->id());
         fixture->RunProgramNonblocking(dev, *recv_program);
     }
-    log_info("Run Sender on: {}", sender_device->id());
+    log_info(tt::LogTest, "Run Sender on: {}", sender_device->id());
     fixture->RunProgramNonblocking(sender_device, sender_program);
 
     for (auto& [dev, recv_program] : recv_programs) {
@@ -371,18 +371,18 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     // Pick any port, for now pick the 1st one in the set
     edm_port = *eth_chans.begin();
 
-    tt::log_info(tt::LogTest, "mesh dimensions {:x}", mesh_shape.dims());
-    tt::log_info(tt::LogTest, "mesh size {:x}", mesh_shape.mesh_size());
-    tt::log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
-    tt::log_info(tt::LogTest, "mesh dimension 1 {:x}", mesh_shape[1]);
-    tt::log_info(tt::LogTest, "Src MeshId {} ChipId {}", src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
-    tt::log_info(tt::LogTest, "Dst MeshId {} ChipId {}", dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
+    log_info(tt::LogTest, "mesh dimensions {:x}", mesh_shape.dims());
+    log_info(tt::LogTest, "mesh size {:x}", mesh_shape.mesh_size());
+    log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
+    log_info(tt::LogTest, "mesh dimension 1 {:x}", mesh_shape[1]);
+    log_info(tt::LogTest, "Src MeshId {} ChipId {}", src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
+    log_info(tt::LogTest, "Dst MeshId {} ChipId {}", dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
 
     auto edm_direction = control_plane.get_eth_chan_direction(src_fabric_node_id, edm_port);
     CoreCoord edm_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
         src_physical_device_id, edm_port);
 
-    tt::log_info(tt::LogTest, "Using edm port {} in direction {}", edm_port, edm_direction);
+    log_info(tt::LogTest, "Using edm port {} in direction {}", edm_port, edm_direction);
 
     auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
     auto* receiver_device = DevicePool::instance().get_active_device(dst_physical_device_id);
@@ -570,9 +570,9 @@ void run_unicast_test_bw_chips(
             .defines = defines});
 
     auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-    tt::log_info(tt::LogTest, "mesh dimensions {:x}", mesh_shape.dims());
-    tt::log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
-    tt::log_info(tt::LogTest, "mesh dimension 1 {:x}", mesh_shape[1]);
+    log_info(tt::LogTest, "mesh dimensions {:x}", mesh_shape.dims());
+    log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
+    log_info(tt::LogTest, "mesh dimension 1 {:x}", mesh_shape[1]);
 
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.packet_header_address,
@@ -667,9 +667,9 @@ void RunTestUnicastConnAPI(BaseFabricFixture* fixture, uint32_t num_hops, Routin
         GTEST_SKIP() << "No path found between sender and receivers";
     }
 
-    tt::log_info(tt::LogTest, "Src MeshId {} ChipId {}", src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
-    tt::log_info(tt::LogTest, "Dst MeshId {} ChipId {}", dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
-    tt::log_info(tt::LogTest, "Dst Device is {} hops in direction: {}", num_hops, direction);
+    log_info(tt::LogTest, "Src MeshId {} ChipId {}", src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
+    log_info(tt::LogTest, "Dst MeshId {} ChipId {}", dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
+    log_info(tt::LogTest, "Dst Device is {} hops in direction: {}", num_hops, direction);
 
     chip_id_t src_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
     chip_id_t dst_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
@@ -695,8 +695,8 @@ void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture) {
     const auto src_physical_device_id = devices[random_dev_list[0]]->id();
     const auto dst_physical_device_id = devices[random_dev_list[1]]->id();
 
-    tt::log_info(tt::LogTest, "Src Phys ChipId {}", src_physical_device_id);
-    tt::log_info(tt::LogTest, "Dst Phys ChipId {}", dst_physical_device_id);
+    log_info(tt::LogTest, "Src Phys ChipId {}", src_physical_device_id);
+    log_info(tt::LogTest, "Dst Phys ChipId {}", dst_physical_device_id);
 
     run_unicast_test_bw_chips(
         fixture, src_physical_device_id, dst_physical_device_id, 0 /* num_hops, not needed for 2d */);
@@ -705,12 +705,12 @@ void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture) {
 void RunTestUnicastTGGateways(BaseFabricFixture* fixture) {
     // TODO: remove this restriction once tunneling is disabled
     if (!fixture->slow_dispatch_) {
-        tt::log_info(tt::LogTest, "This test can only be run with TT_METAL_SLOW_DISPATCH_MODE currently");
+        log_info(tt::LogTest, "This test can only be run with TT_METAL_SLOW_DISPATCH_MODE currently");
         GTEST_SKIP();
     }
 
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::ClusterType::TG) {
-        tt::log_info(tt::LogTest, "This test is only for TG");
+        log_info(tt::LogTest, "This test is only for TG");
         GTEST_SKIP();
     }
 
@@ -724,7 +724,7 @@ void RunTestUnicastTGGateways(BaseFabricFixture* fixture) {
         for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
             // idx 0 in the tunnel is the mmio chip itself
             const auto remote_chip_id = tunnels_from_mmio[t][1];
-            tt::log_info(tt::LogTest, "Running tests for chips: {} and {}", mmio_chip_id, remote_chip_id);
+            log_info(tt::LogTest, "Running tests for chips: {} and {}", mmio_chip_id, remote_chip_id);
             run_unicast_test_bw_chips(fixture, mmio_chip_id, remote_chip_id, 1);
             run_unicast_test_bw_chips(fixture, remote_chip_id, mmio_chip_id, 1);
         }
@@ -841,16 +841,16 @@ void RunTestMCastConnAPI(
             .compile_args = compile_time_args,
             .defines = defines});
 
-    tt::log_info(tt::LogTest, "mesh dimensions {:x}", mesh_shape.dims());
-    tt::log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
-    tt::log_info(tt::LogTest, "mesh dimension 1 {:x}", mesh_shape[1]);
-    tt::log_info(tt::LogTest, "Mcast Src MeshId {} ChipId {}", src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
-    tt::log_info(
+    log_info(tt::LogTest, "mesh dimensions {:x}", mesh_shape.dims());
+    log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
+    log_info(tt::LogTest, "mesh dimension 1 {:x}", mesh_shape[1]);
+    log_info(tt::LogTest, "Mcast Src MeshId {} ChipId {}", src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
+    log_info(
         tt::LogTest, "Mcast Fwd Dst MeshId {} ChipId {}", left_fabric_node_id.mesh_id, left_fabric_node_id.chip_id);
-    tt::log_info(tt::LogTest, "Mcast Fwd Dst Device is {} hops in direction: {}", fwd_hops, fwd_dir);
-    tt::log_info(
+    log_info(tt::LogTest, "Mcast Fwd Dst Device is {} hops in direction: {}", fwd_hops, fwd_dir);
+    log_info(
         tt::LogTest, "Mcast Bwd Dst MeshId {} ChipId {}", right_fabric_node_id.mesh_id, right_fabric_node_id.chip_id);
-    tt::log_info(tt::LogTest, "Mcast Bwd Dst Device is {} hops in direction: {}", bwd_hops, bwd_dir);
+    log_info(tt::LogTest, "Mcast Bwd Dst Device is {} hops in direction: {}", bwd_hops, bwd_dir);
 
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.packet_header_address,

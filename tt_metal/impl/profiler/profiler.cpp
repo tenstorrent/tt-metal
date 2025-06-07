@@ -25,7 +25,7 @@
 #include "hal_types.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
 #include "profiler.hpp"
 #include "profiler_paths.hpp"
@@ -261,7 +261,7 @@ void DeviceProfiler::readRiscProfilerResults(
                     tracy::riscName[riscEndIndex],
                     bufferEndIndex);
                 TracyMessageC(warningMsg.c_str(), warningMsg.size(), tracy::Color::Tomato3);
-                log_warning(warningMsg.c_str());
+                log_warning(tt::LogMetal, "{}", warningMsg);
             }
 
             uint32_t riscNumRead = 0;
@@ -705,6 +705,7 @@ void DeviceProfiler::serializeJsonNocTraces(
     std::filesystem::create_directories(output_dir);
     if (!std::filesystem::is_directory(output_dir)) {
         log_error(
+            tt::LogMetal,
             "Could not write noc event json trace to '{}' because the directory path could not be created!",
             output_dir);
         return;
@@ -752,7 +753,7 @@ void DeviceProfiler::serializeJsonNocTraces(
         }
     }
 
-    log_info("Writing profiler noc traces to '{}'", output_dir);
+    log_info(tt::LogMetal, "Writing profiler noc traces to '{}'", output_dir);
     for (auto& [runtime_id, events] : events_by_opname) {
         // dump events to a json file inside directory output_dir named after the opname
         std::filesystem::path rpt_path = output_dir;
@@ -764,7 +765,7 @@ void DeviceProfiler::serializeJsonNocTraces(
         }
         std::ofstream rpt_ofs(rpt_path);
         if (!rpt_ofs) {
-            log_error("Could not write noc event json trace to '{}'", rpt_path);
+            log_error(tt::LogMetal, "Could not write noc event json trace to '{}'", rpt_path);
             return;
         }
         rpt_ofs << nlohmann::json(std::move(events)).dump(4) << std::endl;
@@ -857,7 +858,9 @@ void DeviceProfiler::generateZoneSourceLocationsHashes() {
 
         auto did_insert = zone_src_locations.insert(zone_src_location);
         if (did_insert.second && (hash_to_zone_src_locations.find(hash_16bit) != hash_to_zone_src_locations.end())) {
-            log_warning("Source location hashes are colliding, two different locations are having the same hash");
+            log_warning(
+                tt::LogAlways,
+                "Source location hashes are colliding, two different locations are having the same hash");
         }
 
         ZoneDetails details;
@@ -919,7 +922,8 @@ void DeviceProfiler::dumpResults(
     ZoneName(zone_name.c_str(), zone_name.size());
 
     if (rtoptions.get_profiler_noc_events_enabled()) {
-        log_warning("Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
+        log_warning(
+            tt::LogAlways, "Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
     }
 
     // open CSV log file
@@ -938,7 +942,7 @@ void DeviceProfiler::dumpResults(
     nlohmann::ordered_json noc_trace_json_log = nlohmann::json::array();
 
     if (!log_file_ofs) {
-        log_error("Could not open kernel profiler dump file '{}'", log_path);
+        log_error(tt::LogMetal, "Could not open kernel profiler dump file '{}'", log_path);
     } else {
         for (const auto& worker_core : worker_cores) {
             if (do_L1_data_buffer) {
@@ -1224,12 +1228,14 @@ void DeviceProfiler::updateTracyContext(std::pair<uint32_t, CoreCoord> device_co
             frequency = device_core_frequency / 1000.0;
             device_sync_info = std::make_tuple(cpu_time, device_time, frequency);
             log_debug(
+                tt::LogMetal,
                 "For device {}, core {},{} default frequency was used and its zones will be out of sync",
                 device_id,
                 worker_core.x,
                 worker_core.y);
         } else {
             log_debug(
+                tt::LogMetal,
                 "Device {}, core {},{} sync info are, frequency {} GHz,  delay {} cycles and, sync point {} seconds",
                 device_id,
                 worker_core.x,
@@ -1255,6 +1261,7 @@ void DeviceProfiler::updateTracyContext(std::pair<uint32_t, CoreCoord> device_co
             auto tracyCtx = device_tracy_contexts.at(device_core);
             TracyTTContextCalibrate(tracyCtx, cpu_time, device_time, frequency);
             log_debug(
+                tt::LogMetal,
                 "Device {}, core {},{} calibration info are, frequency {} GHz,  delay {} cycles and, sync point {} "
                 "seconds",
                 device_id,

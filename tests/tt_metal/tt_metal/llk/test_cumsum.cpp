@@ -23,7 +23,7 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"

@@ -37,7 +37,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/dispatch/command_queue_common.hpp"
 #include "impl/dispatch/dispatch_settings.hpp"
@@ -237,22 +237,22 @@ void init(int argc, char** argv) {
     debug_g = test_args::has_command_option(input_args, "-d");
 
     if (debug_g && use_dram_exec_buf_g) {
-        tt::log_fatal("Exec buf is not supported with debug commands");
+        log_fatal(tt::LogTest, "Exec buf is not supported with debug commands");
         exit(0);
     }
 
     if (packetized_path_en_g && !(split_prefetcher_g && split_dispatcher_g)) {
-        tt::log_fatal("Packetized path requires split prefetcher and dispatcher");
+        log_fatal(tt::LogTest, "Packetized path requires split prefetcher and dispatcher");
         exit(0);
     }
 
     if (!packetized_path_en_g && packetized_path_timeout_en_g) {
-        tt::log_fatal("Packetized path timeout specified without enabling the packetized path");
+        log_fatal(tt::LogTest, "Packetized path timeout specified without enabling the packetized path");
         exit(0);
     }
 
     if (test_device_id_g != 0 && !packetized_path_en_g) {
-        tt::log_fatal("Split device requires packetized path and split prefetcher/dispatcher");
+        log_fatal(tt::LogTest, "Split device requires packetized path and split prefetcher/dispatcher");
         exit(0);
     }
 }
@@ -1644,7 +1644,7 @@ void gen_prefetcher_cmds(
         case 7: gen_packed_read_test(device, prefetch_cmds, cmd_sizes, device_data); break;
         case 8: gen_ringbuffer_read_test(device, prefetch_cmds, cmd_sizes, device_data); break;
         default:
-            log_fatal("Unknown test: {}", test_type_g);
+            log_fatal(tt::LogTest, "Unknown test: {}", test_type_g);
             exit(0);
             break;
     }
@@ -3611,7 +3611,10 @@ int main(int argc, char** argv) {
         }
 
         if ((1 << exec_buf_log_page_size_g) * device->allocator()->get_num_banks(BufferType::DRAM) > cmddat_q_size_g) {
-            log_fatal("Exec buffer must fit in cmddat_q, page size too large ({})", 1 << exec_buf_log_page_size_g);
+            log_fatal(
+                tt::LogTest,
+                "Exec buffer must fit in cmddat_q, page size too large ({})",
+                1 << exec_buf_log_page_size_g);
             exit(0);
         }
 
@@ -3811,7 +3814,7 @@ int main(int argc, char** argv) {
         }
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);

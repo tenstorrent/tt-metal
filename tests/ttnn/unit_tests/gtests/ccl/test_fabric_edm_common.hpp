@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -233,16 +233,16 @@ Correctness run_output_check(CONTAINER_T const& inputs, CONTAINER_T output_buffe
         if (output_buffer[i] != inputs[i]) {
             if (debug_mode) {
                 if (pass) {
-                    log_error("Output mismatch");
+                    log_error(tt::LogTest, "Output mismatch");
                 }
-                log_error("[{}]: expected {} got {}", i, inputs[i], output_buffer[i]);
+                log_error(tt::LogTest, "[{}]: expected {} got {}", i, inputs[i], output_buffer[i]);
                 num_printed_mismatches++;
             }
             pass = false;
         }
     }
     if (num_printed_mismatches > 0) {
-        log_error("... (remaining mismatches omitted)");
+        log_error(tt::LogTest, "... (remaining mismatches omitted)");
     }
 
     log_info(tt::LogTest, "Output check: {}", pass ? "PASS" : "FAIL");
@@ -306,7 +306,7 @@ void run_programs(std::vector<Program>& programs, const std::vector<IDevice*>& d
             tt::tt_metal::detail::CompileProgram(devices.at(i), programs.at(i));
         }
     } catch (std::exception& e) {
-        log_error("Failed compile: {}", e.what());
+        log_error(tt::LogTest, "Failed compile: {}", e.what());
         throw e;
     }
 
@@ -1165,7 +1165,7 @@ void persistent_fabric_teardown_sequence(
     std::optional<SubdeviceInfo>& subdevice_managers,
     ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
     tt::tt_fabric::TerminationSignal termination_mode = tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE) {
-    log_info("Tearing down fabric");
+    log_info(tt::LogTest, "Tearing down fabric");
 
     // Wait for workers to finish
     auto d0_worker_subdevice = devices[0]->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];
@@ -1261,11 +1261,11 @@ int TestLineFabricEntrypoint(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
-        log_info("This test can only be run on T3000 devices");
+        log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return 0;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        log_info(tt::LogTest, "Test must be run on WH");
         return 0;
     }
 
@@ -1313,7 +1313,7 @@ int TestLineFabricEntrypoint(
                 enable_persistent_fabric);
 
         } catch (std::exception& e) {
-            log_error("Caught exception: {}", e.what());
+            log_error(tt::LogTest, "Caught exception: {}", e.what());
             test_fixture.TearDown();
             return false;
         }
@@ -1347,11 +1347,11 @@ int TestLoopbackEntrypoint(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
-        log_info("This test can only be run on T3000 devices");
+        log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return 0;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        log_info(tt::LogTest, "Test must be run on WH");
         return 0;
     }
 
@@ -1456,7 +1456,7 @@ int TestLoopbackEntrypoint(
             subdevice_managers,
             enable_persistent_fabric);
     } catch (std::exception& e) {
-        log_error("Caught exception: {}", e.what());
+        log_error(tt::LogTest, "Caught exception: {}", e.what());
         test_fixture.TearDown();
         return -1;
     }
@@ -1482,7 +1482,7 @@ int TestLoopbackEntrypoint(
                 subdevice_managers,
                 enable_persistent_fabric);
         } catch (std::exception& e) {
-            log_error("Caught exception: {}", e.what());
+            log_error(tt::LogTest, "Caught exception: {}", e.what());
             test_fixture.TearDown();
             return -1;
         }
@@ -1534,11 +1534,11 @@ inline bool TestMultiInputReaderKernel(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
-        log_info("This test can only be run on T3000 devices");
+        log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return true;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        log_info(tt::LogTest, "Test must be run on WH");
         return true;
     }
     Fabric1DFixture test_fixture;
@@ -1811,11 +1811,11 @@ bool RunPipelinedWorkersTest(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
-        log_info("This test can only be run on T3000 devices");
+        log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return true;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        log_info(tt::LogTest, "Test must be run on WH");
         return true;
     }
 
@@ -1873,7 +1873,7 @@ bool RunPipelinedWorkersTest(
     TT_FATAL(mem_configs.size() == num_tensors, "Must have a memory config for each tensor");
     for (size_t i = 0; i < num_tensors; i++) {
         device_tensors.push_back(host_tensors[i].to_device(device, mem_configs[i]));
-        log_info("Tensor[{}] allocated starting at address {}", i, device_tensors[i].buffer()->address());
+        log_info(tt::LogTest, "Tensor[{}] allocated starting at address {}", i, device_tensors[i].buffer()->address());
     }
     TT_ASSERT(device_tensors.size() == num_tensors);
     TT_ASSERT(device_tensors.size() == host_tensors.size());
@@ -2113,11 +2113,11 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     constexpr size_t test_expected_num_devices = 4;
     if (tt::tt_metal::GetNumAvailableDevices() < test_expected_num_devices) {
-        log_info("This test can only be run on T3000 devices");
+        log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        log_info(tt::LogTest, "Test must be run on WH");
         return;
     }
     // Initialize MeshDevice with 1D Fabric
@@ -2184,11 +2184,11 @@ void run_ring_all_gather_with_persistent_fabric(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     constexpr size_t test_expected_num_devices = 8;
     if (tt::tt_metal::GetNumAvailableDevices() < test_expected_num_devices) {
-        log_info("This test can only be run on T3000 devices");
+        log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        log_info(tt::LogTest, "Test must be run on WH");
         return;
     }
     // Initialize MeshDevice with 1D Fabric
@@ -2487,11 +2487,11 @@ void Run1DFabricPacketSendTest(
     bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
     bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
     if (num_devices < 4) {
-        log_info("This test can only be run on T3000 devices");
+        log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        log_info(tt::LogTest, "Test must be run on WH");
         return;
     }
 
@@ -2564,10 +2564,10 @@ void Run1DFabricPacketSendTest(
     size_t dest_buffer_size = max_packet_payload_size_bytes * 4;
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
 
-    log_info("Device open and fabric init");
+    log_info(tt::LogTest, "Device open and fabric init");
     // MeshFabric1DLineDeviceInitFixture test_fixture;
     FABRIC_DEVICE_FIXTURE test_fixture;
-    log_info("\tDone");
+    log_info(tt::LogTest, "\tDone");
     auto view = *(test_fixture.view_);
 
     auto fabrics_under_test_devices =

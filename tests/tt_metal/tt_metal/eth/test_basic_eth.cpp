@@ -28,7 +28,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>

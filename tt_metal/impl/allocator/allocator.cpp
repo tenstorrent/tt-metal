@@ -12,7 +12,7 @@
 #include "assert.hpp"
 #include "buffer_types.hpp"
 #include "impl/allocator/bank_manager.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/xy_pair.h>
 
 namespace tt {
@@ -95,6 +95,7 @@ void Allocator::verify_safe_allocation() const {
     thread_local static bool warning_generated = false;
     if (allocations_unsafe_ and not warning_generated) {
         log_warning(
+            tt::LogMetal,
             "Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be "
             "corrupted once a trace is executed.");
         warning_generated = true;

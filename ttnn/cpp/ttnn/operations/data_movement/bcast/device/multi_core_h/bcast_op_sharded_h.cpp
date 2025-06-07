@@ -126,6 +126,7 @@ operation::ProgramWithCallbacks bcast_sharded_h(
 
     uint32_t ncores_y = ncores / ncores_x;
     log_debug(
+        tt::LogOp,
         "ncores {}, ncores_x {}, Wt {}, Ht {}, src0_cb_index {}, src1_cb_index {}, output_cb_index {}, src1_is_dram "
         "{}, dst_is_dram {}",
         ncores,

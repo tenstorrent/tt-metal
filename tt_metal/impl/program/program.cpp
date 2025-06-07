@@ -57,7 +57,7 @@
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "profiler_state.hpp"
 #include "program_command_sequence.hpp"
 #include "program_device_map.hpp"

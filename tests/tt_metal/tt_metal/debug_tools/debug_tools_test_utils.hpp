@@ -15,7 +15,7 @@ inline bool OpenFile(string &file_name, std::fstream &file_stream, std::ios_base
     if (file_stream.is_open()) {
         return true;
     }
-    tt::log_info(tt::LogTest, "Test Error: Couldn't open file {}.", file_name);
+    log_info(tt::LogTest, "Test Error: Couldn't open file {}.", file_name);
     return false;
 }
 
@@ -23,14 +23,14 @@ inline bool OpenFile(string &file_name, std::fstream &file_stream, std::ios_base
 inline void DumpFile(string file_name) {
     std::fstream log_file;
     if (!OpenFile(file_name, log_file, std::fstream::in)) {
-        tt::log_info(tt::LogTest, "File \'{}\' does not exist!", file_name);
+        log_info(tt::LogTest, "File \'{}\' does not exist!", file_name);
         return;
     }
 
-    tt::log_info(tt::LogTest, "File \'{}\' contains:", file_name);
+    log_info(tt::LogTest, "File \'{}\' contains:", file_name);
     string line;
     while (getline(log_file, line)) {
-        tt::log_info(tt::LogTest, "{}", line);
+        log_info(tt::LogTest, "{}", line);
     }
 }
 
@@ -162,7 +162,7 @@ inline bool FileContainsAllStrings(string file_name, const std::vector<string> &
     for (const auto &s : must_contain_set) {
         missing_strings.append(&", \""[missing_strings.empty() ? 2 : 0]).append(s).push_back('"');
     }
-    tt::log_info(
+    log_info(
         tt::LogTest,
         "Test Error: Expected file {} to contain the following strings: {}",
         file_name,
@@ -208,7 +208,7 @@ inline bool FileContainsAllStringsInOrder(string file_name, const std::vector<st
     for (const auto &s : must_contain_queue) {
         missing_strings.append(&", \""[missing_strings.empty() ? 2 : 0]).append(s).push_back('"');
     }
-    tt::log_info(
+    log_info(
         tt::LogTest,
         "Test Error: Expected file {} to contain the following strings: {}",
         file_name,
@@ -222,7 +222,7 @@ inline bool FilesMatchesString(string file_name, const string& expected) {
     // Open the input file.
     std::fstream file;
     if (!OpenFile(file_name, file, std::fstream::in)) {
-        tt::log_info(
+        log_info(
             tt::LogTest,
             "Test Error: file {} could not be opened.",
             file_name
@@ -239,7 +239,7 @@ inline bool FilesMatchesString(string file_name, const string& expected) {
     while (getline(file, line_a) && getline(expect_stream, line_b)) {
         line_num++;
         if (!StringMatchesGlob(line_a, line_b)) {
-            tt::log_info(
+            log_info(
                 tt::LogTest,
                 "Test Error: Line {} of {} did not match expected:\n\t{}\n\t{}",
                 line_num,
@@ -253,7 +253,7 @@ inline bool FilesMatchesString(string file_name, const string& expected) {
 
     // Make sure that there's no lines left over in either stream
     if (getline(file, line_a)) {
-        tt::log_info(
+        log_info(
             tt::LogTest,
             "Test Error: file {} has more lines than expected (>{}).",
             file_name,
@@ -262,7 +262,7 @@ inline bool FilesMatchesString(string file_name, const string& expected) {
         return false;
     }
     if (getline(expect_stream, line_b)) {
-        tt::log_info(
+        log_info(
             tt::LogTest,
             "Test Error: file {} has less lines than expected ({}).",
             file_name,

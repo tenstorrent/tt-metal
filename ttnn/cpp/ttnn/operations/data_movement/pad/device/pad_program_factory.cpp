@@ -99,22 +99,22 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
 
 #if 0
     {
-        log_debug("src0_buffer_addr: {}", src0_buffer->address());
-        log_debug("dst_buffer_addr: {}", dst_buffer->address());
-        log_debug("a.shape[0]: {}", a.get_padded_shape()[0]);
-        log_debug("out.shape[0]: {}", output_shape[0]);
-        log_debug("a.shape[1]: {}", a.get_padded_shape()[1]);
-        log_debug("out.shape[1]: {}", output_shape[1]);
-        log_debug("a.shape[2]: {}", a.get_padded_shape()[2]);
-        log_debug("out.shape[2]: {}", output_shape[2]);
-        log_debug("s.shape[3]: {}", a.get_padded_shape()[3]);
-        log_debug("out.shape[3]: {}", output_shape[3]);
-        log_debug("unpadded_row_size_nbytes: {}", unpadded_row_size_nbytes);
-        log_debug("padded_row_size_nbytes: {}", padded_row_size_nbytes);
-        log_debug("padded_row_diff_size_nbytes: {}", padded_row_diff_size_nbytes);
-        log_debug("pad_value_const_tensor_addr: {}", pad_value_const_tensor_addr);
-        log_debug("pad_value_const_buffer_nbytes: {}", pad_value_const_buffer_nbytes);
-        log_debug("packed_pad_value: {}", packed_pad_value);
+        log_debug(tt::LogOp, "src0_buffer_addr: {}", src0_buffer->address());
+        log_debug(tt::LogOp, "dst_buffer_addr: {}", dst_buffer->address());
+        log_debug(tt::LogOp, "a.shape[0]: {}", a.get_padded_shape()[0]);
+        log_debug(tt::LogOp, "out.shape[0]: {}", output_shape[0]);
+        log_debug(tt::LogOp, "a.shape[1]: {}", a.get_padded_shape()[1]);
+        log_debug(tt::LogOp, "out.shape[1]: {}", output_shape[1]);
+        log_debug(tt::LogOp, "a.shape[2]: {}", a.get_padded_shape()[2]);
+        log_debug(tt::LogOp, "out.shape[2]: {}", output_shape[2]);
+        log_debug(tt::LogOp, "s.shape[3]: {}", a.get_padded_shape()[3]);
+        log_debug(tt::LogOp, "out.shape[3]: {}", output_shape[3]);
+        log_debug(tt::LogOp, "unpadded_row_size_nbytes: {}", unpadded_row_size_nbytes);
+        log_debug(tt::LogOp, "padded_row_size_nbytes: {}", padded_row_size_nbytes);
+        log_debug(tt::LogOp, "padded_row_diff_size_nbytes: {}", padded_row_diff_size_nbytes);
+        log_debug(tt::LogOp, "pad_value_const_tensor_addr: {}", pad_value_const_tensor_addr);
+        log_debug(tt::LogOp, "pad_value_const_buffer_nbytes: {}", pad_value_const_buffer_nbytes);
+        log_debug(tt::LogOp, "packed_pad_value: {}", packed_pad_value);
     }
 #endif
 
@@ -199,12 +199,12 @@ operation::ProgramWithCallbacks pad_tile(
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
-    tt::log_debug("pad_tile");
-    tt::log_debug("cb_data_format: {}", cb_data_format);
-    tt::log_debug("single_tile_size: {}", single_tile_size);
-    tt::log_debug("output_tensor_shape: {}", output_padded_shape);
-    tt::log_debug("input_tensor_start: {}", input_tensor_start);
-    tt::log_debug("pad_value: {}", pad_value);
+    log_debug(tt::LogOp, "pad_tile");
+    log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
+    log_debug(tt::LogOp, "single_tile_size: {}", single_tile_size);
+    log_debug(tt::LogOp, "output_tensor_shape: {}", output_padded_shape);
+    log_debug(tt::LogOp, "input_tensor_start: {}", input_tensor_start);
+    log_debug(tt::LogOp, "pad_value: {}", pad_value);
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -311,7 +311,7 @@ operation::ProgramWithCallbacks pad_tile(
 
 inline void log_rt_args(const CoreCoord& core, std::vector<uint32_t>& args) {
     for (auto v : args) {
-        tt::log_debug(tt::LogOp, "{},{} :: {}", core.x, core.y, v);
+        log_debug(tt::LogOp, "{},{} :: {}", core.x, core.y, v);
     }
 }
 
@@ -552,31 +552,31 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
 
 #if 1
     {
-        tt::log_debug("ncores: {}", ncores);
-        tt::log_debug("ncores_h: {}", ncores_h);
-        tt::log_debug("ncores_w: {}", ncores_w);
-        tt::log_debug("ntiles_per_core_h: {}", ntiles_per_core_h);
-        tt::log_debug("ntiles_per_core_w: {}", ntiles_per_core_w);
-        tt::log_debug("src0_buffer_addr: {}", src0_buffer->address());
-        tt::log_debug("dst_buffer_addr: {}", dst_buffer->address());
-        tt::log_debug("a.shape[0]: {}", a.get_padded_shape()[0]);
-        tt::log_debug("out.shape[0]: {}", output_shape[0]);
-        tt::log_debug("a.shape[1]: {}", a.get_padded_shape()[1]);
-        tt::log_debug("out.shape[1]: {}", output_shape[1]);
-        tt::log_debug("a.shape[2]: {}", a.get_padded_shape()[2]);
-        tt::log_debug("out.shape[2]: {}", output_shape[2]);
-        tt::log_debug("s.shape[3]: {}", a.get_padded_shape()[3]);
-        tt::log_debug("out.shape[3]: {}", output_shape[3]);
-        tt::log_debug("unpadded_row_size_nbytes: {}", unpadded_row_size_nbytes);
-        tt::log_debug("padded_row_size_nbytes: {}", padded_row_size_nbytes);
-        // tt::log_debug("padded_row_diff_size_nbytes: {}", padded_row_diff_size_nbytes);
-        tt::log_debug("pad_value_const_tensor_addr: {}", pad_value_const_tensor_addr);
-        tt::log_debug("pad_value_const_buffer_nbytes: {}", pad_value_const_buffer_nbytes);
-        tt::log_debug("packed_pad_value: {}", packed_pad_value);
-        tt::log_debug("src_nbytes_per_core_w: {}", src_nbytes_per_core_w);
-        tt::log_debug("dst_nbytes_per_core_w: {}", dst_nbytes_per_core_w);
-        tt::log_debug("nbatch_per_core_h: {}", nbatch_per_core_h);
-        tt::log_debug("ncores_per_batch_h: {}", ncores_per_batch_h);
+        log_debug(tt::LogOp, "ncores: {}", ncores);
+        log_debug(tt::LogOp, "ncores_h: {}", ncores_h);
+        log_debug(tt::LogOp, "ncores_w: {}", ncores_w);
+        log_debug(tt::LogOp, "ntiles_per_core_h: {}", ntiles_per_core_h);
+        log_debug(tt::LogOp, "ntiles_per_core_w: {}", ntiles_per_core_w);
+        log_debug(tt::LogOp, "src0_buffer_addr: {}", src0_buffer->address());
+        log_debug(tt::LogOp, "dst_buffer_addr: {}", dst_buffer->address());
+        log_debug(tt::LogOp, "a.shape[0]: {}", a.get_padded_shape()[0]);
+        log_debug(tt::LogOp, "out.shape[0]: {}", output_shape[0]);
+        log_debug(tt::LogOp, "a.shape[1]: {}", a.get_padded_shape()[1]);
+        log_debug(tt::LogOp, "out.shape[1]: {}", output_shape[1]);
+        log_debug(tt::LogOp, "a.shape[2]: {}", a.get_padded_shape()[2]);
+        log_debug(tt::LogOp, "out.shape[2]: {}", output_shape[2]);
+        log_debug(tt::LogOp, "s.shape[3]: {}", a.get_padded_shape()[3]);
+        log_debug(tt::LogOp, "out.shape[3]: {}", output_shape[3]);
+        log_debug(tt::LogOp, "unpadded_row_size_nbytes: {}", unpadded_row_size_nbytes);
+        log_debug(tt::LogOp, "padded_row_size_nbytes: {}", padded_row_size_nbytes);
+        // log_debug(tt::LogOp, "padded_row_diff_size_nbytes: {}", padded_row_diff_size_nbytes);
+        log_debug(tt::LogOp, "pad_value_const_tensor_addr: {}", pad_value_const_tensor_addr);
+        log_debug(tt::LogOp, "pad_value_const_buffer_nbytes: {}", pad_value_const_buffer_nbytes);
+        log_debug(tt::LogOp, "packed_pad_value: {}", packed_pad_value);
+        log_debug(tt::LogOp, "src_nbytes_per_core_w: {}", src_nbytes_per_core_w);
+        log_debug(tt::LogOp, "dst_nbytes_per_core_w: {}", dst_nbytes_per_core_w);
+        log_debug(tt::LogOp, "nbatch_per_core_h: {}", nbatch_per_core_h);
+        log_debug(tt::LogOp, "ncores_per_batch_h: {}", ncores_per_batch_h);
     }
 #endif
 
@@ -645,12 +645,12 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
                     nbatch_per_core_h};
                 // if (core.x == 0) log_rt_args(core, reader_rt_args);
                 // if (core.x == 0) {
-                //     log_debug("{} :: start_src_stick_id: {}", core.y, start_src_stick_id);
-                //     log_debug("{} :: start_dst_stick_id: {}", core.y, start_dst_stick_id);
-                //     log_debug("{} :: local_nsticks: {}", core.y, local_nsticks);
-                //     log_debug("{} :: num_local_unpadded_nsticks: {}", core.y, num_local_unpadded_nsticks);
-                //     log_debug("{} :: nbatch_per_core_h: {}", core.y, nbatch_per_core_h);
-                //     log_debug("{} :: ncores_per_batch_h: {}", core.y, ncores_per_batch_h);
+                //     log_debug(tt::LogOp, "{} :: start_src_stick_id: {}", core.y, start_src_stick_id);
+                //     log_debug(tt::LogOp, "{} :: start_dst_stick_id: {}", core.y, start_dst_stick_id);
+                //     log_debug(tt::LogOp, "{} :: local_nsticks: {}", core.y, local_nsticks);
+                //     log_debug(tt::LogOp, "{} :: num_local_unpadded_nsticks: {}", core.y, num_local_unpadded_nsticks);
+                //     log_debug(tt::LogOp, "{} :: nbatch_per_core_h: {}", core.y, nbatch_per_core_h);
+                //     log_debug(tt::LogOp, "{} :: ncores_per_batch_h: {}", core.y, ncores_per_batch_h);
                 // }
                 const auto& writer_rt_args = reader_rt_args;
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
@@ -1195,8 +1195,8 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
 
     auto& front_pad = input_tensor_start;
 
-    tt::log_debug("H_padded: {}", H_padded);
-    tt::log_debug("front_pad: {}", front_pad);
+    log_debug(tt::LogOp, "H_padded: {}", H_padded);
+    log_debug(tt::LogOp, "front_pad: {}", front_pad);
 
     // stick sizes
     auto stick_size_unpadded = W * a.element_size();
@@ -1207,8 +1207,8 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     uint32_t zero_pad_stick_size = tt::tt_metal::find_max_divisor(stick_size_padded, 512);
     uint32_t num_zero_pad_sticks_read = stick_size_padded / zero_pad_stick_size;
 
-    tt::log_debug("zero_pad_stick_size: {}", zero_pad_stick_size);
-    tt::log_debug("num_zero_pad_sticks_read: {}", num_zero_pad_sticks_read);
+    log_debug(tt::LogOp, "zero_pad_stick_size: {}", zero_pad_stick_size);
+    log_debug(tt::LogOp, "num_zero_pad_sticks_read: {}", num_zero_pad_sticks_read);
 
     // TODO: add a general case, where we can pad on any dim.
     TT_FATAL(
@@ -1233,10 +1233,10 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     uint32_t num_cores_x_unpadded = grid_size_unpadded.x;
     uint32_t num_cores_y_unpadded = grid_size_unpadded.y;
 
-    tt::log_debug("num_unpadded_sticks: {}", num_unpadded_sticks);
-    tt::log_debug("shard_height_unpadded: {}", shard_height_unpadded);
-    tt::log_debug("all_cores_unpadded: {}", all_cores_unpadded);
-    tt::log_debug("num_cores_unpadded: {}", num_cores_unpadded);
+    log_debug(tt::LogOp, "num_unpadded_sticks: {}", num_unpadded_sticks);
+    log_debug(tt::LogOp, "shard_height_unpadded: {}", shard_height_unpadded);
+    log_debug(tt::LogOp, "all_cores_unpadded: {}", all_cores_unpadded);
+    log_debug(tt::LogOp, "num_cores_unpadded: {}", num_cores_unpadded);
 
     // output shard spec
     auto shard_spec_padded = output.shard_spec().value();
@@ -1250,10 +1250,10 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     uint32_t num_cores_x_padded = grid_size_padded.x;
     uint32_t num_cores_y_padded = grid_size_padded.y;
 
-    tt::log_debug("num_unpadded_sticks: {}", num_unpadded_sticks);
-    tt::log_debug("shard_height_unpadded: {}", shard_height_unpadded);
-    tt::log_debug("all_cores_unpadded: {}", all_cores_unpadded);
-    tt::log_debug("num_cores_unpadded: {}", num_cores_unpadded);
+    log_debug(tt::LogOp, "num_unpadded_sticks: {}", num_unpadded_sticks);
+    log_debug(tt::LogOp, "shard_height_unpadded: {}", shard_height_unpadded);
+    log_debug(tt::LogOp, "all_cores_unpadded: {}", all_cores_unpadded);
+    log_debug(tt::LogOp, "num_cores_unpadded: {}", num_cores_unpadded);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

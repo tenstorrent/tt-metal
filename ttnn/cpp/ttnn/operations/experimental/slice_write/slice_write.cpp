@@ -6,7 +6,7 @@
 #include "device/slice_write_op.hpp"
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/constants.hpp"
-#include "tt-metalium/logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
@@ -80,7 +80,7 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     ttnn::Shape padded_shape(padded_shape_vec);
 
     if (empty) {
-        tt::log_debug("Empty tensor slice, returning unchanged output tensor");
+        log_debug(tt::LogOp, "Empty tensor slice, returning unchanged output tensor");
         return output_tensor;
     }
 
@@ -142,12 +142,12 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
                                       tt::div_up(padded_output_shape[2], input.shard_spec().value().shape[0]);
             in_place_unpad &= begins[3] == 0 && ends[3] == padded_output_shape[3];
             if (in_place_unpad) {
-                tt::log_info("In-place unpad optimization via copy");
+                log_info(tt::LogOp, "In-place unpad optimization via copy");
                 ttnn::copy(DefaultQueueId, input_tensor, output_tensor);
                 return output_tensor;
             }
         }
-        tt::log_debug("Invoking SliceWriteDeviceOperation");
+        log_debug(tt::LogOp, "Invoking SliceWriteDeviceOperation");
 
         (void)tt::tt_metal::operation::run(
             SliceWriteDeviceOperation{ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step)},

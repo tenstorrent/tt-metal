@@ -646,10 +646,10 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
 
     tt::tt_metal::Buffer* src0_dram_buffer = a.buffer();
 
-    tt::log_debug("transpose_hc_multi_core");
-    tt::log_debug("sub_tile_line_bytes: {}", sub_tile_line_bytes);
-    tt::log_debug("cb_data_format: {}", cb_data_format);
-    tt::log_debug("single_tile_size: {}", single_tile_size);
+    log_debug(tt::LogOp, "transpose_hc_multi_core");
+    log_debug(tt::LogOp, "sub_tile_line_bytes: {}", sub_tile_line_bytes);
+    log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
+    log_debug(tt::LogOp, "single_tile_size: {}", single_tile_size);
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
@@ -959,7 +959,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
             cores.push_back(core);
         }
 
-        tt::log_debug("core: {}", core);
+        log_debug(tt::LogOp, "core: {}", core);
     }
 
     uint32_t CH = C * H;
@@ -1189,8 +1189,8 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
     uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
 
-    tt::log_debug("all_cores: {}", all_cores);
-    tt::log_debug("num_cores: {}", num_cores);
+    log_debug(tt::LogOp, "all_cores: {}", all_cores);
+    log_debug(tt::LogOp, "num_cores: {}", num_cores);
 
     auto output_shape = output.get_padded_shape();
 
@@ -2022,19 +2022,19 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
         pack_num_pages_last_row_col = 1;
     }
 
-    tt::log_debug("output_page_size: {}", output_page_size);
-    tt::log_debug("pack_num_pages: {}", pack_num_pages);
-    tt::log_debug("pack_num_pages_last_col: {}", pack_num_pages_last_col);
-    tt::log_debug("pack_num_pages_last_row: {}", pack_num_pages_last_row);
-    tt::log_debug("pack_num_pages_last_row_col: {}", pack_num_pages_last_row_col);
+    log_debug(tt::LogOp, "output_page_size: {}", output_page_size);
+    log_debug(tt::LogOp, "pack_num_pages: {}", pack_num_pages);
+    log_debug(tt::LogOp, "pack_num_pages_last_col: {}", pack_num_pages_last_col);
+    log_debug(tt::LogOp, "pack_num_pages_last_row: {}", pack_num_pages_last_row);
+    log_debug(tt::LogOp, "pack_num_pages_last_row_col: {}", pack_num_pages_last_row_col);
 
     auto shard_spec = a.shard_spec().value();
     uint32_t shard_height = shard_spec.shape[0];
     uint32_t shard_width = shard_spec.shape[1];
     uint32_t num_hw_blocks_per_core = shard_height / H;
 
-    tt::log_debug("shard_height: {}", shard_height);
-    tt::log_debug("dst_single_tile_size: {}", dst_single_tile_size);
+    log_debug(tt::LogOp, "shard_height: {}", shard_height);
+    log_debug(tt::LogOp, "dst_single_tile_size: {}", dst_single_tile_size);
 
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
@@ -2049,8 +2049,8 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
     uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
 
-    tt::log_debug("all_cores: {}", all_cores);
-    tt::log_debug("num_cores: {}", num_cores);
+    log_debug(tt::LogOp, "all_cores: {}", all_cores);
+    log_debug(tt::LogOp, "num_cores: {}", num_cores);
 
     auto output_shape = output.get_padded_shape();
 

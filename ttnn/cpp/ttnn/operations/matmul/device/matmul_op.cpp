@@ -108,7 +108,7 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
 
     const auto& t = output_tensors.at(0);
     if (t.storage_type() != StorageType::DEVICE) {
-        tt::log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
+        log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
     }
 
     auto arch = t.storage_type() == StorageType::DEVICE
@@ -131,14 +131,14 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
 
     operation::OpPerformanceModel result(input_tensors, output_tensors, ideal_dev_clock_cycles);
 #if 0
-    tt::log_info(tt::LogOp, "Matmul PerfModel:");
+    log_info(tt::LogOp, "Matmul PerfModel:");
     for (auto i = 0; i < out_shape.rank() - 2; i++) {
-        tt::log_info(tt::LogOp, "\t Batch Values: (Index: {}, Value: {})", i, out_shape[i]);
+        log_info(tt::LogOp, "\t Batch Values: (Index: {}, Value: {})", i, out_shape[i]);
     }
-    tt::log_info(tt::LogOp, "\t In A (H, W): ({}, {})", in_a_shape[-2], in_a_shape[-1]);
-    tt::log_info(tt::LogOp, "\t In B (H, W): ({}, {})", in_b_shape[-2], in_b_shape[-1]);
-    tt::log_info(tt::LogOp, "\t Out (H, W): ({}, {})", out_shape[-2], out_shape[-1]);
-    tt::log_info(tt::LogOp, "\t ideal_dev_clock_cycles: {}", ideal_dev_clock_cycles);
+    log_info(tt::LogOp, "\t In A (H, W): ({}, {})", in_a_shape[-2], in_a_shape[-1]);
+    log_info(tt::LogOp, "\t In B (H, W): ({}, {})", in_b_shape[-2], in_b_shape[-1]);
+    log_info(tt::LogOp, "\t Out (H, W): ({}, {})", out_shape[-2], out_shape[-1]);
+    log_info(tt::LogOp, "\t ideal_dev_clock_cycles: {}", ideal_dev_clock_cycles);
 #endif
     return result;
 }
@@ -1124,7 +1124,7 @@ inline MatmulProgramConfig get_program_config(
         matmul->user_fused_activation,
         matmul->user_run_batched,
         matmul->output_dtype.value_or(input_tensor_a.get_dtype()));
-    tt::log_debug(tt::LogOp, "Auto generated program config: {}", config);
+    log_debug(tt::LogOp, "Auto generated program config: {}", config);
 
     // Sanity checks for matmul program configs
     std::visit(

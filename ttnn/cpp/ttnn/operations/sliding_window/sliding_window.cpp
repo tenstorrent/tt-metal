@@ -37,7 +37,8 @@ std::array<uint32_t, 4> get_pair_n4_padding(
             }
         },
         padding);
-    tt::log_debug("Padding = ({}, {}), ({}, {})", ret_padding[0], ret_padding[1], ret_padding[2], ret_padding[3]);
+    log_debug(
+        tt::LogOp, "Padding = ({}, {}), ({}, {})", ret_padding[0], ret_padding[1], ret_padding[2], ret_padding[3]);
     return ret_padding;
 }
 /**

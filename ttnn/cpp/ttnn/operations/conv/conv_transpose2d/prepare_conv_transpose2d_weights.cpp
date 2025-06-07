@@ -6,7 +6,7 @@
 #include <optional>
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/buffer.hpp"
-#include "tt-metalium/logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/mesh_device.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -90,7 +90,8 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
 Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel) {
     Tensor to_mirror_tensor;
     if (tt::tt_metal::is_device_tensor(conv_weight_tensor)) {
-        tt::log_warning(
+        log_warning(
+            tt::LogOp,
             "Prepare Weights for ConvTranspose2D needs weights on host, but they are already on device. The op will "
             "move them back to host.");
         to_mirror_tensor = ttnn::operations::core::from_device(conv_weight_tensor);

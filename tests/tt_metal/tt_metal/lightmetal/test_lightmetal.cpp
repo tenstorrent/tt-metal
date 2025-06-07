@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <algorithm>
 #include <cstdint>

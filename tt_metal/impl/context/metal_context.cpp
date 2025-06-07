@@ -29,7 +29,7 @@ void MetalContext::initialize(
     if (initialized_) {
         if (this->dispatch_core_config_ != dispatch_core_config or num_hw_cqs != this->num_hw_cqs_ or
             l1_bank_remap != this->l1_bank_remap_ or fw_compile_hash != this->fw_compile_hash_) {
-            log_warning("Closing and re-initializing MetalContext with new parameters.");
+            log_warning(tt::LogAlways, "Closing and re-initializing MetalContext with new parameters.");
             teardown();
         } else {
             // Re-init request with the same parameters, do nothing

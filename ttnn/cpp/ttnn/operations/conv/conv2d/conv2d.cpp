@@ -11,7 +11,7 @@
 #include <tt-metalium/buffer_types.hpp>
 
 #include "tt-metalium/assert.hpp"
-#include "tt-metalium/logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
 #include "tt-metalium/small_vector.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"

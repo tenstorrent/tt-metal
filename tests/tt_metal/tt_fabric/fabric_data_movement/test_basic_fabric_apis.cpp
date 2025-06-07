@@ -33,7 +33,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -162,7 +162,7 @@ void RunAsyncWriteTest(
     }
 
     std::string test_type = is_raw_write ? "Raw Async Write" : "Async Write";
-    tt::log_info(tt::LogTest, "{} from {} to {}", test_type, start_fabric_node_id.chip_id, end_fabric_node_id.chip_id);
+    log_info(tt::LogTest, "{} from {} to {}", test_type, start_fabric_node_id.chip_id, end_fabric_node_id.chip_id);
 
     // Get the optimal channels (no internal hops) on the start chip that will forward in the direction of the end chip
     auto router_chans = control_plane.get_forwarding_eth_chans_to_chip(start_fabric_node_id, end_fabric_node_id);
@@ -516,7 +516,7 @@ void RunAsyncWriteMulticastTest(
     // Log test configuration
     std::string test_type = is_raw_write ? "Raw" : "";
     std::string direction_type = multidirectional ? "Multidirectional" : "";
-    tt::log_info(
+    log_info(
         tt::LogTest,
         "Async {} Write Mcast {} from {} to {}",
         test_type,

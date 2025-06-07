@@ -39,7 +39,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "multi_command_queue_fixture.hpp"
 #include <tt-metalium/program.hpp>
 #include "random_program_fixture.hpp"
