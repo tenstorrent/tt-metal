@@ -135,6 +135,7 @@ target_sources(
             fabric/hw/inc/fabric_routing_mode.h
             impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
+            impl/dispatch/kernels/cq_relay.hpp
             impl/dispatch/kernels/cq_helpers.hpp
             impl/dispatch/kernels/packet_queue.hpp
             impl/dispatch/kernels/packet_queue_ctrl.hpp
@@ -305,6 +306,7 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h
             third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_untilize.h
             tools/profiler/kernel_profiler.hpp
+            ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp
             # Kernel sources
             impl/dispatch/kernels/cq_dispatch.cpp
             impl/dispatch/kernels/cq_dispatch_subordinate.cpp
