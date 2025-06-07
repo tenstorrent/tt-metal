@@ -604,10 +604,10 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     uint32_t num_cores_x_padded = grid_size_padded.x;
     uint32_t num_cores_y_padded = grid_size_padded.y;
 
-    tt::log_debug("num_padded_sticks: {}", num_padded_sticks);
-    tt::log_debug("shard_height_padded: {}", shard_height_padded);
-    tt::log_debug("all_cores_padded: {}", all_cores_padded);
-    tt::log_debug("num_cores_padded: {}", num_cores_padded);
+    log_debug(tt::LogOp, "num_padded_sticks: {}", num_padded_sticks);
+    log_debug(tt::LogOp, "shard_height_padded: {}", shard_height_padded);
+    log_debug(tt::LogOp, "all_cores_padded: {}", all_cores_padded);
+    log_debug(tt::LogOp, "num_cores_padded: {}", num_cores_padded);
 
     // output shard spec
     auto shard_spec_unpadded = output.shard_spec().value();
@@ -622,10 +622,10 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     uint32_t num_cores_x_unpadded = grid_size_unpadded.x;
     uint32_t num_cores_y_unpadded = grid_size_unpadded.y;
 
-    tt::log_debug("num_unpadded_sticks: {}", num_unpadded_sticks);
-    tt::log_debug("shard_height_unpadded: {}", shard_height_unpadded);
-    tt::log_debug("all_cores_unpadded: {}", all_cores_unpadded);
-    tt::log_debug("num_cores_unpadded: {}", num_cores_unpadded);
+    log_debug(tt::LogOp, "num_unpadded_sticks: {}", num_unpadded_sticks);
+    log_debug(tt::LogOp, "shard_height_unpadded: {}", shard_height_unpadded);
+    log_debug(tt::LogOp, "all_cores_unpadded: {}", all_cores_unpadded);
+    log_debug(tt::LogOp, "num_cores_unpadded: {}", num_cores_unpadded);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 

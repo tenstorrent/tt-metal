@@ -22,7 +22,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
     const auto HW = input_shape[2];
     const auto C = input_shape[3];
 
-    tt::log_debug(tt::LogType::LogOp, "Running op with HW={}, C={}, shard_shape={}", HW, C, a.shard_spec()->shape);
+    log_debug(tt::LogType::LogOp, "Running op with HW={}, C={}, shard_shape={}", HW, C, a.shard_spec()->shape);
 
     TT_FATAL(C < TILE_HEIGHT, "C must be 32 or smaller");
     TT_FATAL(
@@ -32,8 +32,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
     const uint32_t total_tiles = HW / TILE_HEIGHT;  // assume C < 32
     const uint32_t total_tiles_per_core = tt::div_up(total_tiles, input_cores.size());
 
-    tt::log_debug(
-        tt::LogType::LogOp, "Processing {} tiles per core ({} total tiles)", total_tiles_per_core, total_tiles);
+    log_debug(tt::LogType::LogOp, "Processing {} tiles per core ({} total tiles)", total_tiles_per_core, total_tiles);
 
     const auto create_circular_buffer = [&program, &input_core_grid](
                                             uint32_t index,
@@ -41,7 +40,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
                                             uint32_t page_size,
                                             const tt::DataFormat& format,
                                             tt::tt_metal::Buffer* buffer = nullptr) -> tt::tt_metal::CBHandle {
-        tt::log_debug(
+        log_debug(
             tt::LogType::LogOp,
             "Creating CB at index {} with total size {} B and page size {} B",
             index,
