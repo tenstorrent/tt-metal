@@ -15,7 +15,6 @@ template <
     DataCopyType type,
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    bool is_fp32_dest_acc_en,
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy(uint dst_index, uint operand = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
@@ -27,7 +26,6 @@ template <
     DataCopyType type,
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    bool is_fp32_dest_acc_en,
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_block(uint start_dst_index, uint ntiles, uint operand = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
