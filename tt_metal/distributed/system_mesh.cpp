@@ -12,7 +12,7 @@
 #include <cstddef>
 
 #include "assert.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "shape_base.hpp"

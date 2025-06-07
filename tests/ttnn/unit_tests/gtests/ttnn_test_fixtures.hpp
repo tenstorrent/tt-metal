@@ -79,8 +79,7 @@ protected:
 
         DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
         if (arch_ == tt::ARCH::WORMHOLE_B0 and num_devices_ != 1) {
-            tt::log_warning(
-                tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
+            log_warning(tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
             dispatch_core_type = DispatchCoreType::ETH;
         }
         device_holder_ = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(

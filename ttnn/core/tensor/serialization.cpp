@@ -45,7 +45,7 @@ struct FileCloser {
     void operator()(FILE* file) const {
         if (file) {
             if (fclose(file) != 0) {
-                log_warning("Failed to close file");
+                log_warning(tt::LogAlways, "Failed to close file");
             }
         }
     }

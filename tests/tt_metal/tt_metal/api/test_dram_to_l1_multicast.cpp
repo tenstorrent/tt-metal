@@ -5,7 +5,7 @@
 #include <fmt/base.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -126,7 +126,7 @@ bool dram_to_l1_multicast(
                  (cfg.exclude_direction.x == 1 && j >= cfg.exclude_start.x)) &&
                 ((cfg.exclude_direction.y == 0 && i <= cfg.exclude_start.y) ||
                  (cfg.exclude_direction.y == 1 && i >= cfg.exclude_start.y))) {
-                tt::log_debug(
+                log_debug(
                     tt::LogTest, "Skipping core {},{}", j, i);  // debug print to verify we don't skip unnecessary cores
                 continue;
             }

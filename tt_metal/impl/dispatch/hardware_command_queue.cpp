@@ -30,7 +30,7 @@
 #include "dprint_server.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "program/program_device_map.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
@@ -669,7 +669,7 @@ void HWCommandQueue::read_completion_queue() {
 
 void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_finish");
-    tt::log_debug(tt::LogDispatch, "Finish for command queue {}", this->id_);
+    log_debug(tt::LogDispatch, "Finish for command queue {}", this->id_);
     std::shared_ptr<Event> event = std::make_shared<Event>();
     this->enqueue_record_event(event, sub_device_ids);
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled()) {
@@ -848,7 +848,7 @@ void HWCommandQueue::record_end() {
 void HWCommandQueue::terminate() {
     ZoneScopedN("HWCommandQueue_terminate");
     TT_FATAL(!this->manager_.get_bypass_mode(), "Terminate cannot be used with tracing");
-    tt::log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
+    log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
     auto command = EnqueueTerminateCommand(this->id_, this->device_, this->manager_);
     this->enqueue_command(command, false, {});
 }

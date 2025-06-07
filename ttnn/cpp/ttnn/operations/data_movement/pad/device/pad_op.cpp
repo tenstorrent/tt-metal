@@ -126,7 +126,7 @@ operation::ProgramWithCallbacks Pad::create_program(
         }
     } else if (input_tensor.get_layout() == Layout::TILE) {
         if (this->use_multicore) {
-            tt::log_warning(
+            log_warning(
                 tt::LogType::LogOp, "TILE layout does not have multicore implementation yet. Falling back to 1 core.");
         }
         return detail::pad_tile(

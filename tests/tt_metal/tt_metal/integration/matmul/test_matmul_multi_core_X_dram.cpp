@@ -37,7 +37,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "matmul_test_utils.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -587,7 +587,7 @@ TEST_F(DispatchFixture, TensixMatmulMultiCoreSingleDRAM) {
         log_info(LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
     } else if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
-        tt::log_info("This test is disabled in WH B0");
+        log_info(tt::LogTest, "This test is disabled in WH B0");
         GTEST_SKIP();
     }
     for (unsigned int id = 0; id < devices_.size(); id++) {

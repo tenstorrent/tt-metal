@@ -35,7 +35,7 @@
 #include "gtest/gtest.h"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -584,7 +584,7 @@ bool RunWriteBWTest(
         tt::tt_metal::detail::CompileProgram(sender_device, sender_program);
         tt::tt_metal::detail::CompileProgram(receiver_device, receiver_program);
     } catch (std::exception& e) {
-        log_error("Failed compile: {}", e.what());
+        log_error(tt::LogTest, "Failed compile: {}", e.what());
         throw e;
     }
 
@@ -625,16 +625,16 @@ bool RunWriteBWTest(
             std::any_of(inputs.begin(), inputs.end(), [](uint32_t x) { return x != 0; }),
             "Input buffer expected to not be all 0");
         if (not pass) {
-            log_error("Output mismatch");
+            log_error(tt::LogTest, "Output mismatch");
             if (debug_mode) {
                 std::size_t num_printed_mismatches = 0;
                 for (size_t i = 0; i < readback_data_vec.size() && num_printed_mismatches < 64; i++) {
                     if (readback_data_vec[i] != inputs[i]) {
-                        log_error("[{}]: expected {} got {}", i, inputs[i], readback_data_vec[i]);
+                        log_error(tt::LogTest, "[{}]: expected {} got {}", i, inputs[i], readback_data_vec[i]);
                         num_printed_mismatches++;
                     }
                 }
-                log_error("... (remaining mismatches omitted)");
+                log_error(tt::LogTest, "... (remaining mismatches omitted)");
             }
         }
         return pass;
@@ -674,11 +674,11 @@ int TestEntrypoint(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 2) {
-        log_info("This test can only be run on n300 devices");
+        log_info(tt::LogTest, "This test can only be run on n300 devices");
         return 0;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        log_info(tt::LogTest, "Test must be run on WH");
         return 0;
     }
 
@@ -722,7 +722,7 @@ int TestEntrypoint(
 
             termination_mode);
     } catch (std::exception& e) {
-        log_error("Caught exception: {}", e.what());
+        log_error(tt::LogTest, "Caught exception: {}", e.what());
         test_fixture.TearDown();
         return -1;
     }

@@ -13,7 +13,7 @@
 #include <unordered_map>
 
 #include "assert.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_fabric {
 

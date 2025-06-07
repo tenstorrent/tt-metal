@@ -69,7 +69,8 @@ Tensor::Tensor(
 
     if (tile.has_value() and  //
         (tile->get_tile_shape()[0] != TILE_WIDTH or tile->get_tile_shape()[1] != TILE_HEIGHT)) {
-        tt::log_warning(
+        log_warning(
+            tt::LogTTNN,
             "only matmul op and ccl all-gather currently supports the customized tile shape: {}",
             tile->get_tile_shape());
     }

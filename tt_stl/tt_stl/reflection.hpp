@@ -26,6 +26,7 @@
 #include <nlohmann/json.hpp>
 #include <magic_enum/magic_enum.hpp>
 #include <tt_stl/type_name.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt {
 namespace stl {
@@ -662,7 +663,7 @@ struct transform_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     T operator()(auto&& callback, T&& value) const {
-        log_debug("Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
+        log_debug(tt::LogAlways, "Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
         return value;
     }
 
@@ -675,7 +676,7 @@ struct transform_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     T operator()(auto&& callback, const T& value) const {
-        log_debug("Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
+        log_debug(tt::LogAlways, "Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
         return value;
     }
 };

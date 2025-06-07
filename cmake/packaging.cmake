@@ -94,6 +94,8 @@ cpack_add_component(fmt-core GROUP metalium-dev)
 cpack_add_component(json-dev GROUP metalium-dev)
 cpack_add_component(magic-enum-dev GROUP metalium-dev)
 cpack_add_component(umd-dev GROUP metalium-dev)
+cpack_add_component(spdlog-dev GROUP metalium-dev)
+cpack_add_component(tt-logger-dev GROUP metalium-dev)
 
 cpack_add_component_group(metalium-examples)
 cpack_add_component(metalium-examples DEPENDS metalium-dev GROUP metalium-examples DESCRIPTION "TT-Metalium examples")

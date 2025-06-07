@@ -6,7 +6,7 @@
 
 #include "flatbuffers/flatbuffers.h"
 #include "lightmetal/lightmetal_capture.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <kernel_types.hpp>
