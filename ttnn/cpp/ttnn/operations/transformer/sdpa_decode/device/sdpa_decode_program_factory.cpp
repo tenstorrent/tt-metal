@@ -37,9 +37,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     const uint32_t k_chunk_size,
     std::optional<bool> share_cache) {
     /*
-    Q: 1 x B x PNH x DH 
-    K: B x NKV x S x DH 
-    V: B x NKV x S x DH 
+    Q: 1 x B x PNH x DH
+    K: B x NKV x S x DH
+    V: B x NKV x S x DH
     */
 
     /*
