@@ -12,7 +12,7 @@
 #include <optional>
 #include <climits>
 #include "assert.hpp"
-
+#include <memory>
 namespace tt::tt_metal {
 
 /*! @brief Ringbuffer cache manager
@@ -29,8 +29,7 @@ public:
     RingbufferCacheManager(int cache_block_sizeB, int cache_size_blocks, int manager_entry_initial_size) :
         cache_block_sizeB_(cache_block_sizeB),
         cache_size_blocks_(cache_size_blocks),
-        cache_manager_initial_entry_size_{manager_entry_initial_size},
-        manager_{.rb{*this}} {
+        cache_manager_initial_entry_size_{manager_entry_initial_size} {
         TT_ASSERT(cache_size_blocks > 0, "Ringbuffer cache size must be greater than 0");
         TT_ASSERT(cache_block_sizeB > 0, "Ringbuffer cache block size must be greater than 0");
         TT_ASSERT(
@@ -61,6 +60,28 @@ public:
 
         std::vector<int32_t> temp_valid;
         this->valid_.swap(temp_valid);
+    }
+
+    friend void swap(RingbufferCacheManager& a, RingbufferCacheManager& b) {
+        TT_ASSERT(
+            a.cache_block_sizeB_ == b.cache_block_sizeB_,
+            "Ringbuffer cache block size mismatch: {} != {}",
+            a.cache_block_sizeB_,
+            b.cache_block_sizeB_);
+        TT_ASSERT(
+            a.cache_size_blocks_ == b.cache_size_blocks_,
+            "Ringbuffer cache size mismatch: {} != {}",
+            a.cache_size_blocks_,
+            b.cache_size_blocks_);
+        TT_ASSERT(
+            a.cache_manager_initial_entry_size_ == b.cache_manager_initial_entry_size_,
+            "Ringbuffer cache manager initial entry size mismatch: {} != {}",
+            a.cache_manager_initial_entry_size_,
+            b.cache_manager_initial_entry_size_);
+        // swap the ringbuffer cache manager
+        using std::swap;
+        swap(a.valid_, b.valid_);
+        swap(a.manager_, b.manager_);
     }
 
     struct CacheOffset {
@@ -94,9 +115,7 @@ private:
     };
 
     /*! @brief cache manager  */
-    struct {
-        RingbufferCacheManager& rb;
-
+    struct InternalManager {
         std::vector<RingbufferCacheManagerEntry> entry;  // ringbuffer manager entries
         // the following indexes are for the ringbuffer manager, not the ringbuffer
         uint32_t oldest_idx{0};
@@ -121,6 +140,14 @@ private:
             this->oldest_idx = 0;
             this->next_idx = 0;
             this->next_block_offset = 0;
+        }
+
+        friend void swap(InternalManager& a, InternalManager& b) {
+            using std::swap;
+            swap(a.entry, b.entry);
+            swap(a.oldest_idx, b.oldest_idx);
+            swap(a.next_idx, b.next_idx);
+            swap(a.next_block_offset, b.next_block_offset);
         }
     } manager_;
 

@@ -171,6 +171,7 @@ private:
     const uint32_t prefetcher_dram_aligned_num_blocks_;
     const uint32_t prefetcher_cache_manager_size_;
     std::unique_ptr<RingbufferCacheManager> prefetcher_cache_manager_;
+    std::unique_ptr<RingbufferCacheManager> trace_prefetcher_cache_manager_;
 
     void allocate_trace_programs();
     void read_completion_queue();

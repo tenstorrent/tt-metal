@@ -83,6 +83,8 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     prefetcher_cache_manager_size_(
         1 << (std::bit_width(std::min(1024u, std::max(2u, prefetcher_dram_aligned_num_blocks_ >> 4))) - 1)),
     prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
+        prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)),
+    trace_prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
         prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_))  //
 {
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
@@ -900,8 +902,8 @@ void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::sh
     for (auto device : mesh_device_->get_devices()) {
         device->sysmem_manager().set_bypass_mode(/*enable*/ true, /*clear*/ true);
     }
-    // reset prefetcher cache manager, since trace capture modifies the state on host
-    this->reset_prefetcher_cache_manager();
+
+    swap(this->trace_prefetcher_cache_manager_, this->prefetcher_cache_manager_);
 }
 
 void FDMeshCommandQueue::record_end() {
@@ -922,9 +924,8 @@ void FDMeshCommandQueue::record_end() {
     for (auto device : mesh_device_->get_devices()) {
         device->sysmem_manager().set_bypass_mode(/*enable*/ false, /*clear*/ true);
     }
-    // Reset the prefetcher cache manager, since trace capture modifies the state on host for subsequent non-trace
-    // programs
-    this->reset_prefetcher_cache_manager();
+
+    swap(this->trace_prefetcher_cache_manager_, this->prefetcher_cache_manager_);
 }
 
 SystemMemoryManager& FDMeshCommandQueue::reference_sysmem_manager() {

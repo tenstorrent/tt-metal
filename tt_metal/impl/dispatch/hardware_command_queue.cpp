@@ -91,6 +91,8 @@ HWCommandQueue::HWCommandQueue(
     prefetcher_cache_manager_size_(
         1 << (std::bit_width(std::min(1024u, std::max(2u, prefetcher_dram_aligned_num_blocks_ >> 4))) - 1)),
     prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
+        prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)),
+    trace_prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
         prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)) {
     ZoneScopedN("CommandQueue_constructor");
     this->device_ = device;
@@ -718,8 +720,8 @@ void HWCommandQueue::record_begin(const uint32_t tid, const std::shared_ptr<Trac
     this->tid_ = tid;
     this->trace_ctx_ = std::move(ctx);
     this->manager_.set_bypass_mode(true, true);  // start trace capture
-    // reset prefetcher cache manager, since trace capture modifies the state on host
-    this->reset_prefetcher_cache_manager();
+
+    swap(this->trace_prefetcher_cache_manager_, this->prefetcher_cache_manager_);
 }
 
 // Allocate space for program binaries and other data in the worker config ring buffer.
@@ -853,9 +855,7 @@ void HWCommandQueue::record_end() {
         this->config_buffer_mgr_reset_);
     this->manager_.set_bypass_mode(false, true);  // stop trace capture
 
-    // Reset the prefetcher cache manager, since trace capture modifies the state on host for subsequent non-trace
-    // programs
-    this->reset_prefetcher_cache_manager();
+    swap(this->trace_prefetcher_cache_manager_, this->prefetcher_cache_manager_);
 }
 
 void HWCommandQueue::terminate() {
