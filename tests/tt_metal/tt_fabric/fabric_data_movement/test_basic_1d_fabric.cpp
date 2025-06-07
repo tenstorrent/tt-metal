@@ -293,7 +293,8 @@ void RunTestLineMcast(
     }
 }
 
-void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDirection direction) {
+void RunTestUnicastRaw(
+    BaseFabricFixture* fixture, uint32_t num_hops, RoutingDirection direction, bool enable_fabric_tracing) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
@@ -413,6 +414,10 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
         defines["FABRIC_2D"] = "";
     }
 
+    if (enable_fabric_tracing) {
+        defines["TEST_ENABLE_FABRIC_TRACING"] = "1";
+    }
+
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
@@ -486,6 +491,10 @@ void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDir
     fixture->RunProgramNonblocking(sender_device, sender_program);
     fixture->WaitForSingleProgramDone(sender_device, sender_program);
     fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
+
+    if (enable_fabric_tracing) {
+        tt_metal::DumpDeviceProfileResults(sender_device, sender_program);
+    }
 
     // Validate the status and packets processed by sender and receiver
     std::vector<uint32_t> sender_status;
@@ -974,10 +983,12 @@ void RunTestMCastConnAPI(
     }
 }
 
-TEST_F(Fabric1DFixture, TestUnicastRaw) { RunTestUnicastRaw(this, 1); }
+TEST_F(Fabric1DFixture, TestUnicastRaw) { RunTestUnicastRaw(this, 1, RoutingDirection::E, false); }
 TEST_F(Fabric1DFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
 TEST_F(Fabric1DFixture, TestUnicastTGGateways) { RunTestUnicastTGGateways(this); }
 TEST_F(Fabric1DFixture, TestMCastConnAPI) { RunTestMCastConnAPI(this); }
+
+TEST_F(Fabric1DFixture, TestUnicastRawWithTracing) { RunTestUnicastRaw(this, 1, RoutingDirection::E, true); }
 
 TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
     // Each epoch is a separate program launch with increasing number of workers
