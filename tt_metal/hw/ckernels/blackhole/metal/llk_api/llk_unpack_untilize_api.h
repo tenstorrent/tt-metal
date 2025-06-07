@@ -19,8 +19,8 @@ inline void llk_unpack_untilize_hw_configure(const llk_unpack_A_params_t* unpack
     const uint32_t unpA_num_faces = 4;
     const uint32_t unpA_face_r_dim = FACE_R_DIM;
 
-    __<is_fp32_dest_acc_en, stoch_rnd_mode>(
-        unpack_src_format[unpA_operand_id],
+_llk_unpack_untilize_hw_configure_<is_fp32_dest_acc_en, stoch_rnd_mode>(
+    unpack_src_format[unpA_operand_id],
         unpack_dst_format[unpA_operand_id],
         unpA_face_r_dim,
         within_face_16x16_transpose,
