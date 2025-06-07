@@ -288,7 +288,7 @@ TEST_F(CommandQueueSingleCardFixture, IdleEthTestInvalidReadWriteAddressL1) {
 
     const DeviceAddr l1_end_address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED) +
-        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BASE);
     const DeviceAddr l1_end_address_offset = 256;
     const DeviceAddr address = l1_end_address + l1_end_address_offset;
 
