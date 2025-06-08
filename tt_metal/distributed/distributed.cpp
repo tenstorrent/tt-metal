@@ -55,6 +55,14 @@ void EventSynchronize(const MeshEvent& event) {
     }
 }
 
+bool EventQuery(const MeshEvent& event) {
+    const auto& mesh_device = event.device();
+    const auto& device_range = event.device_range();
+    auto& sysmem_manager = mesh_device->get_device(*(device_range.begin()))->sysmem_manager();
+    bool event_completed = sysmem_manager.get_last_completed_event(event.mesh_cq_id()) >= event.id();
+    return event_completed;
+}
+
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {
     auto trace_id = MeshTrace::next_id();
     device->begin_mesh_trace(cq_id, trace_id);
