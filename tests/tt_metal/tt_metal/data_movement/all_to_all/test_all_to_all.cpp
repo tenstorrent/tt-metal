@@ -236,6 +236,50 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
 
     return pcc;
 }
+
+void directed_ideal_test(
+    tt::ARCH arch_,
+    std::vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_case_id,
+    CoreCoord mst_start_coord,
+    CoreCoord sub_start_coord,
+    CoreCoord mst_grid_size,
+    CoreCoord sub_grid_size) {
+    NOC noc_id = NOC::NOC_0;
+
+    // Physical Constraints
+    auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+    /* Running the Test */
+
+    uint32_t num_of_transactions_per_master = 1;
+    uint32_t pages_reservable_per_transaction = max_reservable_pages / num_of_transactions_per_master;
+
+    // Test config
+    unit_tests::dm::all_to_all::AllToAllConfig test_config = {
+
+        .test_id = unit_tests::dm::all_to_all::START_ID + test_case_id,
+
+        .mst_logical_start_coord = mst_start_coord,
+        .sub_logical_start_coord = sub_start_coord,
+        .mst_grid_size = mst_grid_size,
+        .sub_grid_size = sub_grid_size,
+
+        .num_of_transactions_per_master = num_of_transactions_per_master,
+        .pages_reservable_per_transaction = pages_reservable_per_transaction,
+        .bytes_per_page = bytes_per_page,
+
+        .l1_data_format = DataFormat::Float16_b,
+        .noc_id = noc_id,
+    };
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
+
 }  // namespace unit_tests::dm::all_to_all
 
 /* =============================================================  /
@@ -316,49 +360,6 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
 
     /* ======== DIRECTED IDEAL ======== */
 
-    void directed_ideal_test(
-        tt::ARCH arch_,
-        std::vector<IDevice*> & devices_,
-        uint32_t num_devices_,
-        uint32_t test_case_id,
-        CoreCoord mst_start_coord,
-        CoreCoord sub_start_coord,
-        CoreCoord mst_grid_size,
-        CoreCoord sub_grid_size) {
-        NOC noc_id = NOC::NOC_0;
-
-        // Physical Constraints
-        auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
-            tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
-        /* Running the Test */
-
-        uint32_t num_of_transactions_per_master = 1;
-        uint32_t pages_reservable_per_transaction = max_reservable_pages / num_of_transactions_per_master;
-
-        // Test config
-        unit_tests::dm::all_to_all::AllToAllConfig test_config = {
-
-            .test_id = unit_tests::dm::all_to_all::START_ID + test_case_id,
-
-            .mst_logical_start_coord = mst_start_coord,
-            .sub_logical_start_coord = sub_start_coord,
-            .mst_grid_size = mst_grid_size,
-            .sub_grid_size = sub_grid_size,
-
-            .num_of_transactions_per_master = num_of_transactions_per_master,
-            .pages_reservable_per_transaction = pages_reservable_per_transaction,
-            .bytes_per_page = bytes_per_page,
-
-            .l1_data_format = DataFormat::Float16_b,
-            .noc_id = noc_id,
-        };
-
-        // Run
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-        }
-    }
-
     /* ======== 2x2 to 1x1 ======== */
     TEST_F(DeviceFixture, TensixDataMovementAllToAll2x2To1x1DirectedIdeal) {
         uint32_t test_case_id = 6;
@@ -371,7 +372,7 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
         CoreCoord mst_grid_size = {2, 2};
         CoreCoord sub_grid_size = {1, 1};
 
-        directed_ideal_test(
+        unit_tests::dm::all_to_all::directed_ideal_test(
             arch_,
             devices_,
             num_devices_,
@@ -394,7 +395,7 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
         CoreCoord mst_grid_size = {4, 4};
         CoreCoord sub_grid_size = {1, 1};
 
-        directed_ideal_test(
+        unit_tests::dm::all_to_all::directed_ideal_test(
             arch_,
             devices_,
             num_devices_,
@@ -417,7 +418,7 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
         CoreCoord mst_grid_size = {1, 1};
         CoreCoord sub_grid_size = {2, 2};
 
-        directed_ideal_test(
+        unit_tests::dm::all_to_all::directed_ideal_test(
             arch_,
             devices_,
             num_devices_,
@@ -440,7 +441,7 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
         CoreCoord mst_grid_size = {1, 1};
         CoreCoord sub_grid_size = {4, 4};
 
-        directed_ideal_test(
+        unit_tests::dm::all_to_all::directed_ideal_test(
             arch_,
             devices_,
             num_devices_,
@@ -463,7 +464,7 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
         CoreCoord mst_grid_size = {2, 2};
         CoreCoord sub_grid_size = {2, 2};
 
-        directed_ideal_test(
+        unit_tests::dm::all_to_all::directed_ideal_test(
             arch_,
             devices_,
             num_devices_,
