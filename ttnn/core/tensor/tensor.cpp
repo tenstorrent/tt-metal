@@ -69,7 +69,8 @@ Tensor::Tensor(
 
     if (tile.has_value() and  //
         (tile->get_tile_shape()[0] != TILE_WIDTH or tile->get_tile_shape()[1] != TILE_HEIGHT)) {
-        tt::log_warning(
+        log_warning(
+            tt::LogTTNN,
             "only matmul op and ccl all-gather currently supports the customized tile shape: {}",
             tile->get_tile_shape());
     }
@@ -464,7 +465,7 @@ Tensor Tensor::cpu(bool blocking, QueueId cq_id) const { return tensor_ops::tens
 Tensor Tensor::extract_shard(const CoreCoord& core) const {
     ZoneScoped;
     const auto& buffer_page_mapping = *this->buffer()->get_buffer_page_mapping();
-    auto core_id = buffer_page_mapping.core_to_core_id.at(core);
+    auto core_id = buffer_page_mapping.core_to_core_id_.at(core);
     return this->extract_shard(core_id);
 }
 

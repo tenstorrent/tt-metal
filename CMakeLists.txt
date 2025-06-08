@@ -205,6 +205,23 @@ else()
     add_compile_definitions(TT_ENABLE_LIGHT_METAL_TRACE=0)
 endif()
 
+# Control compile time logging for TT_METAL - needs to be set before PCH compilation
+if(NOT DEFINED TT_METAL_ENABLE_LOGGING)
+    if(CMAKE_BUILD_TYPE STREQUAL "Release")
+        set(_default_enable_logging OFF)
+    else()
+        set(_default_enable_logging ON)
+    endif()
+endif()
+option(
+    TT_METAL_ENABLE_LOGGING
+    "Enables inclusion of log_trace and log_debug into the binary."
+    ${_default_enable_logging}
+)
+if(TT_METAL_ENABLE_LOGGING)
+    add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
+endif()
+
 include(GNUInstallDirs)
 # GNUInstallDirs takes PROJECT_DIR verbatim, but directories should always be lowercase
 string(TOLOWER ${PROJECT_NAME} PROJECT_NAME_LOWER)

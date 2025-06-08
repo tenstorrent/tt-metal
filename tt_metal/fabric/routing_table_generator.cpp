@@ -13,7 +13,7 @@
 #include <unordered_map>
 
 #include "assert.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_fabric {
 
@@ -195,7 +195,10 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
                 auto& candidate_paths = paths[dst_mesh_id_val];
                 std::uint32_t min_load = std::numeric_limits<std::uint32_t>::max();
                 std::uint32_t min_distance = std::numeric_limits<std::uint32_t>::max();
-                TT_ASSERT(candidate_paths.size() > 0, "Expecting at least one path to target mesh");
+                if (candidate_paths.size() == 0) {
+                    this->inter_mesh_table_[src_mesh_id_val][src_chip_id][dst_mesh_id_val] = RoutingDirection::NONE;
+                    continue;
+                }
                 // TODO: This exit_chip_id doesn't make sense since it is always chip 0
                 chip_id_t exit_chip_id = candidate_paths[0][1].first;
                 MeshId next_mesh_id = candidate_paths[0][1].second;

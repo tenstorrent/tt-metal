@@ -6,7 +6,7 @@
 
 #include <core_coord.hpp>
 #include "dev_msgs.h"
-#include <logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <metal_soc_descriptor.h>
 #include <algorithm>
 #include <cstdint>
@@ -662,7 +662,7 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
     if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
-        // tt::log_info(tt::LogMetal, "Writing to device {} using DMA", core.chip);
+        // log_info(tt::LogMetal, "Writing to device {} using DMA", core.chip);
         this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
     } else {
         this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
@@ -691,7 +691,7 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
     if (this->supports_dma_operations(chip_id, size_in_bytes)) {
-        // tt::log_info(tt::LogMetal, "Reading from device {} using DMA", core.chip);
+        // log_info(tt::LogMetal, "Reading from device {} using DMA", core.chip);
         this->driver_->dma_read_from_device(mem_ptr, size_in_bytes, core.chip, core_coord, addr);
     } else {
         this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);
@@ -761,7 +761,7 @@ void Cluster::read_sysmem(
 void Cluster::verify_sw_fw_versions(
     int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const {
     tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
-    tt::log_info(
+    log_info(
         tt::LogDevice,
         "Software version {}, Ethernet FW version {} (Device {})",
         sw.str(),
@@ -1010,7 +1010,7 @@ void Cluster::reserve_ethernet_cores_for_tunneling() {
         }
         std::map<std::tuple<chip_id_t, chip_id_t>, bool> reserved_chip_connections = {};
         for (const auto &chip_id : devices) {
-            if (!TT_METAL_SLOW_DISPATCH_MODE && arch_ == ARCH::WORMHOLE_B0 && !rtoptions_.get_fd_fabric()) {
+            if (TT_METAL_SLOW_DISPATCH_MODE == nullptr and arch_ == ARCH::WORMHOLE_B0) {
                 for (const auto &[connected_chip_id, active_eth_cores] :
                      this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
                     for (const auto &eth_core : active_eth_cores) {

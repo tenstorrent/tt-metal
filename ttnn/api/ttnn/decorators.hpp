@@ -24,25 +24,6 @@ using OptionalConstTensors = tt::tt_metal::operation::OptionalConstTensors;
 
 namespace detail {
 
-template <typename... args_t>
-void log(const std::string& prefix, args_t&&... args) {
-    auto args_tuple = std::tuple{[](auto&& arg) {
-        using T = std::decay_t<decltype(arg)>;
-        if constexpr (std::is_pointer_v<T>) {
-            return fmt::format("{}", tt::stl::get_type_name<T>());
-        } else {
-            return arg;
-        }
-    }(std::forward<args_t>(args))...};
-
-    std::string fmt{prefix};
-    fmt += "\n";
-    for (int i = 0; i < sizeof...(args); i++) {
-        fmt += fmt::format("\t{:2}: {}\n", i, "{}");
-    }
-    std::apply([&fmt](const auto&... args) { tt::log_debug(tt::LogOp, fmt.c_str(), args...); }, args_tuple);
-}
-
 // Get "add" from "ttnn::add"
 static std::string base_name(const std::string& cpp_fully_qualified_name) {
     auto last_token = cpp_fully_qualified_name.substr(cpp_fully_qualified_name.rfind("::") + 2);
@@ -134,13 +115,13 @@ struct registered_operation_t {
 private:
     template <typename... args_t>
     auto traced_invoke(args_t&&... args) const {
-        tt::log_debug(tt::LogOp, "Started C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+        log_debug(tt::LogOp, "Started C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
         tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
 
         auto output = invoke(std::forward<args_t>(args)...);
 
         tt::tt_metal::GraphTracker::instance().track_function_end(output);
-        tt::log_debug(tt::LogOp, "Finished C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+        log_debug(tt::LogOp, "Finished C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
         return output;
     }
 

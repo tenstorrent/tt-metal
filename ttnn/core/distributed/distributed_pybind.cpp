@@ -194,6 +194,15 @@ void py_module(py::module& module) {
             py::arg("submesh_shape"),
             py::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevices are alive
         .def(
+            "get_submeshes",
+            &MeshDevice::get_submeshes,
+            R"doc(
+              Get the submeshes created on this MeshDevice.
+
+                Returns:
+                    List[MeshDevice]: The submeshes created on this MeshDevice.
+        )doc")
+        .def(
             "compute_with_storage_grid_size",
             &MeshDevice::compute_with_storage_grid_size,
             R"doc(

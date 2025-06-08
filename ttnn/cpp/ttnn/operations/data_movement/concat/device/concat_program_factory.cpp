@@ -96,8 +96,8 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
     }
     const auto num_tiles_for_output_shard = get_num_tiles_per_shard(output.shard_spec()->shape);
 
-    log_debug("Number of tiles per input tensor shard: {}", num_tiles_for_each_input_shard);
-    log_debug("Number of tiles for output tensor shard: {}", num_tiles_for_output_shard);
+    log_debug(tt::LogOp, "Number of tiles per input tensor shard: {}", num_tiles_for_each_input_shard);
+    log_debug(tt::LogOp, "Number of tiles for output tensor shard: {}", num_tiles_for_output_shard);
 
     const auto create_circular_buffer = [&program, &cores = all_cores](
                                             uint32_t index,
@@ -105,7 +105,8 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
                                             uint32_t tile_size,
                                             const tt::DataFormat& format,
                                             Buffer* buffer) -> tt::tt_metal::CBHandle {
-        tt::log_debug(
+        log_debug(
+            tt::LogOp,
             "Creating CB (id={}) for {} tiles (each {} B) with total size {} B",
             index,
             num_tiles,
