@@ -102,7 +102,8 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
     const size_t pages_sent_per_transaction_per_master =
         test_config.pages_reservable_per_transaction / (num_masters + 1);
     if (pages_sent_per_transaction_per_master == 0) {
-        log_warning("Pages sent per transaction per master is 0. Skipping the current set of configurations.");
+        log_warning(
+            tt : LogTest, "Pages sent per transaction per master is 0. Skipping the current set of configurations.");
         return 1;
     }
     const size_t bytes_sent_per_transaction_per_master =
@@ -173,7 +174,7 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
     }
 
     // Assign unique id
-    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    log_info(tt : LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     /* ================ RUNNING THE PROGRAM ================ */
@@ -225,10 +226,10 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
         pcc = is_close_packed_vectors<bfloat16, uint32_t>(
             packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
         if (!pcc) {
-            log_error("PCC Check failed");  // TO-DO: Print the failed core's coordinates here
-            log_info("Golden vector");
+            log_error(tt : LogTest, "PCC Check failed");  // TO-DO: Print the failed core's coordinates here
+            log_info(tt : LogTest, "Golden vector");
             print_vector<uint32_t>(packed_golden);
-            log_info("Output vector");
+            log_info(tt : LogTest, "Output vector");
             print_vector<uint32_t>(packed_output);
             return pcc;
         }
