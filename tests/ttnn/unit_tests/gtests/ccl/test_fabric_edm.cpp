@@ -74,12 +74,13 @@ static int baseline_validate_test_environment(const FullMeshTestParams& params) 
     uint32_t galaxy_num_devices = 32;
     for (size_t axis = 0; axis < FullMeshTestParams::MAX_NUM_AXES; axis++) {
         if (params.num_links[axis] > 2 && tt::tt_metal::GetNumAvailableDevices() < galaxy_num_devices) {
-            tt::log_warning("This test with {} links can only be run on Galaxy systems", params.num_links[axis]);
+            log_warning(
+                tt::LogTest, "This test with {} links can only be run on Galaxy systems", params.num_links[axis]);
             return 1;
         }
         if (tt::tt_metal::GetNumAvailableDevices() == min_test_num_devices && params.num_links[axis] > 1 &&
             params.line_size[axis] > 4) {
-            tt::log_warning("T3000 cannot run multi-link with more than 4 devices");
+            log_warning(tt::LogTest, "T3000 cannot run multi-link with more than 4 devices");
             return 1;
         }
     }
