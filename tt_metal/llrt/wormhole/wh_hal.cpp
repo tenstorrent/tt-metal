@@ -147,6 +147,16 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
 
     this->eth_fw_arg_addr_func_ = [&](uint32_t arg_index) -> uint32_t { return 0; };
 
+    this->device_features_func_ = [](DeviceFeature feature) -> bool {
+        switch (feature) {
+            case DeviceFeature::ETH_FW_API: return false;
+            case DeviceFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER: return false;
+            case DeviceFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER: return true;
+            case DeviceFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
+            default: TT_THROW("Invalid Wormhole device feature {}", static_cast<int>(feature));
+        }
+    };
+
     this->num_nocs_ = NUM_NOCS;
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
