@@ -808,6 +808,7 @@ void DeviceProfiler::serializeJsonNocTraces(
             local_noc_write_event.contains("type") && local_noc_write_event["type"] == "WRITE_";
         if (!local_event_is_valid_type) {
             log_error(
+                tt::LogMetal,
                 "[profiler noc tracing] local noc event following fabric event is not a regular noc write, but instead "
                 ": {}",
                 local_noc_write_event["type"].get<std::string>());
@@ -818,6 +819,7 @@ void DeviceProfiler::serializeJsonNocTraces(
         double ts_diff = local_noc_write_event.value("timestamp", 0.0) - fabric_event.value("timestamp", 0.0);
         if (ts_diff > 1000) {
             log_warning(
+                tt::LogMetal,
                 "[profiler noc tracing] Failed to coalesce fabric noc trace events because timestamps are implausibly "
                 "far apart.");
             return std::nullopt;
@@ -833,7 +835,10 @@ void DeviceProfiler::serializeJsonNocTraces(
             auto maybe_routing_fields_type =
                 magic_enum::enum_cast<KernelProfilerNocEventMetadata::FabricPacketType>(routing_fields_type_str);
             if (!maybe_routing_fields_type) {
-                log_error("[profiler noc tracing] Failed to parse routing fields type: {}", routing_fields_type_str);
+                log_error(
+                    tt::LogMetal,
+                    "[profiler noc tracing] Failed to parse routing fields type: {}",
+                    routing_fields_type_str);
                 return std::nullopt;
             }
             auto routing_fields_type = maybe_routing_fields_type.value();
@@ -852,7 +857,8 @@ void DeviceProfiler::serializeJsonNocTraces(
                     break;
                 }
                 case KernelProfilerNocEventMetadata::FabricPacketType::LOW_LATENCY_MESH: {
-                    log_error("[profiler noc tracing] noc tracing does not support LOW_LATENCY_MESH packets!");
+                    log_error(
+                        tt::LogMetal, "[profiler noc tracing] noc tracing does not support LOW_LATENCY_MESH packets!");
                     return std::nullopt;
                 }
             }
@@ -860,6 +866,7 @@ void DeviceProfiler::serializeJsonNocTraces(
             auto eth_chan_opt = routing_lookup.getRouterEthCoreToChannelLookup(device_id, phys_eth_route_coord);
             if (!eth_chan_opt) {
                 log_warning(
+                    tt::LogMetal,
                     "[profiler noc tracing] Fabric edm_location->channel lookup failed for event in op '{}' at ts {}: "
                     "src_dev={}, "
                     "eth_core=({}, {}), hops={}. Keeping original events.",
@@ -891,6 +898,7 @@ void DeviceProfiler::serializeJsonNocTraces(
             return modified_write_event;
         } catch (const nlohmann::json::exception& e) {
             log_warning(
+                tt::LogMetal,
                 "[profiler noc tracing] JSON parsing error during event coalescing for event in op '{}': {}",
                 fabric_event.value("op_name", "N/A"),
                 e.what());
@@ -962,7 +970,7 @@ CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(chip_id_t device_id, con
             return c;
         }
     } catch (const std::exception& e) {
-        log_error("Failed to translate virtual coordinate {},{} to physical", c.x, c.y);
+        log_error(tt::LogMetal, "Failed to translate virtual coordinate {},{} to physical", c.x, c.y);
         return c;
     }
     return c;

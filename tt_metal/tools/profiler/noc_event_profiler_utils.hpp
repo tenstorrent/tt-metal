@@ -88,7 +88,7 @@ inline void dumpClusterCoordinatesAsJson(const std::filesystem::path& filepath) 
     if (cluster_json_ofs.is_open()) {
         cluster_json_ofs << cluster_json.dump(2);
     } else {
-        log_error("Failed to open file '{}' for dumping cluster coordinate map", filepath.string());
+        log_error(tt::LogMetal, "Failed to open file '{}' for dumping cluster coordinate map", filepath.string());
     }
 }
 

@@ -493,7 +493,7 @@ void RunTestUnicastRaw(
     fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
 
     if (enable_fabric_tracing) {
-        tt_metal::DumpDeviceProfileResults(sender_device, sender_program);
+        tt_metal::detail::DumpDeviceProfileResults(sender_device);
     }
 
     // Validate the status and packets processed by sender and receiver
