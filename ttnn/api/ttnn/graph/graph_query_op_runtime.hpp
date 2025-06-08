@@ -129,7 +129,7 @@ auto query_op_runtime(Op op, MeshDevice* device, Args&&... args) {
         return RuntimeQueryResponse{ExecutionStatus::Success, runtime};
 
     } catch (const std::exception& e) {
-        tt::log_debug(tt::LogOp, "op_runtime - error: {}", e.what());
+        log_debug(tt::LogOp, "op_runtime - error: {}", e.what());
         return RuntimeQueryResponse{ExecutionStatus::Error, 0, e.what()};
     }
 }
