@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Support &mdash; TT-Metalium  documentation</title>
+  <title>Inspector &mdash; TT-Metalium  documentation</title>
       <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/tt-metalium/resources/support.html" />
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tools/inspector.html" />
   <!--[if lt IE 9]>
     <script src="../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -23,8 +23,8 @@
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Contributing as a developer" href="contributing.html" />
-    <link rel="prev" title="Inspector" href="../tools/inspector.html" /> 
+    <link rel="next" title="Support" href="../resources/support.html" />
+    <link rel="prev" title="Device Program Profiler" href="device_program_profiler.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -56,21 +56,27 @@
 <li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
-<ul>
+<ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/programming_model/index.html">Programming Model</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/apis/index.html">APIs</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../tt_metal/examples/index.html">Programming Examples</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../tools/index.html">Tools</a></li>
-</ul>
-<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
-<ul class="current">
-<li class="toctree-l1 current"><a class="current reference internal" href="#">Support</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="#reporting-bugs-feature-proposals-or-support-requests">Reporting bugs, feature proposals, or support requests</a></li>
-<li class="toctree-l2"><a class="reference internal" href="#troubleshooting-and-debugging-tips">Troubleshooting and debugging tips</a></li>
-<li class="toctree-l2"><a class="reference internal" href="#community">Community</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Tools</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="kernel_print.html">Kernel Debug Print</a></li>
+<li class="toctree-l2"><a class="reference internal" href="watcher.html">Watcher</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tracy_profiler.html">Tracy Profiler</a></li>
+<li class="toctree-l2"><a class="reference internal" href="device_program_profiler.html">Device Program Profiler</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Inspector</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#enabling">Enabling</a></li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="contributing.html">Contributing as a developer</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../resources/contributing.html">Contributing as a developer</a></li>
 </ul>
 
         </div>
@@ -87,9 +93,10 @@
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
       <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
-      <li class="breadcrumb-item active">Support</li>
+          <li class="breadcrumb-item"><a href="index.html">Tools</a></li>
+      <li class="breadcrumb-item active">Inspector</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../_sources/resources/support.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../_sources/tools/inspector.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -97,38 +104,29 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="support">
-<span id="id1"></span><h1>Support<a class="headerlink" href="#support" title="Permalink to this heading"></a>
+  <section id="inspector">
+<h1>Inspector<a class="headerlink" href="#inspector" title="Permalink to this heading"></a>
 </h1>
-<section id="reporting-bugs-feature-proposals-or-support-requests">
-<h2>Reporting bugs, feature proposals, or support requests<a class="headerlink" href="#reporting-bugs-feature-proposals-or-support-requests" title="Permalink to this heading"></a>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Permalink to this heading"></a>
 </h2>
-<p>If you have a</p>
-<ul class="simple">
-<li><p>bug to report</p></li>
-<li><p>feature to formally propose</p></li>
-<li><p>need for support such as access permissions or cloud issues</p></li>
-</ul>
-<p>then please file an
-<a class="reference external" href="https://github.com/tenstorrent/tt-metal/issues/new/choose">issue</a> on
-GitHub.</p>
+<p>The Inspector is a tool that provides insights into Metal host runtime. It is designed to be on by default and to have
+minimal impact on performance.
+It consists of two components: one that logs necessary data to do investigation and one that allows clients to connect
+and query Metal host runtime data.</p>
 </section>
-<section id="troubleshooting-and-debugging-tips">
-<h2>Troubleshooting and debugging tips<a class="headerlink" href="#troubleshooting-and-debugging-tips" title="Permalink to this heading"></a>
+<section id="enabling">
+<h2>Enabling<a class="headerlink" href="#enabling" title="Permalink to this heading"></a>
 </h2>
-<p>You can check out relevant sections in the
-<a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md">contribution standards</a> if
-you ever need hardware troubleshooting help or debugging tips.</p>
-</section>
-<section id="community">
-<h2>Community<a class="headerlink" href="#community" title="Permalink to this heading"></a>
-</h2>
-<p>We have an official Discord channel with representatives from both Tenstorrent
-and the Metal project. Join <a class="reference external" href="https://discord.gg/tvhGzHQwaj">here</a>.</p>
-<p>We have a <a class="reference external" href="https://github.com/tenstorrent/tt-metal/discussions">discussion board</a> on GitHub where
-members can bounce ideas off each other and discuss the project.</p>
-<p>Please refer to the <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/CODE_OF_CONDUCT.md">code of conduct</a>
-when interacting with the community.</p>
+<p>Configure the Inspector by setting the following environment variables:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">export</span> <span class="n">TT_METAL_INSPECTOR</span><span class="o">=</span><span class="mi">1</span>                              <span class="c1"># optional: enable/disable the Inspector. Default is `1` (enabled).</span>
+<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_LOG_PATH</span><span class="o">=</span><span class="n">logging_path</span>          <span class="c1"># optional: set logging path. Default is `$TT_METAL_HOME/generated/inspector`</span>
+<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT</span><span class="o">=</span><span class="mi">0</span>  <span class="c1"># optional: enable/disable stopping execution if the Inspector is not initialized properly. Default is `1` (enabled).</span>
+<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS</span><span class="o">=</span><span class="mi">0</span>     <span class="c1"># optional: enable/disable warnings on logging write exceptions (like disk out of space). Default is `1` (enabled).</span>
+</pre></div>
+</div>
+<p>Enabling the Inspector will override <cite>TT_METAL_RISCV_DEBUG_INFO</cite> and debugging info will be generated for riscv elfs.</p>
 </section>
 </section>
 
@@ -137,8 +135,8 @@ when interacting with the community.</p>
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="../tools/inspector.html" class="btn btn-neutral float-left" title="Inspector" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="contributing.html" class="btn btn-neutral float-right" title="Contributing as a developer" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="device_program_profiler.html" class="btn btn-neutral float-left" title="Device Program Profiler" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../resources/support.html" class="btn btn-neutral float-right" title="Support" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
