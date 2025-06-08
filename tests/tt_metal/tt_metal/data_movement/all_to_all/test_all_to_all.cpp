@@ -102,7 +102,7 @@ bool run_dm(IDevice* device, const AllToAllConfig& test_config) {
     const size_t pages_sent_per_transaction_per_master =
         test_config.pages_reservable_per_transaction / (num_masters + 1);
     if (pages_sent_per_transaction_per_master == 0) {
-        // log_warning("Pages sent per transaction per master is 0. Skipping the current set of configurations.");
+        log_warning("Pages sent per transaction per master is 0. Skipping the current set of configurations.");
         return 1;
     }
     const size_t bytes_sent_per_transaction_per_master =
