@@ -39,7 +39,7 @@ Test expectations are that pcc checks pass and sufficient test attribute data is
 ## Test Cases
 Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size. Each test case has multiple runs, and each run has a unique runtime host id, assigned by a global counter.
 
-1. **All to All Packet Sizes:** Tests all to all on a NxN to NxN grid.
+1. **All to All Packet Sizes:** Tests different number of transactions and transaction sizes by varying the num_of_transactions and transaction_size_pages parameters.
 a. **2x2 Packet Sizes**
 2. **All to All Directed Ideal:** Tests the most optimal data movement setup between two ranges of cores.
 a. **2x2 to 1x1**
