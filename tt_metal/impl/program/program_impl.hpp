@@ -141,7 +141,7 @@ public:
     ProgramImpl(ProgramImpl&& other) = default;
     ProgramImpl& operator=(ProgramImpl&& other) = default;
 
-    ~ProgramImpl() noexcept = default;
+    ~ProgramImpl() noexcept;
 
     void set_runtime_id(uint64_t id);
     uint64_t get_runtime_id() const;
@@ -180,9 +180,7 @@ public:
     }
     void set_cached(uint64_t device_hash) { this->cached_device_hash_ = device_hash; }
     const std::optional<uint64_t>& get_cached() const { return this->cached_device_hash_; }
-    void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status) {
-        this->binaries_on_device_[device_id] = status;
-    }
+    void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
     ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
     const ProgramConfig& get_program_config(uint32_t programmable_core_type_index) const;
