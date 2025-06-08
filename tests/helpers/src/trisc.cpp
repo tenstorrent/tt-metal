@@ -54,8 +54,12 @@ int main()
     llk_profiler::reset();
 #endif
 
-    run_kernel();
-    ckernel::tensix_sync();
+    {
+        ZONE_SCOPED("KERNEL")
+        run_kernel();
+        ckernel::tensix_sync();
+    }
+
     *mailbox = ckernel::KERNEL_COMPLETE; // 0x1
 
     // Use a volatile variable to prevent the compiler from optimizing away the loop
