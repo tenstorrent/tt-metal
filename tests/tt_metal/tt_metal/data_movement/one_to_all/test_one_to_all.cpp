@@ -577,7 +577,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllDirectedIdeal) {
     NOC noc_id = NOC::NOC_0;
 
     bool is_multicast = false;
-    bool is_linked = true;
+    bool is_linked = false;
 
     // Limit the grid size to 100 cores because the max allowed kernel args is 256
     if (grid_size.x * grid_size.y > 100) {
