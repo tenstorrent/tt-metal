@@ -207,7 +207,6 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@skip_for_blackhole("Bad CosineSimilarity on BH. Issue #21881")
 @pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize(
     "dim2", [50257]
@@ -222,6 +221,10 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     torch_dtype = torch.bfloat16
 
     input = torch.randn(shape, dtype=torch_dtype) * 0.9
+    # Make every 256th element 10000
+    # This produced a reproducible failure for WH/BH: https://github.com/tenstorrent/tt-metal/issues/21881
+    for i in range(256, input.numel(), 256):
+        input[0][i] = 10000
 
     pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
 
