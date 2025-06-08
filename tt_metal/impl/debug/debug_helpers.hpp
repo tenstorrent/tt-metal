@@ -56,7 +56,7 @@ static CoreDescriptorSet GetDispatchCores(chip_id_t device_id) {
     const auto& dispatch_core_config =
         tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-    tt::log_warning("Dispatch Core Type = {}", dispatch_core_type);
+    log_warning(tt::LogAlways, "Dispatch Core Type = {}", dispatch_core_type);
     for (auto logical_core : tt::get_logical_dispatch_cores(device_id, num_cqs, dispatch_core_config)) {
         dispatch_cores.insert({logical_core, dispatch_core_type});
     }
@@ -108,7 +108,7 @@ inline int GetNumRiscs(chip_id_t device_id, const CoreDescriptor& core) {
     }
 }
 
-inline const std::string_view get_core_type_name(CoreType ct) {
+inline std::string_view get_core_type_name(CoreType ct) {
     switch (ct) {
         case CoreType::ARC: return "ARC";
         case CoreType::DRAM: return "DRAM";

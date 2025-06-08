@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace ttnn {
 
@@ -58,15 +58,15 @@ void throttle_mm_perf(const tt::ARCH arch, const int num_cores, std::map<std::st
     if (throttle_level && mm_throttle_needed) {
         mm_kernel_defines["MM_THROTTLE"] = std::to_string(throttle_level);
         if (throttle_level == 5) {
-            tt::log_info(tt::LogOp, "Throttle matmul perf to max 33%");
+            log_info(tt::LogOp, "Throttle matmul perf to max 33%");
         } else if (throttle_level == 4) {
-            tt::log_info(tt::LogOp, "Throttle matmul perf to max 40%");
+            log_info(tt::LogOp, "Throttle matmul perf to max 40%");
         } else if (throttle_level == 3) {
-            tt::log_info(tt::LogOp, "Throttle matmul perf to max 50%");
+            log_info(tt::LogOp, "Throttle matmul perf to max 50%");
         } else if (throttle_level == 2) {
-            tt::log_info(tt::LogOp, "Throttle matmul perf to max 67%");
+            log_info(tt::LogOp, "Throttle matmul perf to max 67%");
         } else if (throttle_level == 1) {
-            tt::log_info(tt::LogOp, "Throttle matmul perf to max 73%");
+            log_info(tt::LogOp, "Throttle matmul perf to max 73%");
         } else {
             mm_kernel_defines["MM_THROTTLE"] = std::to_string(0);
             log_error(
