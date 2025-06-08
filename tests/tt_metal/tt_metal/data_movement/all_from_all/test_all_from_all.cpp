@@ -224,11 +224,6 @@ bool run_dm(IDevice* device, const AllFromAllConfig& test_config) {
         tt_metal::detail::ReadFromDeviceL1(
             device, mst_logical_core, mst_l1_base_address, total_size_bytes_received, packed_output);
 
-        // DEBUG: Print the number of elements in the output vector
-        std::cout << "Number of elements in the output vector: " << packed_output.size() << std::endl;
-        // DEBUG: Print the number of bytes of the elements in the output vector
-        std::cout << "Total bytes in the output vector: " << packed_output.size() * sizeof(uint32_t) << std::endl;
-
         // Results comparison
         pcc = is_close_packed_vectors<bfloat16, uint32_t>(
             packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
