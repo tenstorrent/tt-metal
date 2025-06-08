@@ -9,6 +9,7 @@
 /*************************************************************************
  * LLK UNPACK REDUCE
  *************************************************************************/
+
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_reduce_hw_configure(
     const llk_unpack_reduce_params_t* unpack_reduce_params, const float const_mult) {
