@@ -36,7 +36,7 @@ class ProfilerFullMarker:
     id: int
 
 
-def _process_profiler_message(line: str):
+def _parse_profiler_message(line: str):
     # ex. '#pragma message: LLK_PROFILER:sources/example.cpp:1337:MARKER'
     expr = _PROFILER_PATTERN.search(line)
     if expr is None:
@@ -51,6 +51,13 @@ def _process_profiler_message(line: str):
     )
 
 
+def _assert_no_collision(messages, message):
+    """Inserts message if no collisions, raises otherwise"""
+    existing = messages.get(message.id)
+    if existing is not None and existing != message:
+        raise AssertionError(f'Hash collision between "{message}" and "{existing}"')
+
+
 def build_perf_test(test_config):
     make_cmd = generate_make_command(test_config, ProfilerBuild.Yes)
     result = run_shell_command(f"cd .. && {make_cmd}")
@@ -58,11 +65,8 @@ def build_perf_test(test_config):
     lines = result.stderr.splitlines()
     messages = {}
     for line in lines:
-        if message := _process_profiler_message(line):
-            if message.id in messages:
-                first = messages[message.id]
-                second = message
-                raise AssertionError(f'Hash collision between "{first}" and "{second}"')
+        if message := _parse_profiler_message(line):
+            _assert_no_collision(messages, message)
             messages[message.id] = message
     return messages
 
