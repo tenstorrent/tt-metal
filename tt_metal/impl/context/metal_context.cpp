@@ -7,8 +7,6 @@
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
-#include "tt_metal/impl/debug/inspector.hpp"
-#include "tt_metal/impl/debug/inspector_impl.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/debug/debug_helpers.hpp"
@@ -44,9 +42,6 @@ void MetalContext::initialize(
     num_hw_cqs_ = num_hw_cqs;
     l1_bank_remap_ = l1_bank_remap;
     fw_compile_hash_ = fw_compile_hash;
-
-    // Initialize inspector
-    inspector_data_ = Inspector::initialize();
 
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);

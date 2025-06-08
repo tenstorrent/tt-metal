@@ -8,7 +8,6 @@
 #include <stdio.h>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
 #include <stdexcept>
 #include <string>
 
@@ -62,7 +61,6 @@ RunTimeOptions::RunTimeOptions() {
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
 
     ParseWatcherEnv();
-    ParseInspectorEnv();
 
     for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
         ParseFeatureEnv((RunTimeDebugFeatures)i);
@@ -142,14 +140,7 @@ RunTimeOptions::RunTimeOptions() {
     }
 
     const char* riscv_debug_info_enabled_str = std::getenv("TT_METAL_RISCV_DEBUG_INFO");
-    bool enable_riscv_debug_info = get_inspector_enabled();
-    if (riscv_debug_info_enabled_str != nullptr) {
-        enable_riscv_debug_info = true;
-        if (strcmp(riscv_debug_info_enabled_str, "0") == 0) {
-            enable_riscv_debug_info = false;
-        }
-    }
-    set_riscv_debug_info_enabled(enable_riscv_debug_info);
+    set_riscv_debug_info_enabled(riscv_debug_info_enabled_str != nullptr);
 
     const char* validate_kernel_binaries = std::getenv("TT_METAL_VALIDATE_PROGRAM_BINARIES");
     set_validate_kernel_binaries(validate_kernel_binaries != nullptr && validate_kernel_binaries[0] == '1');
@@ -289,41 +280,6 @@ void RunTimeOptions::ParseWatcherEnv() {
         TT_ASSERT(
             watcher_disabled_features.find(watcher_noc_sanitize_str) == watcher_disabled_features.end(),
             "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=0");
-    }
-}
-
-void RunTimeOptions::ParseInspectorEnv() {
-    const char* inspector_enable_str = getenv("TT_METAL_INSPECTOR");
-    if (inspector_enable_str != nullptr) {
-        inspector_settings.enabled = true;
-        if (strcmp(inspector_enable_str, "0") == 0) {
-            inspector_settings.enabled = false;
-        }
-    }
-
-    const char* inspector_log_path_str = getenv("TT_METAL_INSPECTOR_LOG_PATH");
-    if (inspector_log_path_str != nullptr) {
-        inspector_settings.log_path = std::filesystem::path(inspector_log_path_str);
-    } else {
-        inspector_settings.log_path = std::filesystem::path(get_root_dir()) / "generated/inspector";
-    }
-    std::filesystem::remove_all(inspector_settings.log_path);
-    std::filesystem::create_directories(inspector_settings.log_path);
-
-    const char* inspector_initialization_is_important_str = getenv("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT");
-    if (inspector_initialization_is_important_str != nullptr) {
-        inspector_settings.initialization_is_important = true;
-        if (strcmp(inspector_initialization_is_important_str, "0") == 0) {
-            inspector_settings.initialization_is_important = false;
-        }
-    }
-
-    const char* inspector_warn_on_write_exceptions_str = getenv("TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS");
-    if (inspector_warn_on_write_exceptions_str != nullptr) {
-        inspector_settings.warn_on_write_exceptions = true;
-        if (strcmp(inspector_warn_on_write_exceptions_str, "0") == 0) {
-            inspector_settings.warn_on_write_exceptions = false;
-        }
     }
 }
 
