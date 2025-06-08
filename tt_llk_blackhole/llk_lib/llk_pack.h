@@ -473,7 +473,7 @@ inline void _llk_pack_mop_config_(
 }
 
 template <
-    bool is_fp32_dest_acc_en     = false,
+    bool is_fp32_dest_acc_en,
     bool is_tile_dim_reconfig_en = false,
     DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor,
     bool write_tile_header       = true>
