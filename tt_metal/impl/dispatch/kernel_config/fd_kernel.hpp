@@ -148,9 +148,9 @@ public:
 protected:
     // Attributes for an EDM client to connect to the router
     struct FDKernelEdmConnectionAttributes {
-        size_t worker_flow_control_sem;
-        size_t worker_teardown_sem;
-        size_t worker_buffer_index_sem;
+        size_t worker_flow_control_sem{0};
+        size_t worker_teardown_sem{0};
+        size_t worker_buffer_index_sem{0};
     };
 
     [[maybe_unused]] KernelHandle configure_kernel_variant(
