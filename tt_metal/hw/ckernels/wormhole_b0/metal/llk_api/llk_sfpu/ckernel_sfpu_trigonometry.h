@@ -19,6 +19,7 @@ namespace sfpu {
 static const float PI = 3.1415927f;
 static const float PI_2 = 1.5707964f;
 static const float PI_4 = 0.7853982f;
+static const float FRAC_1_PI = 0.31830987f;
 
 static sfpi_inline vFloat sfpu_tan_large(vFloat x) {
     const vFloat r = 4.0f * sfpi::abs(x) - 5.0f;
@@ -86,6 +87,24 @@ inline void calculate_tangent() {
         dst_reg[0] = sfpu_tan<APPROXIMATION_MODE>(PI * v);
         dst_reg++;
     }
+}
+
+template <bool APPROXIMATION_MODE>
+static vFloat sfpu_sinpi(vFloat x);
+
+template <>
+sfpi_inline vFloat sfpu_sinpi<true>(vFloat x) {
+    vFloat xx = x * x;
+
+    return x * ((0x1.29cf02p+1f * xx - 0x1.4954d4p+2f) * xx + 0x1.92149p+1f);
+}
+
+template <>
+sfpi_inline vFloat sfpu_sinpi<false>(vFloat x) {
+    vFloat xx = x * x;
+
+    return x *
+           ((((0x1.406628p-4f * xx - 0x9.93f86p-4f) * xx + 0x2.8cd64p+0f) * xx - 0x5.2aef6p+0f) * xx + 0x3.243f6cp+0f);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
