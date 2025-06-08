@@ -428,6 +428,9 @@ def mesh_device(request, silicon_arch_name, device_params):
 
     ttnn.DumpDeviceProfiler(mesh_device)
 
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
+
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
     del mesh_device
@@ -493,6 +496,9 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
     ttnn.DumpDeviceProfiler(mesh_device)
 
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
+
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
     del mesh_device
@@ -517,6 +523,9 @@ def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     yield mesh_device
 
     ttnn.DumpDeviceProfiler(mesh_device)
+
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -543,6 +552,9 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     yield mesh_device
 
     ttnn.DumpDeviceProfiler(mesh_device)
+
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
