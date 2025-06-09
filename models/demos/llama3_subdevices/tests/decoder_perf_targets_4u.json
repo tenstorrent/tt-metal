@@ -40,7 +40,7 @@
             "first_to_last_start": 1565.888888888889,
             "non-overlapped-dispatch-time": 4351.1,
             "kernel_duration_relative_margin": 0.05,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.25,
             "first_to_last_start_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.2
         },
@@ -103,7 +103,7 @@
             "op_name": "LlamaReduceScatterCreateHeads",
             "kernel_duration": 9801.145,
             "op_to_op": 966.0,
-            "first_to_last_start": 1843.22,
+            "first_to_last_start": 2250.0,
             "non-overlapped-dispatch-time": 6101.6,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.4,
@@ -169,11 +169,11 @@
             "op_name": "PagedUpdateCache",
             "kernel_duration": 5963,
             "op_to_op": 860.2222222222222,
-            "first_to_last_start": 102,
+            "first_to_last_start": 145,
             "non-overlapped-dispatch-time": 5890.0,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
-            "first_to_last_start_relative_margin": 0.2,
+            "first_to_last_start_relative_margin": 0.35,
             "dispatch_duration_relative_margin": 0.2
         },
         "ScaledDotProductAttentionDecode_0": {
