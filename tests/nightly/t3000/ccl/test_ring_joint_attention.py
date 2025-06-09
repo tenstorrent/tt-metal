@@ -72,8 +72,8 @@ def run_ring_joint_sdpa(
     all_gather_topology,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
-    sdpa_compute_grid = (8, 7)
-    ccl_core_grid_offset = (0, 7)
+    sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
+    ccl_core_grid_offset = (0, full_compute_grid.y - 1)
 
     # Basic CCL setup
     ccl_sub_device_crs = ttnn.CoreRangeSet(
