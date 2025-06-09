@@ -32,6 +32,10 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < num_of_transactions; i++) {
             for (uint32_t j = 0; j < num_subordinates; j++) {
+                // Subordinate coordiantes are stored in the runtime arguments starting at index 1
+                // Each x coordinate is stores in an odd index
+                // Each y coordinate is stored in the next even index
+                // The first subordinate's coordinates are at indices 1 and 2, the second at indices 3 and 4, etc.
                 subordinate_x_coord = get_arg_val<uint32_t>(1 + (j * 2));
                 subordinate_y_coord = get_arg_val<uint32_t>(1 + (j * 2) + 1);
 

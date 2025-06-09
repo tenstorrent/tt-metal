@@ -445,4 +445,22 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedIdeal) {
         arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
 }
 
+/* ======== 11x10 from 11x10 ======== */
+TEST_F(DeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
+    uint32_t test_case_id = 6;
+
+    /* Parameters */
+
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord sub_start_coord = {0, 0};
+
+    CoreCoord mst_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+
+    unit_tests::dm::all_from_all::directed_ideal_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
+}
+
 }  // namespace tt::tt_metal
