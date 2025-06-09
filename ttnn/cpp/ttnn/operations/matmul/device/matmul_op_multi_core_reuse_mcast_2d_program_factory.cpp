@@ -1105,6 +1105,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                         mm_in1_sender_writer_args.push_back(curr_storage_core);  // current_dram_bank_id
 
                         log_debug(
+                            tt::LogOp,
                             "curr worker core: {} read {} tiles from dram bank: {}, start from index: {}",
                             curr_worker_core,
                             worker_core_stride,
@@ -1132,6 +1133,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                             mm_in1_sender_writer_args.push_back(curr_storage_core);     // current_dram_bank_id
 
                             log_debug(
+                                tt::LogOp,
                                 "curr worker core: {} read {} tiles from dram bank: {}, start from index: {}",
                                 curr_worker_core,
                                 (stride - worker_core_stride),

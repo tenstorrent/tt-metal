@@ -28,7 +28,7 @@
 #include "fabric_host_interface.h"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
 #include "mesh_graph.hpp"
 #include "metal_soc_descriptor.h"
@@ -541,6 +541,11 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                             // This entry represents mesh to itself, should not be used by FW
                             this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_mesh_id] =
                                 src_chan_id;
+                        } else if (target_direction == RoutingDirection::NONE) {
+                            // This entry represents a mesh to mesh connection that is not reachable
+                            // Set to an invalid channel id
+                            this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_mesh_id] =
+                                eth_chan_magic_values::INVALID_DIRECTION;
                         } else if (target_direction == direction) {
                             // This entry represents an outgoing eth channel
                             this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_mesh_id] =
@@ -1086,7 +1091,7 @@ void ControlPlane::print_ethernet_channels() const {
 
 void ControlPlane::set_routing_mode(uint16_t mode) {
     if (!(this->routing_mode_ == 0 || this->routing_mode_ == mode)) {
-        tt::log_warning(
+        log_warning(
             tt::LogFabric,
             "Control Plane: Routing mode already set to {}. Setting to {}",
             (uint16_t)this->routing_mode_,

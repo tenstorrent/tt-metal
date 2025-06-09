@@ -35,7 +35,7 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
@@ -432,9 +432,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    log_info("test_pull_from_pcie");
-    log_info("Bandwidth(GB/s): {:.3f}", avg_h2d_bandwidth);
-    log_info("pass:{}", pass);
+    log_info(tt::LogTest, "test_pull_from_pcie");
+    log_info(tt::LogTest, "Bandwidth(GB/s): {:.3f}", avg_h2d_bandwidth);
+    log_info(tt::LogTest, "pass:{}", pass);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

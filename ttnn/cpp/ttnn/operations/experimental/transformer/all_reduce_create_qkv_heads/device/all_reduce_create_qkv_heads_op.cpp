@@ -224,7 +224,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
     const ttnn::MeshCoordinate& mesh_coord,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
+    log_debug(tt::LogOp, "DEBUG: create_program is called");
 
     const auto& input_tensor = input_tensors[0];
     auto mesh_device = input_tensor.mesh_device();
@@ -262,21 +262,21 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
     uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec()->grid.num_cores();
     uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec()->grid.num_cores();
 
-    tt::log_debug(tt::LogOp, "input_tensor_shape: {}", input_tensor_shape);
-    tt::log_debug(tt::LogOp, "input_tensor_memory_config: {}", input_tensor_memory_config);
-    tt::log_debug(tt::LogOp, "output_tensor_memory_config: {}", output_tensor_memory_config);
-    tt::log_debug(tt::LogOp, "input_shard_num_cores: {}", input_shard_num_cores);
-    tt::log_debug(tt::LogOp, "output_shard_num_cores: {}", output_shard_num_cores);
-    tt::log_debug(
+    log_debug(tt::LogOp, "input_tensor_shape: {}", input_tensor_shape);
+    log_debug(tt::LogOp, "input_tensor_memory_config: {}", input_tensor_memory_config);
+    log_debug(tt::LogOp, "output_tensor_memory_config: {}", output_tensor_memory_config);
+    log_debug(tt::LogOp, "input_shard_num_cores: {}", input_shard_num_cores);
+    log_debug(tt::LogOp, "output_shard_num_cores: {}", output_shard_num_cores);
+    log_debug(
         tt::LogOp,
         "input_tensor_memory_config.shard_spec()->shape: {}",
         input_tensor_memory_config.shard_spec()->shape);
-    tt::log_debug(
+    log_debug(
         tt::LogOp,
         "output_tensor_memory_config.shard_spec()->shape: {}",
         output_tensor_memory_config.shard_spec()->shape);
 
-    tt::log_debug(tt::LogOp, "Running TG Llama specific all_reduce_create_qkv_heads_minimal_multi_core_with_workers");
+    log_debug(tt::LogOp, "Running TG Llama specific all_reduce_create_qkv_heads_minimal_multi_core_with_workers");
     return all_reduce_create_qkv_heads_minimal_multi_core_with_workers(
         input_tensors,
         target_device,

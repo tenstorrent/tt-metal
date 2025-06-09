@@ -183,6 +183,7 @@ inline void llk_unpack_tilizeA_B(
 
     const std::uint32_t base_address_a =
         get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
+    const bool narrow_tile = get_operand_narrow_tile(operandA_id);
 
     const std::uint32_t base_address_b =
         get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
@@ -200,7 +201,7 @@ inline void llk_unpack_tilizeA_B(
         tile_index_a,
         tile_index_b,
         block_ct_dim,
-        num_faces,
+        num_faces
     );
 
     WAYPOINT("UPTD");

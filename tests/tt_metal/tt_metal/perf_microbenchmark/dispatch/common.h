@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -385,7 +385,7 @@ inline bool DeviceData::validate_one_core(
     } else if (core_type == CoreType::PCIE) {
         core_string = "PCIE";
     } else {
-        tt::log_fatal("Logical core: {} physical core {} core type {}", logical_core, phys_core, core_type);
+        log_fatal(tt::LogTest, "Logical core: {} physical core {} core type {}", logical_core, phys_core, core_type);
         TT_ASSERT(false, "Core type not found");
     }
 

@@ -169,8 +169,12 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     "Building forward direction EDM on chip {} on link {}",
                     src_device->id(),
                     edm_builders_forward_direction[src_device->id()].size());
-                tt::log_debug(
-                    "src_device {}, dest_device {}, is_dateline {}", src_device->id(), dest_device->id(), dateline);
+                log_debug(
+                    tt::LogOp,
+                    "src_device {}, dest_device {}, is_dateline {}",
+                    src_device->id(),
+                    dest_device->id(),
+                    dateline);
                 edm_builders_forward_direction[src_device->id()].push_back(
                     tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                         src_device,
@@ -280,7 +284,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 if (enable_core_placement_opt) {
                     if (edm_fwd.my_noc_x < edm_bwd.my_noc_x) {
                         log_info(
-                            tt::LogTest,
+                            tt::LogOp,
                             "device {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
                             edm_fwd.my_chip_id,
                             edm_fwd.my_noc_x,
@@ -302,7 +306,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         }
                     } else if (edm_fwd.my_noc_x > edm_bwd.my_noc_x) {
                         log_info(
-                            tt::LogTest,
+                            tt::LogOp,
                             "device {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
                             edm_fwd.my_chip_id,
                             edm_fwd.my_noc_x,
@@ -712,7 +716,7 @@ void initialize_edm_fabric(
 
         for (size_t r = 0; r < num_rows; r++) {
             for (size_t c = 0; c < num_cols; c++) {
-                log_info(tt::LogAlways, "Compile EDM program");
+                log_info(tt::LogOp, "Compile EDM program");
                 tt::tt_metal::IDevice* device = mesh_device->get_device(r, c);
                 auto& program = programs.at(r).at(c);
                 tt::tt_metal::detail::CompileProgram(device, program);

@@ -88,7 +88,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
     const ttnn::MeshCoordinate& coord,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
+    log_debug(tt::LogOp, "DEBUG: create_program is called");
     const auto mesh_view = this->mesh_device->get_view();
     std::vector<IDevice*> devices =
         (this->cluster_axis == 0) ? mesh_view.get_devices_on_column(coord[1]) : mesh_view.get_devices_on_row(coord[0]);
@@ -124,21 +124,21 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
     uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec()->grid.num_cores();
     uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec()->grid.num_cores();
 
-    tt::log_debug(tt::LogOp, "input_tensor_shape: {}", input_tensor_shape);
-    tt::log_debug(tt::LogOp, "input_tensor_memory_config: {}", input_tensor_memory_config);
-    tt::log_debug(tt::LogOp, "output_tensor_memory_config: {}", output_tensor_memory_config);
-    tt::log_debug(tt::LogOp, "input_shard_num_cores: {}", input_shard_num_cores);
-    tt::log_debug(tt::LogOp, "output_shard_num_cores: {}", output_shard_num_cores);
-    tt::log_debug(
+    log_debug(tt::LogOp, "input_tensor_shape: {}", input_tensor_shape);
+    log_debug(tt::LogOp, "input_tensor_memory_config: {}", input_tensor_memory_config);
+    log_debug(tt::LogOp, "output_tensor_memory_config: {}", output_tensor_memory_config);
+    log_debug(tt::LogOp, "input_shard_num_cores: {}", input_shard_num_cores);
+    log_debug(tt::LogOp, "output_shard_num_cores: {}", output_shard_num_cores);
+    log_debug(
         tt::LogOp,
         "input_tensor_memory_config.shard_spec()->shape: {}",
         input_tensor_memory_config.shard_spec()->shape);
-    tt::log_debug(
+    log_debug(
         tt::LogOp,
         "output_tensor_memory_config.shard_spec()->shape: {}",
         output_tensor_memory_config.shard_spec()->shape);
 
-    tt::log_debug(tt::LogOp, "Running TG Llama specific all_reduce_async_minimal_multi_core_with_workers");
+    log_debug(tt::LogOp, "Running TG Llama specific all_reduce_async_minimal_multi_core_with_workers");
     return all_reduce_async_minimal_multi_core_with_workers(
         input_tensors[0],
         input_tensors[1],
