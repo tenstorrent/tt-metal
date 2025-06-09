@@ -150,8 +150,10 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
         in_df,
         {{tt::CBIndex::c_0, 1}, {tt::CBIndex::c_1, 1}, {tt::CBIndex::c_2, 1}, {tt::CBIndex::c_3, 1}});
 
-    std::vector<uint32_t> reader_kernel_compile_args = {flip};
-    std::vector<uint32_t> writer_kernel_compile_args = {flip};
+    std::vector<uint32_t> reader_kernel_compile_args = {
+        num_tiles_per_row, HtWt, product_high_dims, product_low_dims, flip};
+    std::vector<uint32_t> writer_kernel_compile_args = {
+        num_tiles_per_row, HtWt, product_high_dims, product_low_dims, flip};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Data Movement Kernel Setup
@@ -212,33 +214,10 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
             TT_THROW("Core outside specified core ranges");
         }
 
-        SetRuntimeArgs(
-            program,
-            cumsum_reader_handle_id,
-            core,
-            {
-                input_tensor.buffer()->address(),
-                start_row,
-                rows_per_core,
-                num_tiles_per_row,
-                product_high_dims,
-                product_low_dims,
-                HtWt,
-            });
+        SetRuntimeArgs(program, cumsum_reader_handle_id, core, {input_tensor.buffer()->address(), start_row});
 
         SetRuntimeArgs(
-            program,
-            cumsum_writer_handle_id,
-            core,
-            {
-                output_tensor.buffer()->address(),
-                start_row,
-                rows_per_core,
-                num_tiles_per_row,
-                product_high_dims,
-                product_low_dims,
-                HtWt,
-            });
+            program, cumsum_writer_handle_id, core, {output_tensor.buffer()->address(), start_row, rows_per_core});
 
         SetRuntimeArgs(
             program,

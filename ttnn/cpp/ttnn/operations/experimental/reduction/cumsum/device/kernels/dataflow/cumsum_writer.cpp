@@ -13,12 +13,12 @@ void kernel_main() {
     uint32_t output_dram_base_addr = get_arg_val<uint32_t>(0);  // output base addr (DRAM)
     uint32_t start_row = get_arg_val<uint32_t>(1);
     uint32_t num_rows = get_arg_val<uint32_t>(2);
-    uint32_t tiles_per_row = get_arg_val<uint32_t>(3);  // number of tiles in a row / along axis
-    uint32_t product_high_dims = get_arg_val<uint32_t>(4);
-    uint32_t product_low_dims = get_arg_val<uint32_t>(5);
-    uint32_t HtWt = get_arg_val<uint32_t>(6);
 
-    uint32_t flip = get_compile_time_arg_val(0);
+    constexpr uint32_t tiles_per_row = get_compile_time_arg_val(0);
+    constexpr uint32_t HtWt = get_compile_time_arg_val(1);
+    constexpr uint32_t product_high_dims = get_compile_time_arg_val(2);
+    constexpr uint32_t product_low_dims = get_compile_time_arg_val(3);
+    constexpr uint32_t flip = get_compile_time_arg_val(4);
 
     constexpr uint32_t cb_in = tt::CBIndex::c_1;
 
