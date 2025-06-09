@@ -68,7 +68,6 @@ target_sources(
             api/tt-metalium/kernel.hpp
             api/tt-metalium/kernel_types.hpp
             api/tt-metalium/lightmetal_binary.hpp
-            api/tt-metalium/logger.hpp
             api/tt-metalium/math.hpp
             api/tt-metalium/memory_reporter.hpp
             api/tt-metalium/mesh_config.hpp
@@ -80,6 +79,8 @@ target_sources(
             api/tt-metalium/program.hpp
             api/tt-metalium/program_cache.hpp
             api/tt-metalium/program_descriptors.hpp
+            api/tt-metalium/profiler_optional_metadata.hpp
+            api/tt-metalium/profiler_types.hpp
             api/tt-metalium/runtime_args_data.hpp
             api/tt-metalium/semaphore.hpp
             api/tt-metalium/shape.hpp
@@ -334,6 +335,7 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         Reflect::Reflect
         TT::STL
+        tt-logger::tt-logger
     PRIVATE
         Metalium::Metal::Impl
         metal_common_libs
@@ -346,6 +348,7 @@ target_link_libraries(
         HAL::wormhole
         HAL::blackhole
         FlatBuffers::FlatBuffers
+        TT::Metalium::Logging
 )
 
 target_precompile_headers(tt_metal REUSE_FROM TT::CommonPCH)
@@ -380,6 +383,7 @@ include_directories(
     api/tt-metalium
 )
 
+add_subdirectory(logging)
 add_subdirectory(hw)
 add_subdirectory(hostdevcommon)
 add_subdirectory(common)
@@ -428,6 +432,7 @@ if(TT_INSTALL)
             TracyClient
             span
             small_vector
+            tt-logger
         EXPORT Metalium
         FILE_SET
         api

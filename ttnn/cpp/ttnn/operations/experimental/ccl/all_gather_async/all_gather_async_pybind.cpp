@@ -17,9 +17,26 @@ namespace ttnn::operations::experimental::ccl {
 
 namespace {
 
+struct GlobalSemaphoreArg {
+    // allows semaphore arguments to be passed as a single semaphore or a vector of semaphores
+    std::vector<GlobalSemaphore> semaphores;
+    GlobalSemaphoreArg(const GlobalSemaphore& single) : semaphores{single} {}
+    GlobalSemaphoreArg(const std::vector<GlobalSemaphore>& vec) : semaphores(vec) {}
+    GlobalSemaphoreArg(std::vector<GlobalSemaphore>&& vec) : semaphores(std::move(vec)) {}
+    const std::vector<GlobalSemaphore>& get() const { return semaphores; }
+    operator const std::vector<GlobalSemaphore>&() const { return semaphores; }
+};
+
 template <typename ccl_operation_t>
 void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
     // namespace py = pybind11;
+
+    py::class_<GlobalSemaphoreArg>(module, "GlobalSemaphoreArg")
+        .def(py::init<const GlobalSemaphore&>())
+        .def(py::init<const std::vector<GlobalSemaphore>&>());
+
+    py::implicitly_convertible<GlobalSemaphore, GlobalSemaphoreArg>();
+    py::implicitly_convertible<std::vector<GlobalSemaphore>, GlobalSemaphoreArg>();
 
     bind_registered_operation(
         module,
@@ -29,15 +46,54 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const int32_t dim,
-               const GlobalSemaphore& multi_device_global_semaphore,
+               const GlobalSemaphoreArg& multi_device_global_semaphore,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> ttnn::Tensor {
                 return self(
-                    input_tensor, dim, multi_device_global_semaphore, num_links, memory_config, topology, subdevice_id);
+                    input_tensor,
+                    dim,
+                    multi_device_global_semaphore.get(),
+                    num_links,
+                    memory_config,
+                    topology,
+                    subdevice_id);
             },
             py::arg("input_tensor"),
+            py::arg("dim"),
+            py::arg("multi_device_global_semaphore"),
+            py::kw_only(),
+            py::arg("num_links") = 1,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("topology") = ttnn::ccl::Topology::Ring,
+            py::arg("subdevice_id") = std::nullopt},
+
+        ttnn::pybind_overload_t{
+            [](const ccl_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               ttnn::Tensor& persistent_intermediate_buffer,
+               ttnn::Tensor& persistent_output_buffer,
+               const int32_t dim,
+               const GlobalSemaphoreArg& multi_device_global_semaphore,
+               const uint32_t num_links,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const ttnn::ccl::Topology topology,
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> ttnn::Tensor {
+                return self(
+                    input_tensor,
+                    persistent_intermediate_buffer,
+                    persistent_output_buffer,
+                    dim,
+                    multi_device_global_semaphore.get(),
+                    num_links,
+                    memory_config,
+                    topology,
+                    subdevice_id);
+            },
+            py::arg("input_tensor"),
+            py::arg("persistent_intermediate_buffer"),
+            py::arg("persistent_output_buffer"),
             py::arg("dim"),
             py::arg("multi_device_global_semaphore"),
             py::kw_only(),
@@ -53,7 +109,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
                const ttnn::ccl::Topology topology,
-               const GlobalSemaphore& multi_device_global_semaphore,
+               const GlobalSemaphoreArg& multi_device_global_semaphore,
                const std::optional<ttnn::Tensor>& persistent_output_tensor,
                const std::optional<size_t> num_preferred_links,
                const std::optional<MemoryConfig>& memory_config,
@@ -64,7 +120,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                     cluster_axis,
                     mesh_device,
                     topology,
-                    multi_device_global_semaphore,
+                    multi_device_global_semaphore.get(),
                     persistent_output_tensor,  // = std::nullopt,
                     memory_config,             // = std::nullopt,
                     num_preferred_links,       // = std::nullopt,

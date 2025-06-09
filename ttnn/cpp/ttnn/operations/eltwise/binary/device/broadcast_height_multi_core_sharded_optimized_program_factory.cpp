@@ -173,6 +173,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     uint32_t batch_b = Ht / Ht_per_batch_b;
 
     log_debug(
+        tt::LogOp,
         "ncores {}, ncores_x {}, Wt {}, Ht {}, h_blk {}, w_blk {}, src0_cb_index {}, src1_cb_index {}, output_cb_index "
         "{}, src1_is_dram {}, dst_is_dram {}, Ht_per_batch_b {}, batch_b {}",
         ncores,

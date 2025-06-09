@@ -50,23 +50,23 @@ namespace detail {
 #ifdef DEBUG
 
 void log_external_operation(const operation::ExternalOperation& operation, const std::vector<Tensor>& input_tensors) {
-    tt::log_debug(tt::LogOp, "Launching External Operation: \"{}\"", operation.get_type_name());
+    log_debug(tt::LogOp, "Launching External Operation: \"{}\"", operation.get_type_name());
 
     auto attributes = operation.attributes();
     if (not attributes.empty()) {
-        tt::log_debug(tt::LogOp, "Attributes:");
+        log_debug(tt::LogOp, "Attributes:");
         for (auto&& [name, value] : attributes) {
-            tt::log_debug(tt::LogOp, "\t{} = {}", name, value);
+            log_debug(tt::LogOp, "\t{} = {}", name, value);
         }
     }
 
-    tt::log_debug(tt::LogOp, "Input std::vector<Tensor>:");
+    log_debug(tt::LogOp, "Input std::vector<Tensor>:");
     for (auto index = 0; index < input_tensors.size(); index++) {
         const auto& tensor = input_tensors[index];
-        tt::log_debug(tt::LogOp, "\t{}: {}", index, tensor);
+        log_debug(tt::LogOp, "\t{}: {}", index, tensor);
     }
 
-    tt::log_debug(tt::LogOp, "");
+    log_debug(tt::LogOp, "");
 }
 #else
 
@@ -464,14 +464,7 @@ HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padde
         }
     };
 
-    auto copy_if_borrowed = [](const HostBuffer& buffer) {
-        if (buffer.is_borrowed()) {
-            return buffer.deep_copy();
-        }
-        return buffer;
-    };
-
-    return copy_if_borrowed(convert_to_logical(std::visit(
+    return convert_to_logical(std::visit(
         tt::stl::overloaded{
             [](const HostStorage& storage) { return storage.buffer; },
             [](const MultiDeviceHostStorage& storage) {
@@ -484,7 +477,7 @@ HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padde
                     tt::stl::get_active_type_name_in_variant(tt_tensor.get_storage()));
             },
         },
-        tt_tensor.get_storage())));
+        tt_tensor.get_storage()));
 }
 
 py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool padded_output = false) {

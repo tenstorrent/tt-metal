@@ -24,7 +24,7 @@ ALLOWED_PREFIXES = {
     "fmt",
     "magic_enum",
     "nlohmann",
-    "pybind11",
+    "tt-logger",
 }
 
 STD_HEADERS = {

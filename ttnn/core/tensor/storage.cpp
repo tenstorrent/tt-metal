@@ -12,21 +12,6 @@ namespace tt::tt_metal {
 
 DeviceStorage::DeviceStorage(std::shared_ptr<Buffer> buffer_) { buffer = std::move(buffer_); }
 
-MemoryConfig DeviceStorage::memory_config() const {
-    auto* buffer_to_use = get_buffer();
-
-    std::optional<ShardSpec> shard_spec = std::nullopt;
-
-    if (is_sharded(buffer_to_use->buffer_layout())) {
-        shard_spec = buffer_to_use->shard_spec().tensor_shard_spec;
-    }
-    return MemoryConfig{
-        buffer_to_use->buffer_layout(),
-        buffer_to_use->buffer_type(),
-        shard_spec,
-    };
-}
-
 DeviceStorage::DeviceStorage(
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords_) :
     coords(std::move(coords_)), mesh_buffer(std::move(mesh_buffer_)) {}

@@ -46,10 +46,10 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
     auto input_log_shape = input.get_logical_shape();
     auto output_log_shape = output.get_logical_shape();
-    tt::log_debug("row major reshape");
-    tt::log_debug("input shape: {}", input_log_shape);
-    tt::log_debug("output shape: {}", output_log_shape);
-    tt::log_debug("data size: {}", data_size);
+    log_debug(tt::LogOp, "row major reshape");
+    log_debug(tt::LogOp, "input shape: {}", input_log_shape);
+    log_debug(tt::LogOp, "output shape: {}", output_log_shape);
+    log_debug(tt::LogOp, "data size: {}", data_size);
     uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
     uint32_t dest_page_size_bytes = output_log_shape[-1] * data_size;
     uint32_t source_read_size_bytes = ((source_page_size_bytes - 1) & MASK_64) + 128;

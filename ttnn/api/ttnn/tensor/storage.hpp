@@ -34,12 +34,11 @@ struct DeviceStorage {
     DeviceStorage(
         std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords_);
 
-    MemoryConfig memory_config() const;
     Buffer* get_buffer() const;
     std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer() const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("memory_config");
-    auto attribute_values() const { return std::make_tuple(this->memory_config()); }
+    static constexpr auto attribute_names = std::forward_as_tuple();
+    auto attribute_values() const { return std::forward_as_tuple(); }
 
     bool is_allocated() const;
 
