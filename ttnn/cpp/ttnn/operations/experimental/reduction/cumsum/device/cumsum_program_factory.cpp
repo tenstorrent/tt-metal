@@ -44,7 +44,7 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
     const auto& tensor_shape = input_tensor.padded_shape();
     const uint32_t tensor_rank = tensor_shape.rank();
     int32_t dim = operation_attributes.dim;
-    const bool flip = operation_attributes.flip;
+    const bool flip = false;
 
     if (dim < 0) {  // Handle cases where dim is negative
         dim += tensor_rank;

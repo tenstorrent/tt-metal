@@ -17,9 +17,7 @@ struct CumSumOperation {
         const Tensor& input,
         int64_t dim,
         std::optional<ttnn::DataType> dtype = std::nullopt,
-        std::optional<Tensor> preallocated_output = std::nullopt,
-        std::optional<bool> flip = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        std::optional<Tensor> preallocated_output = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::reduction
