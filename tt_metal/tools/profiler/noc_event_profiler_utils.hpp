@@ -49,7 +49,7 @@ public:
             // NOTE: soc desc is for chip_id_src, not device->id()
             const auto& soc_desc = cluster.get_soc_desc(chip_id_src);
             // Build a mapping of (eth_core --> eth_chan)
-            for (chan_id_t eth_chan = 0; eth_chan < soc_desc.get_num_eth_channels(); eth_chan++) {
+            for (auto eth_chan = 0; eth_chan < soc_desc.get_num_eth_channels(); eth_chan++) {
                 auto eth_physical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::PHYSICAL);
                 eth_core_to_channel_lookup_.emplace(std::make_tuple(chip_id_src, eth_physical_core), eth_chan);
             }
