@@ -14,12 +14,12 @@ void kernel_main() {
     uint32_t input_dram_base_addr = get_arg_val<uint32_t>(0);  // input base addr (DRAM)
     uint32_t start_row = get_arg_val<uint32_t>(1);
     uint32_t num_rows = get_arg_val<uint32_t>(2);
-    uint32_t tiles_per_row = get_arg_val<uint32_t>(3);  // number of tiles in a row / along axis
-    uint32_t product_high_dims = get_arg_val<uint32_t>(4);
-    uint32_t product_low_dims = get_arg_val<uint32_t>(5);
-    uint32_t HtWt = get_arg_val<uint32_t>(6);
 
-    uint32_t flip = get_compile_time_arg_val(0);
+    constexpr uint32_t tiles_per_row = get_compile_time_arg_val(0);
+    constexpr uint32_t HtWt = get_compile_time_arg_val(1);
+    constexpr uint32_t product_high_dims = get_compile_time_arg_val(2);
+    constexpr uint32_t product_low_dims = get_compile_time_arg_val(3);
+    constexpr uint32_t flip = get_compile_time_arg_val(4);
 
     constexpr uint32_t cb_out = tt::CBIndex::c_0;
     constexpr uint32_t cb_zero = tt::CBIndex::c_2;
@@ -53,9 +53,10 @@ void kernel_main() {
     for (uint32_t i = start_row; i < start_row + num_rows; i++) {
         uint32_t i0 = i / (product_high_dims * HtWt);
         uint32_t i1 = i % (product_high_dims * HtWt);
+
         for (uint32_t j = 0; j < tiles_per_row; j++) {
             uint32_t tile_j = j;
-            if (flip) {
+            if constexpr (flip) {
                 tile_j = tiles_per_row - j - 1;
             }
 
