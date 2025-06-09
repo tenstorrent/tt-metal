@@ -17,6 +17,9 @@
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/hal.hpp>
+// #include "tt_metal/impl/context/metal_context.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -67,6 +70,66 @@ uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) {
     return tt::round_up(get_page_size(tensor), BUFFER_ALIGNMENT);
 }
 
+std::vector<tt::tt_metal::IDevice*> get_neighbors(
+    const MeshDeviceView& mesh_view, const MeshCoordinate& mesh_coordinate, tt::tt_fabric::Topology& topology) {
+    std::vector<tt::tt_metal::IDevice*> neighbors;
+    auto src_device = mesh_view.get_device(mesh_coordinate);
+    for (uint8_t axis = 0; axis < 2; axis++) {
+        std::vector<tt::tt_metal::IDevice*> axis_neighbors;
+        if (axis == 0) {
+            axis_neighbors = mesh_view.get_devices_on_row(mesh_coordinate[0]);
+        } else {
+            axis_neighbors = mesh_view.get_devices_on_column(mesh_coordinate[1]);
+        }
+        for (uint32_t i = 0; i < axis_neighbors.size(); i++) {
+            if (axis_neighbors.at(i) == src_device) {
+                if (i != 0) {
+                    neighbors.push_back(axis_neighbors.at(i - 1));
+                } else if (topology == ttnn::ccl::Topology::Ring) {
+                    neighbors.push_back(axis_neighbors.at(axis_neighbors.size() - 1));
+                }
+                if (i != axis_neighbors.size() - 1) {
+                    neighbors.push_back(axis_neighbors.at(i + 1));
+                } else if (topology == ttnn::ccl::Topology::Ring) {
+                    neighbors.push_back(axis_neighbors.at(0));
+                }
+            }
+        }
+    }
+    return neighbors;
+}
+
+uint32_t select_link(
+    const MeshDeviceView& mesh_view,
+    const MeshCoordinate& src,
+    const MeshCoordinate& dst,
+    uint32_t num_links,
+    tt::tt_fabric::Topology topology) {
+    auto same_row = src[0] == dst[0];
+    auto same_col = src[1] == dst[1];
+    auto rows = mesh_view.num_rows();
+    auto cols = mesh_view.num_cols();
+    TT_FATAL(same_row ^ same_col, "src & dst must be neighbours");
+
+    if (same_row) {  // ----- horizontal -----
+        bool east = false;
+        if (topology == tt::tt_fabric::Topology::Ring) {
+            east = dst[1] == (src[1] + 1) % cols;  // wrap-around permitted
+        } else {                                   /* Linear */
+            east = dst[1] == src[1] + 1;           // no wrap-around
+        }
+        return (src[1] + (east ? 0 : 1)) % num_links;  // link id
+    } else {                                           // ----- vertical -----
+        bool south = false;
+        if (topology == tt::tt_fabric::Topology::Ring) {
+            south = dst[0] == (src[0] + 1) % rows;  // wrap-around permitted
+        } else {                                    /* Linear */
+            south = dst[0] == src[0] + 1;           // no wrap-around
+        }
+        return (src[0] + (south ? 0 : 1)) % num_links;  // link id
+    }
+}
+
 }  // namespace detail
 
 AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::cached_mesh_workload_t
@@ -95,6 +158,11 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
+    tt::log_info(
+        tt::LogAlways,
+        "Creating all to all dispatch program for mesh coordinate: ({}, {})",
+        mesh_coordinate[0],
+        mesh_coordinate[1]);
 
     tt::tt_metal::Program program{};
 
@@ -110,8 +178,8 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     const auto& mesh_view = mesh_device->get_view();
     auto src_device = mesh_device->get_device(mesh_coordinate);
     auto src_physical_device_id = src_device->id();
-    // auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    // auto src_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
+
+    auto neighbors = detail::get_neighbors(mesh_view, mesh_coordinate, topology);
 
     auto input_shape = input_tensor.get_tensor_spec().logical_shape();
     auto indices_shape = indices_tensor.get_tensor_spec().logical_shape();
@@ -223,25 +291,26 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         mapping_tensor_cb_id,
         client_interface_cb_id,
         send_preparation_buffer_id,
+
         input_pages,
         indices_pages,
         mapping_pages,
         output_pages,
         metadata_pages,
+
         input_page_size,
         indices_page_size,
         mapping_page_size,
         output_page_size,
         metadata_page_size,
+
         num_devices,
         hidden_size,
         batch_size,
         selected_experts_k,
         experts,
-        input_page_size,
-        indices_page_size,
-        mapping_page_size,
-        metadata_page_size,
+        batches_per_device,
+
         num_links,
         topology == tt::tt_fabric::Topology::Ring ? 1u : 0u,
     };
@@ -277,6 +346,21 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         metadata_tensor.buffer()->address(),
         (uint32_t)operation_attributes.cross_device_semaphore->address(),
     };
+
+    for (auto& neighbor : neighbors) {
+        auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
+        uint32_t link_id = detail::select_link(mesh_view, mesh_coordinate, neighbor_coordinate, num_links, topology);
+        tt::log_info(
+            tt::LogAlways,
+            "Connection between ({}, {}) and ({}, {}) will choose link_id: {}",
+            mesh_coordinate[0],
+            mesh_coordinate[1],
+            neighbor_coordinate[0],
+            neighbor_coordinate[1],
+            link_id);
+        tt::tt_fabric::append_fabric_connection_rt_args(
+            src_physical_device_id, neighbor->id(), link_id, program, sender_core, reader_runtime_args);
+    }
 
     tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, sender_cores.at(0), reader_runtime_args);
     tt::tt_metal::SetRuntimeArgs(program, binary_writer_kernel_id, sender_cores.at(0), writer_runtime_args);
