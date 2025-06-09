@@ -47,6 +47,9 @@ filterwarnings("ignore")
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_demo(device, reset_seeds, demo_type, model_type, use_pretrained_weight):
+    # https://github.com/tenstorrent/tt-metal/issues/23270
+    device.disable_and_clear_program_cache()
+
     # Download latest version of the dataset
     path = kagglehub.dataset_download("mateuszbuda/lgg-mri-segmentation")
     for dirname, _, filenames in os.walk("/kaggle/input"):
