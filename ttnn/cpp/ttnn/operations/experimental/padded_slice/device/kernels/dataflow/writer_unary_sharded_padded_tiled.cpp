@@ -55,7 +55,6 @@ void kernel_main() {
     uint32_t read_addr = get_read_ptr(cb_untilized_id);
 
     uint32_t block_row_size = read_size / tt::constants::TILE_HEIGHT;
-#define DEBUG
 #ifdef DEBUG
     DPRINT << "total_num_tiles: " << total_num_tiles << ", num_tiles_per_read: " << num_tiles_per_read
            << ", tile_size: " << tile_size << ", read_size: " << read_size << "block row size " << block_row_size
@@ -88,12 +87,10 @@ void kernel_main() {
         cb_wait_front(cb_untilized_id, num_tiles_per_read);
         uint64_t noc_read_addr = get_noc_addr(get_read_ptr(cb_untilized_id));
         noc_read_addr += read_start_offset * block_row_size;
+
         noc_async_read(noc_read_addr, write_addr, read_rows_size * block_row_size);
-        row_count++;
-        if (row_count == 4) {
-            noc_async_read_barrier();
-            row_count = 0;
-        }
+        noc_async_read_barrier();
+
         write_addr += read_rows_size * block_row_size;
         cb_pop_front(cb_untilized_id, num_tiles_per_read);
         tiles_read += num_tiles_per_read;
@@ -106,4 +103,5 @@ void kernel_main() {
             }
         }
     }
+    noc_async_read_barrier();
 }

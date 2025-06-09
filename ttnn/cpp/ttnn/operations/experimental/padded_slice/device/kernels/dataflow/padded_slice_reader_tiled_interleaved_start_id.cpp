@@ -41,7 +41,6 @@ void kernel_main() {
     DPRINT << "num_padded_sticks: " << num_padded_sticks[0] << " " << num_padded_sticks[1] << " "
            << num_padded_sticks[2] << " " << num_padded_sticks[3] << " " << ENDL();
 #endif
-
     const uint32_t base_src_buffer_l1_addr = get_write_ptr(cb_id_in0);
     const uint64_t base_noc_addr = get_noc_addr(0, s0);
 
@@ -55,26 +54,13 @@ void kernel_main() {
             noc_async_read(src_noc_addr, src_buffer_l1_addr, tile_size);
             noc_async_read_barrier();
 
-#ifdef DEBUG
-            DPRINT << "src_stick_id: " << src_stick_id << " addr " << src_buffer_l1_addr - base_src_buffer_l1_addr
-                   << ENDL();
-#endif
             src_buffer_l1_addr += tile_size;
             src_stick_id++;
             for (uint32_t j = 0; j < num_dims; j++) {
                 id_per_dim[j]++;
                 if (id_per_dim[j] == num_unpadded_sticks[j]) {
-#ifdef DEBUG
-                    DPRINT << "j = " << j << " increment " << num_unpadded_sticks[j]
-                           << " id_per_dim = " << id_per_dim[0] << " " << id_per_dim[1] << " " << id_per_dim[2] << " "
-                           << id_per_dim[3] << ENDL();
-#endif
                     id_per_dim[j] = 0;
                     src_stick_id += num_padded_sticks[j];
-#ifdef DEBUG
-                    DPRINT << "New Stick ID " << src_stick_id << ENDL();
-#endif
-
                 } else {
                     break;
                 }
