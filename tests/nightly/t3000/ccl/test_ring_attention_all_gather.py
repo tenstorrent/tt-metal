@@ -208,7 +208,6 @@ def run_ring_attention_all_gather_impl(
     mesh_device.clear_loaded_sub_device_manager()
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "num_devices, num_links, ag_output_shape, ag_num_inputs, rp_dim, rp_axis, rp_factor, up_factor, layout, ag_input_dtype",
@@ -307,16 +306,7 @@ def test_ring_attention_all_gather(
     ttnn.close_mesh_device(submesh_device)
 
 
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
-    indirect=True,
-)
-@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "num_devices, num_links, ag_output_shape, ag_num_inputs, rp_dim, rp_axis, rp_factor, up_factor, layout, ag_input_dtype",
     [
