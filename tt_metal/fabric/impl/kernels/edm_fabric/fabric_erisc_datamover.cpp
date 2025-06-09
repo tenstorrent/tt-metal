@@ -373,8 +373,9 @@ bool did_something;
 /////////////////////////////////////////////
 
 template <
-    uint8_t VC_RECEIVER_CHANNEL,
     uint8_t sender_channel_index,
+    uint8_t to_receiver_pkts_sent_id,
+    bool SKIP_CONNECTION_LIVENESS_CHECK,
     uint8_t SENDER_NUM_BUFFERS,
     uint8_t RECEIVER_NUM_BUFFERS>
 FORCE_INLINE void send_next_data(
@@ -408,7 +409,7 @@ FORCE_INLINE void send_next_data(
 
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
     // messages)
-    if constexpr (sender_ch_live_check_skip[sender_channel_index]) {
+    if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
         // For persistent connections, we don't need to increment the counter, we only care about the
         // buffer index, so we only increment it directly
         local_sender_write_counter.index =
@@ -429,7 +430,7 @@ FORCE_INLINE void send_next_data(
     static constexpr uint32_t packets_to_forward = 1;
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
     };
-    remote_update_ptr_val<to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL], sender_txq_id>(packets_to_forward);
+    remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(packets_to_forward);
 }
 
 /////////////////////////////////////////////
@@ -818,8 +819,9 @@ FORCE_INLINE void establish_edm_connection(
 ////////////////////////////////////
 template <
     bool enable_packet_header_recording,
-    uint8_t VC_RECEIVER_CHANNEL,
     uint8_t sender_channel_index,
+    uint8_t to_receiver_pkts_sent_id,
+    bool SKIP_CONNECTION_LIVENESS_CHECK,
     uint8_t SENDER_NUM_BUFFERS,
     uint8_t RECEIVER_NUM_BUFFERS>
 void run_sender_channel_step_impl(
@@ -853,7 +855,7 @@ void run_sender_channel_step_impl(
             tt::tt_fabric::validate(*packet_header);
             packet_header_recorder.record_packet_header(reinterpret_cast<volatile uint32_t*>(packet_header));
         }
-        send_next_data<VC_RECEIVER_CHANNEL, sender_channel_index>(
+        send_next_data<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
             local_sender_channel,
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
@@ -868,7 +870,7 @@ void run_sender_channel_step_impl(
         increment_local_update_ptr_val(
             to_sender_packets_completed_streams[sender_channel_index], -completions_since_last_check);
         if constexpr (!enable_first_level_ack) {
-            if constexpr (sender_ch_live_check_skip[sender_channel_index]) {
+            if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
                 local_sender_channel_worker_interface
                     .template update_persistent_connection_copy_of_free_slots<enable_ring_support>(
                         completions_since_last_check);
@@ -896,7 +898,7 @@ void run_sender_channel_step_impl(
         ASSERT(false);
         auto acks_since_last_check = get_ptr_val(to_sender_packets_acked_streams[sender_channel_index]);
         if (acks_since_last_check > 0) {
-            if constexpr (sender_ch_live_check_skip[sender_channel_index]) {
+            if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
                 local_sender_channel_worker_interface
                     .template update_persistent_connection_copy_of_free_slots<enable_ring_support>();
             } else {
@@ -917,7 +919,7 @@ void run_sender_channel_step_impl(
         }
     }
 
-    if constexpr (!sender_ch_live_check_skip[sender_channel_index]) {
+    if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
         auto check_connection_status =
             !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
         if (check_connection_status) {
@@ -950,8 +952,9 @@ FORCE_INLINE void run_sender_channel_step(
     if constexpr (is_sender_channel_serviced[sender_channel_index]) {
         run_sender_channel_step_impl<
             enable_packet_header_recording,
-            VC_RECEIVER_CHANNEL,
             sender_channel_index,
+            to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
+            sender_ch_live_check_skip[sender_channel_index],
             SENDER_NUM_BUFFERS_ARRAY[sender_channel_index]>(
             local_sender_channels.template get<sender_channel_index>(),
             local_sender_channel_worker_interfaces.template get<sender_channel_index>(),
@@ -965,6 +968,7 @@ FORCE_INLINE void run_sender_channel_step(
 
 template <
     uint8_t receiver_channel,
+    uint8_t to_receiver_pkts_sent_id,
     typename WriteTridTracker,
     uint8_t RECEIVER_NUM_BUFFERS,
     uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS>
@@ -976,19 +980,18 @@ void run_receiver_channel_step_impl(
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table) {
     auto& ack_counter = receiver_channel_pointers.ack_counter;
-    auto pkts_received_since_last_check = get_ptr_val<to_receiver_packets_sent_streams[receiver_channel]>();
+    auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
     if constexpr (enable_first_level_ack) {
         bool pkts_received = pkts_received_since_last_check > 0;
         ASSERT(receiver_channel_pointers.completion_counter - ack_counter < RECEIVER_NUM_BUFFERS);
         if (pkts_received) {
             // currently only support processing one packet at a time, so we only decrement by 1
-            increment_local_update_ptr_val<to_receiver_packets_sent_streams[receiver_channel]>(-1);
+            increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
             receiver_send_received_ack(ack_counter.get_buffer_index(), local_receiver_channel);
             ack_counter.increment();
         }
     } else {
-        increment_local_update_ptr_val<to_receiver_packets_sent_streams[receiver_channel]>(
-            -pkts_received_since_last_check);
+        increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
         // Ack counter does not get used to index a buffer slot, so we skip the buffer index increment
         // and only increment the counter
         ack_counter.counter += pkts_received_since_last_check;
@@ -1094,7 +1097,6 @@ void run_receiver_channel_step_impl(
             can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
         }
         if (can_send_completion) {
-            DPRINT << "RX completion\n";
             receiver_send_completion_ack(receiver_channel_pointers.get_src_chan_id(receiver_buffer_index));
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
             completion_counter.increment();
@@ -1116,7 +1118,7 @@ FORCE_INLINE void run_receiver_channel_step(
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table) {
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
-        run_receiver_channel_step_impl<receiver_channel>(
+        run_receiver_channel_step_impl<receiver_channel, to_receiver_packets_sent_streams[receiver_channel]>(
             local_receiver_channels.template get<receiver_channel>(),
             downstream_edm_interface,
             receiver_channel_pointers,
