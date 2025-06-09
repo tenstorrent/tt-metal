@@ -408,19 +408,19 @@ get_padded_slice_runtime_args_tile_sharded_output(
     std::vector<uint32_t> accumulated_total_tiles_per_dim(num_dims);
     std::vector<uint32_t> accumulated_total_sticks_per_dim(num_dims);
 
-    num_output_tiles_per_dim[0] = tt::div_up(actual_output_shape[-1], TILE_WIDTH);
+    num_output_tiles_per_dim[0] = tt::div_up(actual_output_shape[-1], TILE_WIDTH) / num_cores_channels;
     num_output_tiles_per_dim[1] = (tt::round_up(output_tensor_start[-2] + actual_output_shape[-2], TILE_HEIGHT) -
                                    tt::round_down(output_tensor_start[-2], TILE_HEIGHT)) /
                                   TILE_HEIGHT;
 
     tt::log_debug("Output Start : {}, Output Shape : {}", output_tensor_start, actual_output_shape);
 
-    num_input_tiles_per_dim[0] = 0;
-    num_input_tiles_per_dim[1] =
-        (tt::div_up(input_shape[-2], TILE_HEIGHT) - num_output_tiles_per_dim[1]) * num_output_tiles_per_dim[0];
+    accumulated_total_tiles_per_dim[0] = tt::div_up(actual_output_shape[-1], TILE_WIDTH);
+    accumulated_total_tiles_per_dim[1] = tt::div_up(input_shape[-2], TILE_HEIGHT) * accumulated_total_tiles_per_dim[0];
 
-    accumulated_total_tiles_per_dim[0] = num_output_tiles_per_dim[0];
-    accumulated_total_tiles_per_dim[1] = tt::div_up(input_shape[-2], TILE_HEIGHT) * num_output_tiles_per_dim[0];
+    num_input_tiles_per_dim[0] = tt::div_up(actual_output_shape[-1], TILE_WIDTH) - num_output_tiles_per_dim[0];
+    num_input_tiles_per_dim[1] =
+        (tt::div_up(input_shape[-2], TILE_HEIGHT) - num_output_tiles_per_dim[1]) * accumulated_total_tiles_per_dim[0];
 
     num_output_sticks_per_dim[0] = 1;
     num_input_sticks_per_dim[0] = 0;
@@ -494,7 +494,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
         const uint32_t num_sticks_written_start = core_h_index * num_sticks_per_core;
         const uint32_t num_sticks_written_end = (core_h_index + 1) * num_sticks_per_core;
 
-        const uint32_t width_offset = core_w_index * 0;
+        const uint32_t width_offset = core_w_index * num_tiles_per_channel;
         std::vector<uint32_t> start_index_per_dim(num_dims);
         std::vector<uint32_t> end_index_per_dim(num_dims);
 
@@ -564,7 +564,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
         reader_kernel_args[0] += width_offset;
 
         uint32_t addr_offset = 2;
-        reader_kernel_args[addr_offset++] = input_start_id;
+        reader_kernel_args[addr_offset++] = input_start_id + width_offset;
         reader_kernel_args[addr_offset++] = num_tiles_this_core;
         auto reversed_start_index = start_index_per_dim;
         std::ranges::reverse(reversed_start_index);

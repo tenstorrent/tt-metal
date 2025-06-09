@@ -71,6 +71,9 @@ void kernel_main() {
 #endif
                     id_per_dim[j] = 0;
                     src_stick_id += num_padded_sticks[j];
+#ifdef DEBUG
+                    DPRINT << "New Stick ID " << src_stick_id << ENDL();
+#endif
 
                 } else {
                     break;
