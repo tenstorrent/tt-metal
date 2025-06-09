@@ -9,6 +9,11 @@ Or, make sure to set the following environment variable in the terminal:
 export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 ```
 
+To obtain the perf reports through profiler, please build with following command:
+```
+./build_metal.sh -p
+```
+
 ## Introduction
 YOLOv8 is one of the recent iterations in the YOLO series of real-time object detectors, offering cutting-edge performance in terms of accuracy and speed.
 
@@ -28,12 +33,6 @@ pytest models/demos/yolov8x/demo/demo.py
 ```bash
 pytest models/demos/yolov8x/tests/test_e2e_performant.py
 ```
-
-- device perf (46 fps):
-```bash
-pytest models/demos/yolov8x/tests/test_perf_yolov8x.py::test_perf_device_bare_metal_yolov8x`
-```
-
 
 #### Note: The post-processing is performed using PyTorch.
 
