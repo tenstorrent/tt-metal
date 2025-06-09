@@ -12,6 +12,7 @@ from ..reference.normalization import RmsNorm
 from ..tt.fun_normalization import sd_layer_norm, sd_rms_norm
 from ..tt.fun_normalization import TtLayerNormParameters, TtRmsNormParameters
 from ..tt.utils import assert_quality
+from ..tt.parallel_config import StableDiffusionParallelManager
 
 
 @pytest.mark.parametrize(
@@ -20,14 +21,17 @@ from ..tt.utils import assert_quality
         [4096, 3072],
     ],
 )
-@pytest.mark.parametrize("mesh_device", [(1, 1), (1, 2), (1, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("affine", [True, False], ids=["affine", "noaffine"])
+@pytest.mark.usefixtures("use_program_cache")
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_layer_norm(
     *,
     mesh_device: ttnn.MeshDevice,
     input_shape: list[int],
     affine: bool,
 ) -> None:
+    parallel_manager = StableDiffusionParallelManager(mesh_device, 1, 1, 1, 1, 1, ttnn.Topology.Linear)
     batch_size, _ = mesh_device.shape
     input_shape = [batch_size, *input_shape]
 
@@ -41,6 +45,7 @@ def test_layer_norm(
         dtype=ttnn.bfloat8_b,
         weight_shape=input_shape[-1:],
         eps=torch_model.eps,
+        distributed=True,
     )
 
     torch_input_tensor = torch.randn(input_shape)
@@ -56,7 +61,7 @@ def test_layer_norm(
     with torch.no_grad():
         torch_output = torch_model(torch_input_tensor)
 
-    tt_output = sd_layer_norm(tt_input_tensor, parameters)
+    tt_output = sd_layer_norm(tt_input_tensor, parameters, parallel_manager, cfg_index=0)
 
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, tuple(mesh_device.shape), (0, -1))
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=composer)

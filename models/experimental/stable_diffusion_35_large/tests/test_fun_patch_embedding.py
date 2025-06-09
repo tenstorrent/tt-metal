@@ -13,7 +13,8 @@ import math
 
 from ..reference import SD3Transformer2DModel
 from ..tt.fun_patch_embedding import sd_patch_embed, TtPatchEmbedParameters
-from ..tt.utils import assert_quality, from_torch_fast_2d, initialize_sd_parallel_config
+from ..tt.utils import assert_quality, from_torch_fast_2d
+from ..tt.parallel_config import StableDiffusionParallelManager
 
 if TYPE_CHECKING:
     from ..reference.patch_embedding import PatchEmbed
@@ -61,8 +62,9 @@ def test_patch_embedding(
     tp_factor: int,
     topology: ttnn.Topology,
 ) -> None:
-    mesh_shape = tuple(mesh_device.shape)
-    dit_parallel_config = initialize_sd_parallel_config(mesh_shape, cfg_factor, sp_factor, tp_factor, topology)
+    parallel_manager = StableDiffusionParallelManager(
+        mesh_device, cfg_factor, sp_factor, tp_factor, sp_factor, tp_factor, topology
+    )
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 
@@ -89,7 +91,7 @@ def test_patch_embedding(
         device=mesh_device,
         hidden_dim_padding=hidden_dim_padding,
         out_channels=embedding_dim,
-        parallel_config=dit_parallel_config,
+        parallel_config=parallel_manager.dit_parallel_config,
         dtype=ttnn_dtype,
         height=height,
         width=width,
@@ -104,13 +106,13 @@ def test_patch_embedding(
     tt_input_tensor = from_torch_fast_2d(
         torch_input_tensor.permute([0, 2, 3, 1]),  # BCYX -> BYXC
         mesh_device=mesh_device,
-        mesh_shape=dit_parallel_config.cfg_parallel.mesh_shape,
+        mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
         dims=[seq_parallel_shard_dim, None],
         dtype=ttnn_dtype,
         layout=ttnn.TILE_LAYOUT,
     )
 
-    tt_output = sd_patch_embed(tt_input_tensor, parameters, parallel_config=dit_parallel_config)
+    tt_output = sd_patch_embed(tt_input_tensor, parameters, parallel_manager=parallel_manager)
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(

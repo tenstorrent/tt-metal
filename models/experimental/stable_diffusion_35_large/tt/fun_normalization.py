@@ -10,6 +10,7 @@ import torch
 import ttnn
 
 from .utils import from_torch_fast, from_torch_fast_2d
+from .parallel_config import StableDiffusionParallelManager
 
 
 @dataclass
@@ -113,11 +114,11 @@ def sd_rms_norm(x: ttnn.Tensor, parameters: TtRmsNormParameters, deallocate: boo
 def sd_layer_norm(
     x: ttnn.Tensor,
     parameters: TtLayerNormParameters,
-    parallel_config: DiTParallelConfig,
-    ag_global_semaphore,
+    parallel_manager: StableDiffusionParallelManager,
     memory_config: ttnn.MemoryConfig | None = None,
     program_config: ttnn.ProgramConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
+    cfg_index: int = 0,
 ) -> ttnn.Tensor:
     if not parameters.distributed:
         return ttnn.layer_norm(
@@ -144,10 +145,10 @@ def sd_layer_norm(
     stats = ttnn.experimental.all_gather_async(
         stats,
         dim=len(x.shape) - 1,
-        cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+        cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
         mesh_device=x.device(),
-        topology=parallel_config.topology,
-        multi_device_global_semaphore=ag_global_semaphore,
+        topology=parallel_manager.dit_parallel_config.topology,
+        multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["ag"],
         memory_config=memory_config,
         num_links=1,
     )

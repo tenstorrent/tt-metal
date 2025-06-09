@@ -11,7 +11,8 @@ import math
 
 from ..reference.feed_forward import FeedForward
 from ..tt.fun_feed_forward import TtFeedForwardParameters, sd_feed_forward
-from ..tt.utils import assert_quality, from_torch_fast_2d, create_global_semaphores, initialize_sd_parallel_config
+from ..tt.utils import assert_quality, from_torch_fast_2d
+from ..tt.parallel_config import StableDiffusionParallelManager
 
 TILE_SIZE = 32
 
@@ -57,20 +58,11 @@ def test_feed_forward(
     topology: ttnn.Topology,
     shard_sequence: bool,
 ) -> None:
-    mesh_shape = tuple(mesh_device.shape)
-    dit_parallel_config = initialize_sd_parallel_config(mesh_shape, cfg_factor, sp_factor, tp_factor, topology)
+    parallel_manager = StableDiffusionParallelManager(
+        mesh_device, cfg_factor, sp_factor, tp_factor, sp_factor, tp_factor, topology
+    )
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
-
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-
-    # create global semaphore handles
-    num_devices = mesh_device.get_num_devices()
-    rs_from_ccl_semaphore_handle = create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0)
-    rs_to_ccl_semaphore_handle = create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0)
 
     torch_model = FeedForward(dim=embedding_dim, dim_out=embedding_dim).to(dtype=torch_dtype)
     torch_model.eval()
@@ -89,7 +81,7 @@ def test_feed_forward(
         dtype=ttnn_dtype,
         device=mesh_device,
         hidden_dim_padding=hidden_dim_padding,
-        parallel_config=dit_parallel_config,
+        parallel_config=parallel_manager.dit_parallel_config,
     )
 
     torch.manual_seed(0)
@@ -110,8 +102,8 @@ def test_feed_forward(
     tt_input_tensor = from_torch_fast_2d(
         input_padded_4d,
         mesh_device=mesh_device,
-        mesh_shape=dit_parallel_config.cfg_parallel.mesh_shape,
-        dims=[dit_parallel_config.sequence_parallel.mesh_axis + 2 if shard_sequence else None, None],
+        mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
+        dims=[parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 2 if shard_sequence else None, None],
         dtype=ttnn_dtype,
         layout=ttnn.TILE_LAYOUT,
     )
@@ -122,9 +114,8 @@ def test_feed_forward(
     tt_output = sd_feed_forward(
         tt_input_tensor,
         parameters,
-        parallel_config=dit_parallel_config,
-        rs_from_global_semaphore=rs_from_ccl_semaphore_handle,
-        rs_to_global_semaphore=rs_to_ccl_semaphore_handle,
+        parallel_manager=parallel_manager,
+        cfg_index=0,
     )
     tt_output_torch = ttnn.to_torch(
         tt_output,
@@ -132,8 +123,8 @@ def test_feed_forward(
             mesh_device,
             mesh_shape=tuple(mesh_device.shape),
             dims=[
-                dit_parallel_config.sequence_parallel.mesh_axis + 2,
-                dit_parallel_config.tensor_parallel.mesh_axis + 2,
+                parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 2,
+                parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 2,
             ],
         ),
     )

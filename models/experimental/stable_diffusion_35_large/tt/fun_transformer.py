@@ -15,7 +15,7 @@ from .fun_normalization import sd_layer_norm, TtLayerNormParameters
 from .fun_patch_embedding import sd_patch_embed, TtPatchEmbedParameters
 from .fun_timestep_embedding import sd_combined_timestep_embed, TtCombinedTimestepTextProjEmbeddingsParameters
 from .fun_transformer_block import sd_transformer_block, TtTransformerBlockParameters, chunk_time
-from .parallel_config import DiTParallelConfig
+from .parallel_config import DiTParallelConfig, StableDiffusionParallelManager
 
 
 @dataclass
@@ -112,18 +112,13 @@ def sd_transformer(
     pooled_projection: ttnn.Tensor,
     timestep: ttnn.Tensor,
     parameters: TtSD3Transformer2DModelParameters,
-    parallel_config: DiTParallelConfig,
+    parallel_manager: StableDiffusionParallelManager,
     num_heads: int,
     N: int,
     L: int,
-    ag_global_semaphore,
-    rs_from_global_semaphore,
-    rs_to_global_semaphore,
-    ring_attention_semaphore_handles,
-    persistent_buffers,
-    worker_sub_device_id,
+    cfg_index: int,
 ) -> ttnn.Tensor:
-    spatial = sd_patch_embed(spatial, parameters.pos_embed, parallel_config=parallel_config)
+    spatial = sd_patch_embed(spatial, parameters.pos_embed, parallel_manager=parallel_manager)
     time_embed = sd_combined_timestep_embed(
         timestep=timestep, pooled_projection=pooled_projection, parameters=parameters.time_text_embed
     )
@@ -132,48 +127,54 @@ def sd_transformer(
     spatial = ttnn.unsqueeze(spatial, 1)
     prompt = ttnn.unsqueeze(prompt, 1)
 
+    local_heads = num_heads // parallel_manager.dit_parallel_config.tensor_parallel.factor
+    full_seq_len = spatial.shape[2] * parallel_manager.dit_parallel_config.sequence_parallel.factor
+    kv_gathered_shape = [spatial.shape[0], local_heads, full_seq_len, spatial.shape[3] // local_heads]
+
+    parallel_manager.maybe_init_persistent_buffers(kv_gathered_shape)
+
     for i, block in enumerate(parameters.transformer_blocks, start=1):
         spatial, prompt_out = sd_transformer_block(
             spatial=spatial,
             prompt=prompt,
             time_embed=time_embed,
             parameters=block,
-            parallel_config=parallel_config,
+            parallel_manager=parallel_manager,
             num_heads=num_heads,
             N=N,  # spatial_sequence_length
             L=L,  # prompt_sequence_length
-            ag_global_semaphore=ag_global_semaphore,
-            rs_from_global_semaphore=rs_from_global_semaphore,
-            rs_to_global_semaphore=rs_to_global_semaphore,
-            ring_attention_semaphore_handles=ring_attention_semaphore_handles,
-            persistent_buffers=persistent_buffers,
-            worker_sub_device_id=worker_sub_device_id,
+            cfg_index=cfg_index,
         )
         if prompt_out is not None:
             prompt = prompt_out
     spatial_time = sd_linear(ttnn.silu(time_embed), parameters.time_embed_out)
     [scale, shift] = chunk_time(spatial_time, 2)
-    if parallel_config.sequence_parallel.factor > 1:
+    if parallel_manager.is_sequence_parallel:
         spatial = ttnn.experimental.all_gather_async(
             spatial,
             dim=-2,
-            cluster_axis=parallel_config.sequence_parallel.mesh_axis,
+            cluster_axis=parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis,
             mesh_device=spatial.device(),
-            topology=parallel_config.topology,
-            multi_device_global_semaphore=ag_global_semaphore,
+            topology=parallel_manager.dit_parallel_config.topology,
+            multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["ag"],
             num_links=1,
         )
-    if parallel_config.tensor_parallel.factor > 1:
+    if parallel_manager.is_tensor_parallel:
         spatial = ttnn.experimental.all_gather_async(
             spatial,
             dim=-1,
-            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+            cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
             mesh_device=spatial.device(),
-            topology=parallel_config.topology,
-            multi_device_global_semaphore=ag_global_semaphore,
+            topology=parallel_manager.dit_parallel_config.topology,
+            multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["ag"],
             num_links=1,
         )
-    spatial = sd_layer_norm(spatial, parameters.norm_out, parallel_config, ag_global_semaphore) * (1 + scale) + shift
+
+    spatial = (
+        sd_layer_norm(spatial, parameters.norm_out, parallel_manager=parallel_manager, cfg_index=cfg_index)
+        * (1 + scale)
+        + shift
+    )
     return sd_linear(spatial, parameters.proj_out)
 
     # def cache_and_trace(

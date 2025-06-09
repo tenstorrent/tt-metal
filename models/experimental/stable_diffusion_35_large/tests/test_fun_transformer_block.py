@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from typing import TYPE_CHECKING
 
 import pytest
@@ -12,7 +11,8 @@ import math
 
 from ..reference import SD3Transformer2DModel
 from ..tt.fun_transformer_block import sd_transformer_block, TtTransformerBlockParameters
-from ..tt.utils import assert_quality, from_torch_fast_2d, create_global_semaphores, initialize_sd_parallel_config
+from ..tt.utils import assert_quality, from_torch_fast_2d
+from ..tt.parallel_config import StableDiffusionParallelManager
 
 if TYPE_CHECKING:
     from ..reference.transformer_block import TransformerBlock
@@ -22,11 +22,7 @@ TILE_SIZE = 32
 
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [(2, 4)],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -67,32 +63,12 @@ def test_transformer_block(
     up_factor: int,
     topology: ttnn.Topology,
 ) -> None:
-    mesh_shape = tuple(mesh_device.shape)
-    dit_parallel_config = initialize_sd_parallel_config(
-        mesh_shape, cfg_factor, sp_factor, tp_factor, rp_factor, up_factor, topology
+    parallel_manager = StableDiffusionParallelManager(
+        mesh_device, cfg_factor, sp_factor, tp_factor, rp_factor, up_factor, topology
     )
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice(
-        [
-            ccl_sub_device_crs,
-        ]
-    )
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-
-    # create global semaphore handles
-    num_devices = mesh_device.get_num_devices()
-    ag_ccl_semaphore_handle = create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0)
-    rs_from_ccl_semaphore_handle = create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0)
-    rs_to_ccl_semaphore_handle = create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0)
-    ring_attention_semaphore_handles = [
-        create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(2)
-    ]
     parent_torch_model = SD3Transformer2DModel.from_pretrained(
         f"stabilityai/stable-diffusion-3.5-{model_name}",
         subfolder="transformer",
@@ -121,7 +97,7 @@ def test_transformer_block(
         hidden_dim_padding=hidden_dim_padding,
         device=mesh_device,
         dtype=ttnn_dtype,
-        parallel_config=dit_parallel_config,
+        parallel_config=parallel_manager.dit_parallel_config,
     )
 
     torch.manual_seed(0)
@@ -144,8 +120,11 @@ def test_transformer_block(
     tt_spatial = from_torch_fast_2d(
         spatial_padded_4d,
         mesh_device=mesh_device,
-        mesh_shape=dit_parallel_config.cfg_parallel.mesh_shape,
-        dims=[dit_parallel_config.sequence_parallel.mesh_axis + 2, dit_parallel_config.tensor_parallel.mesh_axis + 2],
+        mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
+        dims=[
+            parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 2,
+            parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 2,
+        ],
         dtype=ttnn_dtype,
         layout=ttnn.TILE_LAYOUT,
     )
@@ -165,8 +144,8 @@ def test_transformer_block(
     tt_prompt = from_torch_fast_2d(
         prompt_padded_4d,
         mesh_device=mesh_device,
-        mesh_shape=dit_parallel_config.cfg_parallel.mesh_shape,
-        dims=[None, dit_parallel_config.tensor_parallel.mesh_axis + 2],
+        mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
+        dims=[None, parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 2],
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn_dtype,
     )
@@ -176,7 +155,7 @@ def test_transformer_block(
         tt_time = from_torch_fast_2d(
             time_padded_2d.unsqueeze(1).unsqueeze(1),
             mesh_device=mesh_device,
-            mesh_shape=dit_parallel_config.cfg_parallel.mesh_shape,
+            mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
             dims=[None, None],
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn_dtype,
@@ -185,7 +164,7 @@ def test_transformer_block(
         tt_time = from_torch_fast_2d(
             time.unsqueeze(1).unsqueeze(1),
             mesh_device=mesh_device,
-            mesh_shape=dit_parallel_config.cfg_parallel.mesh_shape,
+            mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
             dims=[None, None],
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn_dtype,
@@ -196,32 +175,18 @@ def test_transformer_block(
 
     # Create persistent buffers
     persistent_buffer_shape = [1, num_heads // up_factor, spatial_padded_4d.shape[2], head_size]
-    persistent_buffers = [
-        ttnn.from_torch(
-            torch.zeros(persistent_buffer_shape),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn_dtype,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]),
-        )
-        for _ in range(2)
-    ]
+    parallel_manager.maybe_init_persistent_buffers(persistent_buffer_shape)
 
     tt_spatial_output, tt_prompt_output = sd_transformer_block(
         spatial=tt_spatial,
         prompt=tt_prompt,
         time_embed=tt_time,
         parameters=parameters,
-        parallel_config=dit_parallel_config,
+        parallel_manager=parallel_manager,
         num_heads=num_heads,
         N=spatial_sequence_length,
         L=prompt_sequence_length,
-        ag_global_semaphore=ag_ccl_semaphore_handle,
-        rs_from_global_semaphore=rs_from_ccl_semaphore_handle,
-        rs_to_global_semaphore=rs_to_ccl_semaphore_handle,
-        ring_attention_semaphore_handles=ring_attention_semaphore_handles,
-        persistent_buffers=persistent_buffers,
-        worker_sub_device_id=worker_sub_device_id,
+        cfg_index=0,
     )
 
     ttnn.synchronize_device(mesh_device)
@@ -246,8 +211,8 @@ def test_transformer_block(
             mesh_device,
             mesh_shape=tuple(mesh_device.shape),
             dims=[
-                dit_parallel_config.sequence_parallel.mesh_axis + 2,
-                dit_parallel_config.tensor_parallel.mesh_axis + 2,
+                parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 2,
+                parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 2,
             ],
         ),
     )
@@ -263,8 +228,8 @@ def test_transformer_block(
                 mesh_device,
                 mesh_shape=tuple(mesh_device.shape),
                 dims=[
-                    dit_parallel_config.sequence_parallel.mesh_axis + 2,
-                    dit_parallel_config.tensor_parallel.mesh_axis + 2,
+                    parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 2,
+                    parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 2,
                 ],
             ),
         )

@@ -71,7 +71,6 @@ def test_attention(
     up_factor: int,
     topology: ttnn.Topology,
 ) -> None:
-    mesh_shape = tuple(mesh_device.shape)
     parallel_manager = StableDiffusionParallelManager(
         mesh_device, cfg_factor, sp_factor, tp_factor, rp_factor, up_factor, topology
     )

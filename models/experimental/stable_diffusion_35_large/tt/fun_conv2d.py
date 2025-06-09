@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import torch
 import ttnn
 
-from .parallel_config import DiTParallelConfig
+from .parallel_config import DiTParallelConfig, StableDiffusionParallelManager
 from .utils import from_torch_fast_2d
 
 
@@ -72,7 +72,9 @@ class TtConv2dParameters:
         )
 
 
-def sd_conv2d(x: ttnn.Tensor, parameters: TtConv2dParameters, parallel_config: DiTParallelConfig) -> ttnn.Tensor:
+def sd_conv2d(
+    x: ttnn.Tensor, parameters: TtConv2dParameters, parallel_manager: StableDiffusionParallelManager
+) -> ttnn.Tensor:
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         x.device().arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,

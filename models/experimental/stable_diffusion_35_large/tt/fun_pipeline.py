@@ -21,6 +21,7 @@ from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderMo
 from ..tt.utils import from_torch_fast
 from .t5_encoder import TtT5Encoder, TtT5EncoderParameters
 from .fun_transformer import sd_transformer, TtSD3Transformer2DModelParameters
+from .parallel_config import StableDiffusionParallelManager
 
 TILE_SIZE = 32
 
@@ -31,20 +32,13 @@ class TtStableDiffusion3Pipeline:
         *,
         checkpoint: str,
         mesh_device: ttnn.MeshDevice,
-        submesh_devices: List[ttnn.MeshDevice],
         enable_t5_text_encoder: bool = True,
         guidance_cond: int,
-        parallel_config: DiTParallelConfig,
-        ag_ccl_semaphore_handles,
-        rs_from_ccl_semaphore_handles,
-        rs_to_ccl_semaphore_handles,
-        ring_attention_semaphore_handles,
-        worker_sub_device_id,
+        parallel_manager: StableDiffusionParallelManager,
         height: int,
         width: int,
     ) -> None:
         self._mesh_device = mesh_device
-        self._submesh_devices = submesh_devices
 
         logger.info("loading models...")
         self._tokenizer_1 = CLIPTokenizer.from_pretrained(checkpoint, subfolder="tokenizer")
@@ -72,12 +66,6 @@ class TtStableDiffusion3Pipeline:
         assert isinstance(self._vae, AutoencoderKL)
         assert isinstance(torch_transformer, SD3Transformer2DModel)
 
-        self._ag_ccl_semaphore_handles = ag_ccl_semaphore_handles
-        self._rs_from_ccl_semaphore_handles = rs_from_ccl_semaphore_handles
-        self._rs_to_ccl_semaphore_handles = rs_to_ccl_semaphore_handles
-        self._ring_attention_semaphore_handles = ring_attention_semaphore_handles
-        self._worker_sub_device_id = worker_sub_device_id
-
         logger.info("creating TT-NN transformer...")
 
         if checkpoint == "stabilityai/stable-diffusion-3.5-medium":
@@ -85,7 +73,7 @@ class TtStableDiffusion3Pipeline:
         else:
             embedding_dim = 2432
 
-        num_devices = submesh_devices[0].get_num_devices()
+        parallel_config = parallel_manager.dit_parallel_config
         ## heads padding
         assert not embedding_dim % torch_transformer.config.num_attention_heads, "Embedding_dim % num_heads != 0"
         pad_embedding_dim = (bool)(
@@ -102,7 +90,7 @@ class TtStableDiffusion3Pipeline:
             num_heads = torch_transformer.config.num_attention_heads
 
         parameters_list = []
-        for i, submesh_device in enumerate(submesh_devices):
+        for i, submesh_device in enumerate(parallel_manager.submesh_devices):
             parameters_list.append(
                 TtSD3Transformer2DModelParameters.from_torch(
                     torch_transformer.state_dict(),
@@ -119,7 +107,7 @@ class TtStableDiffusion3Pipeline:
                 )
             )
 
-        self.parallel_config = parallel_config
+        self.parallel_manager = parallel_manager
         self.num_heads = num_heads
         self.patch_size = parameters_list[0].pos_embed.patch_size
         self.tt_transformer_parameters = parameters_list
@@ -142,7 +130,7 @@ class TtStableDiffusion3Pipeline:
 
             parameters = TtT5EncoderParameters.from_torch(
                 torch_text_encoder_3.state_dict(),
-                device=self._submesh_devices[0],
+                device=self.parallel_manager.submesh_devices[0],
                 dtype=ttnn.bfloat16,
             )
             self._text_encoder_3 = TtT5Encoder(
@@ -300,6 +288,8 @@ class TtStableDiffusion3Pipeline:
             self._num_channels_latents,
         )
 
+        print(f"Latents shape: {latents_shape}")
+
         logger.info("encoding prompts...")
 
         prompt_encoding_start_time = time.time()
@@ -329,27 +319,29 @@ class TtStableDiffusion3Pipeline:
         tt_prompt_embeds_list = []
         tt_pooled_prompt_embeds_list = []
         tt_latents_step_list = []
-        for i, submesh_device in enumerate(self._submesh_devices):
+        for i, submesh_device in enumerate(self.parallel_manager.submesh_devices):
             tt_prompt_embeds = ttnn.from_torch(
-                prompt_embeds[i].unsqueeze(0) if self.parallel_config.cfg_parallel.factor == 2 else prompt_embeds,
+                prompt_embeds[i].unsqueeze(0)
+                if self.parallel_manager.dit_parallel_config.cfg_parallel.factor == 2
+                else prompt_embeds,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat8_b,
                 device=submesh_device,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
-                    submesh_device, self.parallel_config.cfg_parallel.mesh_shape, dims=[None, None]
+                    submesh_device, self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape, dims=[None, None]
                 ),
             )
             tt_prompt_embeds_list.append(tt_prompt_embeds)
 
             tt_pooled_prompt_embeds = ttnn.from_torch(
                 pooled_prompt_embeds[i].unsqueeze(0)
-                if self.parallel_config.cfg_parallel.factor == 2
+                if self.parallel_manager.dit_parallel_config.cfg_parallel.factor == 2
                 else pooled_prompt_embeds,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat16,
                 device=submesh_device,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
-                    submesh_device, self.parallel_config.cfg_parallel.mesh_shape, dims=[None, None]
+                    submesh_device, self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape, dims=[None, None]
                 ),
             )
             tt_pooled_prompt_embeds_list.append(tt_pooled_prompt_embeds)
@@ -361,8 +353,8 @@ class TtStableDiffusion3Pipeline:
                 device=submesh_device,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     submesh_device,
-                    self.parallel_config.cfg_parallel.mesh_shape,
-                    dims=[self.parallel_config.sequence_parallel.mesh_axis + 1, None],
+                    self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
+                    dims=[self.parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 1, None],
                 ),
             )
             latents_step = tt_initial_latents
@@ -375,28 +367,12 @@ class TtStableDiffusion3Pipeline:
         # ttnn.copy_host_to_device_tensor(tt_pooled_prompt_embeds, self._trace.pooled_projection_input)
         # ttnn.copy_host_to_device_tensor(tt_initial_latents, self._trace.spatial_input_output)
 
-        # Create persistent buffers
-        persistent_buffer_shape = [1, self.num_heads // self.parallel_config.ulysses_parallel.factor, 4096, 64]
-        persistent_buffers = [
-            [
-                ttnn.from_torch(
-                    torch.zeros(persistent_buffer_shape),
-                    device=sm,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(sm, mesh_shape=tuple(sm.shape), dims=[None, None]),
-                )
-                for _ in range(2)
-            ]
-            for sm in self._submesh_devices
-        ]
-
         for i, t in enumerate(tqdm.tqdm(timesteps)):
             sigma_difference = self._scheduler.sigmas[i + 1] - self._scheduler.sigmas[i]
 
             tt_timestep_list = []
             tt_sigma_difference_list = []
-            for submesh_device in self._submesh_devices:
+            for submesh_device in self.parallel_manager.submesh_devices:
                 tt_timestep = ttnn.full([1, 1], fill_value=t, dtype=ttnn.float32, device=submesh_device)
                 tt_timestep_list.append(tt_timestep)
 
@@ -423,7 +399,6 @@ class TtStableDiffusion3Pipeline:
                 sigma_difference=tt_sigma_difference_list,
                 prompt_sequence_length=333,
                 spatial_sequence_length=4096,
-                persistent_buffers=persistent_buffers,
             )
 
         denoising_end_time = time.time()
@@ -439,13 +414,13 @@ class TtStableDiffusion3Pipeline:
                 mesh_device=tt_latents_step_list[0].device(),
                 mesh_shape=tuple(tt_latents_step_list[0].device().shape),
                 dims=[
-                    self.parallel_config.sequence_parallel.mesh_axis + 1,
-                    self.parallel_config.tensor_parallel.mesh_axis + 1,
+                    self.parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 1,
+                    self.parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 1,
                 ],
             ),
         ).to(torch.float32)[
             :,
-            : tt_latents_step_list[0].shape[-3] * self.parallel_config.sequence_parallel.factor,
+            : tt_latents_step_list[0].shape[-3] * self.parallel_manager.dit_parallel_config.sequence_parallel.factor,
             : tt_latents_step_list[0].shape[-2],
             : tt_latents_step_list[0].shape[-1],
         ]
@@ -480,11 +455,10 @@ class TtStableDiffusion3Pipeline:
         sigma_difference: List[ttnn.Tensor],
         prompt_sequence_length: int,
         spatial_sequence_length: int,
-        persistent_buffers: List[List[ttnn.Tensor]],
     ) -> None:
         noise_pred_list = []
-        for submesh_id, submesh_device in enumerate(self._submesh_devices):
-            if do_classifier_free_guidance and self.parallel_config.cfg_parallel.factor == 1:
+        for submesh_id, submesh_device in enumerate(self.parallel_manager.submesh_devices):
+            if do_classifier_free_guidance and not self.parallel_manager.is_cfg_parallel:
                 latent_model_input = ttnn.concat([latents[submesh_id], latents[submesh_id]])
             else:
                 latent_model_input = latents[submesh_id]
@@ -496,21 +470,16 @@ class TtStableDiffusion3Pipeline:
                 pooled_projection=pooled_prompt_embeds[submesh_id],
                 timestep=timestep_model_input,
                 parameters=self.tt_transformer_parameters[submesh_id],
-                parallel_config=self.parallel_config,
+                parallel_manager=self.parallel_manager,
                 num_heads=self.num_heads,
                 N=spatial_sequence_length,
                 L=prompt_sequence_length,
-                ag_global_semaphore=self._ag_ccl_semaphore_handles[submesh_id],
-                rs_from_global_semaphore=self._rs_from_ccl_semaphore_handles[submesh_id],
-                rs_to_global_semaphore=self._rs_to_ccl_semaphore_handles[submesh_id],
-                ring_attention_semaphore_handles=self._ring_attention_semaphore_handles[submesh_id],
-                worker_sub_device_id=self._worker_sub_device_id,
-                persistent_buffers=persistent_buffers[submesh_id],
+                cfg_index=submesh_id,
             )
 
             noise_pred = _reshape_noise_pred(
                 noise_pred,
-                height=latents[0].shape[-3] * self.parallel_config.sequence_parallel.factor,
+                height=latents[0].shape[-3] * self.parallel_manager.dit_parallel_config.sequence_parallel.factor,
                 width=latents[0].shape[-2],
                 patch_size=self.patch_size,
             )
@@ -518,7 +487,7 @@ class TtStableDiffusion3Pipeline:
             noise_pred_list.append(noise_pred)
 
         if do_classifier_free_guidance:
-            if self.parallel_config.cfg_parallel.factor == 1:
+            if not self.parallel_manager.is_cfg_parallel:
                 split_pos = noise_pred_list[0].shape[0] // 2
                 uncond = noise_pred_list[0][0:split_pos]
                 cond = noise_pred_list[0][split_pos:]
@@ -530,8 +499,8 @@ class TtStableDiffusion3Pipeline:
                         mesh_device=noise_pred_list[0].device(),
                         mesh_shape=tuple(noise_pred_list[0].device().shape),
                         dims=[
-                            self.parallel_config.sequence_parallel.mesh_axis + 1,
-                            self.parallel_config.tensor_parallel.mesh_axis + 1,
+                            self.parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 1,
+                            self.parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 1,
                         ],
                     ),
                 ).to(torch.float32)[
@@ -543,8 +512,8 @@ class TtStableDiffusion3Pipeline:
                         mesh_device=noise_pred_list[1].device(),
                         mesh_shape=tuple(noise_pred_list[1].device().shape),
                         dims=[
-                            self.parallel_config.sequence_parallel.mesh_axis + 1,
-                            self.parallel_config.tensor_parallel.mesh_axis + 1,
+                            self.parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 1,
+                            self.parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 1,
                         ],
                     ),
                 ).to(torch.float32)[
@@ -555,26 +524,26 @@ class TtStableDiffusion3Pipeline:
                     torch_noise_pred,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
-                    device=self._submesh_devices[0],
+                    device=self.parallel_manager.submesh_devices[0],
                     mesh_mapper=ttnn.ShardTensor2dMesh(
-                        self._submesh_devices[0],
-                        self.parallel_config.cfg_parallel.mesh_shape,
-                        dims=[self.parallel_config.sequence_parallel.mesh_axis + 1, None],
+                        self.parallel_manager.submesh_devices[0],
+                        self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
+                        dims=[self.parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 1, None],
                     ),
                 )
                 noise_pred_list[1] = ttnn.from_torch(
                     torch_noise_pred,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
-                    device=self._submesh_devices[1],
+                    device=self.parallel_manager.submesh_devices[1],
                     mesh_mapper=ttnn.ShardTensor2dMesh(
-                        self._submesh_devices[1],
-                        self.parallel_config.cfg_parallel.mesh_shape,
-                        dims=[self.parallel_config.sequence_parallel.mesh_axis + 1, None],
+                        self.parallel_manager.submesh_devices[1],
+                        self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
+                        dims=[self.parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 1, None],
                     ),
                 )
 
-        for submesh_id, submesh_device in enumerate(self._submesh_devices):
+        for submesh_id, submesh_device in enumerate(self.parallel_manager.submesh_devices):
             ttnn.add_(latents[submesh_id], sigma_difference[submesh_id] * noise_pred_list[submesh_id])
 
         return latents
@@ -611,7 +580,7 @@ class TtStableDiffusion3Pipeline:
         )
         clip_prompt_embeds = torch.cat([prompt_embed, prompt_2_embed], dim=-1)
         t5_prompt_embed = _get_t5_prompt_embeds(
-            device=self._submesh_devices[0],
+            device=self.parallel_manager.submesh_devices[0],
             prompt=prompt_3,
             num_images_per_prompt=num_images_per_prompt,
             max_sequence_length=max_t5_sequence_length,
@@ -647,7 +616,7 @@ class TtStableDiffusion3Pipeline:
         )
         negative_clip_prompt_embeds = torch.cat([negative_prompt_embed, negative_prompt_2_embed], dim=-1)
         t5_negative_prompt_embed = _get_t5_prompt_embeds(
-            device=self._submesh_devices[0],
+            device=self.parallel_manager.submesh_devices[0],
             prompt=negative_prompt_3,
             num_images_per_prompt=num_images_per_prompt,
             max_sequence_length=max_t5_sequence_length,

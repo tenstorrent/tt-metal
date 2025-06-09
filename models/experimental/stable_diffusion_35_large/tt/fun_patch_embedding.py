@@ -13,7 +13,7 @@ import ttnn
 from .fun_conv2d import sd_conv2d, TtConv2dParameters
 from .substate import substate
 from .utils import from_torch_fast_2d
-from .parallel_config import DiTParallelConfig
+from .parallel_config import DiTParallelConfig, StableDiffusionParallelManager
 
 
 @dataclass
@@ -83,11 +83,11 @@ class TtPatchEmbedParameters:
 
 
 def sd_patch_embed(
-    latent: ttnn.Tensor, parameters: TtPatchEmbedParameters, parallel_config: DiTParallelConfig
+    latent: ttnn.Tensor, parameters: TtPatchEmbedParameters, parallel_manager: StableDiffusionParallelManager
 ) -> ttnn.Tensor:
     batch_size_, in_height, in_width, c_ = latent.shape
     out_height = in_height // parameters.patch_size
     out_width = in_width // parameters.patch_size
-    latent = sd_conv2d(latent, parameters.proj, parallel_config=parallel_config)
+    latent = sd_conv2d(latent, parameters.proj, parallel_manager=parallel_manager)
     latent = ttnn.reshape(latent, (batch_size_, out_height * out_width, -1))
     return latent + parameters.pos_embed

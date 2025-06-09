@@ -11,7 +11,8 @@ import ttnn
 import math
 
 from ..tt.fun_conv2d import TtConv2dParameters, sd_conv2d
-from ..tt.utils import assert_quality, from_torch_fast_2d, initialize_sd_parallel_config
+from ..tt.utils import assert_quality, from_torch_fast_2d
+from ..tt.parallel_config import StableDiffusionParallelManager
 
 TILE_SIZE = 32
 
@@ -76,8 +77,9 @@ def test_conv2d(
     tp_factor: int,
     topology: ttnn.Topology,
 ) -> None:
-    mesh_shape = tuple(mesh_device.shape)
-    dit_parallel_config = initialize_sd_parallel_config(mesh_shape, cfg_factor, sp_factor, tp_factor, topology)
+    parallel_manager = StableDiffusionParallelManager(
+        mesh_device, cfg_factor, sp_factor, tp_factor, sp_factor, tp_factor, topology
+    )
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 
@@ -89,7 +91,6 @@ def test_conv2d(
     )
     torch_model.eval()
 
-    num_devices = mesh_device.get_num_devices()
     pad_embedding_dim = (bool)(num_heads) % tp_factor
     if pad_embedding_dim:
         head_size = out_channels // num_heads
@@ -104,7 +105,7 @@ def test_conv2d(
         hidden_dim_padding=hidden_dim_padding,
         out_channels=out_channels,
         device=mesh_device,
-        parallel_config=dit_parallel_config,
+        parallel_config=parallel_manager.dit_parallel_config,
     )
 
     torch_input_tensor = torch.randn((batch_size, in_channels, height, width), dtype=torch_dtype)
@@ -116,21 +117,21 @@ def test_conv2d(
     tt_input_tensor = from_torch_fast_2d(
         torch_input_tensor.permute([0, 2, 3, 1]),  # BCYX -> BYXC
         mesh_device=mesh_device,
-        mesh_shape=dit_parallel_config.cfg_parallel.mesh_shape,
+        mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
         dims=[seq_parallel_shard_dim, None],
         dtype=ttnn_dtype,
         layout=ttnn.TILE_LAYOUT,
     )
 
-    tt_output = sd_conv2d(tt_input_tensor, parameters, dit_parallel_config)
+    tt_output = sd_conv2d(tt_input_tensor, parameters, parallel_manager)
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
             mesh_device,
             mesh_shape=tuple(mesh_device.shape),
             dims=[
-                dit_parallel_config.sequence_parallel.mesh_axis + seq_parallel_shard_dim,
-                dit_parallel_config.tensor_parallel.mesh_axis + 2,
+                parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + seq_parallel_shard_dim,
+                parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 2,
             ],
         ),
     )

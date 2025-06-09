@@ -12,7 +12,7 @@ import pytest
 import ttnn
 
 from .tt.fun_pipeline import TtStableDiffusion3Pipeline
-from .tt.utils import create_global_semaphores, initialize_sd_parallel_config
+from .tt.parallel_config import StableDiffusionParallelManager
 
 
 @pytest.mark.parametrize(
@@ -54,48 +54,9 @@ def test_sd3(
     up_factor,
     topology,
 ) -> None:  # , prompt_sequence_length, spatial_sequence_length,) -> None:
-    mesh_shape = tuple(mesh_device.shape)
-    dit_parallel_config = initialize_sd_parallel_config(
-        mesh_shape, cfg_factor, sp_factor, tp_factor, rp_factor, up_factor, topology
+    parallel_manager = StableDiffusionParallelManager(
+        mesh_device, cfg_factor, sp_factor, tp_factor, rp_factor, up_factor, topology
     )
-
-    # create submeshes and update mesh_shape before passing to parallel_configs
-    num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
-    submesh_devices = (
-        mesh_device.create_submeshes(ttnn.MeshShape(mesh_shape[0], mesh_shape[1] // cfg_factor))
-        if isinstance(mesh_device, ttnn.MeshDevice) and cfg_factor > 1
-        else [mesh_device]
-    )
-
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-    worker_sub_device = ttnn.SubDevice(
-        [
-            ccl_sub_device_crs,
-        ]
-    )
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-
-    # create global semaphore handles
-    ag_ccl_semaphore_handles = [
-        create_global_semaphores(submesh_devices[i], submesh_devices[i].get_num_devices(), ccl_sub_device_crs, 0)
-        for i in range(cfg_factor)
-    ]
-    rs_from_ccl_semaphore_handles = [
-        create_global_semaphores(submesh_devices[i], submesh_devices[i].get_num_devices(), ccl_sub_device_crs, 0)
-        for i in range(cfg_factor)
-    ]
-    rs_to_ccl_semaphore_handles = [
-        create_global_semaphores(submesh_devices[i], submesh_devices[i].get_num_devices(), ccl_sub_device_crs, 0)
-        for i in range(cfg_factor)
-    ]
-
-    ring_attention_semaphore_handles = [
-        [create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(2)]
-        for _ in range(cfg_factor)
-    ]
 
     if guidance_scale > 1 and cfg_factor == 1:
         guidance_cond = 2
@@ -105,15 +66,9 @@ def test_sd3(
     pipeline = TtStableDiffusion3Pipeline(
         checkpoint=f"stabilityai/stable-diffusion-3.5-{model_name}",
         mesh_device=mesh_device,
-        submesh_devices=submesh_devices,
         enable_t5_text_encoder=False,  # submesh_devices[0].get_num_devices() >= 4,
         guidance_cond=guidance_cond,
-        parallel_config=dit_parallel_config,
-        ag_ccl_semaphore_handles=ag_ccl_semaphore_handles,
-        rs_from_ccl_semaphore_handles=rs_from_ccl_semaphore_handles,
-        rs_to_ccl_semaphore_handles=rs_to_ccl_semaphore_handles,
-        ring_attention_semaphore_handles=ring_attention_semaphore_handles,
-        worker_sub_device_id=worker_sub_device_id,
+        parallel_manager=parallel_manager,
         height=image_h,
         width=image_w,
     )
@@ -156,5 +111,5 @@ def test_sd3(
 
         images[0].save(f"sd35_{image_w}_{image_h}.png")
 
-        for submesh_device in submesh_devices:
+        for submesh_device in parallel_manager.submesh_devices:
             ttnn.synchronize_device(submesh_device)

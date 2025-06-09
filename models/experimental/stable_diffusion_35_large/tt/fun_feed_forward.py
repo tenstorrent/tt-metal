@@ -11,7 +11,7 @@ import ttnn
 
 from .fun_linear import TtLinearParameters, sd_linear
 from .substate import substate
-from .parallel_config import DiTParallelConfig
+from .parallel_config import DiTParallelConfig, StableDiffusionParallelManager
 
 if TYPE_CHECKING:
     import torch
@@ -57,9 +57,8 @@ class TtFeedForwardParameters:
 def sd_feed_forward(
     x: ttnn.Tensor,
     parameters: TtFeedForwardParameters,
-    parallel_config: DiTParallelConfig,
-    rs_from_global_semaphore,
-    rs_to_global_semaphore,
+    parallel_manager: StableDiffusionParallelManager,
+    cfg_index: int,
 ) -> ttnn.Tensor:
     device = x.device()
 
@@ -75,15 +74,15 @@ def sd_feed_forward(
     result = sd_linear(x3, parameters.out_proj, core_grid=core_grid)
     ttnn.deallocate(x3)
 
-    if parallel_config.tensor_parallel.factor > 1:
+    if parallel_manager.is_tensor_parallel:
         result = ttnn.experimental.reduce_scatter_async(
             result,
             dim=3,
-            cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+            cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
             mesh_device=device,
-            topology=parallel_config.topology,
-            from_remote_multi_device_global_semaphore=rs_from_global_semaphore,
-            to_remote_multi_device_global_semaphore=rs_to_global_semaphore,
+            topology=parallel_manager.dit_parallel_config.topology,
+            from_remote_multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["rs_from"],
+            to_remote_multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["rs_to"],
             math_op=ttnn.ReduceType.Sum,
             num_links=1,
             memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
