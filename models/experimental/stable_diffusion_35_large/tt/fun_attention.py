@@ -12,7 +12,7 @@ import ttnn
 from .fun_linear import sd_linear, TtLinearParameters
 from .fun_normalization import sd_rms_norm, TtRmsNormParameters
 from .substate import has_substate, substate
-from .parallel_config import DiTParallelConfig
+from .parallel_config import DiTParallelConfig, StableDiffusionParallelManager
 from .utils import unpadded_all_gather_async
 
 
@@ -185,15 +185,12 @@ def sd_joint_attention(
     spatial: ttnn.Tensor,
     prompt: ttnn.Tensor | None = None,
     parameters: TtAttentionParameters,
-    parallel_config: DiTParallelConfig,
+    parallel_manager: StableDiffusionParallelManager,
     deallocate: bool = False,
     num_heads: int,  # TODO: should be a model parameter
     N: int,
     L: int,
-    ag_global_semaphore,
-    ring_attention_semaphore_handles,
-    persistent_buffers,
-    worker_sub_device_id,
+    cfg_index: int,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
     """
     spatial: N ⊗ S1 ⊗ (H * E1)
@@ -207,7 +204,7 @@ def sd_joint_attention(
     q, k, v = sd_attention_qkv(
         spatial,
         parameters=parameters.spatial,
-        parallel_config=parallel_config,
+        parallel_config=parallel_manager.dit_parallel_config,
         num_heads=num_heads,
         deallocate=deallocate,
     )
@@ -258,12 +255,12 @@ def sd_joint_attention(
     q2, k2, v2 = sd_attention_qkv(
         prompt,
         parameters=parameters.prompt,
-        parallel_config=parallel_config,
+        parallel_config=parallel_manager.dit_parallel_config,
         num_heads=num_heads,
         deallocate=deallocate,
     )
 
-    if parallel_config.ring_parallel.factor > 1:
+    if parallel_manager.is_ring_parallel:
         spatial, prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             q,
             k,
@@ -271,19 +268,19 @@ def sd_joint_attention(
             q2,
             k2,
             v2,
-            persistent_output_buffer_k=persistent_buffers[0],
-            persistent_output_buffer_v=persistent_buffers[1],
+            persistent_output_buffer_k=parallel_manager.persistent_buffers[cfg_index]["K_gathered"],
+            persistent_output_buffer_v=parallel_manager.persistent_buffers[cfg_index]["V_gathered"],
             joint_strategy="rear",
             logical_n=N,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
             dim=2,
-            multi_device_global_semaphore=ring_attention_semaphore_handles,
+            multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["ring_sdpa"],
             num_links=1,
-            cluster_axis=parallel_config.ring_parallel.mesh_axis,
+            cluster_axis=parallel_manager.dit_parallel_config.ring_parallel.mesh_axis,
             mesh_device=device,
-            topology=parallel_config.topology,
-            subdevice_id=worker_sub_device_id,
+            topology=parallel_manager.dit_parallel_config.topology,
+            subdevice_id=parallel_manager.ccl_sub_device_id,
             ccl_core_grid_offset=(0, sdpa_worker_grid[1]),
         )
     else:
@@ -315,22 +312,22 @@ def sd_joint_attention(
     spatial = ttnn.unsqueeze(spatial, 1)
     prompt = ttnn.unsqueeze(prompt, 1)
 
-    if parallel_config.ulysses_parallel.factor > 1:
+    if parallel_manager.is_ulysses_parallel:
         spatial = ttnn.experimental.all_gather_async(
             spatial,
             dim=3,
-            cluster_axis=parallel_config.ulysses_parallel.mesh_axis,
+            cluster_axis=parallel_manager.dit_parallel_config.ulysses_parallel.mesh_axis,
             mesh_device=device,
-            topology=parallel_config.topology,
-            multi_device_global_semaphore=ag_global_semaphore,
+            topology=parallel_manager.dit_parallel_config.topology,
+            multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["ag"],
         )
         prompt = unpadded_all_gather_async(
             prompt,
             dim=3,
-            cluster_axis=parallel_config.ulysses_parallel.mesh_axis,
+            cluster_axis=parallel_manager.dit_parallel_config.ulysses_parallel.mesh_axis,
             mesh_device=device,
-            topology=parallel_config.topology,
-            multi_device_global_semaphore=ag_global_semaphore,
+            topology=parallel_manager.dit_parallel_config.topology,
+            multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["ag"],
         )
 
     spatial = sd_attention_out_proj(spatial, parameters.spatial)

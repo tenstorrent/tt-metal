@@ -12,7 +12,8 @@ import math
 
 from ..reference import SD3Transformer2DModel
 from ..tt.fun_attention import sd_joint_attention, TtAttentionParameters
-from ..tt.utils import assert_quality, from_torch_fast_2d, create_global_semaphores, initialize_sd_parallel_config
+from ..tt.utils import assert_quality, from_torch_fast_2d
+from ..tt.parallel_config import StableDiffusionParallelManager
 
 if TYPE_CHECKING:
     from ..reference.attention import Attention
@@ -71,30 +72,11 @@ def test_attention(
     topology: ttnn.Topology,
 ) -> None:
     mesh_shape = tuple(mesh_device.shape)
-    dit_parallel_config = initialize_sd_parallel_config(
-        mesh_shape, cfg_factor, sp_factor, tp_factor, rp_factor, up_factor, topology
+    parallel_manager = StableDiffusionParallelManager(
+        mesh_device, cfg_factor, sp_factor, tp_factor, rp_factor, up_factor, topology
     )
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
-
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
-
-    worker_sub_device = ttnn.SubDevice(
-        [
-            ccl_sub_device_crs,
-        ]
-    )
-    worker_sub_device_id = ttnn.SubDeviceId(0)
-
-    # create global semaphore handles
-    num_devices = mesh_device.get_num_devices()
-    ccl_semaphore_handle = create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0)
-    ring_attention_semaphore_handles = [
-        create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(2)
-    ]
 
     parent_torch_model = SD3Transformer2DModel.from_pretrained(
         f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="transformer", torch_dtype=torch_dtype
@@ -121,7 +103,7 @@ def test_attention(
         hidden_dim_padding=hidden_dim_padding,
         device=mesh_device,
         dtype=ttnn_dtype,
-        parallel_config=dit_parallel_config,
+        parallel_config=parallel_manager.dit_parallel_config,
     )
 
     torch.manual_seed(0)
@@ -145,8 +127,8 @@ def test_attention(
     tt_spatial = from_torch_fast_2d(
         spatial_padded_4d,
         mesh_device=mesh_device,
-        mesh_shape=dit_parallel_config.cfg_parallel.mesh_shape,
-        dims=[dit_parallel_config.sequence_parallel.mesh_axis + 2, None],
+        mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
+        dims=[parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 2, None],
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn_dtype,
     )
@@ -167,7 +149,7 @@ def test_attention(
         tt_prompt = from_torch_fast_2d(
             prompt_padded_4d,
             mesh_device=mesh_device,
-            mesh_shape=dit_parallel_config.cfg_parallel.mesh_shape,
+            mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
             dims=[None, None],
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn_dtype,
@@ -180,30 +162,18 @@ def test_attention(
 
     # Create persistent buffers
     persistent_buffer_shape = [1, num_heads // up_factor, spatial_padded_4d.shape[2], head_size]
-    persistent_buffers = [
-        ttnn.from_torch(
-            torch.zeros(persistent_buffer_shape),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn_dtype,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]),
-        )
-        for _ in range(2)
-    ]
+    parallel_manager.maybe_init_persistent_buffers(persistent_buffer_shape)
 
     # if joint_attention:
     tt_spatial_output, tt_prompt_output = sd_joint_attention(
         spatial=tt_spatial,
         prompt=tt_prompt,
         parameters=parameters,
-        parallel_config=dit_parallel_config,
+        parallel_manager=parallel_manager,
         num_heads=num_heads,
         N=spatial_sequence_length,
         L=prompt_sequence_length,
-        ag_global_semaphore=ccl_semaphore_handle,
-        ring_attention_semaphore_handles=ring_attention_semaphore_handles,
-        persistent_buffers=persistent_buffers,
-        worker_sub_device_id=worker_sub_device_id,
+        cfg_index=0,
     )
 
     ttnn.synchronize_device(mesh_device)
@@ -214,8 +184,8 @@ def test_attention(
             mesh_device,
             mesh_shape=tuple(mesh_device.shape),
             dims=[
-                dit_parallel_config.sequence_parallel.mesh_axis + 2,
-                dit_parallel_config.tensor_parallel.mesh_axis + 2,
+                parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 2,
+                parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 2,
             ],
         ),
     )
@@ -231,8 +201,8 @@ def test_attention(
                 mesh_device,
                 mesh_shape=tuple(mesh_device.shape),
                 dims=[
-                    dit_parallel_config.sequence_parallel.mesh_axis + 2,
-                    dit_parallel_config.tensor_parallel.mesh_axis + 2,
+                    parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 2,
+                    parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 2,
                 ],
             ),
         )
