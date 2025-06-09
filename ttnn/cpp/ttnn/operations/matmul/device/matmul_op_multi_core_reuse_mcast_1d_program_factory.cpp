@@ -1631,7 +1631,10 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_gather_in0(
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool ignore_subdevice) {
+    bool limit_cores_via_subdevices) {
+    // limit_cores_via_subdevices = false is a hack needed for Llama to work, where we allow an application to operate
+    // on the cores of two different subdevices due to a program factory level fusion. This should not be exposed to the
+    // TTNN users unless the llama specific entry point is used.
     const auto b = b_tensors[0];
     const auto num_output_cb = out_buffers.size();
     const auto batch = b_tensors.size();
@@ -1644,7 +1647,7 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_gather_in0(
     CoreRangeSet all_worker_cores = a.shard_spec().value().grid;
     CoreRangeSet non_idle_cores = all_worker_cores.merge(hop_cores);
     CoreRangeSet all_cores = non_idle_cores;
-    if (!ignore_subdevice) {
+    if (limit_cores_via_subdevices) {
         std::vector<CoreRange> non_idle_cores_vec;
         auto subdevice_cores = device->worker_cores(
             tt::tt_metal::HalProgrammableCoreType::TENSIX,
@@ -1937,14 +1940,13 @@ ttnn::operations::matmul::matmul_shared_variables_t process_program_gather_in0(
         untilize_out,             // untilize_out
         in1_is_dram_interleaved,  // in1_is_dram_interleaved
         in1_is_dram_sharded,      // in1_is_dram_sharded
-        0,                        // to be overwritten by size of static ct vars
         src0_cb_index,
         src1_cb_index,
         src2_cb_index,
         sync_cb_index,
         sync_cb2_index,
     };
-    compute_kernel_args.at(18) = compute_kernel_args.size();
+    compute_kernel_args.push_back(compute_kernel_args.size() + 1);  // The CT index of the output_cbs
     for (uint32_t i = 0; i < num_output_cb; ++i) {
         compute_kernel_args.push_back(output_cb_indices[i]);
     }
@@ -2210,8 +2212,14 @@ inline void override_program_mcast_in1(
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
     const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
     const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-    TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
-    TT_ASSERT(output_tensors.size() == 1);
+    TT_FATAL(
+        input_tensors.size() + optional_input_tensors.size() == 3,
+        "mcast in1 requires 3 input tensors, {} + {} = {} provided",
+        input_tensors.size(),
+        optional_input_tensors.size(),
+        optional_input_tensors.size() + input_tensors.size());
+    TT_FATAL(
+        output_tensors.size() == 1, "matmul mcast in1 requires 1 output tensor, {} provided", output_tensors.size());
 
     auto src_buffer_a = input_tensors.at(0).buffer();
     auto src_buffer_b = input_tensors.at(1).buffer();
@@ -2281,8 +2289,14 @@ inline void override_program_mcast_in0(
     const std::vector<tt::tt_metal::Tensor>& input_tensors,
     const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
     const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-    TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
-    TT_ASSERT(output_tensors.size() == 1);
+    TT_FATAL(
+        input_tensors.size() + optional_input_tensors.size() == 3,
+        "mcast in0 requires 3 input tensors, {} + {} = {} provided",
+        input_tensors.size(),
+        optional_input_tensors.size(),
+        optional_input_tensors.size() + input_tensors.size());
+    TT_FATAL(
+        output_tensors.size() == 1, "matmul mcast in0 requires 1 output tensor, {} provided", output_tensors.size());
 
     auto src_buffer_a = input_tensors.at(0).buffer();
     auto src_buffer_b = input_tensors.at(1).buffer();
@@ -2443,7 +2457,7 @@ ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcas
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t start_cb_index,
-    bool ignore_subdevice) {
+    bool limit_cores_via_subdevices) {
     const auto b = b_tensors[0];
     const auto output = output_tensors[0];
 
@@ -2585,7 +2599,7 @@ ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcas
             global_cb,
             num_global_cb_receivers,
             sub_device_id,
-            ignore_subdevice);
+            limit_cores_via_subdevices);
     }
     TT_FATAL(start_cb_index == tt::CBIndex::c_0, "mcast does not support a non-zero start cb index");
     if (mcast_in0) {
@@ -2724,7 +2738,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
         num_global_cb_receivers,
         sub_device_id,
         tt::CBIndex::c_0,
-        false);
+        true);
     auto override_runtime_arguments_callback =
         [shared_vars](
             const void* operation,
@@ -2753,7 +2767,7 @@ ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcas
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t start_cb_index,
-    bool ignore_subdevice) {
+    bool limit_cores_via_subdevices) {
     MatmulMultiCoreReuseMultiCast1DProgramConfig config =
         std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
 
@@ -2784,7 +2798,7 @@ ttnn::operations::matmul::matmul_shared_variables_t matmul_multi_core_reuse_mcas
         config.num_global_cb_receivers,
         sub_device_id,
         start_cb_index,
-        ignore_subdevice);
+        limit_cores_via_subdevices);
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
@@ -2815,7 +2829,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
             global_cb,
             sub_device_id,
             tt::CBIndex::c_0,
-            false);
+            true);
     auto override_runtime_arguments_callback =
         [shared_vars](
             const void* operation,

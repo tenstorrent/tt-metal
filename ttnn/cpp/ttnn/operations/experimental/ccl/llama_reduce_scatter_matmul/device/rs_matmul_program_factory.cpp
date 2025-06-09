@@ -59,7 +59,7 @@ ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_
                 operation_attributes.matmul.global_cb,
                 std::nullopt,
                 tt::CBIndex::c_6,
-                true)}};
+                false)}};
 }
 
 void Matmul_RS::Matmul_RS_PF::override_runtime_arguments(

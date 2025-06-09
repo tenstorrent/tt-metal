@@ -255,7 +255,7 @@ matmul_shared_variables_t matmul_multi_core_reuse_mcast_1d_optimized_expander(
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const uint32_t start_cb_index,
-    bool ignore_subdevice);
+    bool limit_cores_via_subdevices);
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
