@@ -12,8 +12,6 @@
 #include "tt-metalium/buffer.hpp"
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
-#include "tt-metalium/command_queue.hpp"
-#include "tt-metalium/constants.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/data_types.hpp"
 #include "tt-metalium/device.hpp"
@@ -86,11 +84,13 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
         dim + 2 < tensor_rank, "cumsum on x and y axes not supported: received dim = {}, rank = {}", dim, tensor_rank);
 
     // Parameters setup
-    uint32_t num_tiles = output_tensor.physical_volume() / tt::constants::TILE_HW;
+    const auto& tile = input_tensor.tensor_spec().tile();
+    uint32_t num_tiles = output_tensor.physical_volume() / tile.get_tile_hw();
+    
     const uint32_t xy_volume = tensor_shape[tensor_rank - 1] * tensor_shape[tensor_rank - 2];  // W * H
     const uint32_t num_tiles_per_row = tensor_shape[dim];      // each row contains N independent tiles
     const uint32_t num_rows = num_tiles / num_tiles_per_row;   // total number of rows in tensor
-    const uint32_t HtWt = xy_volume / tt::constants::TILE_HW;  // padded shape => xy_volume is multiple of tile_size
+    const uint32_t HtWt = xy_volume / tile.get_tile_hw();      // padded shape => xy_volume is multiple of tile_size
 
     // Depending on tensor rank and dim parameter, we may have to iterative on several tensor axis, with varying offset
     // To solve this problem (and generalize the approach), we can compute two offsets: for dimensions > dim and for
@@ -109,7 +109,7 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
     }
 
     // Buffer setup
-    const uint32_t single_tile_size = output_tensor.element_size() * tt::constants::TILE_HW;
+    const uint32_t single_tile_size = output_tensor.element_size() * tile.get_tile_hw();
 
     constexpr uint32_t cb_in_index = CBIndex::c_0;
     constexpr uint32_t cb_out_index = CBIndex::c_1;
