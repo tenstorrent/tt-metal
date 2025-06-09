@@ -35,9 +35,9 @@ TSU_PERF_DROP_LIMIT_PERCENT = 10
 
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
-    "4U": {1: {"min": 340, "max": 380}, 10: {"min": 230, "max": 253}, 80: {"min": 49.5, "max": 54}},
+    "4U": {1: {"min": 390, "max": 448}, 10: {"min": 230, "max": 253}, 80: {"min": 49.5, "max": 54}},
     # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
-    "6U": {1: {"min": 450, "max": 490}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
+    "6U": {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
 }
 
 
@@ -490,13 +490,15 @@ def run_llama3_demo(
 
                 tokens_per_second_per_user = 1 / iteration_time
 
+                all_tokens_per_second_per_user.append(tokens_per_second_per_user)
+
                 if not is_ci_env or current_iteration < 200 or current_iteration % 1000 == 0:
                     logger.info(
                         f"Iteration : {current_iteration}, Decode Iteration : {current_decode_iteration}, tok/s/user : {tokens_per_second_per_user:.2f}, Throughput : {batch_size/iteration_time:.2f} tok/s, Iteration Time : {1000*iteration_time:.2f} ms"
                     )
                 profiler.end(f"log_printing_iter_{current_iteration}", iteration=current_iteration)
 
-                if is_ci_env and current_iteration == 127:
+                if current_iteration == 127:
                     tokens_per_second_per_user_token127 = tokens_per_second_per_user
 
                 if not stress_test:
