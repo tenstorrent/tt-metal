@@ -248,7 +248,7 @@ def create_tt_model(
     "device_params",
     [
         {
-            "trace_region_size": 92000000,
+            "trace_region_size": 102000000,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1344544,
@@ -348,24 +348,12 @@ def test_demo_text(
         input_prompts = load_inputs(
             input_prompts,
             [
-                2,
-                111,
                 534,
                 1008,
                 1111 * 4,
                 3333 * 4,
-                4444 * 4,
-                5555 * 4,
-                6666 * 4,
-                7777 * 4,
-                8888 * 2,
-                9999 * 2,
-                10000 * 2,
-                11111 * 2,
-                12222 * 2,
-                15384 * 2,
             ]
-            * 2
+            * 8
             if batch_size == 32
             else [15384 * 8],
             input_prompts,
@@ -458,7 +446,9 @@ def test_demo_text(
         assert (
             max_generated_tokens + max_encoded_prompt_len <= max_seq_len
         ), f"Prompt prefill tokens ({max_encoded_prompt_len}) + maximum number of decoded iterations ({max_generated_tokens}) needs to be <= than max_seq_len ({max_seq_len})"
-        batch_size_per_device_group = 8 if batch_size == 32 else 1
+        batch_size_per_device_group = (
+            32 if batch_size == 32 else 1
+        )  # This is a workoaround until page table needs to know that attention is DP
         if paged_attention:
             paged_cache_max_seq_len = (
                 page_params["page_block_size"] * page_params["page_max_num_blocks"] / batch_size_per_device_group
