@@ -177,3 +177,6 @@ mcast_RingAsLinear,noc_fused_unicast_write_no_flush_atomic_inc,4096,4,1,False,Tr
 unicast_RingAsLinear,noc_fused_unicast_write_no_flush_atomic_inc,4096,4,1,False,True,True,3.3461515609449837,816931.5334338339
 mcast_RingAsLinear,noc_fused_unicast_write_no_flush_atomic_inc,4096,4,1,True,True,True,5.975265086742001,1458804.9528178715
 unicast_RingAsLinear,noc_fused_unicast_write_no_flush_atomic_inc,4096,4,1,True,True,True,6.476256298854942,1581117.2604626324
+unicast_Linear_all_rows_all_cols_mesh,noc_unicast_write,16,"[4, 2]","[1, 1]","[False, False]","[False, False]","[True, True]",0.046324695304926264,2895293.4565578913
+unicast_Linear_all_rows_all_cols_mesh,noc_unicast_write,2048,"[4, 2]","[1, 1]","[False, False]","[False, False]","[True, True]",5.9333069357691,2887356.902231006
+unicast_Linear_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 2]","[1, 1]","[False, False]","[False, False]","[True, True]",10.962518344186009,2676396.080123537
