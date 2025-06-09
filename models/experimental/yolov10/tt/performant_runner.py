@@ -2,36 +2,32 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-
 import ttnn
-from models.demos.ufld_v2.tests.ufld_v2_test_infra import UFLDPerformanceRunnerInfra
+from models.experimental.yolov10.tt.performant_runner_infra import YOLOv10PerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-class UFLDPerformantRunner:
+class YOLOv10PerformantRunner:
     def __init__(
         self,
         device,
         device_batch_size=1,
         act_dtype=ttnn.bfloat16,
-        weight_dtype=ttnn.bfloat8_b,
+        weight_dtype=ttnn.bfloat16,
         model_location_generator=None,
-        resolution=(320, 800),
-        torch_input_tensor=None,
+        resolution=(640, 640),
     ):
         self.device = device
         self.resolution = resolution
-        self.torch_input_tensor = torch_input_tensor
-        self.runner_infra = UFLDPerformanceRunnerInfra(
+        self.runner_infra = YOLOv10PerformanceRunnerInfra(
             device,
             device_batch_size,
             act_dtype,
             weight_dtype,
             model_location_generator,
             resolution=resolution,
-            torch_input_tensor=self.torch_input_tensor,
         )
+
         (
             self.tt_inputs_host,
             sharded_mem_config_DRAM,
@@ -39,7 +35,9 @@ class UFLDPerformantRunner:
         ) = self.runner_infra.setup_dram_sharded_input(device)
         self.tt_image_res = self.tt_inputs_host.to(device, sharded_mem_config_DRAM)
 
-    def _capture_ufldv2_trace_2cqs(self):
+        self._capture_yolov10_trace_2cqs()
+
+    def _capture_yolov10_trace_2cqs(self):
         # Initialize the op event so we can write
         self.op_event = ttnn.record_event(self.device, 0)
 
@@ -80,34 +78,37 @@ class UFLDPerformantRunner:
         ttnn.end_trace_capture(self.device, self.tid, cq_id=0)
         assert trace_input_addr == self.input_tensor.buffer_address()
 
-    def _execute_ufldv2_trace_2cqs_inference(self, tt_inputs_host=None):
-        tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
+    def _execute_yolov10_trace_2cqs_inference(self, tt_inputs_host=None):
         ttnn.wait_for_event(1, self.op_event)
-        ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
+        ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
-        if self.input_tensor.is_sharded():
-            self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
+        # TODO: Add in place support to ttnn to_memory_config
+        self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
-        return self.runner_infra.output_tensor_1
+        ttnn.synchronize_device(self.device)
+
+        ttnn_output_tensor = self.runner_infra.output_tensor
+        return ttnn_output_tensor  # get_model_result(ttnn_output_tensor, self.resolution)
 
     def _validate(self, input_tensor, result_output_tensor):
-        torch_output_tensor = self.runner_infra.torch_output_tensor_1
-        assert_with_pcc(torch_output_tensor, result_output_tensor, self.runner_infra.valid_pcc)
+        torch_output_tensor = self.runner_infra.torch_output_tensor
+        assert_with_pcc(torch_output_tensor, result_output_tensor, 0.99)
 
-    def run(self, torch_input_tensor):
-        n, c, h, w = torch_input_tensor.shape
-        torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
-        torch_input_tensor = torch.nn.functional.pad(torch_input_tensor, (0, 13))
-        torch_input_tensor = torch_input_tensor.reshape(
-            1,
-            1,
-            (torch_input_tensor.shape[0] * torch_input_tensor.shape[1] * torch_input_tensor.shape[2]),
-            torch_input_tensor.shape[3],
-        )
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        output = self._execute_ufldv2_trace_2cqs_inference(tt_inputs_host)
+    def run(self, torch_input_tensor, check_pcc=False):
+        n, h, w, c = torch_input_tensor.shape
+        torch_input_tensor = torch_input_tensor.reshape(1, 1, h * w * n, c)
+        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+        tt_inputs_host = ttnn.pad(tt_inputs_host, [1, 1, n * h * w, 32], [0, 0, 0, 0], 0)
+
+        output = self._execute_yolov10_trace_2cqs_inference(tt_inputs_host)
+
+        if check_pcc:
+            torch_input_tensor = torch_input_tensor.reshape(n, h, w, c)
+            torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
+            self._validate(torch_input_tensor, output)
+
         return output
 
     def release(self):
