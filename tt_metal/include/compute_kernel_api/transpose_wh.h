@@ -32,7 +32,7 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 
-    UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(0, true)));
+    UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(icb, true)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true)));
 }
 
