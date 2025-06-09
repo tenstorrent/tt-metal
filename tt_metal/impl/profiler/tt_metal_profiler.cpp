@@ -691,7 +691,7 @@ void DumpDeviceProfileResults(
     IDevice* device, ProfilerDumpState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-    tt::log_info(tt::LogMetal, "Dumping device profile results for device {} state {}", device->id(), state);
+    log_info(tt::LogMetal, "Dumping device profile results for device {} state {}", device->id(), state);
     std::vector<CoreCoord> workerCores;
     const chip_id_t device_id = device->id();
     const uint8_t device_num_hw_cqs = device->num_hw_cqs();
@@ -775,7 +775,7 @@ void DumpDeviceProfileResults(
                         curr_core.x,
                         curr_core.y);
                     TracyMessageC(msg.c_str(), msg.size(), tracy::Color::Tomato3);
-                    log_warning(msg.c_str());
+                    log_warning(tt::LogMetal, "{}", msg);
                 }
                 dispatch_cores.erase(dispatch_cores.begin());
             }
