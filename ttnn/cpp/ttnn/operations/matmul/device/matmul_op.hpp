@@ -20,16 +20,16 @@ namespace matmul {
 
 // shared variables between override and program
 
-enum MATMUL_TYPE { mcast_in0, gather_in0, mcast_in1 };
+enum class Matmul1DType { MCAST_IN0, GATHER_IN0, MCAST_IN1 };
 
-struct matmul_shared_variables_t {
+struct matmul_mcast_1d_common_override_variables_t {
     std::vector<tt::tt_metal::KernelHandle> kernels;
     std::vector<tt::tt_metal::CBHandle> cbs;
-    bool conditional;
+    bool extract_shard_sub_blocks;
     CoreCoord start_core;
     std::vector<CoreCoord> cores;
     uint32_t num_cores_with_work;
-    MATMUL_TYPE type;
+    Matmul1DType type;
 };
 
 // Define the buffering depth for input CBs (0 and 1) for mcast variants.
@@ -241,7 +241,7 @@ Matmul create_matmul_struct(
     const struct Matmul& parameters,
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt});
 
-matmul_shared_variables_t matmul_multi_core_reuse_mcast_1d_optimized_expander(
+matmul_mcast_1d_common_override_variables_t matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor_a,
     const std::vector<Tensor>& input_tensors_b,
@@ -316,8 +316,8 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
 }  // namespace bmm_op_utils
 
 namespace reuse_mcast_1d_optimized_helpers {
-void override_program(
-    const ttnn::operations::matmul::matmul_shared_variables_t& shared_variables,
+void override_program_parameters(
+    const ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t& shared_variables,
     const void* operation,
     tt::tt_metal::Program& program,
     const std::vector<tt::tt_metal::Tensor>& input_tensors,

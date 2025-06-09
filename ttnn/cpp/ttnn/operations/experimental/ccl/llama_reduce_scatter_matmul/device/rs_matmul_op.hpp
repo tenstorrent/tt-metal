@@ -49,7 +49,7 @@ struct Matmul_RS {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
             LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::shared_variables_t rs_shared_vars;
-            ttnn::operations::matmul::matmul_shared_variables_t matmul_shared_vars;
+            ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_shared_vars;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
