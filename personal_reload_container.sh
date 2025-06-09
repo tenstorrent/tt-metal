@@ -1,3 +1,7 @@
+#!/bin/bash
+
+set -euo pipefail
+
 cd .build/default
 rm -rf *.deb
 rm -rf *.ddeb
