@@ -159,7 +159,7 @@ void kernel_main() {
                     size_t intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
                     for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                         noc_async_read_tile(
-                            (read_forward ? fwd_input_tile_id_start : bwd_input_tile_id_start) +
+                            (read_forward ? fwd_intermediate_tile_id_start : bwd_intermediate_tile_id_start) +
                                 intermediate_row_offset + intermediate_pages_read_in_row,
                             intermediate_tensor_addrgen,
                             intermediate_l1_write_addr);

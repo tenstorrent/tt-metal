@@ -94,8 +94,6 @@ void kernel_main() {
 
     uint32_t slice_Wt = input_tensor_Wt / ring_size;
 
-    constexpr uint32_t batch_num_pages = batch_slice_num_pages * ring_size;
-
     // interleaved addrgen
     constexpr bool intermediate_is_dram = intermediate_type == tt::tt_metal::BufferType::DRAM;
     auto intermediate_addrgen = InterleavedAddrGenFast<intermediate_is_dram>{
@@ -116,7 +114,6 @@ void kernel_main() {
         int fwd_slice_idx = my_chip_id - 1;
         int bwd_slice_idx = my_chip_id + 1;
 
-        uint32_t batch_offset = batch_num_pages * b;
         uint32_t batch_slice_offset = batch_slice_num_pages * b;
         for (uint32_t i = 0; i < ring_size; ++i) {
             actual_fwd_slice_id_x = (actual_fwd_slice_id_x == 0) ? ring_size - 1 : actual_fwd_slice_id_x - 1;
@@ -150,8 +147,8 @@ void kernel_main() {
                 //        << "slice_Wt: " << slice_Wt << ", stride_Wt: " << stride_Wt << ", batch_offset: " <<
                 //        batch_offset
                 //        << "\n";
-                uint32_t fwd_input_tile_id_start = actual_fwd_slice_idx * slice_Wt + batch_offset;
-                uint32_t bwd_input_tile_id_start = actual_bwd_slice_idx * slice_Wt + batch_offset;
+                uint32_t fwd_input_tile_id_start = actual_fwd_slice_idx * slice_Wt;
+                uint32_t bwd_input_tile_id_start = actual_bwd_slice_idx * slice_Wt;
                 bool write_forward = true;
 
                 while (tiles_read < tiles_to_read) {
