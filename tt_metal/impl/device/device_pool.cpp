@@ -793,6 +793,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
 
     bool pass = true;
     for (const auto& dev_id : devices_to_close) {
+        log_info(tt::LogMetal, "devicepool close_devices", dev_id);
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
         pass &= dev->close();
     }
@@ -801,7 +802,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
 }
 
 DevicePool::~DevicePool() {
-    log_debug(tt::LogMetal, "DevicePool destructor");
+    log_info(tt::LogMetal, "DevicePool destructor");
     for (const auto& dev : this->devices) {
         if (dev != nullptr and dev->is_initialized()) {
             // TODO: #13876, Was encountering issues with the DispatchMemMap being destroyed before the DevicePool

@@ -24,9 +24,12 @@
 
 #include "allocator.hpp"
 #include "assert.hpp"
+#include "buffer.hpp"
 #include "device/device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "host_api.hpp"
 #include "mesh_trace.hpp"
+#include "profiler_types.hpp"
 #include "shape_base.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -394,6 +397,8 @@ MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
     return *(mesh_command_queues_[cq_id]);
 }
 
+bool MeshDevice::are_mesh_command_queues_initialized() const { return are_mesh_command_queues_initialized_; }
+
 DeviceIds MeshDevice::get_device_ids() const {
     DeviceIds device_ids;
     for (auto device : this->get_devices()) {
@@ -479,6 +484,17 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 }
 
 bool MeshDevice::close() {
+    log_info(tt::LogMetal, "Closing mesh device {}", this->build_id());
+    // if (scoped_devices_) {
+    //     log_info(tt::LogMetal, "root devices size {}", this->scoped_devices_->root_devices().size());
+    //     for (IDevice* device : this->scoped_devices_->root_devices()) {
+    //         TT_FATAL(dynamic_cast<Device*>(device), "Device is not a Device");
+    //     dynamic_cast<Device*>(device)->set_mesh_device(nullptr);
+    //     }
+    // }
+    // this->is_initialized()
+    DumpMeshDeviceProfileResults(*this, ProfilerDumpState::LAST_CLOSE_DEVICE);
+    are_mesh_command_queues_initialized_ = false;
     mesh_command_queues_.clear();
     sub_device_manager_tracker_.reset();
     scoped_devices_.reset();
@@ -809,6 +825,7 @@ bool MeshDevice::initialize(
             mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(this, cq_id));
         }
     }
+    are_mesh_command_queues_initialized_ = true;
     return true;
 }
 

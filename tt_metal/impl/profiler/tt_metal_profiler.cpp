@@ -77,6 +77,7 @@ void DumpMeshDeviceProfileResults(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     for (IDevice* device : mesh_device.get_devices()) {
+        log_info(tt::LogMetal, "Dumping device profile results for device {} in mesh device", device->id());
         detail::DumpDeviceProfileResults(device, state, metadata);
     }
 #endif
@@ -723,9 +724,9 @@ void DumpDeviceProfileResults(
 
     if (getDeviceProfilerState()) {
         if (state != ProfilerDumpState::ONLY_DISPATCH_CORES) {
-            const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
-            if (USE_FAST_DISPATCH) {
-                if (auto mesh_device = device->get_mesh_device()) {
+            if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
+                auto mesh_device = device->get_mesh_device();
+                if (mesh_device && mesh_device->are_mesh_command_queues_initialized()) {
                     mesh_device->mesh_command_queue().finish();
                 } else {
                     Finish(device->command_queue());
@@ -789,9 +790,7 @@ void DumpDeviceProfileResults(
         if (profiler_it != tt_metal_device_profiler_map.end()) {
             DeviceProfiler& profiler = profiler_it->second;
             profiler.setDeviceArchitecture(device->arch());
-            const ProfilerDataBufferSource data_source =
-                onlyProfileDispatchCores(state) ? ProfilerDataBufferSource::L1 : ProfilerDataBufferSource::DRAM;
-            profiler.dumpResults(device, worker_cores, state, data_source, metadata);
+            profiler.dumpResults(device, worker_cores, state, ProfilerDataBufferSource::DRAM, metadata);
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
                 profiler.pushTracyDeviceResults();
             }
