@@ -13,9 +13,6 @@
 #include "compute_kernel_api/softmax.h"
 #include "compute_kernel_api/reduce.h"
 
-#include "debug/dprint.h"
-#include "debug/dprint_tensix.h"
-
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 

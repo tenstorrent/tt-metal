@@ -95,7 +95,6 @@ void kernel_main() {
                     l1_write_addr += src0_tile_bytes;
 #if FUSED_SCALE_MASK
                     noc_async_read_tile(mask_index, addr_mask, l1_write_addr_mask);  // TODO(AP): data type size
-                    DPRINT << "mask_index: " << mask_index << ENDL();
                     mask_index++;
                     l1_write_addr_mask += mask_tile_bytes;
 #endif
