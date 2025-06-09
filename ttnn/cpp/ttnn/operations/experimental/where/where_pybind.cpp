@@ -39,7 +39,7 @@ void bind_where(pybind11::module& module) {
                * - Dtypes
                  - Layouts
                  - Ranks
-               * - BFLOAT16, BFLOAT8_B
+               * - BFLOAT16
                  - TILE
                  - 2, 3, 4
 
