@@ -6,9 +6,8 @@
 
 using ReceiverKernelConfig = tt::tt_fabric::fabric_tests::SenderKernelConfig;
 
-constexpr uint8_t NUM_TRAFFIC_CONFIGS;
-
-constexpr bool BENCHMARK_MODE;
+constexpr uint8_t NUM_TRAFFIC_CONFIGS = get_compile_time_arg_val(0);
+constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(1);
 
 void kernel_main() {
     size_t rt_args_idx = 0;

@@ -4,12 +4,11 @@
 
 #include "tt_fabric_test_kernels_utils.hpp"
 
-constexpr uint8_t IS_2D_FABRIC;
-constexpr uint8_t USE_DYNAMIC_ROUTING;
-constexpr uint8_t NUM_FABRIC_CONNECTIONS;
-constexpr uint8_t NUM_TRAFFIC_CONFIGS;
-
-constexpr bool BENCHMARK_MODE;
+constexpr uint8_t IS_2D_FABRIC = get_compile_time_arg_val(0);
+constexpr uint8_t USE_DYNAMIC_ROUTING = get_compile_time_arg_val(1);
+constexpr uint8_t NUM_FABRIC_CONNECTIONS = get_compile_time_arg_val(2);
+constexpr uint8_t NUM_TRAFFIC_CONFIGS = get_compile_time_arg_val(3);
+constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(5);
 
 using SenderKernelConfig = tt::tt_fabric::fabric_tests::SenderKernelConfig;
 

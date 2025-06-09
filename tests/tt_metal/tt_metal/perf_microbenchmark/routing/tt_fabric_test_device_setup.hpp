@@ -192,10 +192,13 @@ public:
     uint32_t get_worker_id(CoreCoord logical_core) const;
     void add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config);
     void add_receiver_traffic_config(CoreCoord logical_core, TestTrafficReceiverConfig config);
+    void create_kernels();
 
 private:
     uint32_t get_worker_noc_encoding(CoreCoord logical_core) const;
     void reserve_worker_core(CoreCoord logical_core);
+    void create_sender_kernels();
+    void create_receiver_kernels();
 
     tt::tt_metal::IDevice* device_handle_;
     chip_id_t physical_chip_id_;
@@ -656,6 +659,81 @@ inline uint32_t TestDevice::allocate_address_for_sender(CoreCoord receiver_core)
     }
 
     return address;
+}
+
+inline void TestDevice::create_sender_kernels() {
+    // TODO: fetch these dynamically
+    const bool is_2d_fabric = false;
+    const bool use_dynamic_routing = false;
+
+    for (const auto& [core, sender] : this->senders_) {
+        // get ct args
+        // TODO: fix these- number of fabric connections, mappings etc
+        std::vector<uint32_t> ct_args = {
+            is_2d_fabric,
+            use_dynamic_routing,
+            1, /* num fabric connections */
+            sender.configs_.size(),
+            0 /* benchmark mode */};
+
+        // get fabric connection args
+        // for now just assume that there is only 1 recv per sender
+        // TODO: move this elsewhere and fix the logic
+        const auto& temp_config = sender.configs_[0];
+        const auto dst_physical_chip_id = temp_config.dst_phys_chip_ids[0];
+
+        // get link indices
+        const auto available_links = get_forwarding_link_indices(this->physical_chip_id_, dst_physical_chip_id);
+        const auto link_idx = available_links[0];
+        std::vector<uint32_t> fabric_connection_args;
+        append_fabric_connection_rt_args(
+            this->physical_chip_id_,
+            dst_physical_chip_id,
+            link_idx,
+            this->program_handle,
+            core,
+            fabric_connection_args);
+
+        std::vector<uint32_t> traffic_config_args;
+        for (const auto& config : sender.configs_) {
+            const auto traffic_args = config.get_args();
+            traffic_config_args.insert(traffic_config_args.end(), traffic_args.begin(), traffic_args.end());
+        }
+
+        std::vector<uint32_t> rt_args;
+        rt_args.insert(rt_args.end(), fabric_connection_args.begin(), fabric_connection_args.end());
+        rt_args.insert(rt_args.end(), traffic_config_args.begin(), traffic_config_args.end());
+
+        // create kernel
+        sender.create_kernel(ct_args, rt_args, {});
+    }
+}
+
+inline void TestDevice::create_receiver_kernels() {
+    for (const auto& [core, receiver] : this->receivers_) {
+        // get ct args
+        // TODO: fix these
+        std::vector<uint32_t> ct_args = {receiver.configs_.size(), 0 /* benchmark mode */};
+
+        std::vector<uint32_t> traffic_config_args;
+        for (const auto& config : receiver.configs_) {
+            const auto traffic_args = config.get_args() traffic_config_args.insert(
+                traffic_config_args.end(), traffic_args.begin(), traffic_args.end());
+        }
+
+        std::vector<uint32_t> rt_args;
+        rt_args.insert(rt_args.end(), traffic_config_args.begin(), traffic_config_args.end());
+
+        receiver.create_kernel(ct_args, rt_args, {});
+    }
+}
+
+inline void TestDevice::create_kernels() {
+    // create sender kernels
+    this->create_sender_kernels();
+
+    // create receiver kernels
+    this->create_receiver_kernels();
 }
 
 }  // namespace fabric_tests

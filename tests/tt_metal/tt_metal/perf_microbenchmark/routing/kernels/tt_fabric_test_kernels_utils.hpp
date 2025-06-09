@@ -17,17 +17,13 @@ struct SenderTrafficConfigMetadata {
     static SenderTrafficConfigMetadata build_from_args(size_t& arg_idx) { return SenderTrafficConfigMetadata(arg_idx); }
 
     SenderTrafficConfigMetadata(const SenderTrafficConfigMetadata& other) :
-        fabric_connection_idx(other.fabric_connection_idx), num_packets(other.num_packets), seed(other.seed) {}
+        num_packets(other.num_packets), seed(other.seed) {}
 
-    uint8_t fabric_connection_idx;
     uint32_t num_packets;
     uint32_t seed;
-    uint32_t packet_header_address;
-    uint32_t payload_start_address;
 
 private:
     SenderTrafficConfigMetadata(size_t& arg_idx) {
-        this->fabric_connection_idx = get_arg_val<uint32_t>(arg_idx++);
         this->num_packets = get_arg_val<uint32_t>(arg_idx++);
         this->seed = get_arg_val<uint32_t>(arg_idx++);
     }
@@ -209,8 +205,7 @@ void setup_2d_mcast_routet(uint32_t packet_header_address, const ChipMulticastFi
 
 template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
 void setup_header_chip_send_type(
-    WorkerToFabricEdmSender* fabric_connection_handle, const SenderTrafficConfigMetadata& metadata, size_t& arg_idx) {
-    const uint32_t packet_header_address = metadata.packet_header_address;
+    WorkerToFabricEdmSender* fabric_connection_handle, const uint32_t packet_header_address, size_t& arg_idx) {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
 
@@ -249,8 +244,7 @@ void setup_header_chip_send_type(
 }
 
 // returns the reset dst address currently
-uint64_t setup_header_noc_send_type(const SenderTrafficConfigMetadata& metadata, size_t& arg_idx) {
-    const uint32_t packet_header_address = metadata.packet_header_address;
+uint64_t setup_header_noc_send_type(const uint32_t packet_header_address, size_t& arg_idx) {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
     uint64_t reset_dst_address = 0;
@@ -291,38 +285,75 @@ uint64_t setup_header_noc_send_type(const SenderTrafficConfigMetadata& metadata,
 struct SenderKernelTrafficConfig {
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
     static SenderKernelTrafficConfig build_from_args(
+        size_t& arg_idx,
         WorkerToFabricEdmSender* fabric_connection_handle,
         const SenderTrafficConfigMetadata& metadata,
-        size_t& arg_idx) {
+        const uint32_t packet_header_address,
+        const uint32_t payload_start_address) {
         uint64_t reset_dst_address = 0;
 
-        setup_header_chip_send_type<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(fabric_connection_handle, metadata, arg_idx);
-        reset_dst_address = setup_header_noc_send_type(metadata, arg_idx);
-        return SenderKernelTrafficConfig(fabric_connection_handle, packet_header, metadata, reset_dst_address);
+        setup_header_chip_send_type<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
+            fabric_connection_handle, packet_header_address, arg_idx);
+        reset_dst_address = setup_header_noc_send_type(packet_header_address, arg_idx);
+        return SenderKernelTrafficConfig(
+            fabric_connection_handle, metadata, packet_header_address, payload_start_address, reset_dst_address);
     }
 
     SenderKernelTrafficConfig(
         WorkerToFabricEdmSender* fabric_connection_handle,
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
         const SenderTrafficConfigMetadata& metadata,
-        uint64_t reset_dst_address) :
+        const uint32_t packet_header_address,
+        const uint32_t payload_start_address,
+        const uint64_t reset_dst_address) :
         fabric_connection_handle(fabric_connection_handle),
-        packet_header(packet_header),
+        metadata(metadata),
         reset_dst_address(reset_dst_address),
-        num_packets(metadata.num_packets),
-        payload_start_address(metadata.payload_start_address) {}
+        payload_start_address(payload_start_address) {
+        this->packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
+        // TODO: find a cleaner way to handle this
+        this->payload_size_bytes = this->packet_header->get_payload_size_including_header();
+    }
 
-    // bool send_packet() ?
+    bool has_packets_to_send() const { return this->num_packets_processed < this->metadata.num_packets; }
+
+    template <bool BENCHMARK_MODE>
+    void send_packets() {
+        uint32_t num_packets_to_send = 1;
+        if constexpr (BENCHMARK_MODE) {
+            num_packets_to_send = this->metadata.num_packets;
+        }
+
+        uint64_t start_timestamp = get_timestamp();
+        for (uint32_t i = 0; i < num_packets_to_send; i++) {
+            this->fabric_connection_handle->wait_for_empty_write_slot();
+            if constexpr (!BENCHMARK_MODE) {
+                // only transmit the payload when not in benchmark mode
+                if (this->payload_size_bytes > 0) {
+                    // fill packet
+                    this->fabric_connection_handle->send_payload_without_header_non_blocking_from_address(
+                        this->payload_start_address, this->payload_size_bytes);
+                }
+            }
+            this->fabric_connection_handle->send_payload_flush_non_blocking_from_address(
+                (uint32_t)this->packet_header, sizeof(PACKET_HEADER_TYPE));
+        }
+        this->elapsed_cycles += get_timestamp() - start_timestamp;
+
+        this->num_packets_processed += num_packets_to_send;
+    }
 
     void advance_dst_address() {}
 
     void reset_dst_address() {}
 
     WorkerToFabricEdmSender* fabric_connection_handle;
+    SenderTrafficConfigMetadata metadata;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header;
     uint64_t reset_dst_address;  // used for resetting the dst address when we run out of buffer space on the receiver
-    uint32_t num_packets;
     uint32_t payload_start_address;
+    uint32_t payload_size_bytes = 0;
+    uint32_t num_packets_processed = 0;
+    uint64_t cycles_elapsed = 0;
 };
 
 struct SenderKernelMemoryMap {
@@ -356,32 +387,6 @@ template <uint8_t NUM_FABRIC_CONNECTIONS, uint8_t NUM_TRAFFIC_CONFIGS, bool IS_2
 struct SenderKernelConfig {
     static SenderKernelConfig build_from_args(size_t& arg_idx) { return SenderKernelConfig(arg_idx); }
 
-    // TODO: make this private?
-    SenderKernelConfig(size_t& arg_idx) {
-        this->memory_map = SenderKernelMemoryMap::build_from_args(arg_idx);
-
-        for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
-            fabric_connections[i] = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-        }
-
-        uint32_t curr_packet_header_address = this->memory_map.packet_header_buffer_address;
-        uint32_t curr_payload_start_address = this->memory_map.payload_buffer_address;
-        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-            auto metadata = SenderTrafficConfigMetadata::build_from_args(arg_idx);
-            const auto fabric_connection_idx = metadata.fabric_connection_idx;
-            ASSERT(fabric_connection_idx < NUM_FABRIC_CONNECTIONS);
-
-            metadata.packet_header_address = curr_packet_header_address;
-            metadata.payload_start_address = curr_payload_start_address;
-
-            traffic_configs[i] = SenderKernelTrafficConfig::build_from_args<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
-                &fabric_connections[fabric_connection_idx], metadata, arg_idx);
-
-            curr_packet_header_address += sizeof(PACKET_HEADER_TYPE);
-            curr_payload_start_address += this->memory_map.payload_buffer_chunk_size;
-        }
-    };
-
     void open_connections() {
         for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
             fabric_connections[i].open();
@@ -396,7 +401,40 @@ struct SenderKernelConfig {
 
     SenderKernelMemoryMap memory_map;
     std::array<WorkerToFabricEdmSender, NUM_FABRIC_CONNECTIONS> fabric_connections;
+    std::array<uint8_t, NUM_TRAFFIC_CONFIGS> traffic_config_to_fabric_connection_map;
     std::array<SenderKernelTrafficConfig, NUM_TRAFFIC_CONFIGS> traffic_configs;
+
+private:
+    SenderKernelConfig(size_t& arg_idx) {
+        this->memory_map = SenderKernelMemoryMap::build_from_args(arg_idx);
+
+        for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
+            fabric_connections[i] = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+        }
+
+        // TODO: optimize this to use fewer rt args maybe?
+        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+            traffic_config_to_fabric_connection_map[i] = get_arg_val<uint32_t>(arg_idx++);
+        }
+
+        uint32_t curr_packet_header_address = this->memory_map.packet_header_buffer_address;
+        uint32_t curr_payload_start_address = this->memory_map.payload_buffer_address;
+        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+            auto metadata = SenderTrafficConfigMetadata::build_from_args(arg_idx);
+            const auto fabric_connection_idx = traffic_config_to_fabric_connection_map[i];
+            ASSERT(fabric_connection_idx < NUM_FABRIC_CONNECTIONS);
+
+            traffic_configs[i] = SenderKernelTrafficConfig::build_from_args<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
+                arg_idx,
+                &fabric_connections[fabric_connection_idx],
+                metadata,
+                curr_packet_header_address,
+                curr_payload_start_address);
+
+            curr_packet_header_address += sizeof(PACKET_HEADER_TYPE);
+            curr_payload_start_address += this->memory_map.payload_buffer_chunk_size;
+        }
+    };
 };
 
 struct ReceiverTrafficConfigMetadata {
@@ -409,7 +447,6 @@ struct ReceiverTrafficConfigMetadata {
 
     uint32_t num_packets = 0;
     uint32_t seed = 0;
-    uint32_t num_packets_processed = 0;
 
 private:
     ReceiverTrafficConfigMetadata(size_t& arg_idx) {
@@ -424,20 +461,19 @@ Semantics for data validation: poll() -> validate() -> advance()
 struct BaseTrafficValidationConfig {
     BaseTrafficValidationConfig(const ReceiverTrafficConfigMetadata& metadata) : metadata(metadata) {}
 
-    [[nodiscard]] bool has_packets_to_validate() {
-        return this->metadata.num_packets_processed < this->metadata.num_packets;
-    }
+    [[nodiscard]] bool has_packets_to_validate() { return this->num_packets_processed < this->metadata.num_packets; }
 
     [[nodiscard]] virtual bool poll() = 0;
     [[nodiscard]] virtual bool validate() = 0;
     virtual void update() = 0;
 
     void advance() {
-        this->metadata.num_packets_processed++;
+        this->num_packets_processed++;
         this->update();
     }
 
     ReceiverTrafficConfigMetadata metadata;
+    uint32_t num_packets_processed = 0;
 };
 
 struct AtomicIncValidationConfig : public BaseTrafficValidationConfig {

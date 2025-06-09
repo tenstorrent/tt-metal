@@ -22,9 +22,7 @@
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
-class TestContextInterface {
-    virtual virtual
-};
+class TestContextInterface {};
 
 struct TestFabricFixture {
     tt::ARCH arch_;

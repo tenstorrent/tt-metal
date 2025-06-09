@@ -20,12 +20,20 @@ using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderCo
 using TestTrafficReceiverConfig = tt::tt_fabric::fabric_tests::TestTrafficReceiverConfig;
 using TestWorkerType = tt::tt_fabric::fabric_tests::TestWorkerType;
 
+const std::string default_sender_kernel_src =
+    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_sender.cpp";
+const std::string default_receiver_kernel_src =
+    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_receiver.cpp";
+
 class TestContext {
 public:
     void init();
     void handle_test_config();  // parse and process test config
     void open_devices(tt::tt_metal::FabricConfig fabric_config);
     void process_traffic_config(TestTrafficConfig traffic_config);
+    void compile_programs();
+    void launch_programs();
+    void wait_for_prorgams();
     void close_devices();
 
 private:
@@ -194,6 +202,28 @@ void TestContext::process_traffic_config(TestTrafficConfig traffic_config) {
     }
 }
 
+void TestContext::compile_programs() {
+    for (const auto& [_, test_device] : this->test_devices_) {
+        device.create_kernels();
+    }
+}
+
+void TestContext::launch_programs() {
+    for (const auto& [_, test_device] : this->test_devices_) {
+        const auto* device_handle = test_device.get_device_handle();
+        const auto& program_handle = test_device.get_program_handle();
+        this->fixture_.run_program_non_blocking(device_handle, program_handle);
+    }
+}
+
+void TestContext::wait_for_prorgams() {
+    for (const auto& [_, test_device] : this->test_devices_) {
+        const auto* device_handle = test_device.get_device_handle();
+        const auto& program_handle = test_device.get_program_handle();
+        this->fixture_.wait_for_program_done(device_handle, program_handle);
+    }
+}
+
 void TestContext::close_devices() { this->fixture_.close_devices(); }
 
 // TODO: method to get random chip send type
@@ -222,13 +252,30 @@ int main(int argc, char** argv) {
     // fabric setup
     // setup_fabric()
 
-    // all-to-all mode
+    TestTrafficDataConfig data_config = {
+        .chip_send_type = ChipSendType::CHIP_UNICAST,
+        .noc_send_type = NocSendType::NOC_UNICAST_WRITE,
+        .seed = 100,
+        .num_packets = 10,
+        .payload_size_bytes = 4096};
+
+    TestTrafficConfig traffic_config = {
+        .data_config = data_config,
+        .src_phys_chip_id = 1,
+        .dst_phys_chip_ids = {2},
+        .sender_kernel_src = default_sender_kernel_src,
+        .receiver_kernel_src = default_receiver_kernel_src};
+
+    test_context.process_traffic_config(traffic_config);
 
     // workers setup
+    test_context.compile_programs();
 
     // launch programs
+    test_context.launch_programs();
 
-    //
+    // wait for programs done
+    test_context.wait_for_prorgams();
 
     test_context.close_devices();
 
