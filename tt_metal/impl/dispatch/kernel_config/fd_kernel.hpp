@@ -1,6 +1,7 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #pragma once
 
 #include <tt-metalium/program.hpp>
@@ -102,16 +103,6 @@ public:
     // after above functions and before FD kernels are launched.
     virtual void ConfigureCore() {}
 
-    // Override for specific kernels that can be configured for fabric. Will be called by the FABRIC_ROUTER_VC, which is
-    // an intermediary FDKernel for indicating a fabric router path needs to be found.
-    virtual void UpdateArgsForFabric(
-        const CoreCoord& fabric_router_virtual,
-        uint32_t outbound_eth_chan,
-        tt::tt_fabric::MeshId upstream_mesh_id,
-        chip_id_t upstream_chip_id,
-        tt::tt_fabric::MeshId downstream_mesh_id,
-        chip_id_t downstream_chip_id) {}
-
     // Generator function to create a kernel of a given type. New kernels need to be added here.
     static FDKernel* Generate(
         int node_id,
@@ -155,6 +146,13 @@ public:
     void AddProgram(tt::tt_metal::Program* program) { program_ = program; }
 
 protected:
+    // Attributes for an EDM client to connect to the router
+    struct FDKernelEdmConnectionAttributes {
+        size_t worker_flow_control_sem{0};
+        size_t worker_teardown_sem{0};
+        size_t worker_buffer_index_sem{0};
+    };
+
     [[maybe_unused]] KernelHandle configure_kernel_variant(
         const string& path,
         const std::vector<uint32_t>& compile_args,
@@ -179,7 +177,8 @@ protected:
     static chip_id_t GetDownstreamDeviceId(chip_id_t device_id, int tunnel = -1);
     // Helper function to get the tunnel stop index of current device
     static uint32_t GetTunnelStop(chip_id_t device_id);
-
+    // Create and populate semaphores for the EDM connection
+    void create_edm_connection_sems(FDKernelEdmConnectionAttributes& attributes);
     tt::tt_metal::IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
     tt::tt_metal::Program* program_ = nullptr;
     tt_cxy_pair logical_core_;
