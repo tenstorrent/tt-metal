@@ -188,7 +188,7 @@ def run_llama3_demo(
 
     if paged_attention:
         paged_cache_max_seq_len = (
-            page_params["block_size"] * page_params["max_num_blocks"] / model_args.batch_size_per_device_group
+            page_params["page_block_size"] * page_params["page_max_num_blocks"] / model_args.batch_size_per_device_group
         )
         is_valid_token_position = (stress_test and start_pos <= paged_cache_max_seq_len) or (
             max_generated_tokens + start_pos <= paged_cache_max_seq_len
