@@ -9,11 +9,15 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp
+<<<<<<< HEAD
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_range_dtype,
     compare_pcc,
 )
+=======
+from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
+>>>>>>> ca9bc499d0 (Use assert_with_ulp)
 from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 
 
