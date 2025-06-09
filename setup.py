@@ -19,8 +19,7 @@ readme = None
 
 # Read README.md file from project root
 readme_path = pathlib.Path(__file__).absolute().parent / "README.md"
-with open(str(readme_path), "r", encoding="utf-8") as f:
-    readme = f.read()
+readme = readme_path.read_text(encoding="utf-8")
 
 
 # Get the platform-specific lib directory name
