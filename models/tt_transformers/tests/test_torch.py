@@ -20,7 +20,7 @@ def test_torch_inference(ensure_gc):
     encoded_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in prompts]
 
     reference_model = model_args.reference_transformer()
-    reference_model.load_state_dict(state_dict)
+    reference_model.load_state_dict(state_dict, fuse_qkv=model_args.fuse_qkv, fuse_mlp=model_args.fuse_mlp)
 
     # Embedding on host
     embd = model_args.reference_embedding()

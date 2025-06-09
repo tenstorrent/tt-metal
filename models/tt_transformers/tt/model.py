@@ -55,6 +55,7 @@ class Transformer(LightweightModule):
             args.rope_theta,
             args.rope_scaling_factor,
             args.orig_context_len,
+            ext_scaling_tensor=args.rope_ext_scaling_tensor,
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 

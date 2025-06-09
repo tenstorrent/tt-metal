@@ -77,7 +77,7 @@ def test_decoder_inference(
     }
 
     reference_model = model_args.reference_decoder()
-    reference_model.load_state_dict(partial_state_dict)
+    reference_model.load_state_dict(partial_state_dict, fuse_qkv=model_args.fuse_qkv, fuse_mlp=model_args.fuse_mlp)
 
     generation_start_pos = 0
     generation_length = 1
@@ -91,6 +91,7 @@ def test_decoder_inference(
         model_args.rope_theta,
         model_args.rope_scaling_factor,
         model_args.orig_context_len,
+        ext_scaling_tensor=model_args.rope_ext_scaling_tensor,
     )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
     transformation_mats_prefill = ttnn.as_tensor(
