@@ -19,7 +19,6 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
-// #include "tt_metal/impl/context/metal_context.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -286,6 +285,12 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         tt::tt_metal::CreateCircularBuffer(program, sender_core, send_preparation_buffer_config);
 
     std::vector<uint32_t> reader_compile_time_args = {
+        input_tensor.buffer()->is_dram(),
+        indices_tensor.buffer()->is_dram(),
+        mapping_tensor.buffer()->is_dram(),
+        output_tensor.buffer()->is_dram(),
+        metadata_tensor.buffer()->is_dram(),
+
         input_tensor_cb_id,
         indices_tensor_cb_id,
         mapping_tensor_cb_id,
@@ -316,6 +321,12 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     };
 
     auto writer_compile_time_args = reader_compile_time_args;
+
+    auto input_buffer = input_tensor.buffer();
+    auto indices_buffer = indices_tensor.buffer();
+    auto mapping_buffer = mapping_tensor.buffer();
+    auto output_buffer = output_tensor.buffer();
+    auto metadata_buffer = metadata_tensor.buffer();
 
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
