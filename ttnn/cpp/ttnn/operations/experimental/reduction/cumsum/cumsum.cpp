@@ -5,8 +5,10 @@
 #include "ttnn/operations/experimental/reduction/cumsum/cumsum.hpp"
 #include <algorithm>
 #include <iterator>
+#include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/shape.hpp"
 #include <tt_stl/small_vector.hpp>
+#include "tt-metalium/tile.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
@@ -19,6 +21,37 @@
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::experimental::reduction {
+
+static constexpr uint64_t compute_padded_volume(const Shape& logical_shape, const tt::tt_metal::Tile& tile) {
+    unsigned tile_width = tile.get_width();
+    unsigned tile_height = tile.get_height();
+
+    unsigned width = 1;
+    unsigned height = 1;
+
+    unsigned rank = logical_shape.rank();
+
+    if (rank >= 1) {
+        width = logical_shape[rank - 1];
+    }
+    if (rank >= 2) {
+        height = logical_shape[rank - 2];
+    }
+
+    // Round up width to the next multiple of tile_width
+    uint64_t padded_width = ((width + tile_width - 1) / tile_width) * tile_width;
+
+    // Round up height to the next multiple of tile height
+    uint64_t padded_height = ((height + tile_height - 1) / tile_height) * tile_height;
+
+    // Compute new padded volume: padded_width * padded_height * old_channels * old_batches * ...
+    uint64_t volume = padded_width * padded_height;
+    for (unsigned i = 0; i < rank - 2; i++) {
+        volume *= logical_shape[i];
+    }
+
+    return volume;
+}
 
 Tensor CumSumOperation::invoke(
     QueueId queue_id,
@@ -75,7 +108,7 @@ Tensor CumSumOperation::invoke(
 
         int initial_tensor_rank = tensor_rank;
         if (initial_tensor_rank <= 2) {  // 1D or 2D tensor
-            // reshape tensor => make 3D or 4D
+            // reshape tensor => make 3D or 4D (do not permutate/transpose => memory footprint should be comparable)
             ttnn::SmallVector<uint32_t> new_dims = {1, 1};
             new_dims.insert(new_dims.end(), input_shape.cbegin(), input_shape.cend());
             ttnn::Shape new_shape(new_dims);
@@ -92,6 +125,51 @@ Tensor CumSumOperation::invoke(
 
         // For now, the cumsum does not support `dim` == x or y-axis.
         // For now, we make the operation compatible by permuting axes if `dim` is either x or y axes.
+
+        // If input tensor is 1D (or 2D with few rows), then permuting it can significantly increase its
+        // memory footprint if using a tile layout
+        // For instance (dim = -1):
+        // input shape = [32, 32] (1 tile)
+        // output shape = [32, 32, 1] (32 tiles)
+
+        // To detect problems, we compute footprint of new tensor ahead of its permutation
+        // and display error if it exceeds 30% of all DRAM
+        // Note: This is a 'temporary' limitation: permute-free accumulation on x and y axes is planned
+        const Shape tensor_shape = adjusted_input_tensor.logical_shape();
+        const uint64_t old_volume = adjusted_input_tensor.padded_volume();
+
+        ttnn::SmallVector<uint32_t> new_dims(tensor_shape.cbegin(), tensor_shape.cend());
+        std::swap(new_dims[0], new_dims[dim]);
+        const Shape new_shape(new_dims);
+
+        const uint64_t new_volume = compute_padded_volume(new_shape, adjusted_input_tensor.tensor_spec().tile());
+
+        if (new_volume > old_volume) {
+            const uint64_t element_size = adjusted_input_tensor.element_size();
+            const uint64_t growth = (new_volume - old_volume) * element_size;
+            constexpr uint64_t ONE_MB = (1024 * 1024);
+            constexpr uint64_t MAX_ALLOWED_GROWTH = 800 * ONE_MB;  // 800 MiB
+
+            TT_ASSERT(old_volume > 0, "Can not compute permuted tensor for cumsum operation if input is empty");
+            if (new_volume >= 2 * old_volume) {
+                log_warning(
+                    tt::LogOp,
+                    "Intermediate tensor of cumsum exceeds input by a factor of {}, input size = {} MiB, intermediate "
+                    "size = {} MiB",
+                    new_volume / old_volume,
+                    old_volume / ONE_MB,
+                    new_volume / ONE_MB);
+            }
+
+            TT_FATAL(
+                growth <= MAX_ALLOWED_GROWTH,
+                "Permuted tensor for cumsum would have size of {} MiB, which exceeds initial input of size {} MiB by "
+                "{} MiB, which is more than {} MiB limit",
+                new_volume * element_size / ONE_MB,
+                old_volume * element_size / ONE_MB,
+                growth / ONE_MB,
+                MAX_ALLOWED_GROWTH / ONE_MB);
+        }
 
         // Create permutation that just swaps dim with dim=0
         ttnn::SmallVector<int64_t> permutation(tensor_rank);
