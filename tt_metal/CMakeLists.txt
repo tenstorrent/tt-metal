@@ -75,6 +75,7 @@ target_sources(
             api/tt-metalium/mesh_coord.hpp
             api/tt-metalium/mesh_device.hpp
             api/tt-metalium/mesh_device_view.hpp
+            api/tt-metalium/mesh_trace_id.hpp
             api/tt-metalium/metal_soc_descriptor.h
             api/tt-metalium/persistent_kernel_cache.hpp
             api/tt-metalium/profiler_optional_metadata.hpp
