@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <iostream>
+#include <magic_enum/magic_enum.hpp>
 
 #include "scatter.hpp"
 
@@ -10,6 +11,7 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
@@ -31,8 +33,8 @@ Tensor pre_scatter_transform_tensor(
             ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, input_tensor.device());
     }
     // transposing a row-major tensor here
-    processed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
-    processed_tensor = reduction_common::transform_to_4d_tensor(input_tensor, is_rank_le_4d);
+    processed_tensor = reduction_common::perform_transpose(processed_tensor, is_dim_last_idx, dim, -1);
+    processed_tensor = reduction_common::transform_to_4d_tensor(processed_tensor, is_rank_le_4d);
 
     return processed_tensor;
 }
@@ -65,7 +67,7 @@ Tensor post_scatter_transform_tensor(
         output_tensor.get_logical_shape(),
         original_logical_shape);
 
-    // if layout is not row-major, convert to row-major
+    // if the output tensor's original layout is not row-major, convert the output tensor back
     if (original_layout != Layout::ROW_MAJOR) {
         output_tensor =
             ttnn::to_layout(output_tensor, original_layout, std::nullopt, std::nullopt, output_tensor.device());
@@ -108,19 +110,17 @@ Tensor ScatterOperation::invoke(
     Tensor transformed_input_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
         input_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
 
-    std::optional<Tensor> optional_output_tensor_value = std::nullopt;
+    Layout original_output_layout;
     if (opt_output.has_value()) {
-        auto& output_tensor = opt_output.value();
-        output_tensor = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
-            output_tensor, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
-        optional_output_tensor_value = output_tensor;
+        original_output_layout = opt_output.value().layout();
+        *opt_output = CMAKE_UNIQUE_NAMESPACE::pre_scatter_transform_tensor(
+            *opt_output, dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
     }
 
     const MemoryConfig final_memory_config{
         output_memory_config.has_value()
             ? output_memory_config.value()
-            : (optional_output_tensor_value.has_value() ? optional_output_tensor_value.value().memory_config()
-                                                        : input_tensor.memory_config())};
+            : (opt_output.has_value() ? opt_output.value().memory_config() : input_tensor.memory_config())};
 
     Tensor output = ttnn::prim::scatter_(
         transformed_input_tensor,
@@ -129,8 +129,14 @@ Tensor ScatterOperation::invoke(
         transformed_source_tensor,
         final_memory_config,
         std::nullopt,
-        optional_output_tensor_value,
+        opt_output,
         queue_id);
+    if (opt_output.has_value()) {
+        ttnn::copy(output, *opt_output);
+        *opt_output = CMAKE_UNIQUE_NAMESPACE::post_scatter_transform_tensor(
+            *opt_output, dim, input_tensor_is_dim_last_idx, original_input_tensor_lshape, original_output_layout);
+        return *opt_output;
+    }
     return CMAKE_UNIQUE_NAMESPACE::post_scatter_transform_tensor(
         output, dim, input_tensor_is_dim_last_idx, original_input_tensor_lshape, original_layout);
 }

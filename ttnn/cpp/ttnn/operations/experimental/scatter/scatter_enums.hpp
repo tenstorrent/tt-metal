@@ -16,4 +16,9 @@ using namespace tt;
 
 enum class ScatterReductionType : uint8_t { ADD, MULTIPLY, AMIN, AMAX };
 
+enum class ProcessingMode : uint8_t {
+    FULL_ROW_PROCESSING,
+    SPLIT_ROW_PROCESSING
+};
+
 }  // namespace ttnn::operations::experimental::scatter

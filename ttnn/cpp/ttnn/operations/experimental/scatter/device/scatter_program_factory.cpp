@@ -15,11 +15,11 @@ namespace ttnn::operations::experimental::scatter {
 namespace {
 constexpr uint32_t BIT_MASK_32 = 32 - 1;
 
-uint32_t ceil32(const uint32_t& number) {
+uint64_t ceil32(const uint64_t& number) {
     return ((number & BIT_MASK_32) == 0) ? number : ((number | BIT_MASK_32) + 1);
 }
 
-bool is_pow2_min32(const uint32_t& number) { return ((number & (number - 1)) == 0) && number >= 32; }
+bool is_pow2_min32(const uint64_t& number) { return ((number & (number - 1)) == 0) && number >= 32; }
 }  // namespace
 
 ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
@@ -66,7 +66,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t& source_stick_size = src_shape[-1];
     const uint32_t& output_stick_size = output_shape[-1];
 
-    // TODO(jbbieniekTT): logical or padded volume?
     const uint32_t work_units = input_tensor.logical_volume() / input_stick_size;
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
@@ -77,16 +76,10 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t& source_datum_size = src_tensor.element_size();
     const uint32_t& output_datum_size = output_tensor.element_size();
 
-    const uint32_t& input_stick_size_bytes = input_shape[-1] * input_datum_size;
-    const uint32_t& index_stick_size_bytes = index_shape[-1] * index_datum_size;
-    const uint32_t& source_stick_size_bytes = src_shape[-1] * source_datum_size;
-    const uint32_t& output_stick_size_bytes = output_shape[-1] * output_datum_size;
-
-    // pad pages to 32
-    const uint32_t input_page_size_bytes = ceil32(input_stick_size) * input_datum_size;
-    const uint32_t index_page_size_bytes = ceil32(index_stick_size) * index_datum_size;
-    const uint32_t source_page_size_bytes = ceil32(source_stick_size) * source_datum_size;
-    const uint32_t output_page_size_bytes = ceil32(output_stick_size) * output_datum_size;
+    const uint32_t& input_stick_size_bytes = input_stick_size * input_datum_size;
+    const uint32_t& index_stick_size_bytes = index_stick_size * index_datum_size;
+    const uint32_t& source_stick_size_bytes = source_stick_size * source_datum_size;
+    const uint32_t& output_stick_size_bytes = output_stick_size * output_datum_size;
 
     const uint32_t is_input_stick_size_bytes_pow2_min_32 = is_pow2_min32(input_stick_size_bytes);
     const uint32_t is_index_stick_size_bytes_pow2_min_32 = is_pow2_min32(index_stick_size_bytes);
@@ -101,6 +94,22 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
         is_source_stick_size_bytes_pow2_min_32 ? std::log2(source_stick_size_bytes) : 0;
     const uint32_t output_stick_size_bytes_log2 =
         is_output_stick_size_bytes_pow2_min_32 ? std::log2(output_stick_size_bytes) : 0;
+
+    const uint64_t L1_max_available_memory_bytes = device->l1_size_per_core();
+    constexpr uint64_t L1_reserve_bytes = (1 << 8) * (1 << 10);
+    const uint32_t input_and_output_max_chunk_size = 76800;
+    const uint32_t index_and_source_max_chunk_size = input_and_output_max_chunk_size;
+    const uint32_t input_and_output_chunk_size = std::min(input_stick_size, input_and_output_max_chunk_size);
+    const uint32_t index_and_source_chunk_size = std::min(index_stick_size, index_and_source_max_chunk_size);
+    const uint32_t input_and_output_chunk_size_bytes = input_and_output_chunk_size * input_datum_size;
+    const uint32_t index_chunk_size_bytes = index_and_source_chunk_size * index_datum_size;
+    const uint32_t source_chunk_size_bytes = index_and_source_chunk_size * source_datum_size;
+
+    // pad pages to 32
+    const uint32_t input_page_size_bytes = ceil32(input_and_output_chunk_size_bytes);
+    const uint32_t index_page_size_bytes = ceil32(index_chunk_size_bytes);
+    const uint32_t source_page_size_bytes = ceil32(source_chunk_size_bytes);
+    const uint32_t output_page_size_bytes = ceil32(input_and_output_chunk_size_bytes);
 
     auto cb_input{create_cb(program, input_tensor.get_dtype(), ScatterCB::INPUT, all_cores, input_page_size_bytes)};
     auto cb_index{create_cb(program, index_tensor.get_dtype(), ScatterCB::INDEX, all_cores, index_page_size_bytes)};
@@ -167,9 +176,9 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
             program,
             reader_kernel,
             core,
-            {input_buffer->address(), index_buffer->address(), src_buffer->address(), stick_offset, sticks_per_core});
+            {input_buffer->address(), index_buffer->address(), src_buffer->address(), stick_offset, sticks_per_core, input_and_output_chunk_size, index_and_source_chunk_size});
 
-        SetRuntimeArgs(program, writer_kernel, core, {output_buffer->address(), stick_offset, sticks_per_core});
+        SetRuntimeArgs(program, writer_kernel, core, {output_buffer->address(), stick_offset, sticks_per_core, input_and_output_chunk_size});
 
         stick_offset += sticks_per_core;
     }
@@ -177,7 +186,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     return {std::move(program), {reader_kernel, writer_kernel, cores}};
 }
 
-// TODO(jbbieniekTT): do this now and merge issues or do it separately?
 void ScatterProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& args,
@@ -209,7 +217,7 @@ CBHandle ScatterProgramFactory::create_cb(
     const uint32_t cb_id{static_cast<uint32_t>(scatter_cb)};
     const auto cb_data_format{datatype_to_dataformat_converter(dtype)};
     const auto cb_config{
-        CircularBufferConfig{2 * page_size_bytes, {{cb_id, cb_data_format}}}.set_page_size(cb_id, page_size_bytes)};
+        CircularBufferConfig{page_size_bytes, {{cb_id, cb_data_format}}}.set_page_size(cb_id, page_size_bytes)};
     return CreateCircularBuffer(program, core_range_set, cb_config);
 }
 
