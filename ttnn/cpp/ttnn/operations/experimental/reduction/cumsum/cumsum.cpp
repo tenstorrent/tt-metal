@@ -26,12 +26,16 @@ Tensor CumSumOperation::invoke(
     int64_t dim,
     std::optional<ttnn::DataType> dtype,
 <<<<<<< HEAD
+<<<<<<< HEAD
     std::optional<Tensor> optional_output_tensor) {
     const auto& input_shape = input_tensor.logical_shape();
 =======
     std::optional<Tensor> optional_output_tensor,
     std::optional<bool> flip,
     const std::optional<MemoryConfig>& memory_config) {
+=======
+    std::optional<Tensor> optional_output_tensor) {
+>>>>>>> b25323cf5f (Cleanup references to flip and mmeory_config parameters: to be re-added later)
     const auto& input_shape = input_tensor.get_logical_shape();
 >>>>>>> 9bfbd61f09 (cumsum: add test for cumsum_backward and forward moreh_cumsum to ttnn.experimental.cumsum)
     int tensor_rank = input_shape.rank();
@@ -103,7 +107,7 @@ Tensor CumSumOperation::invoke(
         }
 
         // Compute cumsum on permuted tensor (now accumulation is on dim=0)
-        Tensor output_tensor = ttnn::prim::cumsum(queue_id, permuted_tensor, 0, dtype, opt_output, flip);
+        Tensor output_tensor = ttnn::prim::cumsum(queue_id, permuted_tensor, 0, dtype, opt_output);
 
         // Apply backward permutation to restore initial shape
         output_tensor = ttnn::permute(output_tensor, permutation, output_tensor.memory_config());
@@ -122,7 +126,7 @@ Tensor CumSumOperation::invoke(
     }
 
     // For other dimensions, proceed with original cumsum
-    return ttnn::prim::cumsum(queue_id, adjusted_input_tensor, dim, dtype, optional_output_tensor, flip);
+    return ttnn::prim::cumsum(queue_id, adjusted_input_tensor, dim, dtype, optional_output_tensor);
 }
 
 }  // namespace ttnn::operations::experimental::reduction
