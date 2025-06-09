@@ -100,6 +100,9 @@ def test_unet_trace_perf(
         test_unet_trace_2cq,
     )
 
+    # https://github.com/tenstorrent/tt-metal/issues/23272
+    device.disable_and_clear_program_cache()
+
     logger.info(f"Invoking underlying model test for {iterations} iterations...")
     result = test_unet_trace_2cq(batch, groups, iterations, device, use_program_cache, reset_seeds)
 
