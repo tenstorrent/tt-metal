@@ -46,18 +46,19 @@ void AutoContext::reset_graph() {
     m_graph.reset();
 }
 
-void AutoContext::open_device() {
+void AutoContext::open_device(const std::vector<int>* device_ids) {
     if (m_device) {
         throw std::runtime_error("open_device was called after the device was created.");
     }
-    m_device = std::make_unique<core::MeshDevice>(m_mesh_shape);
+
+    m_device = std::make_unique<core::MeshDevice>(m_mesh_shape, device_ids);
 }
 
 void AutoContext::close_device() {
     m_device = nullptr;
 }
 
-ttnn::distributed::MeshDevice& AutoContext::get_device() {
+ttnn::distributed::MeshDevice& AutoContext::get_device(const std::vector<int>* device_ids) {
     if (!m_device) {
         open_device();
     }
