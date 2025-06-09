@@ -104,7 +104,7 @@ run_resnet_func() {
 
 run_sdxl_func() {
 
-  pytest -n auto --disable-warnings models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2
+  pytest --disable-warnings models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2
 
 }
 
