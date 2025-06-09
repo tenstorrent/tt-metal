@@ -9,6 +9,10 @@
 ### [Qwen 3](tt_transformers)
 - Added support for dense Qwen3 models (0.6B, 1.7B, 4B, 8B, 14B, 32B) on Wormhole devices.
 
+### [Llama 3.1-70B - Galaxy](demos/llama3_subdevices)
+- Integrated Llama 3.1-70B on Galaxy into the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
+- Added initial support for sampling tokens on device with batch size 32.
+
 ## May 26, 2025
 
 ### [Llama 3.1-8B](tt_transformers)
