@@ -351,6 +351,9 @@ inline void _init_exponential_()
                      // : 8'b0_______0_______010_____110          = 0x16 slot4 : STORE  UNIT, want STORE instruction which is in macro instruction mux[3],
                      // delayed by 4 ;     using staging flop as src ;     using                  : 8'b0_______1_______100_____011          = 0x63
         TTI_SFPCONFIG(0, 4, 0); // Load it into macro sequence register 0 (destination = 4)
+
+        // Reset LoadMacroConfig[Lane].Misc for all lanes, in case it has been previously set by another use of macros.
+        TTI_SFPCONFIG(0, 8, 1);
     }
     else if constexpr (APPROXIMATION_MODE)
     {
