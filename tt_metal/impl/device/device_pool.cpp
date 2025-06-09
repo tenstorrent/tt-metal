@@ -688,7 +688,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     std::vector<chip_id_t> devices_to_close;
 
     ZoneScoped;
-    tt::log_info(tt::LogMetal, "close_devices for {} devices", devices.size());
+    log_info(tt::LogMetal, "close_devices for {} devices", devices.size());
     // Loop over all devices and add remote devices to devices_to_close
     // For Galaxy if an mmio device's tunnels are being closed, close the mmio device as well
     std::unordered_set<chip_id_t> mmio_devices_to_close;
