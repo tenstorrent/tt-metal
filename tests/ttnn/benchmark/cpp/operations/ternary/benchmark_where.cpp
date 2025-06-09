@@ -6,13 +6,8 @@
 #include "ttnn/operations/experimental/where/where.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/device.hpp"
-#include "ttnn/tensor/tensor.hpp"
+
 #include "ttnn/operations/functions.hpp"
-
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_buffer.hpp>
-
-#include "small_vector.hpp"
 
 namespace {
 
