@@ -45,10 +45,10 @@ unicast_Linear_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[4, 4]","
 mcast_Linear_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[4, 4]","[False, False]","[False, False]","[True, True]",9.220338835015085,2251059.285892355
 unicast_Linear_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[1, 1]","[False, False]","[False, False]","[True, True]",9.66159129528129,2358786.9373245337
 mcast_Linear_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[1, 1]","[False, False]","[False, False]","[True, True]",9.42300348337968,2300537.9598094923
-unicast_FullRing_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[4, 4]","[False, False]","[False, False]","[False, False]",7.257342329194562,1771812.092088516
-mcast_FullRing_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[4, 4]","[False, False]","[False, False]","[False, False]",6.74217569534689,1646038.9881217992
-unicast_FullRing_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[1, 1]","[False, False]","[False, False]","[False, False]",7.648492373702579,1867307.7084234813
-mcast_FullRing_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[1, 1]","[False, False]","[False, False]","[False, False]",7.094104148854267,1731959.0207163738
+unicast_FullRing_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[4, 4]","[False, False]","[False, False]","[False, False]",7.307342329194562,1771812.092088516
+mcast_FullRing_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[4, 4]","[False, False]","[False, False]","[False, False]",6.79217569534689,1646038.9881217992
+unicast_FullRing_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[1, 1]","[False, False]","[False, False]","[False, False]",8.376766518602965,1867307.7084234813
+mcast_FullRing_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[1, 1]","[False, False]","[False, False]","[False, False]",7.144104148854267,1731959.0207163738
 mcast_Linear,noc_unicast_write,16,4,1,False,False,True,0.04201191048165132,2625744.4051032076
 mcast_Linear,noc_unicast_write,2048,4,1,False,False,True,5.373852813293946,2623951.5689911847
 mcast_Linear,noc_unicast_write,4096,4,1,False,False,True,10.575302183418431,2581860.8846236407
