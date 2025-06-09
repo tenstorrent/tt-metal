@@ -49,11 +49,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperati
         tt::tt_metal::ShardSpec{output_core_grid, {}}};
     // Infer head_dim
     TT_FATAL(
-        input_tensor.get_padded_shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0,
+        input_tensor.padded_shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0,
         "Input shape {} must be divisible by num_heads + 2*num_kv_heads = {}",
-        input_tensor.get_padded_shape()[3],
+        input_tensor.padded_shape()[3],
         num_heads + 2 * num_kv_heads_val);
-    uint32_t head_dim = input_tensor.get_padded_shape()[3] / (num_heads + 2 * num_kv_heads_val);
+    uint32_t head_dim = input_tensor.padded_shape()[3] / (num_heads + 2 * num_kv_heads_val);
     auto optional_outputs = std::vector<std::optional<Tensor>>{};
     if (optional_output_tensors.has_value()) {
         optional_outputs = {optional_output_tensors.value().begin(), optional_output_tensors.value().end()};

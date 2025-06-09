@@ -342,28 +342,28 @@ operation::ProgramWithCallbacks downsample_single_core(
     const Tensor& a, std::array<uint32_t, 5> downsample_params, Tensor& output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
     tt::DataFormat untilized_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t untilized_single_tile_size = tt::tt_metal::detail::TileSize(untilized_cb_data_format);
     auto [img_batch_size, img_height, img_width, img_stride_h, img_stride_w] = downsample_params;
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    TT_ASSERT(a.get_padded_shape()[0] == 1 && a.get_padded_shape()[1] == 1);
-    TT_ASSERT(output.get_padded_shape()[0] == 1 && output.get_padded_shape()[1] == 1);
+    TT_ASSERT(a.padded_shape()[0] == 1 && a.padded_shape()[1] == 1);
+    TT_ASSERT(output.padded_shape()[0] == 1 && output.padded_shape()[1] == 1);
 
     tt::tt_metal::IDevice* device = a.device();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     // Sanity check of output size
-    TT_ASSERT(output.volume() % TILE_HW == 0);
+    TT_ASSERT(output.physical_volume() % TILE_HW == 0);
     uint32_t unpadded_input_volume = img_batch_size * img_height * img_width;
-    TT_ASSERT(a.volume() >= unpadded_input_volume);
+    TT_ASSERT(a.physical_volume() >= unpadded_input_volume);
     uint32_t unpadded_output_volume = ceil((double)unpadded_input_volume / (double)(img_stride_h * img_stride_w));
-    TT_ASSERT(output.volume() >= unpadded_output_volume);
+    TT_ASSERT(output.physical_volume() >= unpadded_output_volume);
 
     uint32_t ncores_x_full_grid = device->compute_with_storage_grid_size().x;
     auto [num_cores_height_sliced, num_cores_width_sliced] = get_num_cores_height_width_sliced(
@@ -386,11 +386,11 @@ operation::ProgramWithCallbacks downsample_single_core(
     auto core_range = all_cores;
 
     uint32_t input_height =
-        a.get_padded_shape()[2];  // input height == flattened face of input image, multiple images are stacked in H dim
-    uint32_t input_width = a.get_padded_shape()[3];         // input width == input image # of channels
-    uint32_t output_height = output.get_padded_shape()[2];  // output height == flattened face of output image, multiple
-                                                            // images are stacked in H dim
-    uint32_t output_width = output.get_padded_shape()[3];
+        a.padded_shape()[2];  // input height == flattened face of input image, multiple images are stacked in H dim
+    uint32_t input_width = a.padded_shape()[3];         // input width == input image # of channels
+    uint32_t output_height = output.padded_shape()[2];  // output height == flattened face of output image, multiple
+                                                        // images are stacked in H dim
+    uint32_t output_width = output.padded_shape()[3];
     TT_ASSERT(input_width == output_width);
 
     uint32_t input_height_unpadded = img_batch_size * img_height * img_width;

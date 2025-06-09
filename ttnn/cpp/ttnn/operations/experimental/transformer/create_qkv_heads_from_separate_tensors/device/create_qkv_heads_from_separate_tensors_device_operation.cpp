@@ -19,12 +19,12 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
         q_input_tensor.buffer() != nullptr && kv_input_tensor.buffer() != nullptr,
         "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
-        q_input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 ||
-            q_input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 ||
-            q_input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        q_input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ||
+            q_input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            q_input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
-    TT_FATAL(kv_input_tensor.get_dtype() == q_input_tensor.get_dtype(), "Unsupported data format");
-    TT_FATAL(q_input_tensor.get_layout() == Layout::TILE && kv_input_tensor.get_layout() == Layout::TILE, "Error");
+    TT_FATAL(kv_input_tensor.dtype() == q_input_tensor.dtype(), "Unsupported data format");
+    TT_FATAL(q_input_tensor.layout() == Layout::TILE && kv_input_tensor.layout() == Layout::TILE, "Error");
     TT_FATAL(q_input_tensor.is_sharded() && kv_input_tensor.is_sharded(), "Operands to TM must be sharded");
 
     auto bbox = q_input_tensor.shard_spec().value().grid.bounding_box();
@@ -52,8 +52,8 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
         this->num_kv_heads,
         num_w_cores);
 
-    const auto q_input_shape = q_input_tensor.get_padded_shape();
-    const auto kv_input_shape = kv_input_tensor.get_padded_shape();
+    const auto q_input_shape = q_input_tensor.padded_shape();
+    const auto kv_input_shape = kv_input_tensor.padded_shape();
     TT_FATAL(q_input_shape[1] == 1 && kv_input_shape[1] == 1, "Unsupported input shape");
     TT_FATAL(
         q_input_shape[0] == kv_input_shape[0],
@@ -119,7 +119,7 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
 
     const uint32_t l1_size = q_input_tensor.device()->l1_size_per_core();
     const uint32_t single_tile_size =
-        tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(q_input_tensor.get_dtype()));
+        tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(q_input_tensor.dtype()));
     TT_FATAL(
         l1_size >= 2 * (per_core_q_tiles + 2 * per_core_k_tiles) * single_tile_size, "Workload exceeds L1 capacity");
 
@@ -133,8 +133,8 @@ std::vector<ttnn::TensorSpec> CreateQKVHeadsSeparateTensorsDeviceOperation::comp
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& input_tensor_kv = input_tensors.at(1);
-    const auto input_shape = input_tensor.get_padded_shape();
-    const auto input_shape_kv = input_tensor_kv.get_padded_shape();
+    const auto input_shape = input_tensor.padded_shape();
+    const auto input_shape_kv = input_tensor_kv.padded_shape();
 
     Shape q_shape({input_shape[0], this->num_q_heads, input_shape[2], this->head_dim});
     Shape v_shape({input_shape_kv[0], this->num_kv_heads, input_shape_kv[2], this->head_dim});
@@ -171,13 +171,13 @@ std::vector<ttnn::TensorSpec> CreateQKVHeadsSeparateTensorsDeviceOperation::comp
 
     auto out_tensor_q = TensorSpec(
         q_shape,
-        tt::tt_metal::TensorLayout(input_tensor.get_dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_q));
+        tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_q));
     auto out_tensor_k = TensorSpec(
         k_shape,
-        tt::tt_metal::TensorLayout(input_tensor.get_dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_k));
+        tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_k));
     auto out_tensor_v = TensorSpec(
         v_shape,
-        tt::tt_metal::TensorLayout(input_tensor.get_dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_v));
+        tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_v));
     return {out_tensor_q, out_tensor_k, out_tensor_v};
 }
 

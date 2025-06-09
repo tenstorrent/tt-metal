@@ -37,8 +37,8 @@ TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFa
         out_shard_spec.num_cores(),
         ncores);
 
-    tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
-    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
     uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
@@ -47,7 +47,7 @@ TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFa
 
     uint32_t num_tile_per_core = 0;
 
-    if (input.get_dtype() == DataType::BFLOAT8_B) {
+    if (input.dtype() == DataType::BFLOAT8_B) {
         uint32_t ntiles_along_width = std::ceil(shard_spec.shape[1] / (float)tt::constants::TILE_WIDTH);
         uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float)tt::constants::TILE_HEIGHT);
         num_tile_per_core = ntiles_along_width * ntiles_along_height;

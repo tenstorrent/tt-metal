@@ -32,11 +32,11 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to untilize need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to untilize need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Can only untilize tile major data");
+    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
-    TT_FATAL(input_tensor_a.get_padded_shape()[-1] % TILE_WIDTH == 0, "Width must be evenly divisible into tiles");
+    TT_FATAL(input_tensor_a.padded_shape()[-1] % TILE_WIDTH == 0, "Width must be evenly divisible into tiles");
     TT_FATAL(
-        (input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1]) % TILE_HEIGHT == 0,
+        (input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]) % TILE_HEIGHT == 0,
         "Height must be evenly divisible into tiles");
 
     if (this->sub_core_grids.has_value()) {
@@ -62,19 +62,19 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
         if (input_tensor_a.is_sharded()) {
             std::array<uint32_t, 2> input_shard_shape = input_tensor_a.shard_spec().value().shape;
             TT_FATAL(
-                input_tensor_a.get_padded_shape()[-1] % input_shard_shape[1] == 0,
+                input_tensor_a.padded_shape()[-1] % input_shard_shape[1] == 0,
                 "Uneven input shard shape not supported");
             TT_FATAL(
-                (input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1]) % input_shard_shape[0] == 0,
+                (input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]) % input_shard_shape[0] == 0,
                 "Uneven input shard shape not supported");
         }
         if (this->output_mem_config.is_sharded()) {
             std::array<uint32_t, 2> output_shard_shape = this->output_mem_config.shard_spec().value().shape;
             TT_FATAL(
-                input_tensor_a.get_padded_shape()[-1] % output_shard_shape[1] == 0,
+                input_tensor_a.padded_shape()[-1] % output_shard_shape[1] == 0,
                 "Uneven output shard shape not supported");
             TT_FATAL(
-                (input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1]) % output_shard_shape[0] == 0,
+                (input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]) % output_shard_shape[0] == 0,
                 "Uneven output shard shape not supported");
         }
     } else if (input_tensor_a.memory_config().is_sharded()) {
@@ -89,12 +89,12 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
     } else if (this->output_mem_config.is_sharded()) {
         TT_FATAL(this->use_multicore == true, "Error");
         TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
-        uint32_t ntiles = input_tensor_a.volume() / TILE_HW;
-        uint32_t ntiles_per_block = input_tensor_a.get_padded_shape()[-1] / TILE_WIDTH;
+        uint32_t ntiles = input_tensor_a.physical_volume() / TILE_HW;
+        uint32_t ntiles_per_block = input_tensor_a.padded_shape()[-1] / TILE_WIDTH;
         uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
         auto num_cores =
             untilize_helpers::get_num_cores(input_tensor_a.device()->compute_with_storage_grid_size(), nblocks);
-        uint32_t fused_height = input_tensor_a.volume() / input_tensor_a.get_padded_shape()[-1];
+        uint32_t fused_height = input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1];
         TT_FATAL(fused_height % num_cores == 0, "Error");
     } else {
         TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
@@ -105,62 +105,61 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
 std::vector<ttnn::TensorSpec> Untilize::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
-    DataType output_dtype =
-        input_tensor.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
+    DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
 
     if (!this->use_multicore) {
         return {TensorSpec(
-            input_tensor.get_logical_shape(),
+            input_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 output_dtype,
                 PageConfig(Layout::ROW_MAJOR),
                 this->output_mem_config,
-                input_tensor.get_logical_shape(),
-                input_tensor.get_padded_shape()))};
+                input_tensor.logical_shape(),
+                input_tensor.padded_shape()))};
     }
 
     if (this->output_mem_config.is_sharded()) {
         if (input_tensor.memory_config().is_sharded()) {
             auto mem_config = this->output_mem_config.with_shard_spec(input_tensor.memory_config().shard_spec());
             return {TensorSpec(
-                input_tensor.get_logical_shape(),
+                input_tensor.logical_shape(),
                 TensorLayout::fromPaddedShape(
                     output_dtype,
                     PageConfig(Layout::ROW_MAJOR),
                     mem_config,
-                    input_tensor.get_logical_shape(),
-                    input_tensor.get_padded_shape()))};
+                    input_tensor.logical_shape(),
+                    input_tensor.padded_shape()))};
         }
 
-        uint32_t ntiles = input_tensor.volume() / TILE_HW;
-        uint32_t ntiles_per_block = input_tensor.get_padded_shape()[-1] / TILE_WIDTH;
+        uint32_t ntiles = input_tensor.physical_volume() / TILE_HW;
+        uint32_t ntiles_per_block = input_tensor.padded_shape()[-1] / TILE_WIDTH;
         uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
         auto num_cores =
             untilize_helpers::get_num_cores(input_tensor.device()->compute_with_storage_grid_size(), nblocks);
         auto shard_grid = tt::tt_metal::num_cores_to_corerangeset(
             num_cores, input_tensor.device()->compute_with_storage_grid_size(), true);
-        uint32_t fused_height = input_tensor.volume() / input_tensor.get_padded_shape()[-1];
-        std::array<uint32_t, 2> shard_shape = {fused_height / num_cores, input_tensor.get_padded_shape()[-1]};
+        uint32_t fused_height = input_tensor.physical_volume() / input_tensor.padded_shape()[-1];
+        std::array<uint32_t, 2> shard_shape = {fused_height / num_cores, input_tensor.padded_shape()[-1]};
         ShardSpec shard_spec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
         auto mem_config = this->output_mem_config.with_shard_spec(shard_spec);
         return {TensorSpec(
-            input_tensor.get_logical_shape(),
+            input_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 output_dtype,
                 PageConfig(Layout::ROW_MAJOR),
                 mem_config,
-                input_tensor.get_logical_shape(),
-                input_tensor.get_padded_shape()))};
+                input_tensor.logical_shape(),
+                input_tensor.padded_shape()))};
     }
 
     return {TensorSpec(
-        input_tensor.get_logical_shape(),
+        input_tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
             output_dtype,
             PageConfig(Layout::ROW_MAJOR),
             this->output_mem_config,
-            input_tensor.get_logical_shape(),
-            input_tensor.get_padded_shape()))};
+            input_tensor.logical_shape(),
+            input_tensor.padded_shape()))};
 }
 
 operation::ProgramWithCallbacks Untilize::create_program(

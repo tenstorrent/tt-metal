@@ -69,9 +69,9 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorRoundtrip) {
 
     Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
 
-    ASSERT_EQ(loaded_tensor.get_tensor_spec().logical_shape(), original_tensor.get_tensor_spec().logical_shape());
-    ASSERT_EQ(loaded_tensor.get_dtype(), original_tensor.get_dtype());
-    ASSERT_EQ(loaded_tensor.get_layout(), original_tensor.get_layout());
+    ASSERT_EQ(loaded_tensor.tensor_spec().logical_shape(), original_tensor.tensor_spec().logical_shape());
+    ASSERT_EQ(loaded_tensor.dtype(), original_tensor.dtype());
+    ASSERT_EQ(loaded_tensor.layout(), original_tensor.layout());
     ASSERT_TRUE(loaded_tensor.storage_type() == StorageType::HOST);
 
     EXPECT_THAT(loaded_tensor.to_vector<float>(), Pointwise(FloatEq(), test_data));
@@ -86,7 +86,7 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorDifferentDataTypes) {
         dump_tensor_flatbuffer(test_file.string(), original_tensor);
         Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
 
-        ASSERT_EQ(loaded_tensor.get_dtype(), DataType::UINT32);
+        ASSERT_EQ(loaded_tensor.dtype(), DataType::UINT32);
         EXPECT_THAT(loaded_tensor.to_vector<uint32_t>(), Pointwise(testing::Eq(), test_data));
     }
 
@@ -98,7 +98,7 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorDifferentDataTypes) {
         dump_tensor_flatbuffer(test_file.string(), original_tensor);
         Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
 
-        ASSERT_EQ(loaded_tensor.get_dtype(), DataType::BFLOAT16);
+        ASSERT_EQ(loaded_tensor.dtype(), DataType::BFLOAT16);
         auto loaded_data = loaded_tensor.to_vector<bfloat16>();
         ASSERT_THAT(loaded_data, SizeIs(test_data.size()));
         for (size_t i = 0; i < test_data.size(); i++) {
@@ -129,9 +129,9 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard1DTensorRoundtrip) {
 
     Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
 
-    ASSERT_EQ(loaded_tensor.get_tensor_spec().logical_shape(), sharded_tensor.get_tensor_spec().logical_shape());
-    ASSERT_EQ(loaded_tensor.get_dtype(), sharded_tensor.get_dtype());
-    ASSERT_EQ(loaded_tensor.get_layout(), sharded_tensor.get_layout());
+    ASSERT_EQ(loaded_tensor.tensor_spec().logical_shape(), sharded_tensor.tensor_spec().logical_shape());
+    ASSERT_EQ(loaded_tensor.dtype(), sharded_tensor.dtype());
+    ASSERT_EQ(loaded_tensor.layout(), sharded_tensor.layout());
     ASSERT_TRUE(loaded_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
 
     std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
@@ -176,9 +176,9 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard2DTensorRoundtrip) {
 
     Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
 
-    ASSERT_EQ(loaded_tensor.get_tensor_spec().logical_shape(), sharded_tensor.get_tensor_spec().logical_shape());
-    ASSERT_EQ(loaded_tensor.get_dtype(), sharded_tensor.get_dtype());
-    ASSERT_EQ(loaded_tensor.get_layout(), sharded_tensor.get_layout());
+    ASSERT_EQ(loaded_tensor.tensor_spec().logical_shape(), sharded_tensor.tensor_spec().logical_shape());
+    ASSERT_EQ(loaded_tensor.dtype(), sharded_tensor.dtype());
+    ASSERT_EQ(loaded_tensor.layout(), sharded_tensor.layout());
     ASSERT_TRUE(loaded_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
 
     std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
@@ -190,7 +190,7 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard2DTensorRoundtrip) {
         EXPECT_THAT(
             loaded_device_tensors[i].to_vector<float>(),
             Pointwise(FloatEq(), original_device_tensors[i].to_vector<float>()));
-        EXPECT_EQ(loaded_device_tensors[i].get_logical_shape(), original_device_tensors[i].get_logical_shape());
+        EXPECT_EQ(loaded_device_tensors[i].logical_shape(), original_device_tensors[i].logical_shape());
     }
 }
 
@@ -214,9 +214,9 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard1DFewerShardsThanDevicesRoun
 
     Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
 
-    ASSERT_EQ(loaded_tensor.get_tensor_spec().logical_shape(), sharded_tensor.get_tensor_spec().logical_shape());
-    ASSERT_EQ(loaded_tensor.get_dtype(), sharded_tensor.get_dtype());
-    ASSERT_EQ(loaded_tensor.get_layout(), sharded_tensor.get_layout());
+    ASSERT_EQ(loaded_tensor.tensor_spec().logical_shape(), sharded_tensor.tensor_spec().logical_shape());
+    ASSERT_EQ(loaded_tensor.dtype(), sharded_tensor.dtype());
+    ASSERT_EQ(loaded_tensor.layout(), sharded_tensor.layout());
     ASSERT_TRUE(loaded_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
 
     std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
@@ -262,9 +262,9 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard2x3SubmeshRoundtrip) {
 
     Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
 
-    ASSERT_EQ(loaded_tensor.get_tensor_spec().logical_shape(), sharded_tensor.get_tensor_spec().logical_shape());
-    ASSERT_EQ(loaded_tensor.get_dtype(), sharded_tensor.get_dtype());
-    ASSERT_EQ(loaded_tensor.get_layout(), sharded_tensor.get_layout());
+    ASSERT_EQ(loaded_tensor.tensor_spec().logical_shape(), sharded_tensor.tensor_spec().logical_shape());
+    ASSERT_EQ(loaded_tensor.dtype(), sharded_tensor.dtype());
+    ASSERT_EQ(loaded_tensor.layout(), sharded_tensor.layout());
     ASSERT_TRUE(loaded_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
 
     std::vector<Tensor> original_device_tensors = ttnn::distributed::get_device_tensors(sharded_tensor);
@@ -276,7 +276,7 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard2x3SubmeshRoundtrip) {
         EXPECT_THAT(
             loaded_device_tensors[i].to_vector<float>(),
             Pointwise(FloatEq(), original_device_tensors[i].to_vector<float>()));
-        EXPECT_EQ(loaded_device_tensors[i].get_logical_shape(), original_device_tensors[i].get_logical_shape());
+        EXPECT_EQ(loaded_device_tensors[i].logical_shape(), original_device_tensors[i].logical_shape());
     }
 }
 

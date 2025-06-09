@@ -42,7 +42,7 @@ MorehClipGradNormStep3Operation::spec_return_value_t MorehClipGradNormStep3Opera
     std::vector<TensorSpec> output_specs;
     output_specs.reserve(tensor_args.inputs.size());
     for (const auto& input : tensor_args.inputs) {
-        output_specs.push_back(input.get_tensor_spec());
+        output_specs.push_back(input.tensor_spec());
     }
     return output_specs;
 };

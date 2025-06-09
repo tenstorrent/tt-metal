@@ -22,18 +22,18 @@ namespace ttnn::operations::data_movement {
 operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tensor& output, bool backwards) {
     tt::tt_metal::Program program{};
 
-    bool tilized = output.get_layout() == Layout::TILE;
+    bool tilized = output.layout() == Layout::TILE;
     bool sharded = input.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED;
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_unit_size = tilized ? tt::tt_metal::detail::TileSize(input_cb_data_format)
-                                       : input.get_padded_shape()[-1] * input.element_size();
+                                       : input.padded_shape()[-1] * input.element_size();
     uint32_t full_input_row = input_unit_size;
     if (sharded && !tilized) {
         input_unit_size = input.memory_config().shard_spec()->shape[1] * input.element_size();
     }
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_unit_size = tilized ? tt::tt_metal::detail::TileSize(output_cb_data_format)
-                                        : output.get_padded_shape()[-1] * output.element_size();
+                                        : output.padded_shape()[-1] * output.element_size();
     uint32_t full_output_row = output_unit_size;
     if (sharded && !tilized) {
         output_unit_size = output.memory_config().shard_spec()->shape[1] * output.element_size();
@@ -41,7 +41,8 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
 
     bool convert_dtype = input_cb_data_format != output_cb_data_format;
 
-    uint32_t num_units = tilized ? output.volume() / TILE_HW : output.volume() / output.get_padded_shape()[-1];
+    uint32_t num_units =
+        tilized ? output.physical_volume() / TILE_HW : output.physical_volume() / output.padded_shape()[-1];
 
     tt::tt_metal::IDevice* device = output.device();
 

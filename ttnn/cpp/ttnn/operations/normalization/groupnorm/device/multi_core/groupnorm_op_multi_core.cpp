@@ -178,31 +178,31 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (gamma.has_value()) {
         TT_FATAL(
-            gamma.value().get_layout() == Layout::ROW_MAJOR,
+            gamma.value().layout() == Layout::ROW_MAJOR,
             "Gamma tensor must have ROW_MAJOR layout, but has {} layout",
-            gamma.value().get_layout());
+            gamma.value().layout());
     }
     if (beta.has_value()) {
         TT_FATAL(
-            beta.value().get_layout() == Layout::ROW_MAJOR,
+            beta.value().layout() == Layout::ROW_MAJOR,
             "Beta tensor must have ROW_MAJOR layout, but has {} layout",
-            beta.value().get_layout());
+            beta.value().layout());
     }
 
-    bool is_height_sharding = a.get_padded_shape()[3] == a.shard_spec().value().shape[1];
+    bool is_height_sharding = a.padded_shape()[3] == a.shard_spec().value().shape[1];
     // convert data format
-    tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(im_data_format);
     tt::DataFormat gamma_beta_cb_data_format = tt::DataFormat::Float16_b;
     if (gamma.has_value()) {
-        gamma_beta_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(gamma.value().get_dtype());
+        gamma_beta_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype());
     }
     if (beta.has_value()) {
-        gamma_beta_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(beta.value().get_dtype());
+        gamma_beta_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype());
     }
     tt::DataFormat in_mask_cb_data_format =
-        input_mask.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(input_mask.value().get_dtype())
+        input_mask.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(input_mask.value().dtype())
                                : tt::DataFormat::Float16_b;
     uint32_t datum_size_bytes = 2;  // bfloat16
 
@@ -225,10 +225,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     uint32_t per_core_Nt = (per_core_N + TILE_WIDTH - 1) / TILE_WIDTH;
     uint32_t per_core_N_bytes_padded = tt::round_up(per_core_N * datum_size_bytes, output.buffer()->alignment());
     bool reader_repack_output = (per_core_N % TILE_WIDTH) != 0;
-    bool tilize_in = a.get_layout() == Layout::ROW_MAJOR;
-    bool untilize_out = output.get_layout() == Layout::ROW_MAJOR;
+    bool tilize_in = a.layout() == Layout::ROW_MAJOR;
+    bool untilize_out = output.layout() == Layout::ROW_MAJOR;
     // tensor shape
-    const auto shape = a.get_padded_shape();
+    const auto shape = a.padded_shape();
     uint32_t H = shape[2] * num_batches;
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t W = shape[3];
@@ -411,9 +411,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
 
     if (input_mask.has_value()) {
         TT_FATAL(
-            input_mask.value().get_padded_shape()[3] == block_wt * TILE_WIDTH,
+            input_mask.value().padded_shape()[3] == block_wt * TILE_WIDTH,
             "input mask width ({}) must have the same width as block_wt * TILE_WIDTH ({})",
-            input_mask.value().get_padded_shape()[3],
+            input_mask.value().padded_shape()[3],
             block_wt * TILE_WIDTH);
     }
 
@@ -425,10 +425,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto input_mask_dram_addr = input_mask.has_value() ? input_mask.value().buffer()->address() : 0;
     // num tiles for a, gamma, beta
-    uint32_t num_tiles = a.volume() / TILE_HW;
-    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().volume() / TILE_HW : 0;
-    uint32_t num_beta_tiles = beta.has_value() ? beta.value().volume() / TILE_HW : 0;
-    uint32_t num_input_mask_tiles = input_mask.has_value() ? input_mask.value().volume() / TILE_HW : 0;
+    uint32_t num_tiles = a.physical_volume() / TILE_HW;
+    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_input_mask_tiles = input_mask.has_value() ? input_mask.value().physical_volume() / TILE_HW : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -666,8 +666,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)num_batches_per_core,
         (std::uint32_t)block_wt};
 
-    if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().get_padded_shape()[3] * gamma.value().element_size();
+    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
+        auto gamma_stick_size = gamma.value().padded_shape()[3] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
         if (gamma_stick_size_is_power_of_two) {
@@ -677,8 +677,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         } else {
             writer_mcast_sender_compile_time_args.push_back(gamma_stick_size);
         }
-    } else if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
-        auto beta_stick_size = beta.value().get_padded_shape()[3] * beta.value().element_size();
+    } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
+        auto beta_stick_size = beta.value().padded_shape()[3] * beta.value().element_size();
         bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
         if (beta_stick_size_is_power_of_two) {
@@ -1097,16 +1097,16 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         writer_kernel_ids.push_back(writer_kernels_id);
 
         if (gamma.has_value()) {
-            gamma_tile_start_id =
-                (gamma_tile_start_id + gamma_beta_num_cols_tile_per_core) % (gamma.value().volume() / TILE_WIDTH);
+            gamma_tile_start_id = (gamma_tile_start_id + gamma_beta_num_cols_tile_per_core) %
+                                  (gamma.value().physical_volume() / TILE_WIDTH);
         }
         if (beta.has_value()) {
-            beta_tile_start_id =
-                (beta_tile_start_id + gamma_beta_num_cols_tile_per_core) % (beta.value().volume() / TILE_WIDTH);
+            beta_tile_start_id = (beta_tile_start_id + gamma_beta_num_cols_tile_per_core) %
+                                 (beta.value().physical_volume() / TILE_WIDTH);
         }
         if (input_mask.has_value()) {
-            input_mask_tile_start_id =
-                (input_mask_tile_start_id + input_mask_num_tiles_per_core) % (input_mask.value().volume() / TILE_HW);
+            input_mask_tile_start_id = (input_mask_tile_start_id + input_mask_num_tiles_per_core) %
+                                       (input_mask.value().physical_volume() / TILE_HW);
         }
     }
 
@@ -1164,25 +1164,25 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     if (gamma.has_value()) {
-        TT_FATAL(gamma.value().get_layout() == Layout::ROW_MAJOR, "Gamma tensor must have ROW_MAJOR layout");
+        TT_FATAL(gamma.value().layout() == Layout::ROW_MAJOR, "Gamma tensor must have ROW_MAJOR layout");
     }
     if (beta.has_value()) {
-        TT_FATAL(beta.value().get_layout() == Layout::ROW_MAJOR, "Beta tensor must have ROW_MAJOR layout");
+        TT_FATAL(beta.value().layout() == Layout::ROW_MAJOR, "Beta tensor must have ROW_MAJOR layout");
     }
 
     // convert data format
-    tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(im_data_format);
     tt::DataFormat gamma_beta_cb_data_format = tt::DataFormat::Float16_b;
     if (gamma.has_value()) {
-        gamma_beta_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(gamma.value().get_dtype());
+        gamma_beta_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype());
     }
     if (beta.has_value()) {
-        gamma_beta_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(beta.value().get_dtype());
+        gamma_beta_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype());
     }
     tt::DataFormat in_mask_cb_data_format =
-        input_mask.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(input_mask.value().get_dtype())
+        input_mask.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(input_mask.value().dtype())
                                : tt::DataFormat::Float16_b;
     uint32_t datum_size_bytes = 2;  // bfloat16
 
@@ -1208,7 +1208,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, true);
 
     // tensor shape
-    const auto shape = a.get_padded_shape();
+    const auto shape = a.padded_shape();
     uint32_t H = shape[2] * num_batches;
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t W = shape[3];
@@ -1290,8 +1290,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     // shard shape per core
     uint32_t per_core_N_bytes_padded = tt::round_up(per_core_N * datum_size_bytes, output.buffer()->alignment());
     bool reader_repack_output = (per_core_N % TILE_WIDTH) != 0;
-    bool tilize_in = a.get_layout() == Layout::ROW_MAJOR;
-    bool untilize_out = output.get_layout() == Layout::ROW_MAJOR;
+    bool tilize_in = a.layout() == Layout::ROW_MAJOR;
+    bool untilize_out = output.layout() == Layout::ROW_MAJOR;
 
     TT_FATAL(
         per_core_N % num_datum_row_per_group == 0,
@@ -1372,9 +1372,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
 
     if (input_mask.has_value()) {
         TT_FATAL(
-            input_mask.value().get_padded_shape()[3] == block_wt * TILE_WIDTH,
+            input_mask.value().padded_shape()[3] == block_wt * TILE_WIDTH,
             "input mask width ({}) must have the same width as block_wt * TILE_WIDTH ({})",
-            input_mask.value().get_padded_shape()[3],
+            input_mask.value().padded_shape()[3],
             block_wt * TILE_WIDTH);
     }
 
@@ -1386,10 +1386,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto input_mask_dram_addr = input_mask.has_value() ? input_mask.value().buffer()->address() : 0;
     // num tiles for a, gamma, beta
-    uint32_t num_tiles = a.volume() / TILE_HW;
-    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().volume() / TILE_HW : 0;
-    uint32_t num_beta_tiles = beta.has_value() ? beta.value().volume() / TILE_HW : 0;
-    uint32_t num_input_mask_tiles = input_mask.has_value() ? input_mask.value().volume() / TILE_HW : 0;
+    uint32_t num_tiles = a.physical_volume() / TILE_HW;
+    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_input_mask_tiles = input_mask.has_value() ? input_mask.value().physical_volume() / TILE_HW : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -1857,15 +1857,15 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)block_wt,
         (std::uint32_t)block_ht_group_2 * block_wt};
 
-    if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().get_padded_shape()[3] * gamma.value().element_size();
+    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
+        auto gamma_stick_size = gamma.value().padded_shape()[3] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
         writer_mcast_sender_compile_time_args_group_1.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
         writer_mcast_sender_compile_time_args_group_2.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
         writer_mcast_sender_compile_time_args_group_1.push_back(gamma_stick_size);
         writer_mcast_sender_compile_time_args_group_2.push_back(gamma_stick_size);
-    } else if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
-        auto beta_stick_size = beta.value().get_padded_shape()[3] * beta.value().element_size();
+    } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
+        auto beta_stick_size = beta.value().padded_shape()[3] * beta.value().element_size();
         bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
         writer_mcast_sender_compile_time_args_group_1.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
         writer_mcast_sender_compile_time_args_group_2.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
@@ -2485,16 +2485,16 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         }
 
         if (gamma.has_value()) {
-            gamma_tile_start_id =
-                (gamma_tile_start_id + gamma_beta_num_cols_tile_per_core) % (gamma.value().volume() / TILE_WIDTH);
+            gamma_tile_start_id = (gamma_tile_start_id + gamma_beta_num_cols_tile_per_core) %
+                                  (gamma.value().physical_volume() / TILE_WIDTH);
         }
         if (beta.has_value()) {
-            beta_tile_start_id =
-                (beta_tile_start_id + gamma_beta_num_cols_tile_per_core) % (beta.value().volume() / TILE_WIDTH);
+            beta_tile_start_id = (beta_tile_start_id + gamma_beta_num_cols_tile_per_core) %
+                                 (beta.value().physical_volume() / TILE_WIDTH);
         }
         if (input_mask.has_value()) {
-            input_mask_tile_start_id =
-                (input_mask_tile_start_id + input_mask_num_tiles_per_core) % (input_mask.value().volume() / TILE_HW);
+            input_mask_tile_start_id = (input_mask_tile_start_id + input_mask_num_tiles_per_core) %
+                                       (input_mask.value().physical_volume() / TILE_HW);
         }
     }
     auto override_runtime_args_callback =

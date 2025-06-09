@@ -19,10 +19,10 @@ Tensor Tanh_accurate::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     TT_FATAL(
-        input_tensor.get_dtype() == DataType::BFLOAT16,
+        input_tensor.dtype() == DataType::BFLOAT16,
         "Supported dtypes for tanh with accuracy mode enabled is : BFLOAT16");
 
-    auto input_dtype = input_tensor.get_dtype();
+    auto input_dtype = input_tensor.dtype();
     DataType output_dtype = input_dtype;
 
     bool preserve_fp32_precision = (input_dtype == DataType::FLOAT32);

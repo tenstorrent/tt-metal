@@ -23,15 +23,14 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
-    auto output_dtype =
-        output_tensor1.has_value() ? output_tensor1.value().get_dtype() : output_tensor2.value().get_dtype();
+    auto output_dtype = output_tensor1.has_value() ? output_tensor1.value().dtype() : output_tensor2.value().dtype();
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
     uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
 
-    uint32_t num_tiles = input_tensor.volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
 
     tt::tt_metal::IDevice* device = input_tensor.device();
 

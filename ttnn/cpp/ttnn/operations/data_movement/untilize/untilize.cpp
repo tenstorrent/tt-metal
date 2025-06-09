@@ -22,11 +22,9 @@ using MassagedUntilizeParams = MassagedOperationParams<ttnn::Tensor, const ttnn:
 MassagedUntilize build_ndiml_untilize(BaseUntilizeType base_untilize) {
     auto original_shape = std::make_shared<std::pair<ttnn::Shape, ttnn::Shape>>();
     return MassagedUntilize(MassagedUntilizeParams{
-        .predicate = [](const ttnn::Tensor& input_tensor) -> bool {
-            return input_tensor.get_logical_shape().rank() > 4;
-        },
+        .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.logical_shape().rank() > 4; },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedUntilizeArgs {
-            *original_shape = std::make_pair(input_tensor.get_logical_shape(), input_tensor.get_padded_shape());
+            *original_shape = std::make_pair(input_tensor.logical_shape(), input_tensor.padded_shape());
             ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
             return std::make_tuple(squeezed_tensor);
         },
@@ -45,15 +43,15 @@ ttnn::Tensor ExecuteUntilize::invoke(
     bool use_pack_untilize,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     bool fp32_dest_acc_en =
-        input_tensor.get_dtype() ==
+        input_tensor.dtype() ==
         DataType::UINT32;  // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
 
-    auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
     uint32_t output_single_tile_size = input_single_tile_size;
 
-    uint32_t num_tiles_per_row = input_tensor.get_padded_shape()[-1] / tt::constants::TILE_WIDTH;
-    uint32_t num_tiles_per_col = input_tensor.get_padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+    uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t num_tiles_per_col = input_tensor.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
 
     bool enough_space_width =
         is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);

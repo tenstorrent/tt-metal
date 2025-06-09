@@ -24,7 +24,7 @@ void CumSumDeviceOperation::validate_on_program_cache_miss(
     // Verify `dim` parameter (`-input.dims <= dim < input.dim`)
     // Note: `args.dim` can be negative (but tensor rank() is unsigned) which is why we cast to int64_t
     const auto& input_tensor = tensor_args.input_tensor;
-    const int64_t tensor_rank = static_cast<int64_t>(input_tensor.get_logical_shape().rank());
+    const int64_t tensor_rank = static_cast<int64_t>(input_tensor.logical_shape().rank());
     TT_FATAL(
         (tensor_rank == 0 && args.dim == 0)  // input tensor can have a dim of 0 (c.f. torch implementation)
             || (args.dim < tensor_rank && args.dim >= -tensor_rank),
@@ -62,7 +62,7 @@ void CumSumDeviceOperation::validate_on_program_cache_hit(
 CumSumDeviceOperation::spec_return_value_t CumSumDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return TensorSpec(
-        tensor_args.input_tensor.get_logical_shape(),
+        tensor_args.input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
             args.dtype,
             tt::tt_metal::PageConfig(tensor_args.input_tensor.layout()),

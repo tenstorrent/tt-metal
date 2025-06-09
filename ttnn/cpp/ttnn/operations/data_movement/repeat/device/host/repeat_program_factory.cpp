@@ -30,7 +30,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
     const Tensor& output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // get datum size
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const uint32_t data_size = input.element_size();
     tt::tt_metal::IDevice* device = input.device();
     // Multi device pre-computation
@@ -39,8 +39,8 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
-    ttnn::Shape input_log_shape = ttnn::Shape(input.get_logical_shape().view());
-    ttnn::Shape output_log_shape = ttnn::Shape(output.get_logical_shape().view());
+    ttnn::Shape input_log_shape = ttnn::Shape(input.logical_shape().view());
+    ttnn::Shape output_log_shape = ttnn::Shape(output.logical_shape().view());
     log_debug(tt::LogOp, "row major reshape");
     log_debug(tt::LogOp, "input shape: {}", input_log_shape);
     log_debug(tt::LogOp, "output shape: {}", output_log_shape);
@@ -145,7 +145,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
     const Tensor& output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // get datum size
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const uint32_t data_size = input.element_size();
     tt::tt_metal::IDevice* device = input.device();
     // Multi device pre-computation
@@ -155,8 +155,8 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
     uint32_t num_cores_total = num_cores_x * num_cores_y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
-    ttnn::Shape input_log_shape = ttnn::Shape(input.get_logical_shape().view());
-    ttnn::Shape output_log_shape = ttnn::Shape(output.get_logical_shape().view());
+    ttnn::Shape input_log_shape = ttnn::Shape(input.logical_shape().view());
+    ttnn::Shape output_log_shape = ttnn::Shape(output.logical_shape().view());
     log_debug(tt::LogOp, "row major reshape");
     log_debug(tt::LogOp, "input shape: {}", input_log_shape);
     log_debug(tt::LogOp, "output shape: {}", output_log_shape);

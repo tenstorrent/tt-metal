@@ -295,7 +295,7 @@ Result conv2d_DRAM(
                 out_channels,
                 output_slice_height,
                 output_slice_width,
-                weight_tensor.get_logical_shape()[3],
+                weight_tensor.logical_shape()[3],
                 input_slice_height,
                 input_slice_width,
                 compute_grid_size,
@@ -394,8 +394,8 @@ Result conv2d_DRAM(
     if (conv_config.deallocate_activation) {
         input_tensor_on_device.deallocate(true);
     }
-    const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.get_logical_shape());
-    const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.get_padded_shape());
+    const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.logical_shape());
+    const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.padded_shape());
 
     dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
 
@@ -574,7 +574,7 @@ Result conv2d_L1(
             if (input_tensor_post_tm.layout() == Layout::TILE) {
                 // Reshape is used as a workaround to an issue in to_layout mentioned here :
                 // https://github.com/tenstorrent/tt-metal/issues/16330
-                input_tensor_post_tm = ttnn::reshape(input_tensor_post_tm, input_tensor_post_tm.get_padded_shape());
+                input_tensor_post_tm = ttnn::reshape(input_tensor_post_tm, input_tensor_post_tm.padded_shape());
                 input_tensor_post_tm =
                     ttnn::to_layout(input_tensor_post_tm, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
             }

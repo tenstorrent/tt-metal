@@ -11,9 +11,9 @@ namespace ttnn::operations::moreh::moreh_fold {
 void MorehFoldOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto& input = tensor_args.input;
-    auto input_shape = input.get_logical_shape();
+    auto input_shape = input.logical_shape();
 
-    TT_FATAL(input.get_layout() == Layout::ROW_MAJOR, "Fold: only support input in ROW_MAJOR");
+    TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Fold: only support input in ROW_MAJOR");
     TT_FATAL(operation_attributes.output_size.size() == 2, "Fold: output_size takes 2 elements");
     TT_FATAL(operation_attributes.kernel_size.size() == 2, "Fold: kernel_size takes 2 elements");
     TT_FATAL(operation_attributes.dilation.size() == 2, "Fold: dilation takes 2 elements");
@@ -30,15 +30,15 @@ void MorehFoldOperation::validate_inputs(
              1);
         kernel_size_product *= operation_attributes.kernel_size[i];
     }
-    auto input_rank = input.get_logical_shape().rank();
+    auto input_rank = input.logical_shape().rank();
 
     TT_FATAL((input_rank == 3) || (input_rank == 2), "Fold: Only support 3D or 2D input tensor");
     TT_FATAL(input_shape[input_rank - 1] == l, "Fold: Invalid input tensor size");
     TT_FATAL(input_shape[input_rank - 2] % kernel_size_product == 0, "Fold: Invalid input tensor size");
 
     if (tensor_args.output) {
-        auto output_shape = tensor_args.output->get_logical_shape();
-        auto output_rank = tensor_args.output->get_logical_shape().rank();
+        auto output_shape = tensor_args.output->logical_shape();
+        auto output_rank = tensor_args.output->logical_shape().rank();
         TT_FATAL(
             output_shape[output_rank - 3] == input_shape[input_rank - 2] / kernel_size_product,
             "Fold: Invalid output tensor size");
@@ -68,11 +68,11 @@ void MorehFoldOperation::validate_on_program_cache_hit(
 MorehFoldOperation::spec_return_value_t MorehFoldOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
-        return tensor_args.output->get_tensor_spec();
+        return tensor_args.output->tensor_spec();
     }
 
-    auto input_tensor_shape = tensor_args.input.get_logical_shape();
-    auto input_tensor_rank = tensor_args.input.get_logical_shape().rank();
+    auto input_tensor_shape = tensor_args.input.logical_shape();
+    auto input_tensor_rank = tensor_args.input.logical_shape().rank();
     uint32_t kernel_size_product = operation_attributes.kernel_size[0] * operation_attributes.kernel_size[1];
     auto output_shape = [&] {
         if (input_tensor_rank == 3) {
@@ -87,8 +87,8 @@ MorehFoldOperation::spec_return_value_t MorehFoldOperation::compute_output_specs
     return TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
-            tensor_args.input.get_dtype(),
-            tt::tt_metal::PageConfig(tensor_args.input.get_layout()),
+            tensor_args.input.dtype(),
+            tt::tt_metal::PageConfig(tensor_args.input.layout()),
             operation_attributes.memory_config));
 };
 

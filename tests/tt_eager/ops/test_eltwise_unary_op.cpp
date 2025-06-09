@@ -56,7 +56,7 @@ template <auto UnaryFunction>
 Tensor host_function(const Tensor& input_tensor) {
     auto input_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(input_tensor);
 
-    auto output_buffer = std::vector<bfloat16>(input_tensor.volume());
+    auto output_buffer = std::vector<bfloat16>(input_tensor.physical_volume());
 
     for (auto index = 0; index < output_buffer.size(); index++) {
         auto value = UnaryFunction(input_buffer[index].to_float());
@@ -65,9 +65,9 @@ Tensor host_function(const Tensor& input_tensor) {
 
     return Tensor(
         tt::tt_metal::HostBuffer(std::move(output_buffer)),
-        input_tensor.get_logical_shape(),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout());
+        input_tensor.logical_shape(),
+        input_tensor.dtype(),
+        input_tensor.layout());
 }
 
 template <ttnn::operations::unary::UnaryOpType unary_op_type, typename... Args>
@@ -159,8 +159,8 @@ void test_shape_padding() {
     auto output_tensor = ttnn::sqrt(padded_input_tensor);
     output_tensor = output_tensor.cpu();
 
-    TT_FATAL(output_tensor.get_padded_shape() == padded_input_shape, "Error");
-    TT_FATAL(output_tensor.get_logical_shape() == input_shape, "Error");
+    TT_FATAL(output_tensor.padded_shape() == padded_input_shape, "Error");
+    TT_FATAL(output_tensor.logical_shape() == input_shape, "Error");
 }
 
 namespace tt {

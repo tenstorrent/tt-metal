@@ -85,13 +85,13 @@ tt::tt_metal::HostBuffer create_host_buffer_from_bytes(uint64_t size_bytes, cons
 
 flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder) {
-    const auto& storage = tensor.get_storage();
+    const auto& storage = tensor.storage();
 
     TT_FATAL(!is_device_tensor(tensor), "Device tensors are not supported in flatbuffer serialization");
 
-    auto tensor_spec_offset = ttnn::to_flatbuffer(tensor.get_tensor_spec(), builder);
+    auto tensor_spec_offset = ttnn::to_flatbuffer(tensor.tensor_spec(), builder);
 
-    const auto& strategy = tensor.get_distributed_tensor_config();
+    const auto& strategy = tensor.distributed_tensor_config();
     if (std::holds_alternative<tt::tt_metal::ReplicateTensor>(strategy)) {
         std::size_t buffer_size = 0;
         if (std::holds_alternative<tt::tt_metal::HostStorage>(storage)) {

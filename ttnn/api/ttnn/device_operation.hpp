@@ -578,7 +578,7 @@ typename device_operation_t::tensor_return_value_t invoke(
 
     // TODO: support the case when tensor args are empty? Or pass in the device as an argument in that case
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
-    const auto& storage = first_tensor.get_storage();
+    const auto& storage = first_tensor.storage();
 
     tensor_return_value_t tensor_return_value;
 

@@ -20,7 +20,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 Tensor pre_scatter_transform_tensor(
     const Tensor& input_tensor, const int8_t dim, const bool is_dim_last_idx, const bool is_rank_le_4d) {
-    if (input_tensor.get_logical_shape() == ttnn::Shape{1} || input_tensor.get_logical_shape() == ttnn::Shape{0}) {
+    if (input_tensor.logical_shape() == ttnn::Shape{1} || input_tensor.logical_shape() == ttnn::Shape{0}) {
         return input_tensor;
     }
 
@@ -48,9 +48,9 @@ Tensor post_scatter_transform_tensor(
     }
 
     TT_FATAL(
-        output_tensor.get_logical_shape() == original_lshape,
+        output_tensor.logical_shape() == original_lshape,
         "Output tensor transformation did not create correct output shape! Got: {}, expected: {}",
-        output_tensor.get_logical_shape(),
+        output_tensor.logical_shape(),
         original_lshape);
 
     return output_tensor;
@@ -68,10 +68,10 @@ Tensor ScatterOperation::invoke(
     const std::optional<MemoryConfig>& output_memory_config,
     const std::optional<scatter::ScatterReductionType>& opt_reduction,
     std::optional<Tensor>& opt_output) {
-    const ttnn::Shape original_input_tensor_lshape = input_tensor.get_logical_shape();
-    const auto input_tensor_rank = input_tensor.get_padded_shape().rank();
+    const ttnn::Shape original_input_tensor_lshape = input_tensor.logical_shape();
+    const auto input_tensor_rank = input_tensor.padded_shape().rank();
 
-    const auto original_index_tensor_lshape = index_tensor.get_logical_shape();
+    const auto original_index_tensor_lshape = index_tensor.logical_shape();
     if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
         return input_tensor;
     }
@@ -87,7 +87,7 @@ Tensor ScatterOperation::invoke(
 
     // transposition case size growth check
     if (!input_tensor_is_dim_last_idx) {
-        const int64_t original_volume = static_cast<int64_t>(input_tensor.padded_volume());
+        const int64_t original_volume = static_cast<int64_t>(input_tensor.physical_volume());
         ttnn::Shape new_shape = input_tensor.logical_shape();
         std::swap(new_shape[dim], new_shape[-1]);
         const int64_t tile_width = input_tensor.tensor_spec().tile().get_width();
@@ -97,14 +97,14 @@ Tensor ScatterOperation::invoke(
         const uint32_t new_volume = new_shape.volume();
 
         std::cout << new_volume << " " << original_volume << " " << new_shape << " " << new_shape << " "
-                  << input_tensor.get_padded_shape();
+                  << input_tensor.padded_shape();
 
         if (new_volume > original_volume) {
             const int64_t datum_size = input_tensor.element_size();
             constexpr int64_t growth_limit = 200 * 1024;
             const int64_t growth = (new_volume - original_volume) * datum_size;
             TT_FATAL(
-                input_tensor.get_logical_shape()[-2] % 32 != 0 && input_tensor.get_logical_shape()[-1] % 32 != 0 &&
+                input_tensor.logical_shape()[-2] % 32 != 0 && input_tensor.logical_shape()[-1] % 32 != 0 &&
                     growth < growth_limit,
                 "Original tensor's volume is {} KB, which is more than {} KB larger than the volume of the same tiled "
                 "transposed tensor: {} KB (growth limit: {} KB)",

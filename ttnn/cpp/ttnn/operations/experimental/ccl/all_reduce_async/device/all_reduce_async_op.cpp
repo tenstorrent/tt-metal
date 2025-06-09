@@ -16,8 +16,8 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Error, Input tensor size should be 2 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& buffer_tensor = input_tensors[1];
-    const auto& layout = input_tensors[0].get_layout();
-    const auto& dtype = input_tensors[0].get_dtype();
+    const auto& layout = input_tensors[0].layout();
+    const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
     TT_FATAL(
@@ -67,7 +67,7 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<ttnn::TensorSpec> AllReduceAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.get_logical_shape();
+    auto shape = input_tensor.logical_shape();
     tt::tt_metal::TensorLayout output_tensor_layout =
         tt::tt_metal::TensorLayout(this->dtype, input_tensor.tensor_spec().page_config(), this->output_mem_config);
 
@@ -115,7 +115,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
         }
     }
 
-    auto input_tensor_shape = input_tensors[0].get_padded_shape();
+    auto input_tensor_shape = input_tensors[0].padded_shape();
     auto input_tensor_buffer_layout = input_tensors[0].buffer()->buffer_layout();
     auto input_tensor_page_layout = input_tensors[0].layout();
 
@@ -156,9 +156,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
 }
 
 tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
-    auto input_shape = input_tensors[0].get_padded_shape();
-    auto input_memory_layout = input_tensors[0].get_layout();
-    auto input_dtype = input_tensors[0].get_dtype();
+    auto input_shape = input_tensors[0].padded_shape();
+    auto input_memory_layout = input_tensors[0].layout();
+    auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
     auto output_dtype = this->dtype;
     return tt::tt_metal::operation::hash_operation<AllReduceAsync>(
@@ -198,7 +198,7 @@ Tensor all_reduce_async_impl(
                ttnn::AllReduceAsync{
                    num_preferred_links.has_value() ? num_preferred_links.value() : 1,
                    num_devices,
-                   dtype.value_or(input_tensor.get_dtype()),
+                   dtype.value_or(input_tensor.dtype()),
                    memory_config.value_or(input_tensor.memory_config()),
                    topology,
                    multi_device_global_semaphore,

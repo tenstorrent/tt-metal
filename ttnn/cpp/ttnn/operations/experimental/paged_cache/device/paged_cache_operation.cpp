@@ -43,24 +43,23 @@ void PagedUpdateCacheDeviceOperation::validate(
 
         // Layout and data type validation
         if (this->op_type == PagedUpdateCacheOpType::UPDATE) {
-            TT_FATAL(
-                input_tensor.get_layout() == Layout::TILE, "Input tensor in non-fused update_cache must be tilized");
+            TT_FATAL(input_tensor.layout() == Layout::TILE, "Input tensor in non-fused update_cache must be tilized");
         }
-        TT_FATAL(cache_tensor.get_layout() == Layout::TILE, "Cache tensor in update_cache must be tilized");
+        TT_FATAL(cache_tensor.layout() == Layout::TILE, "Cache tensor in update_cache must be tilized");
         TT_FATAL(
-            cache_tensor.get_dtype() == DataType::FLOAT32 || cache_tensor.get_dtype() == DataType::BFLOAT16 ||
-                cache_tensor.get_dtype() == DataType::BFLOAT8_B || cache_tensor.get_dtype() == DataType::BFLOAT4_B,
+            cache_tensor.dtype() == DataType::FLOAT32 || cache_tensor.dtype() == DataType::BFLOAT16 ||
+                cache_tensor.dtype() == DataType::BFLOAT8_B || cache_tensor.dtype() == DataType::BFLOAT4_B,
             "Data type of cache tensor must be FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B and is {}",
-            cache_tensor.get_dtype());
+            cache_tensor.dtype());
     };
 
     const auto validateTensorShapes = [](const Tensor& cache_tensor, const Tensor& input_tensor) {
-        TT_FATAL(input_tensor.get_padded_shape()[0] == 1, "Dim 0 of input tensor must be 1");
+        TT_FATAL(input_tensor.padded_shape()[0] == 1, "Dim 0 of input tensor must be 1");
         TT_FATAL(
             cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Only interleaved cache is supported");
         TT_FATAL(
-            input_tensor.get_padded_shape()[-1] == cache_tensor.get_padded_shape()[-1],
+            input_tensor.padded_shape()[-1] == cache_tensor.padded_shape()[-1],
             "Last dim of input tensor must match last dim of cache tensor");
     };
 
@@ -72,11 +71,10 @@ void PagedUpdateCacheDeviceOperation::validate(
         if (!paged_cache) {
             if (share_cache) {
                 TT_FATAL(
-                    cache_tensor.get_padded_shape()[0] == 1,
-                    "Share cache feature expects cache tensor to have batch of 1");
+                    cache_tensor.padded_shape()[0] == 1, "Share cache feature expects cache tensor to have batch of 1");
             } else {
                 TT_FATAL(
-                    input_tensor.get_padded_shape()[1] == cache_tensor.get_padded_shape()[0],
+                    input_tensor.padded_shape()[1] == cache_tensor.padded_shape()[0],
                     "Expect batch in input tensor match the batch in cache tensor");
             }
         } else {
@@ -84,13 +82,13 @@ void PagedUpdateCacheDeviceOperation::validate(
             TT_FATAL(optional_input_tensors.at(0).has_value(), "Paged cache requires update_idxs tensor");
 
             auto page_table = optional_input_tensors.at(1).value();
-            TT_FATAL(page_table.get_dtype() == DataType::INT32, "Error");
-            TT_FATAL(page_table.get_layout() == Layout::ROW_MAJOR, "Error");
+            TT_FATAL(page_table.dtype() == DataType::INT32, "Error");
+            TT_FATAL(page_table.layout() == Layout::ROW_MAJOR, "Error");
             TT_FATAL(
-                page_table.get_padded_shape()[0] == input_tensor.get_padded_shape()[1],
+                page_table.padded_shape()[0] == input_tensor.padded_shape()[1],
                 "Batch size between page_table and input_tensor must match");
             TT_FATAL(
-                page_table.get_padded_shape()[1] <= cache_tensor.get_padded_shape()[0],
+                page_table.padded_shape()[1] <= cache_tensor.padded_shape()[0],
                 "max_num_blocks_per_seq must be less than max_num_blocks");
         }
     };
@@ -105,9 +103,9 @@ void PagedUpdateCacheDeviceOperation::validate(
         uint32_t num_indices;
         if (optional_input_tensors.at(0).has_value()) {
             const auto& update_idxs_tensor = optional_input_tensors.at(0).value();
-            TT_FATAL(update_idxs_tensor.get_dtype() == DataType::INT32, "Error");
-            TT_FATAL(update_idxs_tensor.get_layout() == Layout::ROW_MAJOR, "Error");
-            num_indices = update_idxs_tensor.get_padded_shape()[0];
+            TT_FATAL(update_idxs_tensor.dtype() == DataType::INT32, "Error");
+            TT_FATAL(update_idxs_tensor.layout() == Layout::ROW_MAJOR, "Error");
+            num_indices = update_idxs_tensor.padded_shape()[0];
 
             TT_FATAL(update_idxs_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
             TT_FATAL(update_idxs_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Error");
@@ -115,16 +113,16 @@ void PagedUpdateCacheDeviceOperation::validate(
             num_indices = update_idxs.size();
         }
 
-        TT_FATAL(input_tensor.get_padded_shape()[1] == num_indices, "Number of update_idxs should match batch size");
+        TT_FATAL(input_tensor.padded_shape()[1] == num_indices, "Number of update_idxs should match batch size");
     };
 
     const auto validateSharding = [](const Tensor& input_tensor) {
         TT_FATAL(input_tensor.is_sharded(), "Error");
         if (input_tensor.is_sharded()) {
             TT_FATAL(input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED, "Error");
-            TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.get_padded_shape()[-1], "Error");
+            TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.padded_shape()[-1], "Error");
             TT_FATAL(
-                (input_tensor.volume() / input_tensor.get_padded_shape()[-1]) %
+                (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) %
                         input_tensor.shard_spec().value().shape[0] ==
                     0,
                 "Error");
@@ -142,7 +140,7 @@ void PagedUpdateCacheDeviceOperation::validate(
                                              const std::vector<uint32_t>& update_idxs,
                                              uint32_t batch_offset) {
         TT_FATAL(
-            input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16,
+            input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16,
             "Data type of input tensor for update cache must be FLOAT32 or BFLOAT16");
 
         const bool paged_cache = optional_input_tensors.at(1).has_value();
@@ -158,17 +156,17 @@ void PagedUpdateCacheDeviceOperation::validate(
                                           const Tensor& page_table_tensor,
                                           uint32_t batch_idx) {
         TT_FATAL(
-            input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16 ||
-                cache_tensor.get_dtype() == DataType::BFLOAT8_B || cache_tensor.get_dtype() == DataType::BFLOAT4_B,
+            input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
+                cache_tensor.dtype() == DataType::BFLOAT8_B || cache_tensor.dtype() == DataType::BFLOAT4_B,
             "Data type of input tensor for fill cache must be FLOAT32, BFLOAT16, or BFLOAT8_b");
 
         TT_FATAL(input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
         TT_FATAL(page_table_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
-        TT_FATAL(page_table_tensor.get_dtype() == DataType::INT32, "Error");
+        TT_FATAL(page_table_tensor.dtype() == DataType::INT32, "Error");
 
-        auto cache_shape = cache_tensor.get_padded_shape();
-        auto input_shape = input_tensor.get_padded_shape();
-        auto page_table_shape = page_table_tensor.get_padded_shape();
+        auto cache_shape = cache_tensor.padded_shape();
+        auto input_shape = input_tensor.padded_shape();
+        auto page_table_shape = page_table_tensor.padded_shape();
 
         TT_FATAL(batch_idx <= cache_shape[0], "Error");
         TT_FATAL(
@@ -177,15 +175,14 @@ void PagedUpdateCacheDeviceOperation::validate(
 
     const auto validateFusedUpdateTensors = [](const Tensor& input_tensor1, const Tensor& input_tensor2) {
         // Validate either both should be tiled or row-major
-        bool is_tiled = input_tensor1.get_layout() == Layout::TILE && input_tensor2.get_layout() == Layout::TILE;
-        bool is_row_major =
-            input_tensor1.get_layout() == Layout::ROW_MAJOR && input_tensor2.get_layout() == Layout::ROW_MAJOR;
+        bool is_tiled = input_tensor1.layout() == Layout::TILE && input_tensor2.layout() == Layout::TILE;
+        bool is_row_major = input_tensor1.layout() == Layout::ROW_MAJOR && input_tensor2.layout() == Layout::ROW_MAJOR;
 
         TT_FATAL(
             is_tiled || is_row_major, "input_tensor1 and input_tensor2 must be either both tiled or both row-major");
         if (is_row_major) {
             TT_FATAL(
-                input_tensor1.get_padded_shape()[-1] == 128 && input_tensor2.get_padded_shape()[-2] == 8,
+                input_tensor1.padded_shape()[-1] == 128 && input_tensor2.padded_shape()[-2] == 8,
                 "when input_tensor1 and input_tensor2 are row major, only Llama70b tensor shapes are supported");
         }
 
@@ -229,9 +226,9 @@ void PagedUpdateCacheDeviceOperation::validate(
         validateFillOperation(input_tensors.at(0), input_tensors.at(1), input_tensors.at(2), this->batch_idx_fallback);
         if (this->batch_idx_tensor_opt.has_value()) {
             const auto& tensor = this->batch_idx_tensor_opt.value();
-            TT_FATAL(tensor.volume() == 1, "Batch idx tensor must have a single element");
+            TT_FATAL(tensor.physical_volume() == 1, "Batch idx tensor must have a single element");
             TT_FATAL(
-                tensor.get_dtype() == DataType::UINT32 || tensor.get_dtype() == DataType::INT32,
+                tensor.dtype() == DataType::UINT32 || tensor.dtype() == DataType::INT32,
                 "Batch idx tensor must be an integer type");
             // Add any other necessary validation for the tensor itself
         }

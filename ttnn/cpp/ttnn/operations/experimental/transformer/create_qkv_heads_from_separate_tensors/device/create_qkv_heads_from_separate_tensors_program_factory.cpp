@@ -20,8 +20,8 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_qkv_separate(
     const uint32_t head_dim,
     std::vector<Tensor>& output,
     bool transpose_k) {
-    const auto& q_shape = input_tensor_q.get_padded_shape();
-    const auto& kv_shape = input_tensor_kv.get_padded_shape();
+    const auto& q_shape = input_tensor_q.padded_shape();
+    const auto& kv_shape = input_tensor_kv.padded_shape();
     auto shard_spec = input_tensor_q.shard_spec().value();
     auto all_cores = shard_spec.grid;
     auto bbox = all_cores.bounding_box();
@@ -42,8 +42,8 @@ static inline tt::tt_metal::operation::ProgramWithCallbacks create_qkv_separate(
     uint32_t per_core_q_tiles = q_shard_ht * q_shard_wt;
     uint32_t per_core_k_tiles = k_shard_ht * k_shard_wt;
 
-    const auto q_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_q.get_dtype());
-    const auto kv_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_kv.get_dtype());
+    const auto q_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
+    const auto kv_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_kv.dtype());
     uint32_t single_tile_size = tile_size(q_data_format);
 
     uint32_t q_heads_per_core = num_q_heads / num_w_cores;

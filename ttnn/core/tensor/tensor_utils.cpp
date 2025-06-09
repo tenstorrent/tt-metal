@@ -17,7 +17,7 @@ namespace tt {
 namespace tt_metal {
 
 ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape) {
-    int64_t old_volume = tensor.get_logical_volume();
+    int64_t old_volume = tensor.logical_volume();
     int64_t new_volume = 1;
     int64_t index_of_negative_1 = -1;
     bool has_zero = false;
@@ -109,22 +109,22 @@ Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)
     transformed_buffers.reserve(storage.num_buffers());
     transformed_specs.reserve(storage.num_buffers());
     for (size_t i = 0; i < storage.num_buffers(); i++) {
-        Tensor transformed_tensor_shard = transform_func(Tensor(storage.get_buffer(i), tensor.get_tensor_spec()));
-        transformed_specs.push_back(transformed_tensor_shard.get_tensor_spec());
-        auto* host_storage = std::get_if<HostStorage>(&transformed_tensor_shard.get_storage());
+        Tensor transformed_tensor_shard = transform_func(Tensor(storage.get_buffer(i), tensor.tensor_spec()));
+        transformed_specs.push_back(transformed_tensor_shard.tensor_spec());
+        auto* host_storage = std::get_if<HostStorage>(&transformed_tensor_shard.storage());
         TT_FATAL(host_storage != nullptr, "transform function must return a host tensor");
         transformed_buffers.push_back(std::move(host_storage->buffer));
     }
     TensorSpec reference_spec = transformed_specs.front();
     MultiDeviceHostStorage transformed_storage(std::move(transformed_buffers));
-    return Tensor(std::move(transformed_storage), reference_spec, tensor.get_distributed_tensor_config());
+    return Tensor(std::move(transformed_storage), reference_spec, tensor.distributed_tensor_config());
 }
 
 void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable) {
     TT_FATAL(is_multi_device_host_tensor(tensor), "apply only supports multi-device host tensors");
     const auto& storage = std::get<MultiDeviceHostStorage>(tensor.storage());
     for (size_t i = 0; i < storage.num_buffers(); i++) {
-        callable(Tensor(storage.get_buffer(i), tensor.get_tensor_spec()));
+        callable(Tensor(storage.get_buffer(i), tensor.tensor_spec()));
     }
 }
 

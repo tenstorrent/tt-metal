@@ -322,10 +322,10 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
         remote_shard_spec.grid, std::nullopt, remote_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
     uint32_t unit_size, local_units_per_shard, remote_units_per_shard;
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.get_dtype());
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());
 
     uint32_t num_units = local_tensor.buffer()->num_pages();
-    if (local_tensor.get_layout() == Layout::TILE) {
+    if (local_tensor.layout() == Layout::TILE) {
         unit_size = tt::tt_metal::detail::TileSize(data_format);
         local_units_per_shard = local_shard_spec.numel() / TILE_HW;
         remote_units_per_shard = remote_shard_spec.numel() / TILE_HW;
@@ -443,15 +443,15 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
 
     uint32_t total_size, page_size, unit_size;
     auto output_shard_shape = output_shard_spec.shape;
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
-    if (input.get_layout() == Layout::TILE) {
+    if (input.layout() == Layout::TILE) {
         page_size = tt::tt_metal::detail::TileSize(data_format);
         unit_size = page_size;
         total_size = output_shard_spec.numel() / TILE_HW * unit_size;
     } else {
         unit_size = output_shard_spec.shape[1] * output.element_size();
-        page_size = output.get_padded_shape()[-1] * output.element_size();
+        page_size = output.padded_shape()[-1] * output.element_size();
         total_size = output_shard_shape[0] * unit_size;
     }
 
@@ -552,10 +552,10 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
     const auto remote_cores = corerange_to_cores(
         remote_shard_spec.grid, std::nullopt, remote_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
-    const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.get_dtype());
+    const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());
     const uint32_t element_size = tt::datum_size(data_format);
 
-    TT_FATAL(local_tensor.get_layout() == Layout::ROW_MAJOR, "Expected row major tensor");
+    TT_FATAL(local_tensor.layout() == Layout::ROW_MAJOR, "Expected row major tensor");
     const uint32_t unit_size = local_shard_spec.shape[1] * local_tensor.element_size();  // width * element size
     const uint32_t local_units_per_shard = local_shard_spec.shape[0];                    // height
     const uint32_t remote_units_per_shard = remote_shard_spec.shape[0];                  // height

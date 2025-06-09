@@ -60,11 +60,11 @@ CCLOpConfig::CCLOpConfig(
     output_tensors(&output_tensors),
     input_sharded(input_tensors.at(0).is_sharded()),
     output_sharded(output_tensors.at(0).is_sharded()),
-    df(tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).get_dtype())),
+    df(tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype())),
     shard_grid_size(output_tensors.at(0).is_sharded() ? input_tensors.at(0).shard_spec()->num_cores() : 0),
     topology(topology),
-    is_row_major(input_tensors.at(0).get_layout() == Layout::ROW_MAJOR) {
-    if (input_tensors.at(0).get_layout() == Layout::TILE) {
+    is_row_major(input_tensors.at(0).layout() == Layout::ROW_MAJOR) {
+    if (input_tensors.at(0).layout() == Layout::TILE) {
         this->tile = input_tensors.at(0).tensor_spec().tile();
         this->page_size = this->tile.get_tile_size(this->df);
         // this->page_size = input_tensors.at(0).buffer()->page_size();

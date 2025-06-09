@@ -11,7 +11,7 @@ namespace ttnn::operations::data_movement {
 std::vector<ttnn::Tensor> ChunkOperation::invoke(const ttnn::Tensor& input_tensor, const uint32_t num_chunks, int dim) {
     TT_FATAL(num_chunks > 0, "Number of chunks must be greater than zero");
 
-    auto size = input_tensor.get_logical_shape();
+    auto size = input_tensor.logical_shape();
     int num_dims = size.rank();
 
     if (dim < 0) {

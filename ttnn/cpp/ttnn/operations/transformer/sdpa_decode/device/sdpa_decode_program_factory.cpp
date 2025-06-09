@@ -50,11 +50,11 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     const bool is_paged_attention = page_table_tensor.has_value();
 
-    auto q_shape = input_tensor_q.get_padded_shape();
-    const bool tilize_q = input_tensor_q.get_layout() == Layout::ROW_MAJOR;
+    auto q_shape = input_tensor_q.padded_shape();
+    const bool tilize_q = input_tensor_q.layout() == Layout::ROW_MAJOR;
     q_shape[2] = tt::round_up(q_shape[2], tt::constants::TILE_HEIGHT);  // round up for row major Q tensor.
-    const auto q_shape_unpadded = input_tensor_q.get_logical_shape();
-    const auto k_shape = input_tensor_k.get_padded_shape();
+    const auto q_shape_unpadded = input_tensor_q.logical_shape();
+    const auto k_shape = input_tensor_k.padded_shape();
     // Use k_shape for S and DH since Q might be different for decode
     uint32_t B = q_shape[1], PNH = q_shape[2], S = k_shape[2], DH = k_shape[3];
 
@@ -66,7 +66,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         uint32_t block_size = k_shape[2];
         page_block_size_t = block_size / TILE_HEIGHT;
         // get real S using the page_table_tensor
-        S = page_table_tensor.value().get_padded_shape()[-1] * S;
+        S = page_table_tensor.value().padded_shape()[-1] * S;
     }
     uint32_t Bkv = k_shape[0];
     uint32_t St = S / TILE_HEIGHT;
@@ -315,13 +315,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     log_debug(tt::LogOp, "out_num_blocks: {}", out_num_blocks);
 
     // Create circular buffers
-    tt::DataFormat q_df = tt_metal::datatype_to_dataformat_converter(input_tensor_q.get_dtype());
-    tt::DataFormat k_df = tt_metal::datatype_to_dataformat_converter(input_tensor_k.get_dtype());
-    tt::DataFormat v_df = tt_metal::datatype_to_dataformat_converter(input_tensor_v.get_dtype());
-    tt::DataFormat mask_df = use_attention_mask
-                                 ? tt_metal::datatype_to_dataformat_converter(attn_mask.value().get_dtype())
-                                 : tt::DataFormat::Float16_b;
-    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+    tt::DataFormat q_df = tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
+    tt::DataFormat k_df = tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
+    tt::DataFormat v_df = tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
+    tt::DataFormat mask_df = use_attention_mask ? tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
+                                                : tt::DataFormat::Float16_b;
+    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;
     // tt::DataFormat im_df = tt::DataFormat::Float16_b;
@@ -360,7 +359,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t index_stick_size = 0;
     if (use_cur_pos_tensor) {
         auto pos_buffer = cur_pos_tensor.value().buffer();
-        tt::DataFormat pos_df = tt_metal::datatype_to_dataformat_converter(cur_pos_tensor.value().get_dtype());
+        tt::DataFormat pos_df = tt_metal::datatype_to_dataformat_converter(cur_pos_tensor.value().dtype());
         pos_tensor_tile_size = tt_metal::detail::TileSize(pos_df);
         index_stick_size = pos_buffer->aligned_page_size();
 
@@ -374,8 +373,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t page_table_stick_size = 0;
     if (is_paged_attention) {
         auto page_table_buffer = page_table_tensor.value().buffer();
-        tt::DataFormat page_table_df =
-            tt_metal::datatype_to_dataformat_converter(page_table_tensor.value().get_dtype());
+        tt::DataFormat page_table_df = tt_metal::datatype_to_dataformat_converter(page_table_tensor.value().dtype());
         page_table_stick_size = page_table_buffer->aligned_page_size();
 
         // cb page_table

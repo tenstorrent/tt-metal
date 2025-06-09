@@ -64,8 +64,8 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.get_padded_shape();
-    const auto input_shape_without_padding = input.get_logical_shape();
+    const auto input_shape = input.padded_shape();
+    const auto input_shape_without_padding = input.logical_shape();
     const auto input_rank = input_shape.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;
@@ -86,7 +86,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     uint32_t mean_rstd_width = 0;
 
     if (mean_has_value) {
-        const auto mean_rstd_shape_without_padding = mean->get_logical_shape();
+        const auto mean_rstd_shape_without_padding = mean->logical_shape();
         mean_rstd_height = mean_rstd_shape_without_padding[-2];
         mean_rstd_width = mean_rstd_shape_without_padding[-1];
     }
@@ -147,7 +147,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     const uint32_t im6_t = (gamma_has_value || beta_has_value) ? 2 * block_size : 0;  // x * gamm + beta
     const uint32_t im7_t = 2;                                                         // Sum[x]
 
-    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
     auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
     const auto intermed_single_tile_size = tt::tt_metal::detail::TileSize(intermed_cb_format);
