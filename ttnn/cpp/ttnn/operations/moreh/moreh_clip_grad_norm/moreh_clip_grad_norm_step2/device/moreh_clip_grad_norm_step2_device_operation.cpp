@@ -38,14 +38,13 @@ void MorehClipGradNormStep2Operation::validate_on_program_cache_hit(
 MorehClipGradNormStep2Operation::spec_return_value_t MorehClipGradNormStep2Operation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.total_norm.has_value()) {
-        return tensor_args.total_norm->get_tensor_spec();
+        return tensor_args.total_norm->tensor_spec();
     }
 
     // output total_norm 1 element
     return TensorSpec(
         Shape{1, 1},
-        TensorLayout(
-            tensor_args.tmp_pow_sum.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
+        TensorLayout(tensor_args.tmp_pow_sum.dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 };
 
 MorehClipGradNormStep2Operation::tensor_return_value_t MorehClipGradNormStep2Operation::create_output_tensors(

@@ -174,7 +174,7 @@ TEST_P(PrepareNdShardedDataTests, PrepareNdShardedData) {
         data[i] = static_cast<uint8_t>(i);
     }
     auto tensor = Tensor::from_vector(data, tensor_spec);
-    auto tensor_data = std::get<HostStorage>(tensor.get_storage()).buffer.view_as<uint8_t>();
+    auto tensor_data = std::get<HostStorage>(tensor.storage()).buffer.view_as<uint8_t>();
 
     auto sharded_data = pack_nd_sharded_data<uint8_t>(tensor_data, tensor_spec);
     EXPECT_EQ(sharded_data.size(), params.expected_data.size());

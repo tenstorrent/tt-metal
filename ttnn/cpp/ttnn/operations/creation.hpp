@@ -115,17 +115,17 @@ Tensor full_impl(
     std::optional<Tensor> optional_output_tensor = std::nullopt) {
     MeshDevice* device_to_use = optional_output_tensor.has_value() ? optional_output_tensor->mesh_device() : device;
 
-    DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_dtype()
+    DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().dtype()
                                                               : dtype.value_or(DataType::BFLOAT16);
     auto get_default_layout = [dtype_value]() {
         return (dtype_value == DataType::BFLOAT4_B || dtype_value == DataType::BFLOAT8_B) ? ttnn::TILE_LAYOUT
                                                                                           : ttnn::ROW_MAJOR_LAYOUT;
     };
 
-    Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_layout()
+    Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().layout()
                                                              : layout.value_or(get_default_layout());
     ttnn::Shape shape_value =
-        optional_output_tensor.has_value() ? optional_output_tensor.value().get_logical_shape() : shape;
+        optional_output_tensor.has_value() ? optional_output_tensor.value().logical_shape() : shape;
     MemoryConfig mem_cfg = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
                                                               : memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
 
@@ -193,12 +193,12 @@ Tensor full_like_impl(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<Tensor> optional_output_tensor = std::nullopt) {
     MeshDevice* device = device_arg.has_value() ? &device_arg->get() : nullptr;
-    Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_layout()
-                                                             : layout.value_or(tensor.get_layout());
-    DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_dtype()
-                                                              : dtype.value_or(tensor.get_dtype());
+    Layout layout_value =
+        optional_output_tensor.has_value() ? optional_output_tensor.value().layout() : layout.value_or(tensor.layout());
+    DataType dtype_value =
+        optional_output_tensor.has_value() ? optional_output_tensor.value().dtype() : dtype.value_or(tensor.dtype());
     auto arch = tensor.device()->arch();
-    const bool is_tile_layout = (tensor.get_layout() == Layout::TILE) && (layout_value == Layout::TILE);
+    const bool is_tile_layout = (tensor.layout() == Layout::TILE) && (layout_value == Layout::TILE);
     if (tt::tt_metal::is_device_tensor(tensor)) {
         // requires reference tensor to be in TILE for device operation fill - this will be changed later
         if (is_tile_layout &&
@@ -209,7 +209,7 @@ Tensor full_like_impl(
         } else {
             return full_impl(
                 queue_id,
-                tensor.get_logical_shape(),
+                tensor.logical_shape(),
                 fill_value,
                 dtype_value,
                 layout_value,
@@ -220,7 +220,7 @@ Tensor full_like_impl(
     } else {
         return full_impl(
             queue_id,
-            tensor.get_logical_shape(),
+            tensor.logical_shape(),
             fill_value,
             dtype_value,
             layout_value,
@@ -283,11 +283,11 @@ struct EmptyLike {
         const std::optional<Layout>& layout = std::nullopt,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        Layout layout_value = layout.value_or(tensor.get_layout());
-        DataType dtype_value = dtype.value_or(tensor.get_dtype());
+        Layout layout_value = layout.value_or(tensor.layout());
+        DataType dtype_value = dtype.value_or(tensor.dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
         return allocate_tensor_on_mesh(
-            TensorSpec(tensor.get_logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
+            TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
             device.has_value() ? &device->get() : tensor.mesh_device());
     }
 };

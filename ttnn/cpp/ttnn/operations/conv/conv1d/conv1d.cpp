@@ -58,7 +58,7 @@ Result conv1d(
     bool return_weights_and_bias) {
     // reshape input tensor to 4D, if it is not already
     const ttnn::Tensor& input_tensor_4d =
-        (input_tensor.get_logical_shape().rank() < 4)
+        (input_tensor.logical_shape().rank() < 4)
             ? ttnn::reshape(input_tensor, Shape({batch_size, input_length, 1, in_channels}))
             : input_tensor;
 
