@@ -42,6 +42,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
     if (input.layout() == Layout::TILE) {
@@ -150,10 +151,21 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     }
 
+    std::string writer_kernel;
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
+    if (dst_is_dram) {
+        if (input.get_layout() == Layout::TILE) {
+            writer_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_blocks_start_id.cpp");
+        } else {
+            writer_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_stick_layout_start_id.cpp");
+        }
+        shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
+    } else {
+        writer_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp");
+    }
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
+        writer_kernel,
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -206,18 +218,36 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
                 }
             }
             curr_num_units_per_shard = shard_height * num_units_per_shard_width;
-            tt::tt_metal::SetRuntimeArgs(
-                program,
-                unary_reader_kernel_id,
-                core,
-                {src_buffer->address(),
-                 shard_height,
-                 shard_width,
-                 padded_offset,
-                 num_units_offset,
-                 curr_num_units_per_shard,
-                 curr_idx_h + curr_idx_w,
-                 starting_idx_h});
+
+            // Reader run-time args
+            std::vector<uint32_t> reader_run_time_args = {
+                src_buffer->address(),
+                shard_height,
+                shard_width,
+                padded_offset,
+                num_units_offset,
+                curr_num_units_per_shard,
+                curr_idx_h + curr_idx_w,
+                starting_idx_h};
+            tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
+
+            // Writer run-time args
+            std::vector<uint32_t> writer_run_time_args;
+            if (dst_is_dram) {
+                writer_run_time_args = {
+                    dst_buffer->address(),
+                    shard_height,
+                    shard_width,
+                    shard_height * shard_width,
+                    num_units_per_row,
+                    curr_idx_h + curr_idx_w,
+                    starting_idx_h};
+            } else {
+                writer_run_time_args = {curr_num_units_per_shard};
+            }
+            tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
+
+            // Update indexing
             curr_idx_w += num_units_per_shard_width;
             if (curr_idx_w >= num_units_per_row) {
                 curr_idx_w = 0;
@@ -301,8 +331,10 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
                 curr_idx_w = 0;
                 curr_idx_h += num_units_per_shard_height;
             }
+
+            // TODO: (GR) Update
+            tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {curr_num_units_per_shard});
         }
-        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {curr_num_units_per_shard});
         if (convert_df) {
             tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, {curr_num_units_per_shard});
         }
@@ -333,7 +365,16 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
                     runtime_args[7] = starting_idx_h;
                 }
             }
-            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+
+            if (dst_is_dram) {
+                auto& runtime_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);
+                for (const auto& core : cores) {
+                    auto& runtime_args = runtime_args_by_core[core.x][core.y];
+                    runtime_args[0] = dst_buffer->address();
+                }
+            } else {
+                UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+            }
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
