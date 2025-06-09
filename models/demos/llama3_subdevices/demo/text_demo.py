@@ -516,13 +516,7 @@ def test_demo_text(
         # return True
         user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
-        # TODO Argmax on device is only supported for batch_size=1
-        argmax_on_device = batch_size == 1  # False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
-
-        if argmax_on_device:
-            device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
-        else:
-            device_sampling_params = None
+        device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
@@ -560,7 +554,6 @@ def test_demo_text(
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     sampling_params=device_sampling_params,
-                    argmax_on_device=argmax_on_device,
                     reset_inputs=iteration == 0 or batch_size > 1,
                 )
             except Exception as e:
@@ -587,10 +580,8 @@ def test_demo_text(
 
             # Save output token to print out later
             for user in range(batch_size):
-                if batch_size == 1:
-                    user_tok = tt_output_torch.tolist()[0]
-                else:
-                    user_tok = tt_output_torch.tolist()[user][0]
+                user_tok = tt_output_torch.tolist()[user]
+
                 if (
                     user_tok not in tokenizer.stop_tokens and user_done[user] == False
                 ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers

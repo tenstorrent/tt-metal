@@ -210,7 +210,6 @@ class Generator:
         assert (
             sampling_params is None or sampling_params.temperature == 0
         ), "Currently only supporting greedy decoding (temperature=0) on device"
-        argmax_on_device = sampling_params is not None and sampling_params.temperature == 0
 
         B = tokens.shape[0]
         tokens = torch.chunk(tokens, self.data_parallel, 0)
@@ -222,7 +221,6 @@ class Generator:
             "tokens": tokens,
             "page_table": page_table,
             "kv_cache": kv_cache,
-            "argmax_on_device": argmax_on_device,
         }
         if enable_trace:
             tt_logits = self._easy_trace_text(**decode_kwargs)
@@ -241,7 +239,6 @@ class Generator:
         current_pos,
         page_table=None,
         kv_cache=None,
-        argmax_on_device=False,
     ):
         """
         Performs text decode step.
@@ -272,7 +269,6 @@ class Generator:
                 rot_mats=tt_rot_mats[i],
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
-                argmax_on_device=argmax_on_device,
             )
             tt_logits.append(tt_logits_i)
 
@@ -284,16 +280,13 @@ class Generator:
         current_pos,
         page_table=None,
         kv_cache=None,
-        argmax_on_device=False,
     ):
         """
         Captures a trace for the decode_forward method.
         """
 
         # Compile run
-        self._decode_forward_no_trace_text(
-            tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
-        )
+        self._decode_forward_no_trace_text(tokens, current_pos, page_table=page_table, kv_cache=kv_cache)
         logger.info("Done Compiling Model")
 
         # Get inputs ready for trace run
@@ -314,11 +307,7 @@ class Generator:
             trace_ids[i] = trace_id
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             transformed_inputs = self.model[i].transform_decode_inputs_device(*(device_inputs[i]))
-            tt_out_trace.append(
-                self.model[i].ttnn_decode_forward(
-                    *transformed_inputs, kv_cache=user_kv_cache, argmax_on_device=argmax_on_device
-                )
-            )
+            tt_out_trace.append(self.model[i].ttnn_decode_forward(*transformed_inputs, kv_cache=user_kv_cache))
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
         return trace_ids, tt_out_trace, *device_inputs
@@ -361,14 +350,13 @@ class Generator:
         current_pos,
         page_table=None,
         kv_cache=None,
-        argmax_on_device=False,
     ):
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
         if not hasattr(self, "trace_ids_text"):
             trace_ids, tt_out_trace, *device_inputs = self._capture_trace_text(
-                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
+                tokens, current_pos, page_table=page_table, kv_cache=kv_cache
             )
             self.trace_ids_text = trace_ids
             self.trace_inputs_text = device_inputs
