@@ -274,7 +274,7 @@ def print_dict(input_dict, dict_name):
 
 
 def is_collective_op(op_code):
-    return any(x in op_code for x in ("AllGather", "ReduceScatter", "AllReduce"))
+    return any(x in op_code for x in ("AllGather", "ReduceScatter", "AllReduce", "MATMUL_RS"))
 
 
 def process_measurements(df, num_layers):
