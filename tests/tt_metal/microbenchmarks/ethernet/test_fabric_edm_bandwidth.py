@@ -17,6 +17,8 @@ from tabulate import tabulate
 import pandas as pd
 from models.utility_functions import enable_persistent_kernel_cache, disable_persistent_kernel_cache
 
+from conftest import is_6u
+
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
@@ -947,6 +949,44 @@ def test_fabric_t3k_4chip_cols_mcast_bw(
     )
 
 
+@pytest.mark.ubench_quick_tests
+@pytest.mark.parametrize("num_messages", [200000])
+@pytest.mark.parametrize("num_op_invocations", [1])
+@pytest.mark.parametrize("line_sync", [True])
+@pytest.mark.parametrize("line_size", [8])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.HalfRing, FabricTestMode.FullRing])
+def test_fabric_t3k_8chip_ring_mcast_bw(
+    num_messages,
+    num_links,
+    num_op_invocations,
+    line_sync,
+    line_size,
+    packet_size,
+    fabric_test_mode,
+):
+    if is_6u():
+        pytest.skip("Skip test for 6U as this is already covered by later tests")
+    run_fabric_edm(
+        is_unicast=True,
+        num_messages=num_messages,
+        num_links=num_links,
+        noc_message_type="noc_unicast_write",
+        num_op_invocations=num_op_invocations,
+        line_sync=line_sync,
+        line_size=line_size,
+        packet_size=packet_size,
+        fabric_mode=fabric_test_mode,
+        disable_sends_for_interior_workers=False,
+        unidirectional=False,
+        senders_are_unidirectional=True,
+        test_mode="1D_fabric_on_mesh",
+        num_cluster_rows=0,
+        num_cluster_cols=0,
+    )
+
+
 # expected_Mpps = expected millions of packets per second
 @pytest.mark.ubench_quick_tests
 @pytest.mark.parametrize("num_messages", [200000])
@@ -1033,9 +1073,9 @@ def test_fabric_t3k_all_rows_and_cols_mcast_bw(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [8])
-@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("num_links", [1, 2, 3, 4])
 @pytest.mark.parametrize("packet_size", [2048, 4096])
-@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.FullRing, FabricTestMode.Linear])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.HalfRing, FabricTestMode.FullRing, FabricTestMode.Linear])
 @pytest.mark.parametrize("num_cluster_cols", [4])
 def test_fabric_6u_4chip_cols_mcast_bw(
     is_unicast,
@@ -1048,9 +1088,9 @@ def test_fabric_6u_4chip_cols_mcast_bw(
     fabric_test_mode,
     num_cluster_cols,
 ):
-    is_ring = fabric_test_mode == FabricTestMode.FullRing
-    if is_ring:
-        pytest.skip("Baseline numbers not yet available for full-6u ring fabric test mode")
+    if not is_6u():
+        pytest.skip("Skip test for T3K since the mesh shape is not supported")
+    is_ring = fabric_test_mode == FabricTestMode.FullRing or fabric_test_mode == FabricTestMode.HalfRing
     update_machine_type_suffix("6u")
     run_fabric_edm(
         is_unicast=is_unicast,
@@ -1077,9 +1117,9 @@ def test_fabric_6u_4chip_cols_mcast_bw(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
-@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("num_links", [1, 2, 3, 4])
 @pytest.mark.parametrize("packet_size", [2048, 4096])
-@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.FullRing, FabricTestMode.Linear])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.HalfRing, FabricTestMode.FullRing, FabricTestMode.Linear])
 @pytest.mark.parametrize("num_cluster_rows", [8])
 def test_fabric_6u_4chip_rows_mcast_bw(
     is_unicast,
@@ -1092,9 +1132,9 @@ def test_fabric_6u_4chip_rows_mcast_bw(
     fabric_test_mode,
     num_cluster_rows,
 ):
-    is_ring = fabric_test_mode == FabricTestMode.FullRing
-    if is_ring:
-        pytest.skip("Baseline numbers not yet available for full-6u ring fabric test mode")
+    if not is_6u():
+        pytest.skip("Skip test for T3K since the mesh shape is not supported")
+    is_ring = fabric_test_mode == FabricTestMode.FullRing or fabric_test_mode == FabricTestMode.HalfRing
     update_machine_type_suffix("6u")
     run_fabric_edm(
         is_unicast=is_unicast,
@@ -1137,6 +1177,8 @@ def test_fabric_6u_all_rows_and_cols_mcast_bw(
     num_cluster_rows,
     num_cluster_cols,
 ):
+    if not is_6u():
+        pytest.skip("Skip test for T3K since the mesh shape is not supported")
     is_ring = fabric_test_mode == FabricTestMode.FullRing
     update_machine_type_suffix("6u")
     run_fabric_edm(

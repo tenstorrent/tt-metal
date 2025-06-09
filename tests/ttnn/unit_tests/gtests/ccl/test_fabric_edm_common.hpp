@@ -2529,9 +2529,9 @@ void Run1DFabricPacketSendTest(
         !(params.num_fabric_rows > 0 && params.num_fabric_cols > 0),
         "Only one of num_fabric_rows and num_fabric_cols may be greater than 0. Test support for both axes live at the "
         "same time is not yet supported");
-    TT_FATAL(
-        use_device_init_fabric ^ (params.num_fabric_rows == 0 && params.num_fabric_cols == 0),
-        "Device init fabric is only supported in this test when launching with multiple fabric rows and/or columns");
+    if (use_device_init_fabric ^ (params.num_fabric_rows == 0 && params.num_fabric_cols == 0)) {
+        log_warning(tt::LogTest, "Using the full mesh as one ring topoplogy, only used for testing T3K");
+    }
 
     ttnn::ccl::Topology topology;
     FabricTestMode fabric_mode = params.fabric_mode;

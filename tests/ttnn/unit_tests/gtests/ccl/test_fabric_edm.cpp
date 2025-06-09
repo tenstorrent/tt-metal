@@ -157,6 +157,8 @@ static int run_single_test(
                 Run1DFabricPacketSendTest<Fabric1DLineDeviceInitFixture>(test_fixture, test_specs, params);
             } else if (params.fabric_mode == FabricTestMode::FullRing) {
                 Run1DFabricPacketSendTest<Fabric1DRingDeviceInitFixture>(test_fixture, test_specs, params);
+            } else if (params.fabric_mode == FabricTestMode::HalfRing) {
+                Run1DFabricPacketSendTest<Fabric1DRingDeviceInitFixture>(test_fixture, test_specs, params);
             } else {
                 TT_THROW(
                     "Invalid fabric mode when using device init fabric in 1D fabric on mesh BW test: {}",
