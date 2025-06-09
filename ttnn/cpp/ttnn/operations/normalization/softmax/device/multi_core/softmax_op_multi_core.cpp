@@ -145,17 +145,20 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     // TODO: Not sure why this fatal is here but not needed for use_large_kernel
     TT_FATAL(im3_t == Wt + block_size && !use_large_kernel, "im3_t == Width in tiles + num_dest_regs to use");
 
-    TT_FATAL(Wt % block_size == 0, "Wt must be divisible by one of the numbers in the range from 8 to 1.");
-    TT_FATAL((block_size != -1), "Wt must be divisible by one of the numbers in the range from 8 to 1.");
+    TT_FATAL(Wt % block_size == 0, "Wt: {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
+    TT_FATAL((block_size != -1), "Wt: {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
     TT_FATAL(
         im0_t % block_size == 0,
-        "Size of cb must be divisible by the size of block used by the reader and compute kernel.");
+        "Size of cb: {} must be divisible by the size of block used by the reader and compute kernel.",
+        im0_t);
     TT_FATAL(
         out0_t % block_size == 0,
-        "Size of cb must be divisible by the size of block used by the reader and compute kernel.");
+        "Size of cb: {} must be divisible by the size of block used by the reader and compute kernel.",
+        out0_t);
     TT_FATAL(
         in4_t % block_size == 0,
-        "Size of cb must be divisible by the size of block used by the reader and compute kernel.");
+        "Size of cb: {} must be divisible by the size of block used by the reader and compute kernel.",
+        in4_t);
     TT_FATAL(
         W <= TILE_WIDTH * im0_t, "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
 
@@ -533,7 +536,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                 } else if (core_group_2.contains(core)) {
                     num_tile_rows_per_core = num_tile_rows_per_core_group_2;
                 } else {
-                    TT_FATAL(false, "Core not in specified core ranges");
+                    TT_THROW("Core not in specified core ranges");
                 }
 
                 uint32_t tile_offset = curr_row * Wt;
