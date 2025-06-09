@@ -54,12 +54,12 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
     // Checks that both master and subordinate cores have the same L1 base address and size
     if (master_l1_info.base_address != subordinate_l1_info.base_address ||
         master_l1_info.size != subordinate_l1_info.size) {
-        log_error("Mismatch in L1 address or size between master and subordinate cores");
+        log_error(tt::LogTest, "Mismatch in L1 address or size between master and subordinate cores");
         return false;
     }
     // Check if the L1 size is sufficient for the test configuration
     if (master_l1_info.size < total_size_bytes) {
-        log_error("Insufficient L1 size for the test configuration");
+        log_error(tt::LogTest, "Insufficient L1 size for the test configuration");
         return false;
     }
     // Assigns a "safe" L1 local address for the master and subordinate cores
@@ -125,7 +125,7 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
 TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
     // Physical Constrains
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
     // Parameters
     uint32_t max_transactions = 256;
@@ -166,7 +166,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
     uint32_t test_id = 51;  // Arbitrary test ID
 
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
     // Adjustable Parameters
     // Ideal: Less transactions, more data per transaction
     uint32_t num_of_transactions = 1;
