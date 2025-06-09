@@ -39,7 +39,7 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_dtype = input_tensor.dtype();
     const auto& output_dtype = output_tensor.dtype();
-    const auto& tensor_shape = input_tensor.get_padded_shape();
+    const auto& tensor_shape = input_tensor.padded_shape();
     const uint32_t tensor_rank = tensor_shape.rank();
     int32_t dim = operation_attributes.dim;
 
@@ -62,20 +62,20 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
         output_dtype);
 
     TT_FATAL(
-        output_tensor.get_layout() == Layout::TILE,
+        output_tensor.layout() == Layout::TILE,
         "Only supported tensor layout is TILE: received {}",
-        output_tensor.get_layout());
+        output_tensor.layout());
 
     TT_FATAL(
         tensor_rank >= 3, "Device operation only support 3D tensor and above: received tensor of rank {}", tensor_rank);
 
     TT_FATAL(
-        input_tensor.buffer()->size() == input_tensor.volume() * input_tensor.element_size(),
+        input_tensor.buffer()->size() == input_tensor.physical_volume() * input_tensor.element_size(),
         "Input tensor size ({}) does not match expected volume ({})",
         input_tensor.buffer()->size(),
-        input_tensor.volume() * input_tensor.element_size());
+        input_tensor.physical_volume() * input_tensor.element_size());
 
-    TT_FATAL(input_tensor.get_logical_volume() > 0, "Input must not be empty");
+    TT_FATAL(input_tensor.logical_volume() > 0, "Input must not be empty");
 
     TT_ASSERT(dim >= 0, "dim argument must be positive: received {}", dim);
 
@@ -144,7 +144,7 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
             .defines = defines_kernel_args});
 
     // Parameters setup
-    uint32_t num_tiles = output_tensor.volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = output_tensor.physical_volume() / tt::constants::TILE_HW;
     const uint32_t xy_volume = tensor_shape[tensor_rank - 1] * tensor_shape[tensor_rank - 2];  // W * H
     const uint32_t num_tiles_per_row = tensor_shape[dim];     // each row contains N independent tiles
     const uint32_t num_rows = num_tiles / num_tiles_per_row;  // total number of rows in tensor
@@ -210,7 +210,7 @@ void CumSumDeviceOperation::SingleCore::override_runtime_arguments(
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& dtype = operation_attributes.dtype;
 
-    const auto& input_dtype = input_tensor.get_dtype();
+    const auto& input_dtype = input_tensor.dtype();
 
     // Support for override_runtime_arguments() will be added in resolution of issue #21097
     TT_THROW("override_runtime_arguments() not yet supported");

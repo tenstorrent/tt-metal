@@ -27,7 +27,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     First implementation just performs vol2col on a single core.
     */
 
-    auto input_tensor_shape = input_tensor.get_logical_shape();
+    auto input_tensor_shape = input_tensor.logical_shape();
     uint32_t N = input_tensor_shape[0];
     uint32_t T_in = input_tensor_shape[1];
     uint32_t H_in = input_tensor_shape[2];
@@ -36,7 +36,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     auto [T_out, H_out, W_out] = detail::compute_output_dims(T_in, H_in, W_in, config.padding, config.kernel_size);
     uint32_t C_out = config.output_channels;
 
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto dtype_bytes = input_tensor.element_size();
     auto tile_size = tt::tt_metal::detail::TileSize(data_format);
 

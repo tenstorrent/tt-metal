@@ -23,16 +23,14 @@ using MassagedTilizeValParams = MassagedOperationParams<ttnn::Tensor, const ttnn
 MassagedTilizeVal build_ndiml_tilize_val(BaseTilizeValType base_tilize) {
     auto original_shape = std::make_shared<Shape>();
     return MassagedTilizeVal(MassagedTilizeValParams{
-        .predicate = [](const ttnn::Tensor& input_tensor) -> bool {
-            return input_tensor.get_logical_shape().rank() > 4;
-        },
+        .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.logical_shape().rank() > 4; },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedTilizeValArgs {
-            *original_shape = input_tensor.get_logical_shape();
+            *original_shape = input_tensor.logical_shape();
             ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
-            const auto tile = output.get_tensor_spec().tile();
+            const auto tile = output.tensor_spec().tile();
             uint32_t tile_height = tile.get_height();
             uint32_t tile_width = tile.get_width();
             auto unsqueezed_tensor = ttnn::reshape(output, *original_shape);
@@ -65,7 +63,7 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore) {
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
     uint32_t output_single_tile_size =
         output_dtype.has_value()
@@ -86,7 +84,7 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
                 squeeze_output_shape(output_padded_shape),
                 pad_value,
                 memory_config.value_or(input_tensor.memory_config()),
-                output_dtype.value_or(input_tensor.get_dtype()),
+                output_dtype.value_or(input_tensor.dtype()),
                 use_multicore,
                 enough_space_width,
                 enough_space_height},
@@ -146,16 +144,16 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
     std::optional<DataType> output_dtype,
     bool use_multicore) {
     using namespace tt::constants;
-    auto padded_shape = input_tensor.get_padded_shape();
+    auto padded_shape = input_tensor.padded_shape();
 
-    uint32_t input_tile_width = input_tensor.get_tensor_spec().tile().get_width();
-    uint32_t input_tile_height = input_tensor.get_tensor_spec().tile().get_height();
+    uint32_t input_tile_width = input_tensor.tensor_spec().tile().get_width();
+    uint32_t input_tile_height = input_tensor.tensor_spec().tile().get_height();
 
     padded_shape[-2] = tt::round_up(padded_shape[-2], input_tile_height);
     padded_shape[-1] = tt::round_up(padded_shape[-1], input_tile_width);
 
     PadValue pad_value;
-    if (input_tensor.get_dtype() == DataType::BFLOAT16 or input_tensor.get_dtype() == DataType::FLOAT32) {
+    if (input_tensor.dtype() == DataType::BFLOAT16 or input_tensor.dtype() == DataType::FLOAT32) {
         pad_value = 0.0f;
     } else {
         pad_value = (uint32_t)0;

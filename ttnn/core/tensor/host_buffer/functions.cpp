@@ -26,6 +26,6 @@ HostBuffer get_host_buffer(const Tensor& tensor) {
             },
             [](const auto&) -> HostBuffer { TT_THROW("Tensor must have HostStorage or MultiDeviceHostStorage"); },
         },
-        tensor.get_storage());
+        tensor.storage());
 }
 }  // namespace tt::tt_metal::host_buffer
