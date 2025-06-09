@@ -8,7 +8,9 @@ target_sources(
     ttnn_op_eltwise_ternary
     PRIVATE
         ternary_composite_op.cpp
-        where.cpp
+        where/where.cpp
+        where/device/where_device_operation.cpp
+        where/device/where_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_eltwise_ternary PRIVATE ${FixmeOpIncDirs})

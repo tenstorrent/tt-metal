@@ -14,7 +14,7 @@
 #include "ttnn/types.hpp"
 #include <tt-metalium/bfloat16.hpp>
 
-#include "where.hpp"
+#include "where/where.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
