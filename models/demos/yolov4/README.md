@@ -1,7 +1,5 @@
 # Yolov4 Demo
 
-## How to run yolov4
-
 ### Model performant running with Trace+2CQ
 
 #### For 320x320:
