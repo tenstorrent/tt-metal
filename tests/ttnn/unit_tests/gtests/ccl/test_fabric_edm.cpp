@@ -78,7 +78,8 @@ static int baseline_validate_test_environment(const WriteThroughputStabilityTest
     return 0;
 }
 
-static int run_single_test(Fabric1DFixture*& test_fixture, TestParams& test_params, const std::string& test_mode) {
+static int run_single_test(
+    std::unique_ptr<Fabric1DFixture>& test_fixture, TestParams& test_params, const std::string& test_mode) {
     auto chip_send_type = test_params.fabric_unicast ? tt::tt_fabric::CHIP_UNICAST : tt::tt_fabric::CHIP_MULTICAST;
     auto [noc_send_type, flush] = get_noc_send_type(test_params.message_noc_type);
 
@@ -206,13 +207,7 @@ static void run_daemon_mode() {
 
     tt::log_info("Daemon listening on pipe: {}", daemon_pipe_path);
 
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
-        return;
-    }
-
-    Fabric1DFixture* test_fixture = nullptr;
+    std::unique_ptr<Fabric1DFixture> test_fixture = nullptr;
     while (daemon_running) {
         std::ifstream pipe(daemon_pipe_path);
         if (!pipe.is_open()) {
@@ -274,10 +269,6 @@ static void run_daemon_mode() {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    if (test_fixture != nullptr) {
-        delete test_fixture;
-    }
-
     // Cleanup
     unlink(daemon_pipe_path.c_str());
     unlink((daemon_pipe_path + "_result").c_str());
@@ -307,10 +298,7 @@ int main(int argc, char** argv) {
     TT_FATAL(test_params.params.num_op_invocations > 0, "num_op_invocations must be greater than 0");
     TT_FATAL(test_params.params.line_size > 0, "line_size must be greater than 0");
 
-    Fabric1DFixture* test_fixture = nullptr;
+    std::unique_ptr<Fabric1DFixture> test_fixture = nullptr;
     auto result = run_single_test(test_fixture, test_params, test_mode);
-    if (test_fixture != nullptr) {
-        delete test_fixture;
-    }
     return result;
 }

@@ -1258,14 +1258,9 @@ int TestLineFabricEntrypoint(
     // argv[1]: buffer_size_bytes
     // argv[2]: num_loops
 
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
         log_info("This test can only be run on T3000 devices");
-        return 0;
-    }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
         return 0;
     }
 
@@ -1344,14 +1339,9 @@ int TestLoopbackEntrypoint(
     // argv[2]: num_loops
     std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
 
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
         log_info("This test can only be run on T3000 devices");
-        return 0;
-    }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
         return 0;
     }
 
@@ -1531,14 +1521,9 @@ inline bool TestMultiInputReaderKernel(
     TwoInputReaderKernelWriteMode test_mode,
     const ttnn::ccl::cmd::CclCommandDestArgs& dest_args,
     bool enable_persistent_fabric) {
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
         log_info("This test can only be run on T3000 devices");
-        return true;
-    }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
         return true;
     }
     Fabric1DFixture test_fixture;
@@ -1808,14 +1793,9 @@ bool RunPipelinedWorkersTest(
 
     std::vector<std::vector<size_t>> worker_chunk_read_order,
     std::vector<MemoryConfig> mem_configs) {
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
         log_info("This test can only be run on T3000 devices");
-        return true;
-    }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
         return true;
     }
 
@@ -2110,14 +2090,9 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     log_info(tt::LogTest, "entering test");
     constexpr auto layout = Layout::TILE;
     // DEVICES setuip
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     constexpr size_t test_expected_num_devices = 4;
     if (tt::tt_metal::GetNumAvailableDevices() < test_expected_num_devices) {
         log_info("This test can only be run on T3000 devices");
-        return;
-    }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
         return;
     }
     // Initialize MeshDevice with 1D Fabric
@@ -2181,14 +2156,9 @@ void run_ring_all_gather_with_persistent_fabric(
     log_info(tt::LogTest, "entering test");
     constexpr auto layout = Layout::TILE;
     // DEVICES setuip
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     constexpr size_t test_expected_num_devices = 8;
     if (tt::tt_metal::GetNumAvailableDevices() < test_expected_num_devices) {
         log_info("This test can only be run on T3000 devices");
-        return;
-    }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
         return;
     }
     // Initialize MeshDevice with 1D Fabric
@@ -2465,30 +2435,35 @@ static std::vector<std::vector<IDevice*>> generate_line_fabrics_under_test(
 }
 
 template <typename FABRIC_DEVICE_FIXTURE>
-void create_fabric_fixture(Fabric1DFixture*& test_fixture, bool use_galaxy) {
+void create_fabric_fixture(std::unique_ptr<Fabric1DFixture>& test_fixture, bool use_galaxy) {
+    auto fixture_recreate_needed = []() -> bool {
+        auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+        return (
+            // prev not Fabric1D, now Fabric1D
+            (fabric_config != tt::tt_metal::FabricConfig::DISABLED &&
+             std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DFixture>) ||
+            // prev not Fabric1DLine, now Fabric1DLine
+            (fabric_config != tt::tt_metal::FabricConfig::FABRIC_1D &&
+             std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DLineDeviceInitFixture>) ||
+            // prev not Fabric1DRing, now Fabric1DRing
+            (fabric_config != tt::tt_metal::FabricConfig::FABRIC_1D_RING &&
+             std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DRingDeviceInitFixture>));
+    }();
+
     if (test_fixture == nullptr) {
-        test_fixture = new FABRIC_DEVICE_FIXTURE();
+        test_fixture = std::make_unique<FABRIC_DEVICE_FIXTURE>();
     } else {
         // NOTE: Currently (device init fabric || galaxy) is always recreate fabrix fixture
-        auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-        if (((fabric_config == tt::tt_metal::FabricConfig::DISABLED &&
-              !std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DFixture>) ||
-             (fabric_config != tt::tt_metal::FabricConfig::DISABLED &&
-              std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DFixture>) ||
-             (fabric_config != tt::tt_metal::FabricConfig::FABRIC_1D &&
-              std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DLineDeviceInitFixture>) ||
-             (fabric_config != tt::tt_metal::FabricConfig::FABRIC_1D_RING &&
-              std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DRingDeviceInitFixture>)) ||
-            use_galaxy) {
-            delete test_fixture;
-            test_fixture = new FABRIC_DEVICE_FIXTURE();
+        if (fixture_recreate_needed || use_galaxy) {
+            test_fixture.reset();
+            test_fixture = std::make_unique<FABRIC_DEVICE_FIXTURE>();
         }
     }
 }
 
 template <typename FABRIC_DEVICE_FIXTURE = Fabric1DFixture>
 void Run1DFabricPacketSendTest(
-    Fabric1DFixture*& test_fixture,
+    std::unique_ptr<Fabric1DFixture>& test_fixture,
     const std::vector<Fabric1DPacketSendTestSpec>& test_specs,
     const WriteThroughputStabilityTestWithPersistentFabricParams& params = {},
     size_t fabric_context_switch_interval =
@@ -3071,12 +3046,6 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     size_t num_op_invocations,
     const WriteThroughputStabilityTestWithPersistentFabricParams& params = {},
     size_t packet_payload_size_bytes = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes) {
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
-        return;
-    }
-
     std::vector<Fabric1DPacketSendTestSpec> test_specs;
     if (num_mcasts > 0) {
         test_specs.push_back(
@@ -3095,11 +3064,8 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     auto params_copy = params;
     params_copy.num_links = num_links;
     params_copy.num_op_invocations = num_op_invocations;
-    Fabric1DFixture* test_fixture = nullptr;
+    std::unique_ptr<Fabric1DFixture> test_fixture = nullptr;
     Run1DFabricPacketSendTest(test_fixture, test_specs, params_copy, 0);
-    if (test_fixture != nullptr) {
-        delete test_fixture;
-    }
 }
 
 void RunRingDeadlockStabilityTestWithPersistentFabric(
@@ -3110,8 +3076,6 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     bool has_forward_connection,
     bool has_backward_connection,
     size_t packet_payload_size_bytes = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes) {
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-
     auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
     switch (cluster_type) {
         case ClusterType::T3K:
