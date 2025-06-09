@@ -177,11 +177,22 @@ FORCE_INLINE void recordFabricNocEvent(
         noc_event_profiler::recordNocEvent(event_type);                    \
     }
 
+// preemptive quick push if transitioning from unlinked state to linked state
+#define QUICK_PUSH_IF_LINKED(cmd_buf, linked)                                          \
+    {                                                                                  \
+        uint32_t cmd_buf_reg_val = NOC_CMD_BUF_READ_REG(noc_index, cmd_buf, NOC_CTRL); \
+        bool cmd_buf_currently_linked = cmd_buf_reg_val & NOC_CMD_VC_LINKED;           \
+        if (linked && !cmd_buf_currently_linked) {                                     \
+            kernel_profiler::quick_push();                                             \
+        }                                                                              \
+    }
+
 #else
 
 // null macros when noc tracing is disabled
 #define RECORD_NOC_EVENT_WITH_ADDR(type, noc_addr, num_bytes, vc)
 #define RECORD_NOC_EVENT_WITH_ID(type, noc_id, num_bytes, vc)
 #define RECORD_NOC_EVENT(type)
+#define QUICK_PUSH_IF_LINKED(cmd_buf, linked)
 
 #endif

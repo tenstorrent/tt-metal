@@ -774,6 +774,7 @@ void noc_async_write_multicast_one_packet(
     bool linked = false,
     uint8_t noc = noc_index) {
     constexpr bool multicast_path_reserve = true;
+    QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST,dst_noc_addr_multicast,size, NOC_MULTICAST_WRITE_VC);
 
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
@@ -1193,6 +1194,7 @@ inline void noc_async_write_multicast(
     } else {
         WAYPOINT("NMWW");
         DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
+        QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
         RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST, dst_noc_addr_multicast, size, NOC_MULTICAST_WRITE_VC);
         ncrisc_noc_fast_write_any_len<noc_mode>(
             noc,
@@ -1314,6 +1316,10 @@ inline void noc_async_write_multicast_loopback_src(
     bool linked = false,
     uint8_t noc = noc_index) {
     constexpr bool multicast_path_reserve = true;
+
+    QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_MULTICAST, dst_noc_addr_multicast, size, NOC_MULTICAST_WRITE_VC);
+
     WAYPOINT("NMLW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
     ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
