@@ -17,6 +17,6 @@ struct CompileTimeWriterKernelArgs {
     uint32_t is_dst_dram;
 };
 
-VALIDATE_KERNEL_STRUCT(ElemwiseWriterKernelArgs)
-VALIDATE_KERNEL_STRUCT(CompileTimeWriterKernelArgs)
+VALIDATE_KERNEL_ARGS_STRUCT(ElemwiseWriterKernelArgs)
+VALIDATE_KERNEL_ARGS_STRUCT(CompileTimeWriterKernelArgs)
 }  // namespace ttnn::kernel::eltwise::where_args

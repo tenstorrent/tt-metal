@@ -35,13 +35,9 @@ consteval uint32_t amount_of_fields() {
 
 }  // namespace ttnn::kernel_utils
 
-#define VALIDATE_KERNEL_STRUCT(KernStruct) \
+#define VALIDATE_KERNEL_ARGS_STRUCT(KernStruct) \
     static_assert(ttnn::kernel_utils::KernelStructConcept<KernStruct>, "All fields must have uint32_t type");
 
-#define VALIDATE_KERNEL_STRUCT_WITH_FIELD_TYPE(KernStruct, FieldType) \
-    static_assert(ttnn::kernel_utils::KernelStructConcept<KernStruct, FieldType>, "All fields must have the same type");
-
 #else
-#define VALIDATE_KERNEL_STRUCT(KernStruct)
-#define VALIDATE_KERNEL_STRUCT_WITH_FIELD_TYPE(KernStruct, FieldType)
+#define VALIDATE_KERNEL_ARGS_STRUCT(KernStruct)
 #endif

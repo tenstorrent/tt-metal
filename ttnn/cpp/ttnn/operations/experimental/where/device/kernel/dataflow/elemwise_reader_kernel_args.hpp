@@ -23,6 +23,6 @@ struct CompileTimeReaderKernelArgs {
     uint32_t is_false_tensor_in_dram;
 };
 
-VALIDATE_KERNEL_STRUCT(ElemwiseReaderKernelArgs)
-VALIDATE_KERNEL_STRUCT(CompileTimeReaderKernelArgs)
+VALIDATE_KERNEL_ARGS_STRUCT(ElemwiseReaderKernelArgs)
+VALIDATE_KERNEL_ARGS_STRUCT(CompileTimeReaderKernelArgs)
 }  // namespace ttnn::kernel::eltwise::where_args
