@@ -243,7 +243,7 @@ foreach(ARCH IN LISTS ARCHS)
                 ../sfpi-version.sh
             COMMENT "Building ${ARCH} hw lib ${HWOBJ}"
             VERBATIM
-	)
+        )
         list(APPEND OBJ_FILES ${HW_OUTPUT_FILE})
     endforeach()
 endforeach()
