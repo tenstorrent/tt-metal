@@ -238,7 +238,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
                     dst_buffer->address(),
                     shard_height,
                     shard_width,
-                    shard_height * shard_width,
+                    curr_num_units_per_shard,
                     num_units_per_row,
                     curr_idx_h + curr_idx_w,
                     starting_idx_h};
