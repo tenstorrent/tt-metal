@@ -354,7 +354,6 @@ setup(
     package_dir={
         "": "ttnn",
     },
-    long_description_content_type="text/markdown",
     ext_modules=ext_modules,
     cmdclass=dict(build_ext=CMakeBuild),
     zip_safe=False,
