@@ -105,11 +105,17 @@ void MAIN {
 #endif
 
     uint32_t num_cb_passes = 1 + ((Wt - 1) / cb_length_t);  // ceiling divide
+    uint32_t max_blk = dest_fp_32 ? 8 : 4;
+    // uint32_t blk_to_use[num_cb_passes];
+    // for(uint32_t i = 0; i < num_cb_passes; i ++){
+    //     for(uint32_t j = max_blk; j >=0; j--){
+    //         if()
+    //     }
+    // }
 
     // First loop is to parse and find the sum
     uint32_t dst0 = 0;
     uint32_t cb_processed_input;
-    uint32_t max_blk = dest_fp_32 ? 8 : 4;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // This and all inner loops are for parsing the length of Wt in terms of chunks of the width that can fit in the
@@ -276,6 +282,9 @@ void apply_fused_scale_mask(
     pack_reconfig_data_format(cb_out);
     mul_tiles_bcast_scalar_init_short(cb_in, cb_fused_scale_mask);
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
+        if(cb_length_t -cur_blk < blk){
+            blk = cb_length_t- cur_blk;
+        }
         tile_regs_acquire();
         cb_wait_front(cb_in, blk);
         cb_reserve_back(cb_out, blk);
@@ -307,6 +316,9 @@ void apply_fused_attn_mask(
 #endif
     for (uint32_t cur_blk = 0; cur_blk < cb_length_t; cur_blk += blk) {
         tile_regs_acquire();
+        if(cb_length_t -cur_blk < blk){
+            blk = cb_length_t- cur_blk;
+        }
         tile_regs_wait();
         cb_wait_front(cb_in, blk);
         cb_wait_front(cb_fused_attn_mask, blk);  // cumulative wait for up to wt tiles
