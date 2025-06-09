@@ -15,6 +15,13 @@ from pathlib import Path
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
 
+readme = None
+
+# Read README.md file from project root
+readme_path = pathlib.Path(__file__).absolute().parent / "README.md"
+with open(str(readme_path), "r", encoding="utf-8") as f:
+    readme = f.read()
+
 
 # Get the platform-specific lib directory name
 def get_lib_dir():
@@ -351,4 +358,6 @@ setup(
     ext_modules=ext_modules,
     cmdclass=dict(build_ext=CMakeBuild),
     zip_safe=False,
+    long_description=readme,
+    long_description_content_type="text/markdown",
 )
