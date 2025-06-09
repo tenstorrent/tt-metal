@@ -24,9 +24,9 @@ struct operation_attributes_type {
     }
 };
 struct tensor_args_type {
-    const Tensor& input_tensor_a;
-    Tensor input_tensor_b;
-    Tensor input_tensor_c;
+    const Tensor& condition_tensor;
+    Tensor true_value_tensor;
+    Tensor false_value_tensor;
     std::optional<Tensor> output_tensor;
 };
 }  // namespace ttnn::operations::ternary::experimental::where_ttt_args

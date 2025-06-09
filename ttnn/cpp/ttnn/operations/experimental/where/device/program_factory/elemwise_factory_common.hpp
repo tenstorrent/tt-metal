@@ -22,13 +22,13 @@ namespace ttnn::operations::ternary::experimental {
 template <bool initialize_args>
 inline void set_eltwise_ternary_runtime_args(
     tt::tt_metal::Program& program,
-    const Tensor& a,
-    const Tensor& b,
-    const Tensor& c,
+    const Tensor& condition_tensor,
+    const Tensor& true_value_tensor,
+    const Tensor& false_value_tensor,
     const Tensor& output,
     const tt::tt_metal::KernelHandle reader_kernel_id,
     const tt::tt_metal::KernelHandle writer_kernel_id,
-    const tt::tt_metal::KernelHandle eltwise_ternary_kernel_id,
+    const tt::tt_metal::KernelHandle compute_kernel_id,
     const CoreRangeSet& all_device_cores) {
     using namespace ttnn::kernel::eltwise::where_args;
     using namespace ttnn::kernel_utils;
@@ -50,7 +50,7 @@ inline void set_eltwise_ternary_runtime_args(
         }
     }
 
-    uint32_t num_tiles = a.volume() / TILE_HW;
+    uint32_t num_tiles = condition_tensor.volume() / TILE_HW;
     bool row_major = true;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         zero_start_grid ? tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles, row_major)
@@ -72,11 +72,11 @@ inline void set_eltwise_ternary_runtime_args(
         cores.size(), std::vector<uint32_t>(amount_of_fields<ElemwiseWriterKernelArgs>(), 0)};
 
     auto& cached_reader_args = GetRuntimeArgs(program, reader_kernel_id);
-    auto& cached_eltwise_args = GetRuntimeArgs(program, eltwise_ternary_kernel_id);
+    auto& cached_eltwise_args = GetRuntimeArgs(program, compute_kernel_id);
     auto& cached_writer_args = GetRuntimeArgs(program, writer_kernel_id);
 
     uint32_t block_size_per_core_group_1 = 1, block_size_per_core_group_2 = 1;
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; ++i) {
+    for (uint32_t i = 0, tile_ofs = 0; i < num_cores_total; ++i) {
         const CoreCoord& core = cores.at(i);
 
         uint32_t block_cnt_per_core = 0;
@@ -107,17 +107,17 @@ inline void set_eltwise_ternary_runtime_args(
         }
 
         ElemwiseReaderKernelArgs read_kern_args = {
-            .cond_tensor_base_addr = a.buffer()->address(),
-            .true_tensor_base_addr = b.buffer()->address(),
-            .false_tensor_base_addr = c.buffer()->address(),
+            .condition_tensor_base_addr = condition_tensor.buffer()->address(),
+            .true_tensor_base_addr = true_value_tensor.buffer()->address(),
+            .false_tensor_base_addr = false_value_tensor.buffer()->address(),
             .num_tiles = num_tiles_per_core,
-            .tile_ofs = num_tiles_read};
+            .tile_ofs = tile_ofs};
 
         ElemwiseComputeKernelArgs compute_kern_args = {
             .per_core_block_cnt = block_cnt_per_core, .per_core_block_size = block_size_per_core};
 
         ElemwiseWriterKernelArgs write_kern_args = {
-            .dst_base_addr = output.buffer()->address(), .num_tiles = num_tiles_per_core, .tile_ofs = num_tiles_read};
+            .dst_base_addr = output.buffer()->address(), .num_tiles = num_tiles_per_core, .tile_ofs = tile_ofs};
 
         reader_args_array[i] = to_vector(read_kern_args);
         compute_args_array[i] = to_vector(compute_kern_args);
@@ -133,12 +133,12 @@ inline void set_eltwise_ternary_runtime_args(
             std::ranges::copy(writer_args_array[i], core_writer_args.data());
         }
 
-        num_tiles_read += num_tiles_per_core;
+        tile_ofs += num_tiles_per_core;
     }
 
     if constexpr (initialize_args) {
         SetRuntimeArgs(program, reader_kernel_id, cores, reader_args_array);
-        SetRuntimeArgs(program, eltwise_ternary_kernel_id, cores, compute_args_array);
+        SetRuntimeArgs(program, compute_kernel_id, cores, compute_args_array);
         SetRuntimeArgs(program, writer_kernel_id, cores, writer_args_array);
     }
 }

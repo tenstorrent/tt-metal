@@ -43,9 +43,9 @@ struct WhereDeviceOperation {
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& a_tensor,
-        const Tensor& b_tensor,
-        const Tensor& c_tensor,
+        const Tensor& condition_tensor,
+        const Tensor& true_value_tensor,
+        const Tensor& false_value_tensor,
         const std::optional<const DataType>& dtype,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> output_tensor);

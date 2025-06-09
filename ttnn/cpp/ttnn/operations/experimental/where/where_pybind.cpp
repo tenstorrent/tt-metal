@@ -9,19 +9,18 @@
 
 namespace ttnn::operations::ternary::experimental::detail {
 
-void bind_where(pybind11::module& module) {
+void bind_where(pybind11::module& pymodule) {
     auto operation = ttnn::operations::ternary::experimental::where;
     using OperationType = decltype(ttnn::operations::ternary::experimental::where);
-    std::string description =
-        R"doc(Computes Where on :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`input_tensor_c` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc";
+
     auto doc = fmt::format(
         R"doc(
-            {2}
+        Selects elements from `true_values` or `false_values` based on a boolean `condition` and returns the tensor with the same layout as `condition`
 
         Args:
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor.
-            input_tensor_c (ttnn.Tensor or Number): the input tensor.
+            condition (ttnn.Tensor): A boolean array where each element determines which value to choose.
+            true_values (ttnn.Tensor or Number): Values to select where `condition` is True.
+            false_values (ttnn.Tensor or Number): Values to select where `condition` is False.
 
 
         Keyword Args:
@@ -46,22 +45,21 @@ void bind_where(pybind11::module& module) {
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
         Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 0], [1, 0]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor3 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor1, tensor2, tensor3)
+            >>> condition = ttnn.from_torch(torch.tensor([[1, 0], [1, 0]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> true_values = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> false_values = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(condition, true_values, false_values)
         )doc",
         operation.base_name(),
-        operation.python_fully_qualified_name(),
-        description);
+        operation.python_fully_qualified_name());
 
     bind_registered_operation(
-        module,
+        pymodule,
         operation,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
-               const Tensor& predicate,
+               const Tensor& condition,
                const Tensor& true_value,
                const Tensor& false_value,
                std::optional<const DataType> output_dtype,
@@ -70,14 +68,14 @@ void bind_where(pybind11::module& module) {
                QueueId queue_id) {
                 return self(
                     queue_id,
-                    predicate,
+                    condition,
                     true_value,
                     false_value,
                     output_dtype,
                     memory_config,
                     std::move(output_tensor));
             },
-            py::arg("predicate"),
+            py::arg("condition"),
             py::arg("true_value"),
             py::arg("false_value"),
             py::kw_only(),
@@ -87,7 +85,7 @@ void bind_where(pybind11::module& module) {
             py::arg("queue_id") = DefaultQueueId},
         ttnn::pybind_overload_t{
             [](const OperationType& self,
-               const Tensor& predicate,
+               const Tensor& condition,
                const float true_value,
                const Tensor& false_value,
                std::optional<const DataType> output_dtype,
@@ -96,14 +94,14 @@ void bind_where(pybind11::module& module) {
                QueueId queue_id) {
                 return self(
                     queue_id,
-                    predicate,
+                    condition,
                     true_value,
                     false_value,
                     output_dtype,
                     memory_config,
                     std::move(output_tensor));
             },
-            py::arg("predicate"),
+            py::arg("condition"),
             py::arg("true_value"),
             py::arg("false_value"),
             py::kw_only(),
@@ -113,7 +111,7 @@ void bind_where(pybind11::module& module) {
             py::arg("queue_id") = DefaultQueueId},
         ttnn::pybind_overload_t{
             [](const OperationType& self,
-               const Tensor& predicate,
+               const Tensor& condition,
                const Tensor& true_value,
                const float false_value,
                std::optional<const DataType> output_dtype,
@@ -122,14 +120,14 @@ void bind_where(pybind11::module& module) {
                QueueId queue_id) {
                 return self(
                     queue_id,
-                    predicate,
+                    condition,
                     true_value,
                     false_value,
                     output_dtype,
                     memory_config,
                     std::move(output_tensor));
             },
-            py::arg("predicate"),
+            py::arg("condition"),
             py::arg("true_value"),
             py::arg("false_value"),
             py::kw_only(),
@@ -139,7 +137,7 @@ void bind_where(pybind11::module& module) {
             py::arg("queue_id") = DefaultQueueId},
         ttnn::pybind_overload_t{
             [](const OperationType& self,
-               const Tensor& predicate,
+               const Tensor& condition,
                const float true_value,
                const float false_value,
                std::optional<const DataType> output_dtype,
@@ -148,14 +146,14 @@ void bind_where(pybind11::module& module) {
                QueueId queue_id) {
                 return self(
                     queue_id,
-                    predicate,
+                    condition,
                     true_value,
                     false_value,
                     output_dtype,
                     memory_config,
                     std::move(output_tensor));
             },
-            py::arg("predicate"),
+            py::arg("condition"),
             py::arg("true_value"),
             py::arg("false_value"),
             py::kw_only(),

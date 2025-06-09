@@ -13,15 +13,15 @@ struct ElementWiseMultiCoreWhereProgram {
         tt::tt_metal::KernelHandle reader_kernel_id;
         tt::tt_metal::KernelHandle writer_kernel_id;
         tt::tt_metal::KernelHandle eltwise_kernel_id;
-        tt::tt_metal::CBHandle cb_src0;
-        tt::tt_metal::CBHandle cb_src1;
-        tt::tt_metal::CBHandle cb_src2;
-        tt::tt_metal::CBHandle cb_output;
+        tt::tt_metal::CBHandle condition_cb;
+        tt::tt_metal::CBHandle true_values_cb;
+        tt::tt_metal::CBHandle false_values_cb;
+        tt::tt_metal::CBHandle output_cb;
         CoreRangeSet all_device_cores;
-        uint32_t src0_single_tile_size;
-        uint32_t src1_single_tile_size;
-        uint32_t src2_single_tile_size;
-        uint32_t dst_single_tile_size;
+        uint32_t condition_tensor_tile_size;
+        uint32_t true_values_tensor_tile_size;
+        uint32_t false_values_tensor_tile_size;
+        uint32_t dst_tile_size;
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 

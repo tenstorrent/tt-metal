@@ -7,7 +7,7 @@
 namespace ttnn::kernel::eltwise::where_args {
 
 struct ElemwiseReaderKernelArgs {
-    uint32_t cond_tensor_base_addr;
+    uint32_t condition_tensor_base_addr;
     uint32_t true_tensor_base_addr;
     uint32_t false_tensor_base_addr;
     uint32_t num_tiles;
@@ -15,7 +15,7 @@ struct ElemwiseReaderKernelArgs {
 };
 
 struct CompileTimeReaderKernelArgs {
-    uint32_t cond_tensor_cb;
+    uint32_t condition_cb;
     uint32_t true_tensor_cb;
     uint32_t false_tensor_cb;
     uint32_t is_cond_tensor_in_dram;

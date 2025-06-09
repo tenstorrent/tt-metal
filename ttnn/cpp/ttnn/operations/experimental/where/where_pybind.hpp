@@ -8,6 +8,6 @@
 
 namespace ttnn::operations::ternary::experimental::detail {
 
-void bind_where(pybind11::module& module);
+void bind_where(pybind11::module& pymodule);
 
 }  // namespace ttnn::operations::ternary::experimental::detail
