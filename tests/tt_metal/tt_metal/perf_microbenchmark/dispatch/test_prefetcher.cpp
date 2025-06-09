@@ -3521,9 +3521,9 @@ int main(int argc, char** argv) {
         if (test_device_id_g == 0) {
             device_r = device;
         } else {
+            const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
             auto const& device_active_eth_cores = device->get_active_ethernet_cores();
-            auto remote_chips =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(device_id_l);
+            auto remote_chips = cluster.get_devices_controlled_by_mmio_device(device_id_l);
             // remove mmio chip from the set. get_devices_controlled_by_mmio_device() returns a set that
             // holds mmio chips as well as remote chips accessed through that mmmio chip.
             remote_chips.erase(device_id_l);
@@ -3538,6 +3538,9 @@ int main(int argc, char** argv) {
 
             device_id_r = test_device_id_g;
             for (auto eth_core : device_active_eth_cores) {
+                if (!cluster.is_ethernet_link_up(device->id(), eth_core)) {
+                    continue;
+                }
                 auto [connected_device_id, eth_receiver_core] = device->get_connected_ethernet_core(eth_core);
                 if (remote_chips.find(connected_device_id) != remote_chips.end()) {
                     device_id_r = connected_device_id;
