@@ -138,7 +138,10 @@ struct McastRoutingInfo {
 };
 
 void RunTestUnicastRaw(
-    BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E);
+    BaseFabricFixture* fixture,
+    uint32_t num_hops = 1,
+    RoutingDirection direction = RoutingDirection::E,
+    bool enable_fabric_tracing = false);
 
 void RunTestUnicastConnAPI(
     BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E);
