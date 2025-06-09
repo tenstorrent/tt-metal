@@ -64,8 +64,9 @@ class TtResnetBlock2D(nn.Module):
             conv_bias_3 = state_dict[f"{module_path}.conv_shortcut.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
         if split_in > 1:
-            self.norm_1_blocks = 16
-            self.norm_core_grid_1 = ttnn.CoreGrid(y=2 if "up_blocks.2.resnets.0" in module_path else 4, x=1)
+            self.norm_1_blocks = 6 if "up_blocks.2.resnets.0" in module_path else 3
+            core_x = core_y = 2 if "up_blocks.2.resnets.0" in module_path else 4
+            self.norm_core_grid_1 = ttnn.CoreGrid(y=core_y, x=core_x)
             self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
                 device, norm_weights_1, norm_bias_1, self.norm_core_grid_1.y
             )
