@@ -315,13 +315,13 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         topology == tt::tt_fabric::Topology::Ring ? 1u : 0u,
     };
 
+    auto writer_compile_time_args = reader_compile_time_args;
+
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/all_to_all_dispatch/device/kernels/dataflow/reader_all_to_all_dispatch.cpp",
         sender_core,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
-    auto writer_compile_time_args = reader_compile_time_args;
 
     tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -385,9 +385,19 @@ void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_a
 
         auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);
         auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, binary_writer_kernel_id, core);
+        reader_runtime_args[0] = tensor_args.input_tensor.buffer()->address();
+        reader_runtime_args[1] = tensor_args.expert_indices_tensor.buffer()->address();
+        reader_runtime_args[2] = tensor_args.expert_mapping_tensor.buffer()->address();
+        reader_runtime_args[3] = tensor_return_value[0].buffer()->address();
+        reader_runtime_args[4] = tensor_return_value[1].buffer()->address();
+        reader_runtime_args[5] = (uint32_t)operation_attributes.cross_device_semaphore->address();
 
-        reader_runtime_args[0] = (uint32_t)operation_attributes.cross_device_semaphore->address();
-        writer_runtime_args[0] = (uint32_t)operation_attributes.cross_device_semaphore->address();
+        writer_runtime_args[0] = tensor_args.input_tensor.buffer()->address();
+        writer_runtime_args[1] = tensor_args.expert_indices_tensor.buffer()->address();
+        writer_runtime_args[2] = tensor_args.expert_mapping_tensor.buffer()->address();
+        writer_runtime_args[3] = tensor_return_value[0].buffer()->address();
+        writer_runtime_args[4] = tensor_return_value[1].buffer()->address();
+        writer_runtime_args[5] = (uint32_t)operation_attributes.cross_device_semaphore->address();
     }
 }
 
