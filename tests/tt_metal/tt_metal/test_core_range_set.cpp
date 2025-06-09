@@ -42,6 +42,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
+#include "impl/program/program_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -91,8 +92,8 @@ void check_semaphores_are_initialized(
                 tt_metal::detail::ReadFromDeviceL1(
                     device,
                     logical_core,
-                    program.get_sem_base_addr(device, logical_core, CoreType::WORKER),
-                    program.get_sem_size(device, logical_core, CoreType::WORKER),
+                    program.impl().get_sem_base_addr(device, logical_core, CoreType::WORKER),
+                    program.impl().get_sem_size(device, logical_core, CoreType::WORKER),
                     res);
                 std::vector<uint32_t> filtered_res;
                 static uint32_t num_u32_to_skip =

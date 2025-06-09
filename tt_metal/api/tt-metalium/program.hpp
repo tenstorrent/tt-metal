@@ -67,13 +67,6 @@ std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program& program, CBHand
 class Internal_;
 }  // namespace detail
 
-// Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
-enum class ProgramBinaryStatus : uint8_t {
-    NotSent = 0,    // Binaries have not been written
-    InFlight = 1,   // Fast Dispatch Commands to write the binaries to DRAM has been issued
-    Committed = 2,  // Binaries have been commited to DRAM
-};
-
 class Program {
 public:
     Program();
@@ -98,40 +91,18 @@ public:
     const std::vector<Semaphore>& semaphores() const;
 
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
+    std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
+
     void add_buffer(std::shared_ptr<Buffer> buf);
-    void release_buffers();
 
     size_t num_semaphores() const;
-    void init_semaphores(
-        const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
     // XXXXX TODO: this should return a const reference
     std::vector<std::vector<CoreCoord>> logical_cores() const;
 
-    void compile(IDevice* device, bool force_slow_dispatch = false);
-
-    void generate_dispatch_commands(IDevice* device);
-
-    void invalidate_circular_buffer_allocation();
-
     void allocate_circular_buffers(const IDevice* device);
 
-    void finalize_offsets(IDevice* device);
-    bool is_finalized() const;
-    ProgramBinaryStatus get_program_binary_status(std::size_t device_id) const;
-    void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status);
-    void allocate_kernel_bin_buf_on_device(IDevice* device);
-    std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
-
-    // debug/test
-    uint32_t get_sem_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
-    uint32_t get_cb_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
-    uint32_t get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
-    uint32_t get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
-    void set_last_used_command_queue_for_testing(CommandQueue* queue);
-    CommandQueue* get_last_used_command_queue() const;
-    const std::vector<SubDeviceId>& determine_sub_device_ids(const IDevice* device);
-    void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
     uint32_t get_cb_memory_size() const;
+
     detail::ProgramImpl& impl() { return *internal_; }
     const detail::ProgramImpl& impl() const { return *internal_; }
 
@@ -171,7 +142,6 @@ private:
 
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
-    std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;
     bool kernel_binary_always_stored_in_ringbuffer();
 
     friend HWCommandQueue;

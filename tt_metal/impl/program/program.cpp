@@ -818,9 +818,6 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
     this->local_circular_buffer_allocation_needed_ = true;
 }
 
-void Program::invalidate_circular_buffer_allocation() { internal_->invalidate_circular_buffer_allocation(); }
-
-uint32_t Program::get_cb_memory_size() const { return internal_->get_cb_memory_size(); }
 uint32_t detail::ProgramImpl::get_cb_memory_size() const {
     uint32_t total_cb_size = 0;
     for (const auto& circular_buffer : this->circular_buffers_) {
@@ -831,6 +828,9 @@ uint32_t detail::ProgramImpl::get_cb_memory_size() const {
     }
     return total_cb_size;
 }
+
+uint32_t Program::get_cb_memory_size() const { return internal_->get_cb_memory_size(); }
+
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
     //ZoneScoped;
     if (not this->local_circular_buffer_allocation_needed_) {
@@ -925,10 +925,6 @@ void detail::ProgramImpl::init_semaphores(
             std::vector{semaphore.get().initial_value()},
             addr + semaphore.get().offset());
     }
-}
-
-void Program::init_semaphores(const IDevice &device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const {
-    internal_->init_semaphores(device, logical_core, programmable_core_type_index);
 }
 
 void detail::ProgramImpl::add_semaphore(
@@ -1273,7 +1269,7 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
     }
 }
 
-void Program::generate_dispatch_commands(IDevice* device) {
+void ProgramImpl::generate_dispatch_commands(IDevice* device) {
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
     uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
@@ -1282,11 +1278,11 @@ void Program::generate_dispatch_commands(IDevice* device) {
         // id into the device hash, to always assert on programs being reused across devices.
         device_hash = (device_hash << 32) | (device->id());
     }
-    if (!internal_->is_cached()) {
-        internal_->set_cached(device_hash);
+    if (!is_cached()) {
+        set_cached(device_hash);
     } else {
         TT_FATAL(
-            *internal_->get_cached() == device_hash,
+            *get_cached() == device_hash,
             "Enqueueing a Program across devices with different cores harvested is not supported, unless coordinate "
             "virtualization is enabled (only enabled on Wormhole and above).");
     }
@@ -1297,7 +1293,7 @@ void Program::generate_dispatch_commands(IDevice* device) {
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
-        program_dispatch::assemble_device_commands(program_command_sequence, impl(), device, sub_device_id);
+        program_dispatch::assemble_device_commands(program_command_sequence, *this, device, sub_device_id);
         // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
         // This means programs will contain stale entries in the cache until the program is deleted
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
@@ -1333,10 +1329,6 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device) {
         // This means programs will contain stale entries in the cache until the program is deleted
         trace_cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
     }
-}
-
-void Program::allocate_kernel_bin_buf_on_device(IDevice* device) {
-    internal_->allocate_kernel_bin_buf_on_device(device);
 }
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
@@ -1467,28 +1459,24 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     Inspector::program_compile_finished(this, device, build_env.build_key);
 }
 
-void Program::compile(IDevice* device, bool force_slow_dispatch) { internal_->compile(device, force_slow_dispatch); }
-
 void detail::ProgramImpl::set_runtime_id(uint64_t id) { this->runtime_id = id; }
 
 void Program::set_runtime_id(uint64_t id) { internal_->set_runtime_id(id); }
 
-uint32_t Program::get_sem_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
+uint32_t ProgramImpl::get_sem_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type = ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
-    uint32_t base_addr = program_dispatch::program_base_addr_on_core(impl(), device, programmable_core_type);
-    return base_addr + impl()
-                           .get_program_config(
-                               MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
-                           .sem_offset;
+    uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
+    return base_addr +
+           get_program_config(MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
+               .sem_offset;
 }
 
-uint32_t Program::get_cb_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
+uint32_t ProgramImpl::get_cb_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type = ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
-    uint32_t base_addr = program_dispatch::program_base_addr_on_core(impl(), device, programmable_core_type);
-    return base_addr + impl()
-                           .get_program_config(
-                               MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
-                           .cb_offset;
+    uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
+    return base_addr +
+           get_program_config(MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
+               .cb_offset;
 }
 
 void detail::ProgramImpl::set_last_used_command_queue_for_testing(CommandQueue* queue) {
@@ -1499,12 +1487,6 @@ CommandQueue* detail::ProgramImpl::get_last_used_command_queue() const {
     return this->last_used_command_queue_for_testing;
 }
 
-void Program::set_last_used_command_queue_for_testing(CommandQueue* queue) {
-    internal_->set_last_used_command_queue_for_testing(queue);
-}
-
-CommandQueue* Program::get_last_used_command_queue() const { return internal_->get_last_used_command_queue(); }
-
 uint32_t detail::ProgramImpl::get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
@@ -1513,20 +1495,12 @@ uint32_t detail::ProgramImpl::get_sem_size(IDevice* device, CoreCoord logical_co
     return this->program_configs_[index].sem_size;
 }
 
-uint32_t Program::get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
-    return internal_->get_sem_size(device, logical_core, core_type);
-}
-
 uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
     uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].cb_size;
-}
-
-uint32_t Program::get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
-    return internal_->get_cb_size(device, logical_core, core_type);
 }
 
 // TODO: Too low level for program.cpp. Move this to HAL, once we have support.
@@ -1607,8 +1581,6 @@ void Program::add_buffer(std::shared_ptr<Buffer> buf) { internal_->add_buffer(st
 
 void detail::ProgramImpl::release_buffers() { owned_buffer_pool = {}; }
 
-void Program::release_buffers() { internal_->release_buffers(); }
-
 std::vector<std::reference_wrapper<const Semaphore>> detail::ProgramImpl::semaphores_on_core(
     const CoreCoord& core, CoreType core_type) const {
     std::vector<std::reference_wrapper<const Semaphore>> semaphores;
@@ -1623,21 +1595,9 @@ std::vector<std::reference_wrapper<const Semaphore>> detail::ProgramImpl::semaph
 bool detail::ProgramImpl::is_finalized() const { return this->finalized_; }
 void detail::ProgramImpl::set_finalized() { this->finalized_ = true; }
 
-bool Program::is_finalized() const { return internal_->is_finalized(); }
-
-ProgramBinaryStatus Program::get_program_binary_status(std::size_t device_id) const {
-    return internal_->get_program_binary_status(device_id);
-}
-void Program::set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status) {
-    internal_->set_program_binary_status(device_id, status);
-}
 void detail::ProgramImpl::set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status) {
     Inspector::program_set_binary_status(this, device_id, status);
     this->binaries_on_device_[device_id] = status;
-}
-
-const std::vector<SubDeviceId>& Program::determine_sub_device_ids(const IDevice* device) {
-    return internal_->determine_sub_device_ids(device);
 }
 
 const ProgramTransferInfo& detail::ProgramImpl::get_program_transfer_info() const noexcept {
@@ -1651,12 +1611,13 @@ std::shared_ptr<Buffer> ProgramImpl::get_kernels_buffer(IDevice* device) const n
     return nullptr;
 }
 
-void Program::set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer) {
-    internal_->kernels_buffer_.insert({buffer->device()->id(), buffer});
+void detail::ProgramImpl::set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer) {
+    kernels_buffer_.insert({buffer->device()->id(), buffer});
 }
 
-std::unordered_map<uint64_t, ProgramCommandSequence> &Program::get_cached_program_command_sequences() noexcept {
-    return internal_->cached_program_command_sequences_;
+std::unordered_map<uint64_t, ProgramCommandSequence>&
+detail::ProgramImpl::get_cached_program_command_sequences() noexcept {
+    return cached_program_command_sequences_;
 }
 
 void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const ProgramOffsetsState& state) {
@@ -1683,8 +1644,6 @@ void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
         populate_dispatch_data(device);  // TODO: maybe rename
     }
 }
-
-void Program::finalize_offsets(IDevice* device) { internal_->finalize_offsets(device); }
 
 using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
 using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;

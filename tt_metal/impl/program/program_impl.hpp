@@ -100,6 +100,13 @@ struct ProgramConfig {
     uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
 };
 
+// Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
+enum class ProgramBinaryStatus : uint8_t {
+    NotSent = 0,    // Binaries have not been written
+    InFlight = 1,   // Fast Dispatch Commands to write the binaries to DRAM has been issued
+    Committed = 2,  // Binaries have been commited to DRAM
+};
+
 namespace detail {
 
 struct ProgramOffsetsState {
@@ -186,12 +193,17 @@ public:
     const ProgramConfig& get_program_config(uint32_t programmable_core_type_index) const;
     const std::vector<SubDeviceId>& determine_sub_device_ids(const IDevice* device);
 
+    void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
+
+    void generate_dispatch_commands(IDevice* device);
     void generate_trace_dispatch_commands(IDevice* device);
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_trace_cached_program_command_sequences() noexcept;
 
     // debug/test
     uint32_t get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
+    uint32_t get_sem_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type);
     uint32_t get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
+    uint32_t get_cb_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type);
     void set_last_used_command_queue_for_testing(CommandQueue* queue);
     CommandQueue* get_last_used_command_queue() const;
     void populate_dispatch_data(IDevice* device);
@@ -325,6 +337,7 @@ private:
     void set_program_offsets_and_sizes(uint32_t index, const ProgramOffsetsState& state);
     void set_program_attrs_across_core_types(IDevice* device);
 
+    std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;
     const ProgramTransferInfo& get_program_transfer_info() const noexcept;
     std::shared_ptr<Buffer> get_kernels_buffer(IDevice* device) const noexcept;
 

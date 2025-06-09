@@ -131,7 +131,7 @@ void EnqueueProgramCommand::process() {
     program_dispatch::reserve_space_in_kernel_config_buffer(
         this->config_buffer_mgr,
         program.impl().get_program_config_sizes(),
-        program.get_program_binary_status(device->id()),
+        program.impl().get_program_binary_status(device->id()),
         num_workers,
         this->expected_num_workers_completed,
         dispatch_metadata);
@@ -140,7 +140,7 @@ void EnqueueProgramCommand::process() {
 
     // Access the program dispatch-command cache
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
-    auto& cached_program_command_sequence = program.get_cached_program_command_sequences().at(command_hash);
+    auto& cached_program_command_sequence = program.impl().get_cached_program_command_sequences().at(command_hash);
     // Update the generated dispatch commands based on the state of the CQ and the ring buffer
     program_dispatch::update_program_dispatch_commands(
         program.impl(),
@@ -152,7 +152,7 @@ void EnqueueProgramCommand::process() {
         this->dispatch_core_type,
         this->sub_device_id,
         dispatch_metadata,
-        program.get_program_binary_status(device->id()));
+        program.impl().get_program_binary_status(device->id()));
     // Issue dispatch commands for this program
     program_dispatch::write_program_command_sequence(
         cached_program_command_sequence,
@@ -162,7 +162,7 @@ void EnqueueProgramCommand::process() {
         dispatch_metadata.stall_first,
         dispatch_metadata.stall_before_program);
     // Kernel Binaries are committed to DRAM, the first time the program runs on device. Reflect this on host.
-    program.set_program_binary_status(device->id(), ProgramBinaryStatus::Committed);
+    program.impl().set_program_binary_status(device->id(), ProgramBinaryStatus::Committed);
 }
 
 EnqueueTerminateCommand::EnqueueTerminateCommand(
@@ -276,7 +276,7 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     cq.enqueue_program(program, blocking);
     // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
     // leaks on device.
-    program.release_buffers();
+    program.impl().release_buffers();
 }
 
 void EnqueueRecordEvent(

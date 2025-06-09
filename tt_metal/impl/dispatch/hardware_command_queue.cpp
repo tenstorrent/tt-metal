@@ -425,14 +425,14 @@ void HWCommandQueue::enqueue_write_to_core(
 
 void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
-    std::vector<SubDeviceId> sub_device_ids = {program.determine_sub_device_ids(device_)};
+    std::vector<SubDeviceId> sub_device_ids = {program.impl().determine_sub_device_ids(device_)};
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
     // Finalize Program: Compute relative offsets for data structures (semaphores, kernel binaries, etc) in L1
-    program.finalize_offsets(device_);
+    program.impl().finalize_offsets(device_);
 
-    if (program.get_program_binary_status(device_->id()) == ProgramBinaryStatus::NotSent) {
+    if (program.impl().get_program_binary_status(device_->id()) == ProgramBinaryStatus::NotSent) {
         // Write program binaries to device if it hasn't previously been cached
-        program.allocate_kernel_bin_buf_on_device(device_);
+        program.impl().allocate_kernel_bin_buf_on_device(device_);
         if (program.impl().get_program_transfer_info().binary_data.size()) {
             const BufferRegion buffer_region(0, program.impl().get_kernels_buffer(device_)->size());
             this->enqueue_write_buffer(
@@ -441,13 +441,13 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
                 buffer_region,
                 false);
         }
-        program.set_program_binary_status(device_->id(), ProgramBinaryStatus::InFlight);
+        program.impl().set_program_binary_status(device_->id(), ProgramBinaryStatus::InFlight);
     }
     // Lower the program to device: Generate dispatch commands.
     // Values in these commands will get updated based on kernel config ring
     // buffer state at runtime.
-    program.generate_dispatch_commands(device_);
-    program.set_last_used_command_queue_for_testing(this);
+    program.impl().generate_dispatch_commands(device_);
+    program.impl().set_last_used_command_queue_for_testing(this);
 
     if (this->manager_.get_bypass_mode()) {
         this->trace_nodes_.push_back(program_dispatch::create_trace_node(program.impl(), device_));
