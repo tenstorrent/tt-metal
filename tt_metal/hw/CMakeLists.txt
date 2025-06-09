@@ -168,7 +168,6 @@ set(GPP_FLAGS_common
 
 # We are going to build 5 or 6 object files foreach ARCH
 foreach(ARCH IN LISTS ARCHS)
-
     # These are the set of object files we are to build foreach ARCH
     set(HW_OBJ_SRC_PAIRS
         "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S"
@@ -228,22 +227,24 @@ foreach(ARCH IN LISTS ARCHS)
     foreach(HW_PAIR IN LISTS HW_OBJ_SRC_PAIRS)
         string(REPLACE ":" ";" HW_PAIR_LIST ${HW_PAIR})
         list(GET HW_PAIR_LIST 0 HWOBJ)
-	list(GET HW_PAIR_LIST 1 HWSRC)
-	set(HW_OUTPUT_FILE "${HW_OBJ_DIR}/${HWOBJ}")
-	add_custom_command(
+        list(GET HW_PAIR_LIST 1 HWSRC)
+        set(HW_OUTPUT_FILE "${HW_OBJ_DIR}/${HWOBJ}")
+        add_custom_command(
             OUTPUT
                 ${HW_OUTPUT_FILE}
             COMMAND
                 ${CMAKE_COMMAND} -E make_directory ${HW_OBJ_DIR}
             COMMAND
-                ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OBJ_DIR}/${HWOBJ} ${PROJECT_SOURCE_DIR}/${HWSRC}
+                ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OBJ_DIR}/${HWOBJ}
+                ${PROJECT_SOURCE_DIR}/${HWSRC}
             DEPENDS
                 ${PROJECT_SOURCE_DIR}/${HWSRC}
                 # If the compiler changes, rebuild
                 ../sfpi-version.sh
             COMMENT "Building ${ARCH} hw lib ${HWOBJ}"
-            VERBATIM)
-	list(APPEND OBJ_FILES ${HW_OUTPUT_FILE})
+            VERBATIM
+	)
+        list(APPEND OBJ_FILES ${HW_OUTPUT_FILE})
     endforeach()
 endforeach()
 
