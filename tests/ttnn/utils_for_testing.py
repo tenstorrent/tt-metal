@@ -7,8 +7,8 @@ import json
 import time
 
 from loguru import logger
-from models.utility_functions import comp_pcc, comp_equal, divup, roundup
-from typing import Tuple
+from models.utility_functions import comp_pcc, comp_allclose, comp_ulp, comp_equal, divup, roundup
+from typing import Tuple, Union
 
 import ttnn
 import torch
@@ -77,6 +77,92 @@ def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     pcc_passed, pcc_message = comp_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
     assert pcc_passed, construct_pcc_assert_message(pcc_message, expected_pytorch_result, actual_pytorch_result)
     return pcc_passed, pcc_message
+
+
+def assert_allclose(
+    expected_result: Union[ttnn.Tensor, torch.Tensor],
+    actual_result: Union[ttnn.Tensor, torch.Tensor],
+    rtol=1e-05,
+    atol=1e-08,
+):
+    """
+     Assert that two tensors are similar.
+
+     Two tensors are considered close if
+     ``
+     |actual - expected| \leq atol + rtol \cdot |expected|
+     ``
+
+    Args:
+         expected_result (Union[ttnn.Tensor, torch.Tensor]): The expected reference tensor
+         actual_result (Union[ttnn.Tensor, torch.Tensor]): The actual tensor to compare against the reference
+         rtol (float, optional): Relative tolerance. Defaults to 1e-05.
+         atol (float, optional): Absolute tolerance. Defaults to 1e-08
+
+     Returns:
+         tuple: A tuple containing:
+             - allclose_passed (bool): True if allclose check passed, False otherwise
+             - allclose_message (str): A message describing comparison result
+
+     Raises:
+         AssertionError: If the tensor shapes don't match or if tensors are not close enough according to
+                         the aforementioned formula.
+    """
+    if isinstance(expected_result, ttnn.Tensor):
+        expected_result = ttnn.to_torch(expected_result)
+    if isinstance(actual_result, ttnn.Tensor):
+        actual_result = ttnn.to_torch(actual_result)
+
+    assert list(expected_result.shape) == list(
+        actual_result.shape
+    ), f"list(expected_pytorch_result.shape)={list(expected_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_result.shape)}"
+    allclose_passed, allclose_message = comp_allclose(expected_result, actual_result, rtol, atol)
+    assert allclose_passed, allclose_message
+    return allclose_passed, allclose_message
+
+
+def assert_with_ulp(
+    expected_result: Union[ttnn.Tensor, torch.Tensor], actual_result: Union[ttnn.Tensor, torch.Tensor], ulp_threshold=10
+):
+    """
+    Assert that two tensors are similar within a given distance expressed in Units of Least Precision (ULP)
+
+    The error is measured using the following formula:
+    ``
+        | expected - actual | / ULP(expected)
+    ``
+
+    Where ULP(expected) returns, for each element, the length of a single Unit of Least Precision (ULP).
+
+
+    Args:
+        expected_result (Union[ttnn.Tensor, torch.Tensor]): The expected reference tensor
+        actual_result (Union[ttnn.Tensor, torch.Tensor]): The actual tensor to compare against the reference
+        ulp_threshold (float, optional): Maximum tolerated ULP distance. Defaults to 10.
+
+    Note:
+        The length of a single ULP is measured using the difference between two consecutive floating point numbers.
+
+    Returns:
+        tuple: A tuple containing:
+            - ulp_passed (bool): True if ulp check passed, False otherwise
+            - ulp_message (str): A message describing comparison result
+
+    Raises:
+        AssertionError: If the tensor shapes don't match or if tensor difference is greater than ulp_threshold.
+    """
+    if isinstance(expected_result, ttnn.Tensor):
+        expected_result = ttnn.to_torch(expected_result)
+    if isinstance(actual_result, ttnn.Tensor):
+        actual_result = ttnn.to_torch(actual_result)
+
+    assert list(expected_result.shape) == list(
+        actual_result.shape
+    ), f"list(expected_result.shape)={list(expected_result.shape)} vs list(actual_result.shape)={list(actual_result.shape)}"
+
+    ulp_passed, ulp_message = comp_ulp(expected_result, actual_result, ulp_threshold)
+    assert ulp_passed, ulp_message
+    return ulp_passed, ulp_message
 
 
 def assert_equal(expected_pytorch_result, actual_pytorch_result):
