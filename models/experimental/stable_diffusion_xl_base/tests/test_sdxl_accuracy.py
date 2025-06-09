@@ -16,7 +16,7 @@ test_demo.__test__ = False
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 6 * 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
 @pytest.mark.parametrize(
     "num_inference_steps",
     ((50),),
