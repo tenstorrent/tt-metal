@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
 from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 
@@ -731,8 +731,7 @@ def test_unary_trunc_ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.trunc)
     golden_tensor = golden_function(in_data1)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(output_tensor, golden_tensor)
 
 
 @pytest.mark.parametrize(
@@ -751,5 +750,4 @@ def test_unary_trunc_ttnn_opt(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.trunc)
     golden_tensor = golden_function(in_data1)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_ulp(output_tensor, golden_tensor)
