@@ -8,6 +8,8 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 
+#include "debug/dprint_pages.h"
+#include "dprint_tensix.h"
 using std::uint32_t;
 
 // matmul C=A*B using dims MK*KN = MN (row major order)
@@ -45,10 +47,16 @@ void MAIN {
                         }
                         cb_wait_front(cb_in1, onetile);
 
+                        // Print out some values from cb_in1 here. These look normal
+                        //  if(tile_row_id == 0) {
+                        //      UNPACK(tt::compute::common::print_full_tile(cb_in1, 0));
+                        //  }
                         matmul_tiles(cb_in0, cb_in1, kt, 0, 0, transpose_hw);
 
                         cb_pop_front(cb_in1, onetile);
                     }
+                    // Print out the dest reg. The matmul is spitting out inf values.
+                    //  dprint_tensix_dest_reg(0);
                     tile_regs_commit();
 
                     cb_reserve_back(cb_intermed0, onetile);
@@ -56,6 +64,7 @@ void MAIN {
                     pack_tile(0, cb_intermed0);
                     tile_regs_release();
                     cb_push_back(cb_intermed0, onetile);
+                    // UNPACK(tt::compute::common::print_full_tile(cb_intermed0, 0));
 
                     // untilize tile and write to CBIndex::c_25
                     reconfig_data_format_srca(cb_in1, cb_intermed0);
@@ -71,6 +80,8 @@ void MAIN {
                     reconfig_data_format_srca(cb_intermed0, cb_in1);
                     mm_init_short(cb_in0, cb_in1, transpose_hw);
                 }
+
+                // UNPACK(tt::compute::common::print_full_tile(cb_in0, 0));
                 cb_pop_front(cb_in0, Kt);
 
                 // cb_intermed2 comes from reader; untilized row-major tile
@@ -87,11 +98,20 @@ void MAIN {
                 tilize_uninit(cb_intermed2, out_cb_id);
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
+
+                // Some nop here will make it pass
                 mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed2, transpose_hw);
-                // Workaround, needs to be reverted to the following when fix is found:
                 // mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
             }
+            // Some nop here will also make it pass
         }
-    }
-}
+        // Here as well
+    }  // batch
+
+    // Nop to stall the end of the kernel between successive calls will resolve the race condition
+    //  for (uint32_t i = 0; i < 1000; i++) {
+    //          asm volatile("nop");
+    //  }
+
+}  // MAIN
 }  // namespace NAMESPACE

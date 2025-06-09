@@ -33,11 +33,11 @@ def generate_input_shapes():
 @pytest.mark.parametrize("in0_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("num_loops", [1])
+@pytest.mark.parametrize("num_loops", [300])
 def test_attn_matmul(num_loops, in0_dtype, in1_dtype, out_dtype, device):
     torch.manual_seed(0)
 
-    for input_shape_a, input_shape_b in generate_input_shapes():
+    for input_shape_a, input_shape_b in reversed(list(generate_input_shapes())):
         print("Now running with input shapes:")
         print(input_shape_a, input_shape_b)
         input_tensor_a = torch.randn(input_shape_a).bfloat16()
@@ -48,6 +48,7 @@ def test_attn_matmul(num_loops, in0_dtype, in1_dtype, out_dtype, device):
         tt_input_tensor_b = tt_input_tensor_b.to(device)
 
         for _ in range(num_loops):
+            print("Beginning iteration", _)
             # Test python syntax in async mode -> tensor handle for inputs should get properly updated when sending to device
 
             compute_grid_size = device.compute_with_storage_grid_size()
@@ -64,7 +65,14 @@ def test_attn_matmul(num_loops, in0_dtype, in1_dtype, out_dtype, device):
             golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
 
             allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
-            assert allclose, f"FAILED: {output}"
+
+            if not allclose:
+                print("golden_output_tensor")
+                print(golden_output_tensor)
+                print("tt_output_tensor")
+                print(tt_output_tensor)
+
+            assert allclose, f"FAILED on iteration {_}: {output}"
 
         tt_input_tensor_a.deallocate()
         tt_input_tensor_b.deallocate()
