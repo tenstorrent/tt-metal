@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
     // run-time args
@@ -25,7 +26,6 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
     const DataFormat data_format = get_dataformat(cb_id_out);
 
-    // TODO: (GR) Update compile time arg indices
     using tensor_shard_info = ShardedInfo<
         get_compile_time_arg_val(1),   // Memory layout
         get_compile_time_arg_val(2),   // The number of sharding cores
@@ -35,7 +35,6 @@ void kernel_main() {
         get_compile_time_arg_val(6),   // pages_per_shard_x
         get_compile_time_arg_val(7)>;  // pages_per_shard_y
 
-    // TODO: (GR) Update runtime arg index
     const auto [mapping_table, rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(7));
     experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};

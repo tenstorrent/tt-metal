@@ -8,6 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+#include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "cpp/ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp"
 #include <tt-metalium/tt_align.hpp>
@@ -349,6 +350,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             const std::vector<Tensor>& output_tensors) {
             auto src_buffer = input_tensors.at(0).buffer();
             auto dst_buffer = output_tensors.at(0).buffer();
+
+            bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
             bool partial_op = num_slices > 1;
             uint32_t starting_idx_h = 0;
