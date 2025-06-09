@@ -298,7 +298,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     // ToDo: enable 32 sticks per tile for reduction for all cases.
     const uint32_t max_rows_for_reduction =
-        (!is_partial_tile && !is_large_kernel) ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
+        !is_partial_tile ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
     TT_FATAL(nblocks == 1, "Multiple blocks not yet supported");
 
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
