@@ -94,9 +94,8 @@ std::unique_ptr<ttml::schedulers::LRSchedulerBase> create_warmup_with_linear_sch
     return std::make_unique<ttml::schedulers::SequentialScheduler>(optimizer, std::move(schedulers), std::move(steps));
 }
 
-void initialize_device(bool ddp, bool tp) {
+void initialize_device(bool ddp, bool tp, tt::tt_metal::distributed::MeshShape mesh_shape) {
     if (ddp || tp) {
-        // currently supports only N300 device
-        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
+        ttml::autograd::ctx().set_mesh_shape(mesh_shape);
     }
 }

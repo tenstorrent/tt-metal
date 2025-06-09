@@ -241,7 +241,8 @@ void generate(
     float temperature = 1.0F,
     float repetition_penalty = 1.0F,
     int top_k = -1,
-    float top_p = 1.0F) {
+    float top_p = 1.0F,
+    const std::vector<int> *device_ids = nullptr) {
     model_to_eval(model);
 
     std::string prompt;
@@ -258,7 +259,7 @@ void generate(
     auto pad_token_id = 0U;
     auto original_vocab_size = tokenizer.get_vocab_size();
     fmt::println("Original tokenizer vocab size: {}", original_vocab_size);
-    auto *device = &ttml::autograd::ctx().get_device();
+    auto *device = &ttml::autograd::ctx().get_device(device_ids);
     auto num_devices = static_cast<uint32_t>(device->num_devices());
     // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
     auto vocab_size = round_up_to_tile(original_vocab_size, (enable_tp ? num_devices : 1U) * 32U);
@@ -392,6 +393,8 @@ struct TrainingConfig {
     // mpi config
     bool enable_mpi = false;
     uint32_t num_mh_workers = 0U;
+    tt::tt_metal::distributed::MeshShape mesh_shape{1, 2};
+    std::vector<int> device_ids{};
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -418,6 +421,19 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
+
+    auto mesh_shape_node = training_config["mesh_shape"];
+    if (mesh_shape_node) {
+        assert(mesh_shape_node.size() == 2);
+        auto mesh_shape_x = mesh_shape_node[0].as<int>(1);
+        auto mesh_shape_y = mesh_shape_node[1].as<int>(2);
+        config.mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_shape_x, mesh_shape_y);
+    }
+
+    auto device_ids_node = training_config["device_ids"];
+    if (device_ids_node) {
+        config.device_ids = device_ids_node.as<std::vector<int>>();
+    }
 
     if (config.model_type == "gpt2") {
         config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
@@ -506,7 +522,10 @@ int main(int argc, char **argv) {
         }
     }
 
-    initialize_device(ddp, enable_tp);
+    initialize_device(ddp, enable_tp, config.mesh_shape);
+
+    fmt::println("Mesh shape: {}", config.mesh_shape);
+    fmt::println("Device ids: {}", config.device_ids);
 
     if (enable_tp) {
         if (!config.model_path.empty()) {
@@ -624,7 +643,7 @@ int main(int argc, char **argv) {
     fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
 
-    auto *device = &ttml::autograd::ctx().get_device();
+    auto *device = &ttml::autograd::ctx().get_device(&config.device_ids);
     device->enable_program_cache();
 
     struct CachedHostData {
