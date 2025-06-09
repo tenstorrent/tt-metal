@@ -180,7 +180,9 @@ foreach(ARCH IN LISTS ARCHS)
 
     if(ARCH STREQUAL "wormhole")
         set(ARCH_ALIAS wormhole_b0)
-        list(APPEND HW_OBJ_SRC_PAIRS
+        list(
+            APPEND
+            HW_OBJ_SRC_PAIRS
             "wh-iram-start.o:tt_metal/hw/toolchain/wh-iram-start.S"
             "wh-iram-trampoline.o:tt_metal/hw/toolchain/wh-iram-trampoline.S"
         )
@@ -210,7 +212,9 @@ foreach(ARCH IN LISTS ARCHS)
     )
 
     # Architecture specific include paths
-    list(APPEND GPP_INCLUDES
+    list(
+        APPEND
+        GPP_INCLUDES
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/${ARCH_ALIAS}_defines
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/noc
@@ -227,18 +231,18 @@ foreach(ARCH IN LISTS ARCHS)
 	list(GET HW_PAIR_LIST 1 HWSRC)
 	set(HW_OUTPUT_FILE "${HW_OBJ_DIR}/${HWOBJ}")
 	add_custom_command(
-          OUTPUT
-          ${HW_OUTPUT_FILE}
-          COMMAND
-          ${CMAKE_COMMAND} -E make_directory ${HW_OBJ_DIR}
-          COMMAND
-          ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OBJ_DIR}/${HWOBJ} ${PROJECT_SOURCE_DIR}/${HWSRC}
-          DEPENDS
-          ${PROJECT_SOURCE_DIR}/${HWSRC}
-          # If the compiler changes, rebuild
-          ../sfpi-version.sh
-          COMMENT "Building ${ARCH} hw lib ${HWOBJ}"
-          VERBATIM)
+            OUTPUT
+                ${HW_OUTPUT_FILE}
+            COMMAND
+                ${CMAKE_COMMAND} -E make_directory ${HW_OBJ_DIR}
+            COMMAND
+                ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OBJ_DIR}/${HWOBJ} ${PROJECT_SOURCE_DIR}/${HWSRC}
+            DEPENDS
+                ${PROJECT_SOURCE_DIR}/${HWSRC}
+                # If the compiler changes, rebuild
+                ../sfpi-version.sh
+            COMMENT "Building ${ARCH} hw lib ${HWOBJ}"
+            VERBATIM)
 	list(APPEND OBJ_FILES ${HW_OUTPUT_FILE})
     endforeach()
 endforeach()
