@@ -26,7 +26,7 @@ Tensor pre_gather_transform_tensor(
     const bool is_rank_le_4d,
     const bool padding_index_tensor = false,
     const ttnn::Shape& index_tensor_padded_shape = {}) {
-    if (input_tensor.get_logical_shape() == ttnn::Shape{1}) {
+    if (input_tensor.logical_shape() == ttnn::Shape{1}) {
         // Early exit for scalar tensors, return the same tensor
         return input_tensor;
     }
@@ -51,7 +51,7 @@ Tensor pre_gather_transform_tensor(
         index_tensor_padded_shape[0],
         index_tensor_padded_shape[1],
         index_tensor_padded_shape[2],
-        transformed_tensor.get_logical_shape()[-1]};
+        transformed_tensor.logical_shape()[-1]};
 
     const Tensor sliced_tensor =
         ttnn::slice(transformed_tensor, start_index, end_index, step, input_tensor.memory_config());
@@ -65,7 +65,7 @@ Tensor post_gather_transform_tensor(
     const int8_t dim,
     const bool is_dim_last_idx,
     const Shape& original_lshape) {
-    const auto input_shape = index_tensor.get_padded_shape();
+    const auto input_shape = index_tensor.padded_shape();
     const auto orig_rank = input_shape.rank();
 
     if (orig_rank < 4) {
@@ -80,9 +80,9 @@ Tensor post_gather_transform_tensor(
     }
 
     TT_FATAL(
-        output_tensor.get_logical_shape() == original_lshape,
+        output_tensor.logical_shape() == original_lshape,
         "Output tensor transformation did not create correct output shape! Got: {}, expected: {}",
-        output_tensor.get_logical_shape(),
+        output_tensor.logical_shape(),
         original_lshape);
 
     return output_tensor;
@@ -100,12 +100,12 @@ Tensor ExecuteGather::invoke(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
     // Input tensor
-    const ttnn::Shape original_input_tensor_lshape = input_tensor.get_logical_shape();
-    const auto input_tensor_rank = input_tensor.get_padded_shape().rank();
+    const ttnn::Shape original_input_tensor_lshape = input_tensor.logical_shape();
+    const auto input_tensor_rank = input_tensor.padded_shape().rank();
 
     // Index tensor
-    const auto original_index_tensor_lshape = input_index_tensor.get_logical_shape();
-    const auto index_tensor_rank = input_index_tensor.get_padded_shape().rank();
+    const auto original_index_tensor_lshape = input_index_tensor.logical_shape();
+    const auto index_tensor_rank = input_index_tensor.padded_shape().rank();
 
     // Check for early exit for empty tensors tensors
     if (original_input_tensor_lshape == ttnn::Shape{}) {
@@ -131,7 +131,7 @@ Tensor ExecuteGather::invoke(
         input_tensor_is_dim_last_idx,
         input_tensor_is_rank_le_4d,
         false,
-        padded_index_tensor.get_padded_shape());
+        padded_index_tensor.padded_shape());
 
     std::optional<Tensor> optional_output_tensor_value = std::nullopt;
     if (optional_output_tensor.has_value()) {

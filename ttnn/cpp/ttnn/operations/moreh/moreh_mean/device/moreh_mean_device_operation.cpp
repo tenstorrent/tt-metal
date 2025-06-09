@@ -33,7 +33,7 @@ MorehMeanOperation::program_factory_t MorehMeanOperation::select_program_factory
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto& input = tensor_args.input;
 
-    auto rank = input.get_logical_shape().rank();
+    auto rank = input.logical_shape().rank();
 
     if (operation_attributes.dim + 1 == rank) {
         return MorehMeanWFactory{};
@@ -56,10 +56,10 @@ void MorehMeanOperation::validate_on_program_cache_hit(
 MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
-        return {tensor_args.output->get_tensor_spec()};
+        return {tensor_args.output->tensor_spec()};
     }
 
-    auto input_shape = tensor_args.input.get_logical_shape();
+    auto input_shape = tensor_args.input.logical_shape();
     auto output_shape = input_shape;
     auto input_rank = input_shape.rank();
 
@@ -70,9 +70,7 @@ MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs
         return TensorSpec(
             output_shape,
             TensorLayout(
-                tensor_args.input.get_dtype(),
-                PageConfig(tensor_args.input.get_layout()),
-                operation_attributes.memory_config));
+                tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));
     }
 
     ttnn::SmallVector<uint32_t> shape;
@@ -93,9 +91,7 @@ MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs
     return TensorSpec(
         ttnn::Shape(std::move(shape)),
         TensorLayout(
-            tensor_args.input.get_dtype(),
-            PageConfig(tensor_args.input.get_layout()),
-            operation_attributes.memory_config));
+            tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));
 }
 
 MorehMeanOperation::tensor_return_value_t MorehMeanOperation::create_output_tensors(

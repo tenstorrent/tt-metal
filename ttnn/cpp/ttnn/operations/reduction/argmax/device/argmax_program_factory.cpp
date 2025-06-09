@@ -90,9 +90,9 @@ operation::ProgramWithCallbacks argmax_single_core(
     const Tensor& input, const Tensor& output, const std::optional<uint32_t> dim, const bool keepdim) {
     tt::tt_metal::Program program{};
 
-    const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const uint32_t input_unit_size = input.element_size();
-    const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const uint32_t output_unit_size = output.element_size();
 
     const tt::tt_metal::IDevice* device = output.device();
@@ -104,7 +104,7 @@ operation::ProgramWithCallbacks argmax_single_core(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_units);
 
-    const auto& input_shape = input.get_padded_shape();
+    const auto& input_shape = input.padded_shape();
     const uint32_t rank = input_shape.size();
     const bool reduce_all = not dim.has_value();
 
@@ -136,7 +136,7 @@ operation::ProgramWithCallbacks argmax_single_core(
     const bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     const auto inner_dim_units = output_last_dim;
-    const auto outer_dim_units = input.get_logical_volume() / inner_dim_units / red_dim_units;
+    const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
 
     const std::vector<uint32_t> reader_compile_time_args = {
         src_cb_idx,
@@ -269,12 +269,12 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program{};
 
-    const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto input_unit_size = input.element_size();
-    const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const auto output_unit_size = output.element_size();
 
-    const auto& input_shape = input.get_padded_shape();
+    const auto& input_shape = input.padded_shape();
     const auto rank = input_shape.size();
     const bool reduce_all = not dim.has_value();
 
@@ -349,7 +349,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const auto cb_red_vals = tt::tt_metal::CreateCircularBuffer(program, all_cores, red_vals_cb_config);
 
     const auto inner_dim_units = output_last_dim;
-    const auto outer_dim_units = input.get_logical_volume() / inner_dim_units / red_dim_units;
+    const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
 
     // Get physical coordinates of the reduce core that collates the intermediate outputs
     const uint32_t reduce_core_id = 0;  // We can do perf optimization by tuning this in the future

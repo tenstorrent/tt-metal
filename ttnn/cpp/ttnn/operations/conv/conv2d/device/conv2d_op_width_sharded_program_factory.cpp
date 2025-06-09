@@ -55,9 +55,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     bool pass = true;
     enable_split_reader = false;
     tt_metal::IDevice* device = a.device();
-    TT_FATAL(a.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "Conv activation should be in row major layout");
+    TT_FATAL(a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
-    TT_FATAL(output_channels <= b.get_padded_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
+    TT_FATAL(output_channels <= b.padded_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
     uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
@@ -67,11 +67,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     // out_subblock_h_ntiles = 8;
 
-    tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
-    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat bias_df =
-        has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().get_dtype()) : tt::DataFormat::Float16_b;
+        has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().dtype()) : tt::DataFormat::Float16_b;
     tt::DataFormat tilized_act_df = out_df;
 
     log_debug(LogOp, "act_df: {}", act_df);
@@ -134,11 +134,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         act_block_h_ntiles);
 
     // Tensor b has weights and it should be tiled layout after converting conv weights into weight matrix
-    TT_FATAL(b.get_layout() == tt::tt_metal::Layout::TILE, "Conv weights should be in tiled layout");
-    TT_FATAL(b.get_padded_shape()[0] == 1, "Conv weight matrix shape is invalid");
-    TT_FATAL(b.get_padded_shape()[1] == 1, "Conv weight matrix shape is invalid");
-    uint32_t weight_matrix_height = b.get_padded_shape()[2];
-    uint32_t weight_matrix_width = b.get_padded_shape()[3];
+    TT_FATAL(b.layout() == tt::tt_metal::Layout::TILE, "Conv weights should be in tiled layout");
+    TT_FATAL(b.padded_shape()[0] == 1, "Conv weight matrix shape is invalid");
+    TT_FATAL(b.padded_shape()[1] == 1, "Conv weight matrix shape is invalid");
+    uint32_t weight_matrix_height = b.padded_shape()[2];
+    uint32_t weight_matrix_width = b.padded_shape()[3];
     uint32_t weight_matrix_height_ntiles = weight_matrix_height / TILE_HEIGHT;
     uint32_t weight_matrix_width_ntiles = weight_matrix_width / TILE_WIDTH;
 
@@ -231,7 +231,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         // Tensor bias is of shape {output_channels}
         TT_FATAL(bias.has_value(), "Error");
         TT_FATAL(bias.value().buffer() != nullptr, "Error");
-        auto bias_shape_without_padding = bias.value().get_logical_shape();
+        auto bias_shape_without_padding = bias.value().logical_shape();
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
 

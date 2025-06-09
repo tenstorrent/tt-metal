@@ -15,7 +15,7 @@
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 auto check_shape(const ttnn::Tensor& input, const ttnn::Shape& output_shape) {
-    auto input_shape = input.get_logical_shape();
+    auto input_shape = input.logical_shape();
     TT_FATAL(
         input_shape.size() <= output_shape.size(),
         "Input tensor shape {}({}) must be at least as large as the broadcast shape {}({}), which it is not",

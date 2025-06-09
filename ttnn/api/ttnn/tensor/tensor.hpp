@@ -194,7 +194,7 @@ public:
     [[deprecated("Use padded_shape() instead")]] const ttnn::Shape& get_padded_shape() const;
     [[deprecated("Use tensor_spec() instead")]] const TensorSpec& get_tensor_spec() const;
     [[deprecated("Use logical_volume() instead")]] uint64_t get_logical_volume() const;
-    [[deprecated("Use padded_volume() instead")]] uint32_t volume() const;
+    [[deprecated("Use physical_volume() instead")]] uint32_t volume() const;
     [[deprecated("Use distributed_tensor_config() instead")]] const DistributedTensorConfig&
     get_distributed_tensor_config() const;
 
@@ -206,7 +206,7 @@ public:
     const ttnn::Shape& padded_shape() const;
     const TensorSpec& tensor_spec() const;
     uint64_t logical_volume() const;
-    uint64_t padded_volume() const;
+    uint64_t physical_volume() const;
     const DistributedTensorConfig& distributed_tensor_config() const;
     const MemoryConfig& memory_config() const;
 

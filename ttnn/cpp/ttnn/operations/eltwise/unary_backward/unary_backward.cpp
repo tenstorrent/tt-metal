@@ -230,7 +230,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRdiv::invoke(
         }
         grad_tensor.emplace_back(result);
     } else {
-        Tensor result = ttnn::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
+        Tensor result = ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config);
         grad_tensor.emplace_back(result);
     }
     return grad_tensor;
@@ -418,7 +418,7 @@ std::vector<Tensor> ExecuteUnaryBackwardFrac::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardTrunc::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad_result = ttnn::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
+    Tensor grad_result = ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
@@ -450,7 +450,7 @@ std::vector<Tensor> ExecuteUnaryBackwardLogSigmoid::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardFillZero::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor result = ttnn::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
+    Tensor result = ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
@@ -840,8 +840,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRpow::invoke(
     const Tensor& grad, const Tensor& input, float exponent, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     float t_nan = std::nanf("");
-    Tensor grad_result =
-        ttnn::zeros_like(input, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
+    Tensor grad_result = ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_mem_config);
     if (exponent != 0.0) {
         grad_result = ttnn::multiply(
             grad,
@@ -1289,7 +1288,7 @@ std::vector<Tensor> ExecuteUnaryBackwardLogiteps::invoke(
             input, ttnn::rsub(input, 1.0f, std::nullopt, output_mem_config), std::nullopt, output_mem_config)),
         std::nullopt,
         output_mem_config);
-    Tensor t_eps = ttnn::full_like(input, eps, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
+    Tensor t_eps = ttnn::full_like(input, eps, input.dtype(), input.layout(), std::nullopt, output_mem_config);
     Tensor ltl_gth = ttnn::logical_or(
         ttnn::lt(input, low, std::nullopt, output_mem_config),
         ttnn::gt(input, high, std::nullopt, output_mem_config),
@@ -1343,7 +1342,7 @@ std::vector<Tensor> ExecuteUnaryBackwardLog2::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardSign::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor zero_grad = ttnn::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
+    Tensor zero_grad = ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(zero_grad);
     return grad_tensor;
 }
@@ -1351,7 +1350,7 @@ std::vector<Tensor> ExecuteUnaryBackwardSign::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardDivNoNan::invoke(
     const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor val = ttnn::full_like(input, scalar, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
+    Tensor val = ttnn::full_like(input, scalar, input.dtype(), input.layout(), std::nullopt, output_mem_config);
     Tensor result = where(
         ttnn::eq(val, 0, std::nullopt, output_mem_config),
         0.0,
@@ -1708,8 +1707,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
     // input.padded_shape()[0]
     // If repeat shape has 0's, it returns zeros of given input
     if (shape[0] == 0 || shape[1] == 0 || shape[2] == 0 || shape[3] == 0) {
-        Tensor zero_tensor =
-            ttnn::zeros_like(input, input.get_dtype(), input.get_layout(), std::nullopt, output_memory_config);
+        Tensor zero_tensor = ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_memory_config);
         grad_tensor.emplace_back(zero_tensor);
         return grad_tensor;
     } else if (shape[0] > 1) {
@@ -1721,7 +1719,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
             grad,
             dim,
             true,
-            ttnn::zeros(required, input.get_dtype(), input.get_layout(), *ttnn_device, output_memory_config),
+            ttnn::zeros(required, input.dtype(), input.layout(), *ttnn_device, output_memory_config),
             output_memory_config,
             std::nullopt);
         grad_tensor.emplace_back(result);
@@ -1735,7 +1733,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
             grad,
             dim,
             true,
-            ttnn::zeros(required, input.get_dtype(), input.get_layout(), *ttnn_device, output_memory_config),
+            ttnn::zeros(required, input.dtype(), input.layout(), *ttnn_device, output_memory_config),
             output_memory_config,
             std::nullopt);
         grad_tensor.emplace_back(result);
@@ -1747,9 +1745,9 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
 // Autoformat support
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
     auto formatted_input_tensor = temp;
-    if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
+    if (formatted_input_tensor.layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape =
-            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(temp.get_padded_shape());
+            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(temp.padded_shape());
         if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
             formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
                 temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);
@@ -1773,7 +1771,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     const bool keepdim = !all_dimensions;
     Tensor prod_result = ttnn::prod(input, dim, keepdim, output_memory_config);
 
-    if (prod_result.get_layout() == Layout::ROW_MAJOR && prod_result.storage_type() == StorageType::DEVICE) {
+    if (prod_result.layout() == Layout::ROW_MAJOR && prod_result.storage_type() == StorageType::DEVICE) {
         prod_result = ttnn::operations::unary_backward::change_layout_to_tile(prod_result, output_memory_config);
     }
 
@@ -1781,7 +1779,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
         Tensor temp = ttnn::multiply(
             prod_result, grad, std::nullopt, output_memory_config);  // result is stored in the first position
         Tensor fill_tensor = ttnn::fill_first_val_into_tensor<::bfloat16>(
-            temp, temp.get_dtype(), temp.get_layout(), temp.device(), output_memory_config);
+            temp, temp.dtype(), temp.layout(), temp.device(), output_memory_config);
         Tensor all_dimension_result = ttnn::multiply(
             ttnn::reciprocal(input, output_memory_config), fill_tensor, std::nullopt, output_memory_config);
         grad_tensor.emplace_back(all_dimension_result);
@@ -1791,7 +1789,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     // all_dimensions = False
     Tensor updated_grad = prod_result;
     auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
-    if (prod_result.get_logical_shape() != grad.padded_shape()) {
+    if (prod_result.logical_shape() != grad.padded_shape()) {
         if (*dim == 3 || *dim == -1) {
             ttnn::SmallVector<int64_t> after_permute_dims = {0, 3, 1, 2};
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
@@ -1814,7 +1812,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
                 grad.padded_shape()[0], 1, grad.padded_shape()[1], grad.padded_shape()[3]};
             Tensor new_slice_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
             updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
-            if (updated_grad.get_layout() == Layout::ROW_MAJOR) {
+            if (updated_grad.layout() == Layout::ROW_MAJOR) {
                 updated_grad =
                     ttnn::operations::unary_backward::change_layout_to_tile(updated_grad, output_memory_config);
             }
@@ -1826,7 +1824,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
         (*dim == 1 || *dim == 0 || *dim == -4 || *dim == -3) ? grad : updated_grad,
         std::nullopt,
         output_memory_config);
-    if (temp.get_layout() == Layout::ROW_MAJOR) {
+    if (temp.layout() == Layout::ROW_MAJOR) {
         temp = ttnn::operations::unary_backward::change_layout_to_tile(temp, output_memory_config);
     }
     if (*dim == 3 || *dim == -1) {
@@ -1863,7 +1861,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
         // put the tensor back on device because permute throws it off device
         // See: Remove auto format within permute_op.cpp #9404
         tensor_2 = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_device_and_pad(
-            tensor_2, tensor_1.device(), tensor_1.get_layout(), tensor_1.memory_config());
+            tensor_2, tensor_1.device(), tensor_1.layout(), tensor_1.memory_config());
 
         after_permute_dims = {0, 3, 1, 2};
         Tensor result = permute(
@@ -1901,7 +1899,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     // put the tensor back on device because permute throws it off device
     // See: Remove auto format within permute_op.cpp #9404
     tensor_2 = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_device_and_pad(
-        tensor_2, tensor_1.device(), tensor_1.get_layout(), tensor_1.memory_config());
+        tensor_2, tensor_1.device(), tensor_1.layout(), tensor_1.memory_config());
 
     Tensor result = ttnn::permute(
         ttnn::bcast(

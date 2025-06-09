@@ -27,7 +27,7 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     auto* output_buffer = output.buffer();
     TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device");
 
-    const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     const uint32_t input_tile_size = tt::tt_metal::detail::TileSize(input_format);
 
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;

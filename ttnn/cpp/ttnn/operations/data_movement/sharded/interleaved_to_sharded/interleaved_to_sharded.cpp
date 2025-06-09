@@ -21,7 +21,7 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
     return operation::run(
                InterleavedToShardedDeviceOperation{
                    .output_mem_config = sharded_memory_config,
-                   .output_dtype = data_type_arg.value_or(input_tensor.get_dtype()),
+                   .output_dtype = data_type_arg.value_or(input_tensor.dtype()),
                    .keep_l1_aligned = keep_l1_aligned.value_or(false)},
                {input_tensor})
         .at(0);
@@ -45,8 +45,8 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
             if constexpr (std::is_same_v<GridType, CoreCoord>) {
                 grid_size = grid;
                 uint32_t num_cores = 0;
-                uint32_t total_height = input_tensor.volume() / input_tensor.get_padded_shape()[-1];
-                uint32_t total_width = input_tensor.get_padded_shape()[-1];
+                uint32_t total_height = input_tensor.physical_volume() / input_tensor.padded_shape()[-1];
+                uint32_t total_width = input_tensor.padded_shape()[-1];
                 switch (shard_scheme) {
                     case TensorMemoryLayout::HEIGHT_SHARDED:
                         num_cores = tt::div_up(total_height, shard_shape[0]);
@@ -71,7 +71,7 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
     return operation::run(
                InterleavedToShardedDeviceOperation{
                    .output_mem_config = sharded_mem_config,
-                   .output_dtype = data_type_arg.value_or(input_tensor.get_dtype()),
+                   .output_dtype = data_type_arg.value_or(input_tensor.dtype()),
                    .keep_l1_aligned = keep_l1_aligned.value_or(false)},
                {input_tensor})
         .at(0);

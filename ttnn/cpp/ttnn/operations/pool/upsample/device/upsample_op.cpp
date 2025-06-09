@@ -17,8 +17,8 @@ void UpSample::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to copy need to be allocated in buffers on device!");
     // TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
-    TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Input tensor layout should be ROW_MAJOR");
-    TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Input tensor data type should be BFLOAT16");
+    TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Input tensor layout should be ROW_MAJOR");
+    TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16, "Input tensor data type should be BFLOAT16");
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_FATAL(
             input_tensor_a.memory_config().memory_layout() == output_mem_config_.memory_layout(),
@@ -45,7 +45,7 @@ std::vector<TensorSpec> UpSample::compute_output_specs(const std::vector<Tensor>
     // NOTE2: Mapping it into in 2D format should be {N*H*W, C}
     // NOTE3: Assuming output data type is same as input
     const auto& input = input_tensors.at(0);
-    const auto input_shape = input.get_logical_shape();
+    const auto input_shape = input.logical_shape();
 
     uint32_t out_n = input_shape[0];
     uint32_t out_h = input_shape[1] * scale_factor_h_;
@@ -71,11 +71,10 @@ std::vector<TensorSpec> UpSample::compute_output_specs(const std::vector<Tensor>
         shard_spec.shape = {
             input.shard_spec()->shape[0] * scale_factor_h_ * scale_factor_w_, input.shard_spec()->shape[1]};
         MemoryConfig mem_config = output_mem_config_.with_shard_spec(shard_spec);
-        return {TensorSpec(output_shape, TensorLayout(input.get_dtype(), PageConfig(input.get_layout()), mem_config))};
+        return {TensorSpec(output_shape, TensorLayout(input.dtype(), PageConfig(input.layout()), mem_config))};
     }
 
-    return {
-        TensorSpec(output_shape, TensorLayout(input.get_dtype(), PageConfig(input.get_layout()), output_mem_config_))};
+    return {TensorSpec(output_shape, TensorLayout(input.dtype(), PageConfig(input.layout()), output_mem_config_))};
 }
 
 operation::ProgramWithCallbacks UpSample::create_program(

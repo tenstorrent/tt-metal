@@ -28,7 +28,7 @@ Tensor CumprodOperation::invoke(
     std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config,
     const QueueId& queue_id) {
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     int tensor_rank = input_shape.rank();
 
     Tensor adjusted_input_tensor = input_tensor;
@@ -37,7 +37,7 @@ Tensor CumprodOperation::invoke(
     constexpr uint32_t FOUR_DIMENSIONS{4};
     constexpr uint32_t FIRST_DIMENSION{0};
 
-    if (tensor_rank == 0 || adjusted_input_tensor.get_logical_volume() == 0) {
+    if (tensor_rank == 0 || adjusted_input_tensor.logical_volume() == 0) {
         return adjusted_input_tensor;
     }
 

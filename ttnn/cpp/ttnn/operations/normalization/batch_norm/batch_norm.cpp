@@ -34,13 +34,13 @@ Tensor BatchNorm::invoke(
     const std::optional<MemoryConfig>& memory_config,
     QueueId queue_id) {
     TT_FATAL(
-        input.get_logical_shape().rank() >= 4,
+        input.logical_shape().rank() >= 4,
         "batch_norm not supported for tensors with rank < 4. (rank={})",
-        input.get_logical_shape().rank(),
-        input.get_logical_shape().rank());
+        input.logical_shape().rank(),
+        input.logical_shape().rank());
 
     // For 0V tensors
-    if (input.get_logical_volume() == 0) [[unlikely]] {
+    if (input.logical_volume() == 0) [[unlikely]] {
         return ttnn::clone(
             input,
             /*dtype=*/std::nullopt,

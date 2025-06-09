@@ -29,9 +29,9 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     const std::optional<float>& pad_value) {
     // Ensure start and end vectors have matching sizes and correct tensor rank
 
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     uint32_t input_rank = input_shape.rank();
-    auto input_layout = input_tensor.get_layout();
+    auto input_layout = input_tensor.layout();
 
     TT_FATAL(input_rank == 4, "Only 4D tensors are supported for padded_slice");
 

@@ -28,8 +28,8 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
-    auto a_dtype = a.get_dtype();
-    auto b_dtype = b.has_value() ? b->get_dtype() : a_dtype;
+    auto a_dtype = a.dtype();
+    auto b_dtype = b.has_value() ? b->dtype() : a_dtype;
     auto& output = tensor_return_value;
     const auto& op_type = operation_attributes.binary_op_type;
 
@@ -42,7 +42,7 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
     tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b_dtype);
     uint32_t src1_single_tile_size = tt_metal::detail::TileSize(src1_cb_data_format);
-    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
 
     tt::DataFormat interim_cb0_format = src0_cb_data_format;

@@ -59,11 +59,11 @@ Tensor handle_zero_volume_matmul(
     ttnn::Shape output_shape = compute_matmul_output_shape(input_tensor_a, input_tensor_b);
 
     // Use the appropriate data type (either from parameters or from input tensor)
-    DataType output_dtype = dtype.value_or(input_tensor_a.get_dtype());
+    DataType output_dtype = dtype.value_or(input_tensor_a.dtype());
 
     // Create a tensor filled with zeros
     auto output_tensor = ttnn::full(
-        output_shape, 0.0f, output_dtype, input_tensor_a.get_layout(), *input_tensor_a.mesh_device(), memory_config);
+        output_shape, 0.0f, output_dtype, input_tensor_a.layout(), *input_tensor_a.mesh_device(), memory_config);
 
     // Apply bias if provided
     if (bias.has_value()) {
@@ -89,15 +89,15 @@ ttnn::Tensor bound_matmul(
     const struct Matmul& parameters,
     const uint8_t& queue_id,
     std::optional<ttnn::Tensor>& optional_output_tensor) {
-    if (input_tensor_a.get_logical_shape().rank() == 0 || input_tensor_b.get_logical_shape().rank() == 0) [[unlikely]] {
+    if (input_tensor_a.logical_shape().rank() == 0 || input_tensor_b.logical_shape().rank() == 0) [[unlikely]] {
         TT_THROW(
             "ttnn.matmul: Both arguments to matmul need to be at least 1D, but got shapes {} and {}",
-            input_tensor_a.get_logical_shape(),
-            input_tensor_b.get_logical_shape());
+            input_tensor_a.logical_shape(),
+            input_tensor_b.logical_shape());
     }
 
     // Check for zero volume tensors
-    if (input_tensor_a.get_logical_volume() == 0 || input_tensor_b.get_logical_volume() == 0) [[unlikely]] {
+    if (input_tensor_a.logical_volume() == 0 || input_tensor_b.logical_volume() == 0) [[unlikely]] {
         return detail::handle_zero_volume_matmul(
             input_tensor_a, input_tensor_b, parameters.output_mem_config, parameters.output_dtype, bias);
     }
@@ -106,13 +106,13 @@ ttnn::Tensor bound_matmul(
                                               ? ttnn::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config())
                                               : input_tensor_a;
     const auto& input_tensor_b_adjusted =
-        (input_tensor_b.get_logical_shape().rank() == 1)
-            ? ttnn::reshape(input_tensor_b, ttnn::Shape({input_tensor_b.get_logical_shape()[-1], 1}))
+        (input_tensor_b.logical_shape().rank() == 1)
+            ? ttnn::reshape(input_tensor_b, ttnn::Shape({input_tensor_b.logical_shape()[-1], 1}))
         : parameters.transpose_b ? ttnn::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config())
                                  : input_tensor_b;
 
-    const auto input_tensor_a_shape = input_tensor_a_adjusted.get_logical_shape();
-    const auto input_tensor_b_shape = input_tensor_b_adjusted.get_logical_shape();
+    const auto input_tensor_a_shape = input_tensor_a_adjusted.logical_shape();
+    const auto input_tensor_b_shape = input_tensor_b_adjusted.logical_shape();
 
     const auto width_a = input_tensor_a_shape[-1];
     const auto height_b = input_tensor_b_shape[-2];
@@ -144,7 +144,7 @@ ttnn::Tensor bound_matmul(
         DefaultQueueId,
         optional_output_tensor);
 
-    if (input_tensor_b.get_logical_shape().rank() == 1) [[unlikely]] {
+    if (input_tensor_b.logical_shape().rank() == 1) [[unlikely]] {
         output_tensor = ttnn::reshape(
             output_tensor, ttnn::operations::matmul::compute_matmul_output_shape(input_tensor_a, input_tensor_b));
     }
@@ -188,7 +188,7 @@ Tensor MatmulOperation::invoke(
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
-    bool user_run_batched = detail::is_input_batched(input_tensor_b.get_logical_shape());
+    bool user_run_batched = detail::is_input_batched(input_tensor_b.logical_shape());
     const bool untilize_out =
         program_config.has_value() &&
                 std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value())
@@ -237,7 +237,7 @@ Tensor LinearOperation::invoke(
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
-    bool b_is_batched = detail::is_input_batched(input_tensor_b.get_logical_shape());
+    bool b_is_batched = detail::is_input_batched(input_tensor_b.logical_shape());
     TT_FATAL(!(b_is_batched && bias.has_value()), "Batched input not supported when bias exists (linear operation).");
 
     return bound_matmul(

@@ -628,15 +628,15 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
         auto [input_padded_shape, input_tensor_sharded_memory_config] = determine_input_memory_config(
             conv_config,
             batch_size,
-            input_tensor.get_logical_shape(),
-            input_tensor.get_padded_shape(),
+            input_tensor.logical_shape(),
+            input_tensor.padded_shape(),
             is_mm_conv,
             device,
             input_tensor.layout(),
             parallel_config);
         return {input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard};
     } else {
-        return {input_tensor.get_logical_shape(), input_tensor.memory_config(), needs_shard_or_reshard};
+        return {input_tensor.logical_shape(), input_tensor.memory_config(), needs_shard_or_reshard};
     }
 }
 
@@ -675,8 +675,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
         determine_output_parallel_config(parallel_config, compute_grid_size, out_channels, is_mm_conv);
 
     // We can have flat and unflattened (n, h, w, c) tensors here
-    const auto flattened_input_shape = flatten_4d_shape(input_tensor.get_logical_shape());
-    const auto flattened_padded_input_shape = flatten_4d_shape(input_tensor.get_padded_shape());
+    const auto flattened_input_shape = flatten_4d_shape(input_tensor.logical_shape());
+    const auto flattened_padded_input_shape = flatten_4d_shape(input_tensor.padded_shape());
 
     input_tensor = ttnn::reshape(input_tensor, flattened_input_shape, flattened_padded_input_shape);
     const ttnn::Shape input_shape = flattened_input_shape;
@@ -736,16 +736,16 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
 void validate_weight_and_bias_tensors(
     const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor) {
     TT_ASSERT(!ttnn::has_storage_type_of(weight_tensor, ttnn::DEVICE_STORAGE_TYPE));
-    TT_ASSERT(weight_tensor.get_layout() == Layout::ROW_MAJOR);
-    TT_ASSERT(weight_tensor.get_logical_shape().rank() == 4);
+    TT_ASSERT(weight_tensor.layout() == Layout::ROW_MAJOR);
+    TT_ASSERT(weight_tensor.logical_shape().rank() == 4);
     // TODO: enable this assert
-    // TT_ASSERT(weight_tensor.get_shape() == weight_tensor.get_padded_shape());
+    // TT_ASSERT(weight_tensor.get_shape() == weight_tensor.padded_shape());
     if (bias_tensor.has_value()) {
         TT_ASSERT(!ttnn::has_storage_type_of(bias_tensor.value(), ttnn::DEVICE_STORAGE_TYPE));
-        TT_ASSERT(bias_tensor.value().get_logical_shape().rank() == 4);
-        TT_ASSERT(bias_tensor.value().get_layout() == Layout::ROW_MAJOR);
+        TT_ASSERT(bias_tensor.value().logical_shape().rank() == 4);
+        TT_ASSERT(bias_tensor.value().layout() == Layout::ROW_MAJOR);
         // TODO: enable this assert
-        // TT_ASSERT(bias_tensor.value().get_shape() == bias_tensor.value().get_padded_shape());
+        // TT_ASSERT(bias_tensor.value().get_shape() == bias_tensor.value().padded_shape());
     }
 }
 
@@ -1337,7 +1337,7 @@ ttnn::Tensor fold_tensor(
         padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0,
         "Padding must be 0 for folding");
     if (!dtype.has_value()) {
-        dtype = tensor.get_dtype();
+        dtype = tensor.dtype();
     }
     TT_FATAL(dtype.value() != tt_metal::DataType::BFLOAT8_B, "Conv2D DRAM folding currently doesn't support BFLOAT8_B");
 

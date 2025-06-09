@@ -15,8 +15,8 @@
 namespace ttnn::operations::experimental::reduction {
 
 Tensor create_mask(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-    auto& padded_shape = input_a.get_padded_shape();
-    auto& unpadded_shape = input_a.get_logical_shape();
+    auto& padded_shape = input_a.padded_shape();
+    auto& unpadded_shape = input_a.logical_shape();
     if (padded_shape == unpadded_shape) {
         return input_a;
     }
@@ -29,13 +29,13 @@ Tensor create_mask(const Tensor& input_a, const std::optional<MemoryConfig>& out
 Tensor ArgmaxOperation::invoke(
     const Tensor& input, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
-    auto input_shape = input.get_padded_shape();
+    auto input_shape = input.padded_shape();
     TT_FATAL(input_shape.rank() == 4, "supported for rank-4 tensors at this time");
 
     Tensor input_a = create_mask(input, output_memory_config);
 
     uint32_t dim = input_shape.get_normalized_index(_dim);
-    int size = input_a.volume();
+    int size = input_a.physical_volume();
 
     if (!all) {
         if ((dim == (input_shape.rank() - 1)) || (dim == (input_shape.rank() - 2))) {
@@ -43,8 +43,8 @@ Tensor ArgmaxOperation::invoke(
             Tensor max_val = ttnn::max(input_a, (int)dim, true, output_memory_config);
             Tensor max_tensor = ttnn::zeros_like(input_a);
             Tensor tindex = ttnn::index_width<::bfloat16>(
-                input.get_logical_shape(),
-                input.get_padded_shape(),
+                input.logical_shape(),
+                input.padded_shape(),
                 DataType::BFLOAT16,
                 Layout::TILE,
                 input_a.device(),
@@ -53,8 +53,8 @@ Tensor ArgmaxOperation::invoke(
                 max_tensor = ttnn::add(max_tensor, max_val, std::nullopt, output_memory_config);
             } else {
                 tindex = ttnn::index_height<::bfloat16>(
-                    input.get_logical_shape(),
-                    input.get_padded_shape(),
+                    input.logical_shape(),
+                    input.padded_shape(),
                     DataType::BFLOAT16,
                     Layout::TILE,
                     input_a.device(),
@@ -85,7 +85,7 @@ Tensor ArgmaxOperation::invoke(
         } else if ((dim == (input_shape.rank() - 3)) || (dim == (input_shape.rank() - 4))) {
             bool is_channel = (dim == (input_shape.rank() - 3));
             Tensor max_val = ttnn::max(input_a, (int)dim, true, output_memory_config);
-            int repeat = input.get_logical_shape()[dim];
+            int repeat = input.logical_shape()[dim];
             std::vector<Tensor> combined_tensors;
             for (int cid = 0; cid < repeat; cid++) {
                 combined_tensors.emplace_back(max_val);
@@ -93,20 +93,20 @@ Tensor ArgmaxOperation::invoke(
             max_val.deallocate();
             Tensor concat_out = ttnn::concat(combined_tensors, dim, output_memory_config);
             // Needed till `max` stops autoformatting output
-            concat_out = ttnn::reshape(concat_out, input_a.get_logical_shape());
+            concat_out = ttnn::reshape(concat_out, input_a.logical_shape());
             Tensor cmp_results = ttnn::eq(input_a, concat_out, std::nullopt, output_memory_config);
             concat_out.deallocate();
             Tensor tindex = ttnn::index_channel<::bfloat16>(
-                input.get_logical_shape(),
-                input.get_padded_shape(),
+                input.logical_shape(),
+                input.padded_shape(),
                 DataType::BFLOAT16,
                 Layout::TILE,
                 input_a.device(),
                 output_memory_config);
             if (!is_channel) {
                 tindex = ttnn::index_batch<::bfloat16>(
-                    input.get_logical_shape(),
-                    input.get_padded_shape(),
+                    input.logical_shape(),
+                    input.padded_shape(),
                     DataType::BFLOAT16,
                     Layout::TILE,
                     input_a.device(),
@@ -132,8 +132,8 @@ Tensor ArgmaxOperation::invoke(
     // TODO: Fix the index generation code. With the fix the code will work for argmax that return entire
     // maximum value index
     Tensor tindex = ttnn::index_all<::bfloat16>(
-        input.get_logical_shape(),
-        input.get_padded_shape(),
+        input.logical_shape(),
+        input.padded_shape(),
         DataType::BFLOAT16,
         Layout::TILE,
         input_a.device(),

@@ -13,25 +13,25 @@ namespace ttnn::operations::moreh::moreh_getitem {
 void MorehGetItemOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    auto input_layout = input_tensor.get_layout();
+    auto input_layout = input_tensor.layout();
     const auto& index_tensors = tensor_args.index_tensors;
     const auto& output_tensor = tensor_args.output;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
-    auto dtype = input_tensor.get_dtype();
+    auto dtype = input_tensor.dtype();
     TT_FATAL(
         dtype == DataType::INT32 || dtype == DataType::BFLOAT16, "Input tensor must be of type INT32 or BFLOAT16!");
 
     // validate index tensors
-    uint32_t index_size = index_tensors[0].get_logical_shape()[-1];
+    uint32_t index_size = index_tensors[0].logical_shape()[-1];
     for (uint32_t i = 0; i < index_tensors.size(); i++) {
         auto& index_tensor = index_tensors[i];
         TT_FATAL(index_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
         TT_FATAL(index_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
-        TT_FATAL(index_tensor.get_dtype() == DataType::INT32, "Index tensor must be of type INT32!");
+        TT_FATAL(index_tensor.dtype() == DataType::INT32, "Index tensor must be of type INT32!");
 
-        auto index_shape = index_tensor.get_logical_shape();
-        auto index_layout = index_tensor.get_layout();
+        auto index_shape = index_tensor.logical_shape();
+        auto index_layout = index_tensor.layout();
         if (index_layout == Layout::ROW_MAJOR) {
             TT_FATAL(index_shape.rank() == 1, "Index tensor must be 1D for ROW_MAJOR layout!");
         } else {
@@ -63,12 +63,12 @@ void MorehGetItemOperation::validate_inputs(
         return;
     }
     TT_ASSERT(output_tensor->buffer() != nullptr, "Must have 1 output tensor.");
-    TT_FATAL(dtype == output_tensor.value().get_dtype(), "Output tensor must have the same dtype as input tensor!");
+    TT_FATAL(dtype == output_tensor.value().dtype(), "Output tensor must have the same dtype as input tensor!");
 }
 MorehGetItemOperation::program_factory_t MorehGetItemOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto& input_tensor = tensor_args.input;
-    auto input_layout = input_tensor.get_layout();
+    auto input_layout = input_tensor.layout();
     if (input_layout == Layout::ROW_MAJOR) {
         return MorehGetItemRmFactory();
     } else {
@@ -89,15 +89,15 @@ void MorehGetItemOperation::validate_on_program_cache_hit(
 MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
-        return {tensor_args.output->get_tensor_spec()};
+        return {tensor_args.output->tensor_spec()};
     }
 
     const auto& input_tensor = tensor_args.input;
     const auto index_dims = operation_attributes.index_dims;
     const auto& index_tensors = tensor_args.index_tensors;
-    auto input_shape = input_tensor.get_logical_shape();
+    auto input_shape = input_tensor.logical_shape();
     auto output_shape = input_shape;
-    auto layout = input_tensor.get_layout();
+    auto layout = input_tensor.layout();
 
     if (layout == Layout::TILE) {
         // compute output shape
@@ -112,7 +112,7 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
         }
 
         auto index = index_tensors[0];
-        uint32_t index_size = index.get_logical_shape()[-1];
+        uint32_t index_size = index.logical_shape()[-1];
 
         for (uint32_t i = 0; i < index_dims.size(); i++) {
             uint32_t out_put_dim = index_dims[i];
@@ -130,11 +130,11 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
         // output: (10, 100, 40)
         SmallVector<uint32_t> output_size_vec;
 
-        auto input_shape = input_tensor.get_logical_shape();
+        auto input_shape = input_tensor.logical_shape();
         uint32_t input_rank = input_shape.rank();
 
         auto index = index_tensors[0];
-        uint32_t index_size = index.get_logical_shape()[0];
+        uint32_t index_size = index.logical_shape()[0];
 
         uint32_t start_dim = operation_attributes.index_dims.front();
         uint32_t last_dim = operation_attributes.index_dims.back();
@@ -153,9 +153,7 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
     return TensorSpec(
         output_shape,
         TensorLayout(
-            tensor_args.input.get_dtype(),
-            PageConfig(tensor_args.input.get_layout()),
-            operation_attributes.memory_config));
+            tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));
 }
 
 MorehGetItemOperation::tensor_return_value_t MorehGetItemOperation::create_output_tensors(

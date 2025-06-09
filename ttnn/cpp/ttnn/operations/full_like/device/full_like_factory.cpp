@@ -55,7 +55,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
     IDevice* device = input.device();
     MemoryConfig memory_config{operation_attributes.memory_config};
 
-    auto num_tiles = input.volume() / TILE_HW;
+    auto num_tiles = input.physical_volume() / TILE_HW;
 
     Program program{};
 
