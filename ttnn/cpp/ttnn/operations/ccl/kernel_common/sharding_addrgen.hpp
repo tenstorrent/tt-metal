@@ -202,7 +202,7 @@ struct ShardedAddrGen {
             uint32_t bank_id = (sharding_coordinates >> 8) & 0xFF;
             uint32_t src_addr = l1_addr + bank_to_dram_offset[bank_id];
             uint32_t src_noc_xy = dram_bank_to_noc_xy[noc][bank_id];
-            return get_noc_addr_helper(src_noc_xy, src_addr);
+            return ((uint64_t)(src_noc_xy) << NOC_ADDR_COORD_SHIFT) | src_addr;
         } else {
             // Extracts the X and Y value and using the l1 address gets the noc address
             return NOC_XY_ADDR(
