@@ -570,25 +570,6 @@ void py_module(py::module& module) {
                 Tensor: The aggregated tensor.
             )doc");
     module.def(
-        "aggregate_tensor",
-        [](const std::vector<Tensor>& tensors, const MeshToTensor& composer) -> Tensor {
-            Tensor aggregated_tensor = aggregate_as_tensor(tensors, AllGatherTensor{});
-
-            return aggregate_tensor(aggregated_tensor, composer);
-        },
-        py::arg("tensor"),
-        py::arg("composer"),
-        R"doc(
-            Aggregates a set of shard tensors into a single host tensor using the provided composer.
-
-            Args:
-                tensor (Tensor): The tensor to aggregate.
-                composer (MeshToTensor): The composer to use for aggregation.
-
-            Returns:
-                Tensor: The aggregated tensor.
-            )doc");
-    module.def(
         "aggregate_as_tensor",
         [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors, AllGatherTensor{}); },
         py::arg("tensors"),
