@@ -4,7 +4,6 @@
 import ttnn
 import torch
 import pytest
-import os
 from models.utility_functions import comp_pcc
 
 from models.utility_functions import skip_for_blackhole
@@ -207,26 +206,13 @@ def test_llama_tg_ScaledDotProductAttentionDecode(
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
-    indirect=True,
-)
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("seq_len", [32])
 @pytest.mark.parametrize("dim", [512])
 @pytest.mark.parametrize("num_heads", [1])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("pcc", [0.9995])
-def test_llama_tg_BinaryDeviceOperation(
-    use_program_cache, mesh_device, batch_size, seq_len, dim, num_heads, dtype, pcc
-):
-    mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 3), mesh_shape=tuple(mesh_device.shape))
-    mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=tuple(mesh_device.shape))
+def test_llama_tg_BinaryDeviceOperation(use_program_cache, device, batch_size, seq_len, dim, num_heads, dtype, pcc):
     in_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -253,9 +239,9 @@ def test_llama_tg_BinaryDeviceOperation(
         dtype,
         in_mem_config,
         out_mem_config,
-        mesh_device,
-        mesh_mapper,
-        mesh_composer,
+        device,
+        None,
+        None,
         pcc,
     )
 
