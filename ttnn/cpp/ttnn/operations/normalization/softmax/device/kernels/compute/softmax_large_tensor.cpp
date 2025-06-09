@@ -106,12 +106,6 @@ void MAIN {
 
     uint32_t num_cb_passes = 1 + ((Wt - 1) / cb_length_t);  // ceiling divide
     uint32_t max_blk = dest_fp_32 ? 8 : 4;
-    // uint32_t blk_to_use[num_cb_passes];
-    // for(uint32_t i = 0; i < num_cb_passes; i ++){
-    //     for(uint32_t j = max_blk; j >=0; j--){
-    //         if()
-    //     }
-    // }
 
     // First loop is to parse and find the sum
     uint32_t dst0 = 0;

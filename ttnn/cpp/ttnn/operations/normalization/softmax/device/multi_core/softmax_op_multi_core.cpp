@@ -124,7 +124,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
     // cb_exps - keeps exps in tt::CBIndex in L1 to avoid recomputing
     uint32_t im0_t = block_size * tt::div_up(Wt, block_size);
-    TT_FATAL(im0_t == Wt, "im0_t == Wt, (Non user error)");
+    TT_FATAL(im0_t == Wt, "im0_t: {} == Wt: {}, (Non user error)", im0_t, Wt);
 
     // used for buffering scale-mask
     // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
@@ -144,7 +144,8 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     }
     // TODO: Not sure why this fatal is here but not needed for use_large_kernel
     if (!use_large_kernel) {
-        TT_FATAL(im3_t == Wt + block_size, "im3_t == Width in tiles + num_dest_regs to use");
+        TT_FATAL(
+            im3_t == Wt + block_size, "im3_t {} == Width in tiles {} + num_dest_regs to use {}", im3_t, Wt, block_size);
     }
 
     TT_FATAL(Wt % block_size == 0, "Wt: {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
@@ -336,7 +337,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         } else if (core_group_2.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_2;
         } else {
-            TT_FATAL(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
         uint32_t tile_offset = curr_row * Wt;
@@ -468,15 +469,15 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
             // cb_exps - keeps exps in tt::CBIndex in L1 to avoid recomputing
             uint32_t im0_t = block_size * tt::div_up(Wt, block_size);
-            TT_FATAL(im0_t == Wt, "im0_t == Wt must be true");
+            TT_FATAL(im0_t == Wt, "Intermediate buffer size (im0_t={}) must match width (Wt={})", im0_t, Wt);
 
             // used for buffering scale-mask
             // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
             uint32_t im3_t = block_size * (tt::div_up(Wt, block_size) + 1);
-            TT_FATAL(im3_t == Wt + block_size, "im3_t == Wt + block_size)");
+            TT_FATAL(im3_t == Wt + block_size, "im3_t {} == Wt {}+ block_size {}", im3_t, Wt, block_size);
 
-            TT_FATAL(Wt % block_size == 0, "Wt must be divisible by block size");
-            TT_FATAL((block_size != -1), "Wt must be divisible by one of the numbers in the range from 8 to 1.");
+            TT_FATAL(Wt % block_size == 0, "Wt {} must be divisible by block size {}", Wt, block_size);
+            TT_FATAL((block_size != -1), "Wt {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
 
             uint32_t NCHt = NC * Ht;
             uint32_t num_tile_rows = NC * Ht;
