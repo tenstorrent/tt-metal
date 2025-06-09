@@ -1,7 +1,7 @@
 Test Name,Noc Message Type,Packet Size,Line Size,Num Links,Disable Interior Workers,Unidirectional,Senders Are Unidirectional,Bandwidth (B/c),Packets/Second
 mcast_HalfRing,noc_unicast_write,4096,4,1,False,False,False,11.345792570298036,2769968.889232919
 mcast_HalfRing,noc_unicast_write,4096,4,2,False,False,False,11.330537619072304,2766244.535906324
-mcast_HalfRing,noc_unicast_write,4096,4,3,False,False,False,10.261558637642511,2515028.9642681913
+mcast_HalfRing,noc_unicast_write,4096,4,3,False,False,False,10.27558637642511,2515028.9642681913
 mcast_HalfRing,noc_unicast_write,4096,4,4,False,False,False,9.048954945670868,2209217.5160329267
 mcast_FullRing,noc_unicast_write,16,4,1,False,False,False,0.039852346888725826,2490771.680545364
 mcast_FullRing,noc_unicast_write,2048,4,1,False,False,False,5.096832200574682,2488687.5979368566
@@ -14,7 +14,7 @@ mcast_FullRing,noc_unicast_write,2048,8,1,False,False,False,4.290401750140346,20
 mcast_FullRing,noc_unicast_write,4096,8,1,False,False,False,8.15279503722146,1990428.4758841456
 mcast_FullRing,noc_unicast_write,4096,8,2,False,False,False,8.000333417913216,1953206.400857719
 mcast_FullRing,noc_unicast_write,4096,8,3,False,False,False,7.237116039693315,1754667.0018782506
-mcast_FullRing,noc_unicast_write,4096,8,4,False,False,False,6.887485020659927,1681514.8976220526
+mcast_FullRing,noc_unicast_write,4096,8,4,False,False,False,7.041485020659927,1681514.8976220526
 unicast_FullRing,noc_unicast_write,4096,4,1,False,False,False,10.147318619776387,2477372.7099063443
 unicast_FullRing,noc_unicast_write,4096,4,2,False,False,False,10.117036568003153,2469979.6308601447
 unicast_FullRing,noc_unicast_write,4096,4,3,False,False,False,10.04267716900118,2451825.480713179
@@ -87,7 +87,7 @@ mcast_RingAsLinear,noc_unicast_write,4096,4,3,False,False,True,9.187957040087301
 mcast_RingAsLinear,noc_unicast_write,4096,4,4,False,False,True,8.38554822213045,2047252.9839185667
 unicast_Linear,noc_unicast_write,16,2,1,False,False,True,0.04661634597218528,2913521.6232615802
 unicast_Linear,noc_unicast_write,2048,2,1,False,False,True,5.999666707968084,2929524.7597500407
-unicast_Linear,noc_unicast_write,4096,2,1,False,False,True,11.165915674978496,2713846.6003365465
+unicast_Linear,noc_unicast_write,4096,2,1,False,False,True,11.065915674978496,2713846.6003365465
 unicast_RingAsLinear,noc_unicast_write,16,2,1,False,False,True,0.04284636030278291,2677897.5189239318
 unicast_RingAsLinear,noc_unicast_write,2048,2,1,False,False,True,5.5201597622644005,2695390.5089181643
 unicast_RingAsLinear,noc_unicast_write,4096,2,1,False,False,True,10.976066988737593,2679703.854672264
