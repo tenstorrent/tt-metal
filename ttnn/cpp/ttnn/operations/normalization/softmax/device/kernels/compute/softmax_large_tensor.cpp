@@ -17,6 +17,24 @@
 #include "compute_kernel_api/eltwise_unary/fill.h"
 #include "compute_kernel_api.h"
 
+// 3 Loops in code
+// 1: Optional Max value for numerical stability
+//      1: (func: apply_fused_scale_mask) Apply optional fused scale mask followed by (func: apply_fused_attn_mask)
+//      apply attention mask 2: (func: pad_input)Pad tile if step 1 is not done, otherwise -inf padding is done by apply
+//      attention mask
+// 1: Loop till we have parsed all of WT
+// 2: Calculate ∑e^x
+//      1: (func: apply_fused_scale_mask) Apply optional fused scale mask followed by (func: apply_fused_attn_mask)
+//      apply attention mask 2: (func: pad_input)Pad tile if step 1 is not done, otherwise -inf padding is done by apply
+//      attention mask 3: (func: exp_cb) calculate cb e^x, 4: (func: reduce_cb) Sums across the width dimension to
+//      calcualte ∑e^x
+// 2: Loop till we have parsed all of WT
+// 3: Calculate Final value
+//      1: (func: apply_fused_scale_mask) Apply optional fused scale mask followed by apply (func:
+//      apply_fused_attn_mask)  attention mask 2: (func: pad_input) Pad tile if step 1 is not done, otherwise -inf
+//      padding is done by apply attention mask 3: (func: exp_cb) calcualte cb e^x 4: (func: apply_recip) Apply_recip
+//      e^x * 1/∑e^x
+// 2: Loop till we have parsed all of WT
 namespace NAMESPACE {
 void apply_fused_scale_mask(
     uint32_t cb_in, uint32_t cb_fused_scale_mask, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk);
