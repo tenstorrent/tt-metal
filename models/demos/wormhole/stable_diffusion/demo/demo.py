@@ -671,7 +671,7 @@ def run_demo_inference_diffusiondb(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 11 * 8192, "trace_region_size": 591528960}],
+    [{"l1_small_size": 11 * 8192, "trace_region_size": 595230720}],
     indirect=True,
 )
 @pytest.mark.parametrize(
