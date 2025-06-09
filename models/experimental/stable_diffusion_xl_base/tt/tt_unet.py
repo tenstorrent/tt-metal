@@ -212,6 +212,8 @@ class TtUNet2DConditionModel(nn.Module):
         residuals = (sample,)
 
         temb = ttnn.typecast(temb, dtype=ttnn.bfloat16)
+
+        ttnn.DumpDeviceProfiler(self.device)
         for i, down_block in enumerate(self.down_blocks):
             if i == 0:
                 sample, [C, H, W], block_residuals = down_block.forward(sample, [B, C, H, W], temb=temb)
@@ -221,10 +223,12 @@ class TtUNet2DConditionModel(nn.Module):
                 )
 
             residuals += block_residuals
+        ttnn.DumpDeviceProfiler(self.device)
 
         sample, [C, H, W] = self.mid_block.forward(
             sample, [B, C, H, W], temb=temb, encoder_hidden_states=encoder_hidden_states
         )
+        ttnn.DumpDeviceProfiler(self.device)
 
         encoder_hidden_states = ttnn.to_memory_config(encoder_hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         for i, up_block in enumerate(self.up_blocks):
@@ -246,6 +250,8 @@ class TtUNet2DConditionModel(nn.Module):
                     temb=temb,
                     encoder_hidden_states=encoder_hidden_states,
                 )
+
+        ttnn.DumpDeviceProfiler(self.device)
 
         sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
 
