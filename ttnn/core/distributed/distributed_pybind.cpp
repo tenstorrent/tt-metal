@@ -602,6 +602,20 @@ void py_module(py::module& module) {
             Returns:
                 Tensor: The aggregated tensor.
             )doc");
+    module.def(
+        "combine_device_tensors",
+        [](const std::vector<Tensor>& tensors) -> Tensor { return combine_device_tensors(tensors); },
+        py::arg("tensors"),
+        py::kw_only(),
+        R"doc(
+            Combines tensor shards allocated on individual devices into a single multi-device tensor. All tensors shards must be allocated on the same mesh buffer.
+
+            Args:
+                tensors (List[Tensor]): The tensor shards to combine.
+
+            Returns:
+                Tensor: The combined tensor.
+            )doc");
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
 }
 
