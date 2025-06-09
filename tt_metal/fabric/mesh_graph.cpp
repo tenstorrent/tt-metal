@@ -478,7 +478,7 @@ std::optional<HostRankId> MeshGraph::get_host_rank_for_chip(MeshId mesh_id, chip
 
     // Find which host rank owns this coordinate
     for (const auto& [mesh_id_host_rank_pair, coord_range] : mesh_host_rank_coord_ranges_) {
-        if (mesh_id_host_rank_pair.first != mesh_id && chip_coord[0] >= coord_range.start_coord()[0] &&
+        if (mesh_id_host_rank_pair.first == mesh_id && chip_coord[0] >= coord_range.start_coord()[0] &&
             chip_coord[0] <= coord_range.end_coord()[0] && chip_coord[1] >= coord_range.start_coord()[1] &&
             chip_coord[1] <= coord_range.end_coord()[1]) {
             return mesh_id_host_rank_pair.second;

@@ -288,4 +288,60 @@ TEST(MeshGraphValidation, TestT3k2x2MeshGraph) {
         MeshContainer<chip_id_t>(MeshShape(2, 2), std::vector<chip_id_t>{0, 1, 2, 3}));
 }
 
+TEST(MeshGraphValidation, TestGetHostRankForChip) {
+    // Test with dual host T3K configuration
+    const std::filesystem::path t3k_dual_host_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.yaml";
+    auto mesh_graph = std::make_unique<tt_fabric::MeshGraph>(t3k_dual_host_mesh_graph_desc_path.string());
+
+    // Test valid chips for mesh 0
+    // Based on the dual host configuration:
+    // Host rank 0 controls chips 0, 1, 4, 5 (left board)
+    // Host rank 1 controls chips 2, 3, 6, 7 (right board)
+    EXPECT_EQ(mesh_graph->get_host_rank_for_chip(MeshId{0}, 0), HostRankId(0));
+    EXPECT_EQ(mesh_graph->get_host_rank_for_chip(MeshId{0}, 1), HostRankId(0));
+    EXPECT_EQ(mesh_graph->get_host_rank_for_chip(MeshId{0}, 4), HostRankId(0));
+    EXPECT_EQ(mesh_graph->get_host_rank_for_chip(MeshId{0}, 5), HostRankId(0));
+
+    EXPECT_EQ(mesh_graph->get_host_rank_for_chip(MeshId{0}, 2), HostRankId(1));
+    EXPECT_EQ(mesh_graph->get_host_rank_for_chip(MeshId{0}, 3), HostRankId(1));
+    EXPECT_EQ(mesh_graph->get_host_rank_for_chip(MeshId{0}, 6), HostRankId(1));
+    EXPECT_EQ(mesh_graph->get_host_rank_for_chip(MeshId{0}, 7), HostRankId(1));
+
+    // Test invalid chip IDs (out of range)
+    EXPECT_EQ(mesh_graph->get_host_rank_for_chip(MeshId{0}, 8), std::nullopt);
+    EXPECT_EQ(mesh_graph->get_host_rank_for_chip(MeshId{0}, 100), std::nullopt);
+
+    // Test invalid mesh ID
+    EXPECT_EQ(mesh_graph->get_host_rank_for_chip(MeshId{1}, 0), std::nullopt);
+
+    // Test with single host T3K configuration
+    const std::filesystem::path t3k_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
+    auto mesh_graph_single_host = std::make_unique<tt_fabric::MeshGraph>(t3k_mesh_graph_desc_path.string());
+
+    // In single host configuration, all chips should belong to host rank 0
+    for (chip_id_t chip_id = 0; chip_id < 8; chip_id++) {
+        EXPECT_EQ(mesh_graph_single_host->get_host_rank_for_chip(MeshId{0}, chip_id), HostRankId(0));
+    }
+
+    // Test with 2x2 configuration (two separate meshes)
+    const std::filesystem::path t3k_2x2_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.yaml";
+    auto mesh_graph_2x2 = std::make_unique<tt_fabric::MeshGraph>(t3k_2x2_mesh_graph_desc_path.string());
+
+    // Each mesh has only one host rank (0)
+    for (chip_id_t chip_id = 0; chip_id < 4; chip_id++) {
+        EXPECT_EQ(mesh_graph_2x2->get_host_rank_for_chip(MeshId{0}, chip_id), HostRankId(0));
+        EXPECT_EQ(mesh_graph_2x2->get_host_rank_for_chip(MeshId{1}, chip_id), HostRankId(0));
+    }
+
+    // Test invalid chip IDs for 2x2 configuration
+    EXPECT_EQ(mesh_graph_2x2->get_host_rank_for_chip(MeshId{0}, 4), std::nullopt);
+    EXPECT_EQ(mesh_graph_2x2->get_host_rank_for_chip(MeshId{1}, 4), std::nullopt);
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests

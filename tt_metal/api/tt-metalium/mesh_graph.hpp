@@ -17,9 +17,8 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
-#include <vector>
-#include <tt-metalium/fabric_types.hpp>
 
+#include <vector>
 namespace tt {
 enum class ARCH;
 }  // namespace tt
