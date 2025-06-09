@@ -1087,7 +1087,7 @@ class TtWorldModel:
         txt_feats = self.txt_feats if txt_feats is None else txt_feats
         # if len(txt_feats) != len(x) or False: #not invoked
         #     txt_feats = txt_feats.expand(x.shape[0], -1, -1)
-        ori_txt_feats = ttnn.clone(txt_feats)
+        ori_txt_feats = txt_feats
         y, dt, embeddings = [], [], []  # outputs
         save = [4, 6, 9, 9, 12, 12, 15, 15, 15, 19, 22]
         f_info = [
