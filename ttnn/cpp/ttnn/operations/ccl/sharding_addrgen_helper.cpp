@@ -147,17 +147,24 @@ std::vector<uint32_t> generate_compile_time_args(const tt::tt_metal::Tensor& t) 
         "ShardedAddrGenArgBuilder::emit_ct_args was invoked with a tensor containing an unsupported (Sharded) Tensor "
         "Memory Layout: {}",
         t.memory_config().memory_layout());
+    bool is_dram = t.memory_config().is_dram();
     ShardSpec shard_spec = t.shard_spec().value();
     ShardSpecBuffer buf_shard_spec = t.buffer()->shard_spec();
     const auto& [pages_per_shard_y, pages_per_shard_x] = buf_shard_spec.shape_in_pages();
-    // contiguity is 0 if there is padding between unaligned page, 1 if there is padding in the rightmost shard, and 2
-    // otherwise
-    shard_addr_gen_consts::ContiguityType contiguity =
-        (t.buffer()->aligned_page_size() != t.buffer()->page_size())
-            ? shard_addr_gen_consts::ContiguityType::PADDING_BETWEEN_PAGES
-        : (buf_shard_spec.tensor2d_shape_in_pages[1] == (pages_per_shard_x * get_sharding_core_count(t)))
-            ? shard_addr_gen_consts::ContiguityType::NO_SHARD_PADDING
-            : shard_addr_gen_consts::ContiguityType::PADDING_IN_RIGHTMOST_SHARD;
+    // contiguity is 0(3) if there is padding between unaligned page and target is L1(DRAM),
+    // 1(4) if there is padding in the rightmost shard and target is L1(DRAM),
+    // and 2(5) otherwise for L1(DRAM)
+    shard_addr_gen_consts::ContiguityType contiguity;
+    if (t.buffer()->aligned_page_size() != t.buffer()->page_size()) {
+        contiguity = is_dram ? shard_addr_gen_consts::ContiguityType::DRAM_PADDING_BETWEEN_PAGES
+                             : shard_addr_gen_consts::ContiguityType::L1_PADDING_BETWEEN_PAGES;
+    } else if (buf_shard_spec.tensor2d_shape_in_pages[1] == (pages_per_shard_x * get_sharding_core_count(t))) {
+        contiguity = is_dram ? shard_addr_gen_consts::ContiguityType::DRAM_NO_SHARD_PADDING
+                             : shard_addr_gen_consts::ContiguityType::L1_NO_SHARD_PADDING;
+    } else {
+        contiguity = is_dram ? shard_addr_gen_consts::ContiguityType::DRAM_PADDING_IN_RIGHTMOST_SHARD
+                             : shard_addr_gen_consts::ContiguityType::L1_PADDING_IN_RIGHTMOST_SHARD;
+    }
     args.push_back(static_cast<uint32_t>(t.memory_config().memory_layout()));  // Memory layout
     args.push_back(static_cast<uint32_t>(get_sharding_core_count(t)));       // The number of sharding cores
     args.push_back(static_cast<uint32_t>(t.buffer()->aligned_page_size()));  // The page size we offset each write to
