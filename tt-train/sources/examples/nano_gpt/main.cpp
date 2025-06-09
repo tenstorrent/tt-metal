@@ -241,8 +241,7 @@ void generate(
     float temperature = 1.0F,
     float repetition_penalty = 1.0F,
     int top_k = -1,
-    float top_p = 1.0F,
-    const std::vector<int> *device_ids = nullptr) {
+    float top_p = 1.0F) {
     model_to_eval(model);
 
     std::string prompt;
@@ -259,7 +258,8 @@ void generate(
     auto pad_token_id = 0U;
     auto original_vocab_size = tokenizer.get_vocab_size();
     fmt::println("Original tokenizer vocab size: {}", original_vocab_size);
-    auto *device = &ttml::autograd::ctx().get_device(device_ids);
+
+    auto *device = &ttml::autograd::ctx().get_device();
     auto num_devices = static_cast<uint32_t>(device->num_devices());
     // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
     auto vocab_size = round_up_to_tile(original_vocab_size, (enable_tp ? num_devices : 1U) * 32U);
@@ -393,7 +393,7 @@ struct TrainingConfig {
     // mpi config
     bool enable_mpi = false;
     uint32_t num_mh_workers = 0U;
-    tt::tt_metal::distributed::MeshShape mesh_shape{1, 2};
+    tt::tt_metal::distributed::MeshShape mesh_shape{1, 2};  // for TP/DPP, default to N300 mesh configuration.
     std::vector<int> device_ids{};
 };
 
@@ -522,11 +522,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    initialize_device(ddp, enable_tp, config.mesh_shape);
-
-    fmt::println("Mesh shape: {}", config.mesh_shape);
-    fmt::println("Device ids: {}", config.device_ids);
-
     if (enable_tp) {
         if (!config.model_path.empty()) {
             throw std::runtime_error("Save and load is not supported with Tensor Parallel model");
@@ -643,7 +638,12 @@ int main(int argc, char **argv) {
     fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
 
-    auto *device = &ttml::autograd::ctx().get_device(&config.device_ids);
+    fmt::println("Mesh shape: {}", config.mesh_shape);
+    fmt::println("Device IDs: {}", config.device_ids);
+
+    initialize_device(ddp, enable_tp, config.mesh_shape, config.device_ids);
+
+    auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
 
     struct CachedHostData {

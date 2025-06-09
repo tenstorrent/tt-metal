@@ -94,8 +94,12 @@ std::unique_ptr<ttml::schedulers::LRSchedulerBase> create_warmup_with_linear_sch
     return std::make_unique<ttml::schedulers::SequentialScheduler>(optimizer, std::move(schedulers), std::move(steps));
 }
 
-void initialize_device(bool ddp, bool tp, tt::tt_metal::distributed::MeshShape mesh_shape) {
+void initialize_device(
+    bool ddp, bool tp, const tt::tt_metal::distributed::MeshShape &mesh_shape, const std::vector<int> &device_ids) {
     if (ddp || tp) {
-        ttml::autograd::ctx().set_mesh_shape(mesh_shape);
+        ttml::autograd::ctx().open_device(mesh_shape, device_ids);
+    } else {
+        // use single-device defaults.
+        ttml::autograd::ctx().open_device();
     }
 }
