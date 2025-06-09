@@ -2031,41 +2031,43 @@ void configure_for_single_chip(
     TT_ASSERT(dispatch_h_core_sem_0_id == dispatch_relay_mux_core_sem_0_id);
     const uint32_t dispatch_h_cb_sem = dispatch_h_core_sem_0_id;
 
-    std::vector<uint32_t> prefetch_compile_args = {
-        dispatch_buffer_base,                             // overridden below for prefetch_h
-        DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE,  // overridden below for prefetch_h
-        dispatch_buffer_pages,                            // overridden below for prefetch_h
-        prefetch_downstream_cb_sem,                       // overridden below for prefetch_d
-        dispatch_cb_sem,                                  // overridden below for prefetch_h
-        dev_hugepage_base_g,
-        hugepage_issue_buffer_size_g,
-        prefetch_q_base,
-        prefetch_q_entries_g * (uint32_t)sizeof(DispatchSettings::prefetch_q_entry_type),
-        prefetch_q_rd_ptr_addr,
-        prefetch_q_rd_ptr_addr + sizeof(uint32_t),
-        cmddat_q_base,    // overridden for split below
-        cmddat_q_size_g,  // overridden for split below
-        0,                // scratch_db_base filled in below if used
-        scratch_db_size_g,
-        prefetch_sync_sem,
-        prefetch_d_buffer_pages,     // prefetch_d only
-        prefetch_d_upstream_cb_sem,  // prefetch_d only
-        prefetch_downstream_cb_sem,  // prefetch_d only
-        DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
-        DispatchSettings::PREFETCH_D_BUFFER_BLOCKS,  // prefetch_d only
-        0,                                           // unused: for prefetch_hd <--> dispatch_hd
-        0,                                           // unused: for prefetch_hd <--> dispatch_hd
-        0,                                           // unused: for prefetch_hd <--> dispatch_hd
-        0,                                           // unused: for prefetch_hd <--> dispatch_hd
-        0,                                           // unused: for prefetch_hd <--> dispatch_hd
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        scratch_db_size_g,
+    std::map<std::string, std::string> prefetch_defines = {
+        {"DOWNSTREAM_CB_BASE", std::to_string(dispatch_buffer_base)},  // overridden below for prefetch_h
+        {"DOWNSTREAM_CB_LOG_PAGE_SIZE",
+         std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},        // overridden below for prefetch_h
+        {"DOWNSTREAM_CB_PAGES", std::to_string(dispatch_buffer_pages)},           // overridden below for prefetch_h
+        {"MY_DOWNSTREAM_CB_SEM_ID", std::to_string(prefetch_downstream_cb_sem)},  // overridden below for prefetch_d
+        {"DOWNSTREAM_CB_SEM_ID", std::to_string(dispatch_cb_sem)},                // overridden below for prefetch_h
+        {"PCIE_BASE", std::to_string(dev_hugepage_base_g)},
+        {"PCIE_SIZE", std::to_string(hugepage_issue_buffer_size_g)},
+        {"PREFETCH_Q_BASE", std::to_string(prefetch_q_base)},
+        {"PREFETCH_Q_SIZE",
+         std::to_string(prefetch_q_entries_g * (uint32_t)sizeof(DispatchSettings::prefetch_q_entry_type))},
+        {"PREFETCH_Q_RD_PTR_ADDR", std::to_string(prefetch_q_rd_ptr_addr)},
+        {"PREFETCH_Q_PCIE_RD_PTR_ADDR", std::to_string(prefetch_q_rd_ptr_addr + sizeof(uint32_t))},
+        {"CMDDAT_Q_BASE", std::to_string(cmddat_q_base)},    // overridden for split below
+        {"CMDDAT_Q_SIZE", std::to_string(cmddat_q_size_g)},  // overridden for split below
+        {"SCRATCH_DB_BASE", std::to_string(0)},              // scratch_db_base filled in below if used
+        {"SCRATCH_DB_SIZE", std::to_string(scratch_db_size_g)},
+        {"DOWNSTREAM_SYNC_SEM_ID", std::to_string(prefetch_sync_sem)},
+        {"CMDDAT_Q_PAGES", std::to_string(prefetch_d_buffer_pages)},            // prefetch_d only
+        {"MY_UPSTREAM_CB_SEM_ID", std::to_string(prefetch_d_upstream_cb_sem)},  // prefetch_d only
+        {"UPSTREAM_CB_SEM_ID", std::to_string(prefetch_downstream_cb_sem)},     // prefetch_d only
+        {"CMDDAT_Q_LOG_PAGE_SIZE", std::to_string(DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE)},
+        {"CMDDAT_Q_BLOCKS", std::to_string(DispatchSettings::PREFETCH_D_BUFFER_BLOCKS)},  // prefetch_d only
+        {"DISPATCH_S_BUFFER_BASE", std::to_string(0)},           // unused: for prefetch_hd <--> dispatch_hd
+        {"MY_DISPATCH_S_CB_SEM_ID", std::to_string(0)},          // unused: for prefetch_hd <--> dispatch_hd
+        {"DOWNSTREAM_DISPATCH_S_CB_SEM_ID", std::to_string(0)},  // unused: for prefetch_hd <--> dispatch_hd
+        {"DISPATCH_S_BUFFER_SIZE", std::to_string(0)},           // unused: for prefetch_hd <--> dispatch_hd
+        {"DISPATCH_S_CB_LOG_PAGE_SIZE", std::to_string(0)},      // unused: for prefetch_hd <--> dispatch_hd
+        {"DOWNSTREAM_MESH_ID", std::to_string(0)},
+        {"DOWNSTREAM_DEV_ID", std::to_string(0)},
+        {"UPSTREAM_MESH_ID", std::to_string(0)},
+        {"UPSTREAM_DEV_ID", std::to_string(0)},
+        {"FABRIC_ROUTER_NOC_XY", std::to_string(0)},
+        {"OUTBOUND_ETH_CHAN", std::to_string(0)},
+        {"CLIENT_INTERFACE_ADDR", std::to_string(0)},
+        {"RINGBUFFER_SIZE", std::to_string(scratch_db_size_g)},
     };
 
     constexpr NOC my_noc_index = NOC::NOC_0;
@@ -2081,16 +2083,18 @@ void configure_for_single_chip(
                                       noc_read_alignment * noc_read_alignment);
         TT_ASSERT(scratch_db_base < 1024 * 1024);  // L1 size
 
-        prefetch_compile_args[3] = prefetch_d_downstream_cb_sem;
-        prefetch_compile_args[11] = prefetch_d_buffer_base;
-        prefetch_compile_args[12] = prefetch_d_buffer_pages * (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
-        prefetch_compile_args[13] = scratch_db_base;
+        prefetch_defines["MY_DOWNSTREAM_CB_SEM_ID"] = std::to_string(prefetch_d_downstream_cb_sem);
+        prefetch_defines["CMDDAT_Q_BASE"] = std::to_string(prefetch_d_buffer_base);
+        prefetch_defines["CMDDAT_Q_SIZE"] =
+            std::to_string(prefetch_d_buffer_pages * (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE));
+        prefetch_defines["SCRATCH_DB_BASE"] = std::to_string(scratch_db_base);
         CoreCoord phys_prefetch_d_upstream_core =
             packetized_path_en_g ? phys_prefetch_relay_demux_core : phys_prefetch_core_g;
         configure_kernel_variant<true, false>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-            prefetch_compile_args,
+            prefetch_defines,
+            {},
             prefetch_d_core,
             phys_prefetch_d_core,
             phys_prefetch_d_upstream_core,
@@ -2101,20 +2105,22 @@ void configure_for_single_chip(
             my_noc_index);
 
         // prefetch_h
-        prefetch_compile_args[0] = prefetch_d_buffer_base;
-        prefetch_compile_args[1] = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        prefetch_compile_args[2] = prefetch_d_buffer_pages;
-        prefetch_compile_args[3] = prefetch_downstream_cb_sem;
-        prefetch_compile_args[4] = prefetch_d_upstream_cb_sem;
-        prefetch_compile_args[11] = cmddat_q_base;
-        prefetch_compile_args[12] = cmddat_q_size_g;
-        prefetch_compile_args[13] = 0;
+        prefetch_defines["DOWNSTREAM_CB_BASE"] = std::to_string(prefetch_d_buffer_base);
+        prefetch_defines["DOWNSTREAM_CB_LOG_PAGE_SIZE"] =
+            std::to_string(DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
+        prefetch_defines["DOWNSTREAM_CB_PAGES"] = std::to_string(prefetch_d_buffer_pages);
+        prefetch_defines["MY_DOWNSTREAM_CB_SEM_ID"] = std::to_string(prefetch_downstream_cb_sem);
+        prefetch_defines["DOWNSTREAM_CB_SEM_ID"] = std::to_string(prefetch_d_upstream_cb_sem);
+        prefetch_defines["CMDDAT_Q_BASE"] = std::to_string(cmddat_q_base);
+        prefetch_defines["CMDDAT_Q_SIZE"] = std::to_string(cmddat_q_size_g);
+        prefetch_defines["SCRATCH_DB_BASE"] = std::to_string(0);
         CoreCoord phys_prefetch_h_downstream_core =
             packetized_path_en_g ? phys_prefetch_relay_mux_core : phys_prefetch_d_core;
         configure_kernel_variant<false, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-            prefetch_compile_args,
+            prefetch_defines,
+            {},
             prefetch_core,
             phys_prefetch_core_g,
             {0xffffffff, 0xffffffff},  // upstream core unused
@@ -2291,12 +2297,13 @@ void configure_for_single_chip(
         uint32_t scratch_db_base =
             cmddat_q_base + ((cmddat_q_size_g + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
         TT_ASSERT(scratch_db_base < 1024 * 1024);  // L1 size
-        prefetch_compile_args[13] = scratch_db_base;
+        prefetch_defines["SCRATCH_DB_BASE"] = std::to_string(scratch_db_base);
 
         configure_kernel_variant<true, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-            prefetch_compile_args,
+            prefetch_defines,
+            {},
             prefetch_core,
             phys_prefetch_core_g,
             {0xffffffff, 0xffffffff},  // upstream core unused
@@ -2380,6 +2387,7 @@ void configure_for_single_chip(
         configure_kernel_variant<true, false>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            {},
             dispatch_compile_args,
             dispatch_core,
             phys_dispatch_core,
@@ -2405,6 +2413,7 @@ void configure_for_single_chip(
         configure_kernel_variant<false, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            {},
             dispatch_compile_args,
             dispatch_h_core,
             phys_dispatch_h_core,
@@ -2582,6 +2591,7 @@ void configure_for_single_chip(
         configure_kernel_variant<true, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            {},
             dispatch_compile_args,
             dispatch_core,
             phys_dispatch_core,
@@ -2773,33 +2783,43 @@ void configure_for_multi_chip(
     TT_ASSERT(dispatch_h_core_sem_0_id == dispatch_relay_mux_core_sem_0_id);
     const uint32_t dispatch_h_cb_sem = dispatch_h_core_sem_0_id;
 
-    std::vector<uint32_t> prefetch_compile_args = {
-        dispatch_buffer_base,                              // overridden below for prefetch_h
-        DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE,  // overridden below for prefetch_h
-        dispatch_buffer_pages,                             // overridden below for prefetch_h
-        prefetch_downstream_cb_sem,                        // overridden below for prefetch_d
-        dispatch_cb_sem,                                   // overridden below for prefetch_h
-        dev_hugepage_base_g,
-        hugepage_issue_buffer_size_g,
-        prefetch_q_base,
-        prefetch_q_entries_g * (uint32_t)sizeof(DispatchSettings::prefetch_q_entry_type),
-        prefetch_q_rd_ptr_addr,
-        prefetch_q_rd_ptr_addr + sizeof(uint32_t),
-        cmddat_q_base,    // overridden for split below
-        cmddat_q_size_g,  // overridden for split below
-        0,                // scratch_db_base filled in below if used
-        scratch_db_size_g,
-        prefetch_sync_sem,
-        prefetch_d_buffer_pages,     // prefetch_d only
-        prefetch_d_upstream_cb_sem,  // prefetch_d only
-        prefetch_downstream_cb_sem,  // prefetch_d only
-        DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
-        DispatchSettings::PREFETCH_D_BUFFER_BLOCKS,  // prefetch_d only
-        0,                                            // unused: for prefetch_d <--> dispatch_d
-        0,                                            // unused: for prefetch_d <--> dispatch_d
-        0,                                            // unused: for prefetch_d <--> dispatch_d
-        0,                                            // unused: for prefetch_d <--> dispatch_d
-        0,                                            // unused: for prefetch_d <--> dispatch_d
+    std::map<string, string> prefetch_defines = {
+        {"DOWNSTREAM_CB_BASE", std::to_string(dispatch_buffer_base)},  // overridden below for prefetch_h
+        {"DOWNSTREAM_CB_LOG_PAGE_SIZE",
+         std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},        // overridden below for prefetch_h
+        {"DOWNSTREAM_CB_PAGES", std::to_string(dispatch_buffer_pages)},           // overridden below for prefetch_h
+        {"MY_DOWNSTREAM_CB_SEM_ID", std::to_string(prefetch_downstream_cb_sem)},  // overridden below for prefetch_d
+        {"DOWNSTREAM_CB_SEM_ID", std::to_string(dispatch_cb_sem)},                // overridden below for prefetch_h
+        {"PCIE_BASE", std::to_string(dev_hugepage_base_g)},
+        {"PCIE_SIZE", std::to_string(hugepage_issue_buffer_size_g)},
+        {"PREFETCH_Q_BASE", std::to_string(prefetch_q_base)},
+        {"PREFETCH_Q_SIZE",
+         std::to_string(prefetch_q_entries_g * (uint32_t)sizeof(DispatchSettings::prefetch_q_entry_type))},
+        {"PREFETCH_Q_RD_PTR_ADDR", std::to_string(prefetch_q_rd_ptr_addr)},
+        {"PREFETCH_Q_PCIE_RD_PTR_ADDR", std::to_string(prefetch_q_rd_ptr_addr + sizeof(uint32_t))},
+        {"CMDDAT_Q_BASE", std::to_string(cmddat_q_base)},    // overridden for split below
+        {"CMDDAT_Q_SIZE", std::to_string(cmddat_q_size_g)},  // overridden for split below
+        {"SCRATCH_DB_BASE", std::to_string(0)},              // scratch_db_base filled in below if used
+        {"SCRATCH_DB_SIZE", std::to_string(scratch_db_size_g)},
+        {"DOWNSTREAM_SYNC_SEM_ID", std::to_string(prefetch_sync_sem)},
+        {"CMDDAT_Q_PAGES", std::to_string(prefetch_d_buffer_pages)},            // prefetch_d only
+        {"MY_UPSTREAM_CB_SEM_ID", std::to_string(prefetch_d_upstream_cb_sem)},  // prefetch_d only
+        {"UPSTREAM_CB_SEM_ID", std::to_string(prefetch_downstream_cb_sem)},     // prefetch_d only
+        {"CMDDAT_Q_LOG_PAGE_SIZE", std::to_string(DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE)},
+        {"CMDDAT_Q_BLOCKS", std::to_string(DispatchSettings::PREFETCH_D_BUFFER_BLOCKS)},  // prefetch_d only
+        {"DISPATCH_S_BUFFER_BASE", std::to_string(0)},           // unused: for prefetch_d <--> dispatch_d
+        {"MY_DISPATCH_S_CB_SEM_ID", std::to_string(0)},          // unused: for prefetch_d <--> dispatch_d
+        {"DOWNSTREAM_DISPATCH_S_CB_SEM_ID", std::to_string(0)},  // unused: for prefetch_d <--> dispatch_d
+        {"DISPATCH_S_BUFFER_SIZE", std::to_string(0)},           // unused: for prefetch_d <--> dispatch_d
+        {"DISPATCH_S_CB_LOG_PAGE_SIZE", std::to_string(0)},      // unused: for prefetch_d <--> dispatch_d
+        {"DOWNSTREAM_MESH_ID", std::to_string(0)},
+        {"DOWNSTREAM_DEV_ID", std::to_string(0)},
+        {"UPSTREAM_MESH_ID", std::to_string(0)},
+        {"UPSTREAM_DEV_ID", std::to_string(0)},
+        {"FABRIC_ROUTER_NOC_XY", std::to_string(0)},
+        {"OUTBOUND_ETH_CHAN", std::to_string(0)},
+        {"CLIENT_INTERFACE_ADDR", std::to_string(0)},
+        {"RINGBUFFER_SIZE", std::to_string(scratch_db_size_g)},
     };
 
     constexpr NOC my_noc_index = NOC::NOC_0;
@@ -2815,17 +2835,19 @@ void configure_for_multi_chip(
                                       noc_read_alignment * noc_read_alignment);
         TT_ASSERT(scratch_db_base < 1024 * 1024);  // L1 size
 
-        prefetch_compile_args[3] = prefetch_d_downstream_cb_sem;
-        prefetch_compile_args[11] = prefetch_d_buffer_base;
-        prefetch_compile_args[12] = prefetch_d_buffer_pages * (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
-        prefetch_compile_args[13] = scratch_db_base;
+        prefetch_defines["MY_DOWNSTREAM_CB_SEM_ID"] = std::to_string(prefetch_d_downstream_cb_sem);
+        prefetch_defines["CMDDAT_Q_BASE"] = std::to_string(prefetch_d_buffer_base);
+        prefetch_defines["CMDDAT_Q_SIZE"] =
+            std::to_string(prefetch_d_buffer_pages * (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE));
+        prefetch_defines["SCRATCH_DB_BASE"] = std::to_string(scratch_db_base);
 
         CoreCoord phys_prefetch_d_upstream_core =
             packetized_path_en_g ? phys_prefetch_relay_demux_core : phys_prefetch_core_g;
         configure_kernel_variant<true, false>(
             program_r,
             "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-            prefetch_compile_args,
+            prefetch_defines,
+            {},
             prefetch_d_core,
             phys_prefetch_d_core,
             phys_prefetch_d_upstream_core,
@@ -2836,21 +2858,23 @@ void configure_for_multi_chip(
             my_noc_index);
 
         // prefetch_h
-        prefetch_compile_args[0] = prefetch_d_buffer_base;
-        prefetch_compile_args[1] = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        prefetch_compile_args[2] = prefetch_d_buffer_pages;
-        prefetch_compile_args[3] = prefetch_downstream_cb_sem;
-        prefetch_compile_args[4] = prefetch_d_upstream_cb_sem;
-        prefetch_compile_args[11] = cmddat_q_base;
-        prefetch_compile_args[12] = cmddat_q_size_g;
-        prefetch_compile_args[13] = 0;
+        prefetch_defines["DOWNSTREAM_CB_BASE"] = std::to_string(prefetch_d_buffer_base);
+        prefetch_defines["DOWNSTREAM_CB_LOG_PAGE_SIZE"] =
+            std::to_string(DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
+        prefetch_defines["DOWNSTREAM_CB_PAGES"] = std::to_string(prefetch_d_buffer_pages);
+        prefetch_defines["MY_DOWNSTREAM_CB_SEM_ID"] = std::to_string(prefetch_downstream_cb_sem);
+        prefetch_defines["DOWNSTREAM_CB_SEM_ID"] = std::to_string(prefetch_d_upstream_cb_sem);
+        prefetch_defines["CMDDAT_Q_BASE"] = std::to_string(cmddat_q_base);
+        prefetch_defines["CMDDAT_Q_SIZE"] = std::to_string(cmddat_q_size_g);
+        prefetch_defines["SCRATCH_DB_BASE"] = std::to_string(0);
 
         CoreCoord phys_prefetch_h_downstream_core =
             packetized_path_en_g ? phys_prefetch_relay_mux_core : phys_prefetch_d_core;
         configure_kernel_variant<false, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-            prefetch_compile_args,
+            prefetch_defines,
+            {},
             prefetch_core,
             phys_prefetch_core_g,
             {0xffffffff, 0xffffffff},  // upstream core unused
@@ -3178,12 +3202,13 @@ void configure_for_multi_chip(
         uint32_t scratch_db_base =
             cmddat_q_base + ((cmddat_q_size_g + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
         TT_ASSERT(scratch_db_base < 1024 * 1024);  // L1 size
-        prefetch_compile_args[13] = scratch_db_base;
+        prefetch_defines["SCRATCH_DB_BASE"] = std::to_string(scratch_db_base);
 
         configure_kernel_variant<true, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-            prefetch_compile_args,
+            prefetch_defines,
+            {},
             prefetch_core,
             phys_prefetch_core_g,
             {0xffffffff, 0xffffffff},  // upstream core unused
@@ -3253,6 +3278,7 @@ void configure_for_multi_chip(
         configure_kernel_variant<true, false>(
             program_r,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            {},
             dispatch_compile_args,
             dispatch_core,
             phys_dispatch_core,
@@ -3277,6 +3303,7 @@ void configure_for_multi_chip(
         configure_kernel_variant<false, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            {},
             dispatch_compile_args,
             dispatch_h_core,
             phys_dispatch_h_core,
@@ -3462,6 +3489,7 @@ void configure_for_multi_chip(
         configure_kernel_variant<true, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            {},
             dispatch_compile_args,
             dispatch_core,
             phys_dispatch_core,
