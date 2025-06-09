@@ -202,27 +202,17 @@ void copy_sticks_async_local(
                       // stick copies are orthogonal so relative order doesn't matter
                 const bool is_forward_copy = dst_local_idx > dst_relative_src;
                 const uint32_t half_stick = stick_nbytes / 2;
-                if (is_forward_copy) {
-                    for (int16_t k = nsticks - 1; k >= 0; k--) {
-                        if constexpr (main_thread) {
-                            noc_async_write(src_addr + k * stick_nbytes, dst_addr + k * stick_nbytes, half_stick);
-                        } else {
-                            noc_async_write(
-                                src_addr + k * stick_nbytes + half_stick,
-                                dst_addr + k * stick_nbytes + half_stick,
-                                half_stick);
-                        }
-                    }
-                } else {
-                    for (uint16_t k = 0; k < nsticks; k++) {
-                        if constexpr (main_thread) {
-                            noc_async_write(src_addr + k * stick_nbytes, dst_addr + k * stick_nbytes, half_stick);
-                        } else {
-                            noc_async_write(
-                                src_addr + k * stick_nbytes + half_stick,
-                                dst_addr + k * stick_nbytes + half_stick,
-                                half_stick);
-                        }
+                const uint32_t start_idx = is_forward_copy ? nsticks - 1 : 0;
+                const uint32_t end_idx = is_forward_copy ? -1 : nsticks;
+                const uint32_t step = is_forward_copy ? -1 : 1;
+                for (uint32_t k = start_idx; end_idx != k; k += step) {
+                    if constexpr (main_thread) {
+                        noc_async_write(src_addr + k * stick_nbytes, dst_addr + k * stick_nbytes, half_stick);
+                    } else {
+                        noc_async_write(
+                            src_addr + k * stick_nbytes + half_stick,
+                            dst_addr + k * stick_nbytes + half_stick,
+                            half_stick);
                     }
                 }
             }
@@ -246,11 +236,16 @@ is not overwritten before being copied to all it's final destinations,
 which may span several output shards. This is done with the following
 steps:
 
-1. (BR) copy the remote sticks from "my" shard to temp buffer
-2. (BR) copy the local sticks from "my" shard to their destinations
+1. (NC,BR) copy the remote sticks from "my" shard to temp buffer
+2. (NC,BR) copy the local sticks from "my" shard to their destinations
 3. (NC,BR) wait on semaphores for all cores to finish 1. and 2.
-4. (NC) write the padding sticks to their destinations
-4. (BR) copy the remote sticks from temp buffer to their destinations
+4. (NC (if padding)) write the padding sticks to their destinations
+4. (BR, NC (if no padding)) copy the remote sticks from temp buffer to their destinations
+
+Note that for remote copies, since the temp buffer is used the order of
+the remote copies does not matter, thus we can alternate copies between
+cores, but for the local copies the order does matter, thus we split each
+copy across the two DM cores when possible.
 */
 
 void kernel_main() {
@@ -343,10 +338,12 @@ void kernel_main() {
 
     noc_async_write_barrier();
     if constexpr (main_thread) {
+        cb_reserve_back(sync_cb_id1, 1);
         cb_push_back(sync_cb_id1, 1);
         cb_wait_front(sync_cb_id2, 1);
         cb_pop_front(sync_cb_id2, 1);
     } else {
+        cb_reserve_back(sync_cb_id2, 1);
         cb_push_back(sync_cb_id2, 1);
         cb_wait_front(sync_cb_id1, 1);
         cb_pop_front(sync_cb_id1, 1);
@@ -369,6 +366,7 @@ void kernel_main() {
         // incremement the semaphore
         noc_semaphore_inc(semaphore_noc_addr, 1);
     } else {
+        cb_reserve_back(sync_cb_id2, 1);
         cb_push_back(sync_cb_id2, 1);
     }
 
