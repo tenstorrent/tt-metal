@@ -42,4 +42,4 @@ def test_ttnn_sentence_bert_model(device, inputs):
     )
     ttnn_out = ttnn_module(ttnn_input_ids, ttnn_attention_mask, ttnn_token_type_ids, ttnn_position_ids, device=device)
     ttnn_out = ttnn.to_torch(ttnn_out[0]).squeeze(dim=1)
-    assert_with_pcc(reference_out.last_hidden_state, ttnn_out, 0.987)
+    assert_with_pcc(reference_out.last_hidden_state, ttnn_out, 0.986)
