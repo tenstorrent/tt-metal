@@ -35,6 +35,7 @@ std::vector<CoreCoord> get_shard_cores(const tt::tt_metal::Tensor& t) {
          ((t.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
            t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) &&
           shard_spec.orientation == ShardOrientation::COL_MAJOR));
+    bool is_dram = t.memory_config().is_dram();
     bool last = false;
     uint32_t held_value = 0;
     uint32_t concatenated_core = 0;
@@ -52,8 +53,12 @@ std::vector<CoreCoord> get_shard_cores(const tt::tt_metal::Tensor& t) {
                  x_index++) {
                 for (uint32_t y_index = core_ranges.at(cr).start_coord.y; y_index <= core_ranges.at(cr).end_coord.y;
                      y_index++) {
-                    CoreCoord noc_core = device->worker_core_from_logical_core(CoreCoord(x_index, y_index));
-                    coordinates.push_back(noc_core);
+                    if (is_dram) {
+                        coordinates.push_back(CoreCoord(x_index, y_index));
+                    } else {
+                        CoreCoord noc_core = device->worker_core_from_logical_core(CoreCoord(x_index, y_index));
+                        coordinates.push_back(noc_core);
+                    }
                 }
             }
         } else {
@@ -61,8 +66,12 @@ std::vector<CoreCoord> get_shard_cores(const tt::tt_metal::Tensor& t) {
                  y_index++) {
                 for (uint32_t x_index = core_ranges.at(cr).start_coord.x; x_index <= core_ranges.at(cr).end_coord.x;
                      x_index++) {
-                    CoreCoord noc_core = device->worker_core_from_logical_core(CoreCoord(x_index, y_index));
-                    coordinates.push_back(noc_core);
+                    if (is_dram) {
+                        coordinates.push_back(CoreCoord(x_index, y_index));
+                    } else {
+                        CoreCoord noc_core = device->worker_core_from_logical_core(CoreCoord(x_index, y_index));
+                        coordinates.push_back(noc_core);
+                    }
                 }
             }
         }
@@ -81,6 +90,7 @@ std::vector<uint32_t> generate_run_time_args(const tt::tt_metal::Tensor& t) {
          ((t.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
            t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) &&
           shard_spec.orientation == ShardOrientation::COL_MAJOR));
+    bool is_dram = t.memory_config().is_dram();
     bool last = false;
     uint32_t held_value = 0;
     uint32_t concatenated_core = 0;
@@ -98,7 +108,8 @@ std::vector<uint32_t> generate_run_time_args(const tt::tt_metal::Tensor& t) {
                  x_index++) {
                 for (uint32_t y_index = core_ranges.at(cr).start_coord.y; y_index <= core_ranges.at(cr).end_coord.y;
                      y_index++) {
-                    CoreCoord noc_core = device->worker_core_from_logical_core(CoreCoord(x_index, y_index));
+                    CoreCoord noc_core = is_dram ? CoreCoord(x_index, y_index)
+                                                 : device->worker_core_from_logical_core(CoreCoord(x_index, y_index));
                     concatenated_core = (noc_core.x & 0xFF) << 8 | (noc_core.y & 0xFF);
                     if (last) {
                         args.push_back(concatenated_core | (held_value << 16));
@@ -113,7 +124,8 @@ std::vector<uint32_t> generate_run_time_args(const tt::tt_metal::Tensor& t) {
                  y_index++) {
                 for (uint32_t x_index = core_ranges.at(cr).start_coord.x; x_index <= core_ranges.at(cr).end_coord.x;
                      x_index++) {
-                    CoreCoord noc_core = device->worker_core_from_logical_core(CoreCoord(x_index, y_index));
+                    CoreCoord noc_core = is_dram ? CoreCoord(x_index, y_index)
+                                                 : device->worker_core_from_logical_core(CoreCoord(x_index, y_index));
                     concatenated_core = (noc_core.x & 0xFF) << 8 | (noc_core.y & 0xFF);
                     if (last) {
                         args.push_back(concatenated_core | (held_value << 16));
