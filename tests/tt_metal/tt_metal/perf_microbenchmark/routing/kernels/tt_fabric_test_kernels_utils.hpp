@@ -13,24 +13,24 @@
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
-struct TrafficConfigMetadata {
-    static TrafficConfigMetadata build_from_args(size_t& arg_idx) {
-        uint8_t fabric_connection_idx = get_arg_val<uint32_t>(arg_idx++);
-        uint32_t num_packets = get_arg_val<uint32_t>(arg_idx++);
-    }
+struct SenderTrafficConfigMetadata {
+    static SenderTrafficConfigMetadata build_from_args(size_t& arg_idx) { return SenderTrafficConfigMetadata(arg_idx); }
 
-    TrafficConfigMetadata(uint8_t fabric_connection_idx, uint32_t num_packets) :
-        fabric_connection_idx(fabric_connection_idx), num_packets(num_packets) {}
-
-    TrafficConfigMetadata(const TrafficConfigMetadata& other) {
-        this->fabric_connection_idx = other.fabric_connection_idx;
-        this->num_packets = other.num_packets;
-    }
+    SenderTrafficConfigMetadata(const SenderTrafficConfigMetadata& other) :
+        fabric_connection_idx(other.fabric_connection_idx), num_packets(other.num_packets), seed(other.seed) {}
 
     uint8_t fabric_connection_idx;
     uint32_t num_packets;
+    uint32_t seed;
     uint32_t packet_header_address;
     uint32_t payload_start_address;
+
+private:
+    SenderTrafficConfigMetadata(size_t& arg_idx) {
+        this->fabric_connection_idx = get_arg_val<uint32_t>(arg_idx++);
+        this->num_packets = get_arg_val<uint32_t>(arg_idx++);
+        this->seed = get_arg_val<uint32_t>(arg_idx++);
+    }
 };
 
 struct ChipUnicastFields1D {
@@ -209,7 +209,7 @@ void setup_2d_mcast_routet(uint32_t packet_header_address, const ChipMulticastFi
 
 template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
 void setup_header_chip_send_type(
-    WorkerToFabricEdmSender* fabric_connection_handle, const TrafficConfigMetadata& metadata, size_t& arg_idx) {
+    WorkerToFabricEdmSender* fabric_connection_handle, const SenderTrafficConfigMetadata& metadata, size_t& arg_idx) {
     const uint32_t packet_header_address = metadata.packet_header_address;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
@@ -249,7 +249,7 @@ void setup_header_chip_send_type(
 }
 
 // returns the reset dst address currently
-uint64_t setup_header_noc_send_type(const TrafficConfigMetadata& metadata, size_t& arg_idx) {
+uint64_t setup_header_noc_send_type(const SenderTrafficConfigMetadata& metadata, size_t& arg_idx) {
     const uint32_t packet_header_address = metadata.packet_header_address;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
@@ -291,7 +291,9 @@ uint64_t setup_header_noc_send_type(const TrafficConfigMetadata& metadata, size_
 struct SenderKernelTrafficConfig {
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
     static SenderKernelTrafficConfig build_from_args(
-        WorkerToFabricEdmSender* fabric_connection_handle, const TrafficConfigMetadata& metadata, size_t& arg_idx) {
+        WorkerToFabricEdmSender* fabric_connection_handle,
+        const SenderTrafficConfigMetadata& metadata,
+        size_t& arg_idx) {
         uint64_t reset_dst_address = 0;
 
         setup_header_chip_send_type<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(fabric_connection_handle, metadata, arg_idx);
@@ -302,7 +304,7 @@ struct SenderKernelTrafficConfig {
     SenderKernelTrafficConfig(
         WorkerToFabricEdmSender* fabric_connection_handle,
         volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-        const TrafficConfigMetadata& metadata,
+        const SenderTrafficConfigMetadata& metadata,
         uint64_t reset_dst_address) :
         fabric_connection_handle(fabric_connection_handle),
         packet_header(packet_header),
@@ -365,7 +367,7 @@ struct SenderKernelConfig {
         uint32_t curr_packet_header_address = this->memory_map.packet_header_buffer_address;
         uint32_t curr_payload_start_address = this->memory_map.payload_buffer_address;
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-            auto metadata = TrafficConfigMetadata::build_from_args(arg_idx);
+            auto metadata = SenderTrafficConfigMetadata::build_from_args(arg_idx);
             const auto fabric_connection_idx = metadata.fabric_connection_idx;
             ASSERT(fabric_connection_idx < NUM_FABRIC_CONNECTIONS);
 
@@ -397,18 +399,52 @@ struct SenderKernelConfig {
     std::array<SenderKernelTrafficConfig, NUM_TRAFFIC_CONFIGS> traffic_configs;
 };
 
+struct ReceiverTrafficConfigMetadata {
+    static ReceiverTrafficConfigMetadata build_from_args(size_t& arg_idx) {
+        return ReceiverTrafficConfigMetadata(arg_idx);
+    }
+
+    ReceiverTrafficConfigMetadata(const ReceiverTrafficConfigMetadata& other) :
+        num_packets(other.num_packets), seed(other.seed) {}
+
+    uint32_t num_packets = 0;
+    uint32_t seed = 0;
+    uint32_t num_packets_processed = 0;
+
+private:
+    ReceiverTrafficConfigMetadata(size_t& arg_idx) {
+        this->num_packets = get_arg_val<uint32_t>(arg_idx++);
+        this->seed = get_arg_val<uint32_t>(arg_idx++);
+    }
+};
+
 /*
 Semantics for data validation: poll() -> validate() -> advance()
 */
 struct BaseTrafficValidationConfig {
+    BaseTrafficValidationConfig(const ReceiverTrafficConfigMetadata& metadata) : metadata(metadata) {}
+
+    [[nodiscard]] bool has_packets_to_validate() {
+        return this->metadata.num_packets_processed < this->metadata.num_packets;
+    }
+
     [[nodiscard]] virtual bool poll() = 0;
     [[nodiscard]] virtual bool validate() = 0;
-    virtual void advance() = 0;
+    virtual void update() = 0;
+
+    void advance() {
+        this->metadata.num_packets_processed++;
+        this->update();
+    }
+
+    ReceiverTrafficConfigMetadata metadata;
 };
 
 struct AtomicIncValidationConfig : public BaseTrafficValidationConfig {
     // TODO need to pass metadata as well for num packets, seed etc
-    AtomicIncValidationConfig(const NocUnicastAtomicIncFields& atomic_inc_fields) {
+    AtomicIncValidationConfig(
+        const NocUnicastAtomicIncFields& atomic_inc_fields, const ReceiverTrafficConfigMetadata& metadata) :
+        BaseTrafficValidationConfig(metadata) {
         this->poll_address = reinterpret_cast<tt_l1_ptr uint32_t*>(atomic_inc_fields.dst_address);
         this->value_step_size = atomic_inc_fields.atomic_inc_val;
         this->wrap_boundary = atomic_inc_fields.atomic_inc_wrap;
@@ -429,7 +465,7 @@ struct AtomicIncValidationConfig : public BaseTrafficValidationConfig {
     // no-op for atomic incs
     bool validate() override { return true; }
 
-    void advance() override {
+    void update() override {
         expected_value += value_step_size;
         if (expected_value > wrap_boundary) {
             // TODO: update the wrap around logic
@@ -443,7 +479,8 @@ struct AtomicIncValidationConfig : public BaseTrafficValidationConfig {
 };
 
 struct WriteValidationConfig : public BaseTrafficValidationConfig {
-    WriteValidationConfig(const NocUnicastWriteFields& write_fields) {
+    WriteValidationConfig(const NocUnicastWriteFields& write_fields, const ReceiverTrafficConfigMetadata& metadata) :
+        BaseTrafficValidationConfig(metadata) {
         this->poll_address = reinterpret_cast<tt_l1_ptr uint32_t*>(write_fields.dst_address);
         this->value_step_size = write_fields.payload_size_bytes;
     }
@@ -461,15 +498,14 @@ struct WriteValidationConfig : public BaseTrafficValidationConfig {
         return check_packet_data(poll_address, value_step_size, mismatch_address, mismatch_value, expected_value);
     }
 
-    void advance() override {
-        seed = prng_next(seed);
+    void update() override {
+        this->metadata.seed = prng_next(this->metadata.seed);
         expected_value = seed + value_step_size;
         poll_address += address_step_size;
 
         // wrap around
     }
 
-    uint32_t seed;
     volatile tt_l1_ptr uint32_t* poll_address;
     uint32_t address_step_size;
     uint32_t expected_value;
@@ -479,7 +515,9 @@ struct WriteValidationConfig : public BaseTrafficValidationConfig {
 };
 
 struct WriteAtomicIncValidationConfig : public BaseTrafficValidationConfig {
-    WriteAtomicIncValidationConfig(const NocUnicastWriteAtomicIncFields& write_atomic_inc_fields) :
+    WriteAtomicIncValidationConfig(
+        const NocUnicastWriteAtomicIncFields& write_atomic_inc_fields, const ReceiverTrafficConfigMetadata& metadata) :
+        BaseTrafficValidationConfig(metadata),
         write_config(write_atomic_inc_fields.write_fields),
         atomic_inc_config(write_atomic_inc_fields.atomic_inc_fields) {}
 
@@ -503,9 +541,9 @@ struct WriteAtomicIncValidationConfig : public BaseTrafficValidationConfig {
         return write_valid;
     }
 
-    void advance() override {
-        atomic_inc_config.advance();
-        write_config.advance();
+    void update() override {
+        atomic_inc_config.update();
+        write_config.update();
     }
 
     struct WriteValidationConfig write_config;
@@ -521,19 +559,21 @@ struct ReceiverKernelConfig {
 private:
     ReceiverKernelConfig(size_t& arg_idx) {
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+            const auto metadata = ReceiverTrafficConfigMetadata::build_from_args(arg_idx);
             NocSendType noc_send_type = static_cast<NocSendType>(get_arg_val<uint32_t>(arg_idx++));
             switch (noc_send_type) {
                 case NocSendType::NOC_UNICAST_WRITE:
-                    const auto write_fields = NocUnicastWriteFields::build_from_args(arg_idx);
-                    this->traffic_configs[i] = new WriteValidationConfig(write_fields);
+                    const auto write_fields = NocUnicastWriteFields::build_from_args<false>(arg_idx);
+                    this->traffic_configs[i] = new WriteValidationConfig(write_fields, metadata);
                     break;
                 case NocSendType::NOC_UNICAST_ATOMIC_INC:
-                    const auto atomic_inc_fields = NocUnicastAtomicIncFields::build_from_args(arg_idx);
-                    this->traffic_configs[i] = new AtomicIncValidationConfig(atomic_inc_fields);
+                    const auto atomic_inc_fields = NocUnicastAtomicIncFields::build_from_args<false>(arg_idx);
+                    this->traffic_configs[i] = new AtomicIncValidationConfig(atomic_inc_fields, metadata);
                     break;
                 case NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC:
-                    const auto write_atomic_inc_fields = NocUnicastWriteAtomicIncFields::build_from_args(arg_idx);
-                    this->traffic_configs[i] = new WriteAtomicIncValidationConfig(write_atomic_inc_fields);
+                    const auto write_atomic_inc_fields =
+                        NocUnicastWriteAtomicIncFields::build_from_args<false>(arg_idx);
+                    this->traffic_configs[i] = new WriteAtomicIncValidationConfig(write_atomic_inc_fields, metadata);
                     break;
                 default: ASSERT(false); break;
             }

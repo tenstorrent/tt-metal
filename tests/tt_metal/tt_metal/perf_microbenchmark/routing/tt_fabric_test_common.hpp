@@ -22,6 +22,10 @@
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
+class TestContextInterface {
+    virtual virtual
+};
+
 struct TestFabricFixture {
     tt::ARCH arch_;
     std::vector<chip_id_t> physical_chip_ids_;
