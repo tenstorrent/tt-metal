@@ -186,7 +186,7 @@ Tensor ExecuteMaximum::invoke(
 }
 
 Tensor _atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-    tt::log_info(tt::LogOp, "Input arguments for the atan2 function are in the format (y, x)");
+    log_info(tt::LogOp, "Input arguments for the atan2 function are in the format (y, x)");
     Tensor result(input_a);
     {
         Tensor atan_input =

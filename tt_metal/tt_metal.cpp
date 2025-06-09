@@ -42,7 +42,7 @@
 #include "lightmetal/lightmetal_capture.hpp"
 #include "lightmetal_binary.hpp"
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/program.hpp"
 #include "program/program_impl.hpp"
 #include "semaphore.hpp"
@@ -826,7 +826,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
     }  // Profiler scope end
     if (wait_until_cores_done) {
-        DumpDeviceProfileResults(device, program);
+        detail::DumpDeviceProfileResults(device);
     }
 }
 
@@ -845,7 +845,7 @@ void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile
     }
     llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
     if (dump_device_profile_results) {
-        DumpDeviceProfileResults(device, program);
+        detail::DumpDeviceProfileResults(device);
     }
 }
 

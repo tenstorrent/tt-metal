@@ -39,7 +39,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
@@ -1113,7 +1113,7 @@ int main(int argc, char** argv) {
         Finish(device->command_queue());
         auto end = std::chrono::high_resolution_clock::now();
         duration = end - start;
-        tt_metal::DumpDeviceProfileResults(device, program);
+        tt_metal::detail::DumpDeviceProfileResults(device);
 
         uint64_t num_of_matmul_ops =
             (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);

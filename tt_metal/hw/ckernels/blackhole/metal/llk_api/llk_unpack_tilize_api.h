@@ -11,7 +11,7 @@
  * LLK UNPACK TILIZE
  *************************************************************************/
 
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_tilize_hw_configure(const llk_unpack_A_params_t *unpack_tilize_params) {
     constexpr bool within_face_16x16_transpose = false;
     constexpr StochRndType stoch_rnd_mode = StochRndType::None;
@@ -28,7 +28,7 @@ inline void llk_unpack_tilize_hw_configure(const llk_unpack_A_params_t *unpack_t
         unpA_num_faces);
 }
 
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_tilize_hw_configure_disaggregated(const std::uint32_t unpA_operand) {
     const llk_unpack_A_params_t unpack_tilize_params = {.unpA_operand = unpA_operand};
     llk_unpack_tilize_hw_configure<is_fp32_dest_acc_en>(&unpack_tilize_params);
@@ -100,7 +100,7 @@ inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c
  * LLK UNPACK TILIZE SRC A, UNPACK SRC B
  *************************************************************************/
 
-template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
+template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_tilizeA_B_hw_configure(
     const llk_unpack_AB_params_t *unpack_tilizeA_B_params, const int within_face_16x16_transpose = 0) {
     // In0 -> unpA
@@ -116,7 +116,7 @@ inline void llk_unpack_tilizeA_B_hw_configure(
     // unpB -> srcB
     const uint32_t num_faces_b = get_operand_num_faces(unpB_operand_id);
     const uint32_t face_r_dim_b = get_operand_face_r_dim(unpB_operand_id);
-    configure_unpack_AB<false, is_fp32_dest_acc_en, false, false>(
+    configure_unpack_AB<is_fp32_dest_acc_en, false, false, false>(
         unpack_src_format[unpA_operand_id],
         unpack_src_format[unpB_operand_id],
         unpack_dst_format[unpA_operand_id],
@@ -128,7 +128,7 @@ inline void llk_unpack_tilizeA_B_hw_configure(
         num_faces_b);
 }
 
-template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
+template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_tilizeA_B_hw_configure_disaggregated(
     const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const int within_face_16x16_transpose = 0) {
     const llk_unpack_AB_params_t unpack_tilizeA_B_params = {.unpA_operand = unpA_operand, .unpB_operand = unpB_operand};
@@ -183,6 +183,7 @@ inline void llk_unpack_tilizeA_B(
 
     const std::uint32_t base_address_a =
         get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
+    const bool narrow_tile = get_operand_narrow_tile(operandA_id);
 
     const std::uint32_t base_address_b =
         get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
@@ -200,7 +201,7 @@ inline void llk_unpack_tilizeA_B(
         tile_index_a,
         tile_index_b,
         block_ct_dim,
-        num_faces,
+        num_faces
     );
 
     WAYPOINT("UPTD");
