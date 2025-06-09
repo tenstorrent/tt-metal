@@ -6,7 +6,7 @@ import torch
 import pytest
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_allclose, assert_with_ulp
 from models.utility_functions import comp_allclose_and_pcc
 
 
@@ -118,7 +118,8 @@ def test_cumsum(size, dim, dtypes, device):
 
     expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
 
-    assert_with_pcc(expected_output, torch_output)
+    if torch_output.numel() > 0:
+        assert_allclose(expected_output, torch_output)
 
 
 @pytest.mark.parametrize(
@@ -159,6 +160,7 @@ def test_cumsum(size, dim, dtypes, device):
         ([2, 3, 5, 33, 128], 1),
         ([2, 3, 5, 33, 128], 2),
         ([1, 151936], -1),
+        ([1, 19], -1),
     ],
 )
 @pytest.mark.parametrize(
@@ -203,4 +205,5 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
 
     assert preallocated_output_tensor == output_tensor
 
-    assert_with_pcc(expected_output, torch_output)
+    if torch_output.numel() > 0:
+        assert_allclose(expected_output, torch_output)
