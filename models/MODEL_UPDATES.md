@@ -4,6 +4,11 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## June 9, 2025
+
+### [Qwen 3](tt_transformers)
+- Added support for dense Qwen3 models (0.6B, 1.7B, 4B, 8B, 14B, 32B) on Wormhole devices.
+
 ## May 26, 2025
 
 ### [Llama 3.1-8B](tt_transformers)
