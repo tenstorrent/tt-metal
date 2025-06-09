@@ -2465,21 +2465,21 @@ static std::vector<std::vector<IDevice*>> generate_line_fabrics_under_test(
 }
 
 template <typename FABRIC_DEVICE_FIXTURE>
-void create_fabric_fixture(Fabric1DFixture*& test_fixture) {
+void create_fabric_fixture(Fabric1DFixture*& test_fixture, bool use_galaxy) {
     if (test_fixture == nullptr) {
         test_fixture = new FABRIC_DEVICE_FIXTURE();
     } else {
-        // NOTE: Currently non device init fabric is always reuse test_fixture
-        //       device init fabric is not supported yet
+        // NOTE: Currently (device init fabric || galaxy) is always recreate fabrix fixture
         auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-        if ((fabric_config == tt::tt_metal::FabricConfig::DISABLED &&
-             !std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DFixture>) ||
-            (fabric_config != tt::tt_metal::FabricConfig::DISABLED &&
-             std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DFixture>) ||
-            (fabric_config != tt::tt_metal::FabricConfig::FABRIC_1D &&
-             std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DLineDeviceInitFixture>) ||
-            (fabric_config != tt::tt_metal::FabricConfig::FABRIC_1D_RING &&
-             std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DRingDeviceInitFixture>)) {
+        if (((fabric_config == tt::tt_metal::FabricConfig::DISABLED &&
+              !std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DFixture>) ||
+             (fabric_config != tt::tt_metal::FabricConfig::DISABLED &&
+              std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DFixture>) ||
+             (fabric_config != tt::tt_metal::FabricConfig::FABRIC_1D &&
+              std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DLineDeviceInitFixture>) ||
+             (fabric_config != tt::tt_metal::FabricConfig::FABRIC_1D_RING &&
+              std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DRingDeviceInitFixture>)) ||
+            use_galaxy) {
             delete test_fixture;
             test_fixture = new FABRIC_DEVICE_FIXTURE();
         }
@@ -2584,7 +2584,7 @@ void Run1DFabricPacketSendTest(
 
     log_info("Device open and fabric init");
     // MeshFabric1DLineDeviceInitFixture test_fixture;
-    create_fabric_fixture<FABRIC_DEVICE_FIXTURE>(test_fixture);
+    create_fabric_fixture<FABRIC_DEVICE_FIXTURE>(test_fixture, use_galaxy);
     log_info("\tDone");
     auto view = *(test_fixture->view_);
 
