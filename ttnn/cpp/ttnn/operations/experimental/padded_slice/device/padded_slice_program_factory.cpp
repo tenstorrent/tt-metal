@@ -586,7 +586,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
             reader_kernel_args.end(), reversed_tile_start_index.begin(), reversed_tile_start_index.end());
 
         std::vector<uint32_t> compute_kernel_args = {
-            num_tiles_this_core,  // number of tiles to read
+            num_tiles_this_core / num_tiles_per_channel,  // number of tiles to read
         };
 
         std::vector<uint32_t> writer_kernel_args = {num_tiles_this_core, num_tiles_per_channel};
@@ -728,19 +728,14 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         num_tiles_height_per_core,
         num_tiles_per_channel);
     std::vector<uint32_t> compute_args = {
-        num_tiles_per_channel,  // per_block_ntiles
         cb_input_index,         // src0_cb_index
-        cb_untilized_index      // untilized_cb_index
+        cb_untilized_index,     // untilized_cb_index
+        cb_untilized_index,     // untilized_cb_index
+        num_tiles_per_channel,  // per_block_ntiles
+        1                       // block_size_height_ntiles
     };
-    std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/pack_untilize_runtime_arg.cpp");
-    if (num_tiles_per_channel > MAX_PACK_UNTILIZE_WIDTH || a.get_dtype() == DataType::UINT16) {
-        log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel =
-            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
-    } else {
-        log_debug(tt::LogOp, "Using fast pack untilize.");
-    }
+    const std::string compute_kernel =
+        "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/compute/pack_untilize.cpp";
 
     auto untilize_compute_kernel_id = CreateKernel(
         program, compute_kernel, total_cores, ComputeConfig{.fp32_dest_acc_en = false, .compile_args = compute_args});
