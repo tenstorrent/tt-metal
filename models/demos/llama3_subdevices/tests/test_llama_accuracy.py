@@ -6,7 +6,10 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.demos.llama3_subdevices.tt.llama_common import HostEmbedding, PagedAttentionConfig, PagedAttention
+from models.demos.llama3_subdevices.tt.llama_common import (
+    HostEmbedding,
+    PagedAttentionConfig,
+)
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.sampling import TTSampling
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOptimizations
@@ -147,17 +150,28 @@ def test_tt_model_acc(
     paged_attention_config = None
 
     if paged_attention:
-        mesh_mapper = ttnn.ShardTensor2dMesh(
-            mesh_device,
-            dims=(None, -2) if batch_size > 1 else (None, None),
-            mesh_shape=model_args.cluster_shape,
+        paged_attention_config = PagedAttentionConfig(
+            block_size=page_params["page_block_size"],
+            max_num_blocks=page_params["page_max_num_blocks"],
         )
-
-        paged_attn = PagedAttention(page_params, model_args)
-
-        page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper)
-
-        paged_attention_config = PagedAttentionConfig(**page_params)
+        # Implied shuffling of blocks
+        permutation = torch.randperm(paged_attention_config.max_num_blocks)
+        # Page table which maps virtual blocks to physical
+        reverse_permutation = torch.argsort(permutation)
+        page_table = reverse_permutation.reshape(
+            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+        )
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, -2) if batch_size > 1 else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),
+        )
 
     # Initialize TT model
     tt_model = TtTransformer(

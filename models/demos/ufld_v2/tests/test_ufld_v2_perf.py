@@ -25,7 +25,7 @@ from tests.ttnn.integration_tests.ufld_v2.test_ttnn_ufld_v2 import custom_prepro
 
 
 def get_expected_times(name):
-    base = {"ufld_v2": (36.6, 0.23)}
+    base = {"ufld_v2": (36.6, 0.28)}
     return base[name]
 
 

@@ -16,31 +16,40 @@ Resource link - [source](https://github.com/cfzd/Ultra-Fast-Lane-Detection-v2)
 - Batch Size :1
 - Supported Input Resolution - (320,800) (Height,Width)
 
-Export the following command before running pytests on N300:
+### How to Run:
+If running on Wormhole N300 (not required for N150 or Blackhole), the following environment variable needs to be set as the model requires at least 8x8 core grid size:
+```sh
+export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+```
 
-`WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml`
+### Build Command to Use:
+To obtain the perf reports through profiler, please build with following command:
+```
+./build_metal.sh -p
+```
 
 Use the following command to run the model :
 
-`pytest tests/ttnn/integration_tests/ufld_v2/test_ttnn_ufld_v2.py::test_ufld_v2_model`
+```
+pytest --disable-warnings tests/ttnn/integration_tests/ufld_v2/test_ttnn_ufld_v2.py::test_ufld_v2_model
+```
 
-Use the following command to run the e2e perf:
+### Performant Model with Trace+2CQ
+- end-2-end perf is 302 FPS
 
-`pytest models/demos/ufld_v2/tests/test_ufld_v2_perf.py::test_ufld_v2_perf`
+Use the following command to run the performant Model with Trace+2CQs:
 
-Use the following command to run the e2e perf with trace(107 FPS):
+```
+pytest --disable-warnings models/demos/ufld_v2/tests/test_ufld_v2_e2e_performant.py
+```
 
-`pytest models/demos/ufld_v2/tests/test_ufld_v2_e2e_performant.py`
+### Performant Demo with Trace+2CQ
 
-Use the following command to generate device perf (306 FPS):
+Use the following command to run the performant Demo with Trace+2CQs:
 
-`pytest models/demos/ufld_v2/tests/test_ufld_v2_perf.py::test_perf_device_bare_metal_ufld_v2`
-
-### Demo
-
-Use the following command to run the demo :
-
-`pytest models/demos/ufld_v2/demo/demo.py`
+```
+pytest --disable-warnings models/demos/ufld_v2/demo/demo.py
+```
 
 To run the demo on your data:
 
