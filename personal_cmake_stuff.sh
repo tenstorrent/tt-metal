@@ -3,13 +3,11 @@
 EXAMPLES_DIR="/usr/share/tt-metalium/examples"
 
 
+set -euo pipefail
 
 # List of examples to build
 EXAMPLES_TO_BUILD=(
     "hello_world_compute_kernel"
-)
-
-BOOST_SPAN_BROKEN_EXAMPLES=(
     "hello_world_datamovement_kernel"
     "loopback"
     "matmul_multicore_reuse"
@@ -23,6 +21,10 @@ BOOST_SPAN_BROKEN_EXAMPLES=(
     "pad_multi_core"
     "shard_data_rm"
     "contributed/vecadd"
+)
+
+BOOST_SPAN_BROKEN_EXAMPLES=(
+
 )
 
 # Loop through specified examples
@@ -52,7 +54,15 @@ for example in "${EXAMPLES_TO_BUILD[@]}"; do
         echo "Testing example: $example"
         cd "$dir"
         cd build
-        ./metal_example_${example}
+        ./metal_example_${example##*/}
+        echo "****************************************************"
+        echo "****************************************************"
+        echo ""
+        echo ""
+        echo ""
+        echo ""
+        echo ""
+        echo ""
         cd "/usr/share/tt-metalium/examples"  # Go back to original directory
     else
         echo "Warning: Example directory not found: $example"
