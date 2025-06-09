@@ -433,7 +433,7 @@ void watcher_init(chip_id_t device_id) {
 
 void watcher_attach(chip_id_t device_id) {
     const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
-    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
 
     if (!watcher::enabled && rtoptions.get_watcher_enabled()) {
         watcher::create_log_file();
@@ -444,6 +444,8 @@ void watcher_attach(chip_id_t device_id) {
         watcher::set_watcher_exception_message("");
 
         watcher::enabled = true;
+
+        rtoptions.set_disable_dma_ops(true);
 
         int sleep_usecs = rtoptions.get_watcher_interval() * 1000;
         std::thread watcher_thread = std::thread(&watcher::watcher_loop, sleep_usecs);
@@ -496,6 +498,8 @@ void watcher_detach(chip_id_t device_id) {
         while (watcher::server_running) {
             ;
         }
+
+        tt::tt_metal::MetalContext::instance().rtoptions().set_disable_dma_ops(false);
     }
 }
 

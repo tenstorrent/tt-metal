@@ -1334,6 +1334,7 @@ void DprintServerAttach(chip_id_t device_id) {
     // If no server is running, create one
     if (!DprintServerIsRunning()) {
         DebugPrintServerContext* ctx = new DebugPrintServerContext();
+        tt::tt_metal::MetalContext::instance().rtoptions().set_disable_dma_ops(true);
     }
 
     // Add this device to the server
@@ -1348,6 +1349,7 @@ void DprintServerDetach(chip_id_t device_id) {
         if (DebugPrintServerContext::inst->GetNumAttachedDevices() == 0) {
             delete DebugPrintServerContext::inst;
             DebugPrintServerContext::inst = nullptr;
+            tt::tt_metal::MetalContext::instance().rtoptions().set_disable_dma_ops(false);
         }
     }
 }
