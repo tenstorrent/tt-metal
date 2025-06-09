@@ -409,23 +409,19 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
     std::vector<InputOutputBufferParams> test_params;
     for (const auto& base_param : base_params) {
         // All combinations of runtime/static arguments
-        for (uint8_t i = 0; i < 8; ++i) {
-            // Rank and number of banks are compile time args for now
-            ArgsConfig config = ArgConfig::CTA;
-            if (i & 1) {
-                config = config | ArgConfig::TensorShapeCRTA;
+        for (uint8_t i = 0; i < 1 << 5; ++i) {
+            ArgsConfig config(i);
+            if (config.test(ArgConfig::RankCRTA) and
+                (!config.test(ArgConfig::TensorShapeCRTA) or !config.test(ArgConfig::ShardShapeCRTA))) {
+                // If rank is runtime, tensor and shard shapes must also be runtime
+                continue;
             }
-            if (i & 2) {
-                config = config | ArgConfig::ShardShapeCRTA;
-            }
-            if (i & 4) {
-                config = config | ArgConfig::BankCoordsCRTA;
+            if (config.test(ArgConfig::NumBanksCRTA) and !config.test(ArgConfig::BankCoordsCRTA)) {
+                // If number of banks is runtime, bank coordinates must also be runtime
+                continue;
             }
             auto p = base_param;
             p.crta_config = config;
-            TT_FATAL(
-                !(p.crta_config.test(ArgConfig::RankCRTA) || p.crta_config.test(ArgConfig::NumBanksCRTA)),
-                "Rank and number of banks must be compile time args for sharded accessor tests!");
             test_params.push_back(p);
         }
     }

@@ -763,10 +763,11 @@ uint32_t ShardedAccessorArgs::get_rank() const {
 
 uint32_t ShardedAccessorArgs::get_num_banks() const {
     // if num_banks is runtime time
+    auto rank_crta = args_config.test(ArgConfig::RankCRTA);
     if (args_config.test(ArgConfig::NumBanksCRTA)) {
-        return runtime_args[1];
+        return runtime_args[rank_crta ? 1 : 0];
     } else {
-        return compile_time_args[2];
+        return compile_time_args[rank_crta ? 1 : 2];
     }
 }
 
@@ -828,6 +829,12 @@ ShardedAccessorArgs get_sharded_accessor_args(
     auto shard_shape_rt = args_config.test(ArgConfig::ShardShapeCRTA);
     auto bank_coords_rt = args_config.test(ArgConfig::BankCoordsCRTA);
 
+    TT_FATAL(
+        !rank_rt or (rank_rt and tensor_shape_rt and shard_shape_rt),
+        "If rank is runtime, tensor_shape and shard_shape must also be runtime");
+    TT_FATAL(
+        !num_banks_rt or (num_banks_rt and bank_coords_rt),
+        "If num_banks is runtime, bank_coords must also be runtime");
     size_t n_compile_time_args = 1 + !rank_rt + !num_banks_rt + tensor_shape.size() * !tensor_shape_rt +
                                  shard_shape.size() * !shard_shape_rt +
                                  bank_coords.size() * !bank_coords_rt;  // +1 for the crta config
@@ -837,13 +844,13 @@ ShardedAccessorArgs get_sharded_accessor_args(
     std::vector<uint32_t> runtime_args;
     compile_time_args.reserve(n_compile_time_args);
     runtime_args.reserve(n_runtime_args);
-    compile_time_args.push_back(args_config.raw());
     auto& rank_args = rank_rt ? runtime_args : compile_time_args;
     auto& num_banks_args = num_banks_rt ? runtime_args : compile_time_args;
     auto& tensor_shape_args = tensor_shape_rt ? runtime_args : compile_time_args;
     auto& shard_shape_args = shard_shape_rt ? runtime_args : compile_time_args;
     auto& bank_coords_args = bank_coords_rt ? runtime_args : compile_time_args;
 
+    compile_time_args.push_back(args_config.raw());
     rank_args.push_back(tensor_shape.size());
     num_banks_args.push_back(bank_coords.size());
     tensor_shape_args.insert(tensor_shape_args.end(), tensor_shape.cbegin(), tensor_shape.cend());
@@ -854,7 +861,7 @@ ShardedAccessorArgs get_sharded_accessor_args(
         bank_coords_args.push_back((virtual_coord.x << 16) | (virtual_coord.y & 0xFFFF));
     }
 
-    return {.compile_time_args = compile_time_args, .runtime_args = runtime_args};
+    return {.compile_time_args = compile_time_args, .runtime_args = runtime_args, .args_config = args_config};
 }
 
 }  // namespace sharded_accessor_utils

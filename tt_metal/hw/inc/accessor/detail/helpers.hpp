@@ -61,6 +61,16 @@ struct ConditionalField<false, T> {
     ConditionalField() = default;
 };
 
+template <typename T, bool Enable>
+struct ConditionalStaticInstance {
+    // empty
+};
+
+template <typename T>
+struct ConditionalStaticInstance<T, true> {
+    static constexpr T instance{/* args */};
+};
+
 // Trait to detect operator[]
 template <typename, typename = void>
 struct has_subscript_operator : std::false_type {};
@@ -78,6 +88,7 @@ struct Span {
     T* _data;
     std::size_t _size;
 
+    constexpr Span() : _data(nullptr), _size(0) {}
     constexpr Span(T* data, std::size_t size) : _data(data), _size(size) {}
 
     T& operator[](std::size_t idx) const { return _data[idx]; }

@@ -84,25 +84,26 @@ struct ShapeWrapperDynamicDimsStaticRank {
 struct ShapeWrapperDynamicRank {
     static constexpr bool is_static = false;
     static constexpr bool has_static_rank = false;
+    static constexpr size_t rank = static_cast<size_t>(-1);  // Rank is not known at compile time
     using ShapeBase = Span<uint32_t>;
 
     // uint32_t shape_buffer[10];
     // NOTE: No additional buffer fo shape is required, since span in constructed on top of &get_common_arg_addr(BASE)
     uint32_t strides_buffer[MAX_RANK];  // TODO: Can we have rank higher than 10?
-    uint32_t rank;
+    uint32_t rank_rt = 0;
     ShapeBase shape;    // runtime shape
     ShapeBase strides;  // runtime strides
     size_t volume = 0;  // runtime volume
 
     explicit ShapeWrapperDynamicRank(ShapeBase&& shape_in) :
-        rank(shape_in.size()), shape(std::move(shape_in)), strides(strides_buffer, rank) {
-        ASSERT(rank <= MAX_RANK);
+        rank_rt(shape_in.size()), shape(std::move(shape_in)), strides(strides_buffer, rank_rt) {
+        ASSERT(rank_rt <= MAX_RANK);
         compute_volume_and_strides();
     }
 
     inline void compute_volume_and_strides() {
         uint32_t stride = 1;
-        for (int i = rank - 1; i >= 0; --i) {
+        for (int i = rank_rt - 1; i >= 0; --i) {
             strides[i] = stride;
             stride *= shape[i];
         }

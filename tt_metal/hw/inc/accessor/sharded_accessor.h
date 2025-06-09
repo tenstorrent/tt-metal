@@ -16,31 +16,52 @@ namespace nd_sharding {
 template <size_t CTA_BASE, size_t CRTA_BASE = 0>
 using distribution_spec_t = typename detail::DistributionSpecWrapper<CTA_BASE, CRTA_BASE>::dspec;
 
+// compile_time_args_skip is required to be constexpr since cta argument index must be constexpr
 template <typename DSpec>
 constexpr size_t compile_time_args_skip() {
     // should be evaluated at compile time if rank and num_banks are static
-    return 1 +  // +1 for crta config
-           DSpec::has_static_rank + DSpec::has_static_num_banks +
-           (DSpec::fetch_rank() * DSpec::TensorShapeT::is_static) +
-           (DSpec::fetch_rank() * DSpec::ShardShapeT::is_static) +
-           (DSpec::fetch_num_banks() * DSpec::BankCoordsT::is_static);
+    if constexpr (DSpec::has_static_rank) {
+        if constexpr (DSpec::has_static_num_banks) {
+            return 1 +  // +1 for crta config
+                   DSpec::has_static_rank + DSpec::has_static_num_banks +
+                   (DSpec::rank_ct * DSpec::TensorShapeT::is_static) +
+                   (DSpec::rank_ct * DSpec::ShardShapeT::is_static) +
+                   (DSpec::num_banks_ct * DSpec::BankCoordsT::is_static);
+        } else {
+            return 1 + DSpec::has_static_rank + DSpec::has_static_num_banks +
+                   (DSpec::rank_ct * DSpec::TensorShapeT::is_static) + (DSpec::rank_ct * DSpec::ShardShapeT::is_static);
+        }
+    } else {
+        if constexpr (DSpec::has_static_num_banks) {
+            return 1 + DSpec::has_static_rank + DSpec::has_static_num_banks +
+                   (DSpec::num_banks_ct * DSpec::BankCoordsT::is_static);
+        } else {
+            return 1 + DSpec::has_static_rank + DSpec::has_static_num_banks;
+        }
+    }
 }
 
 template <typename DSpec>
-constexpr size_t runtime_args_skip() {
+size_t runtime_args_skip() {
     // should be evaluated at compile time if rank and num_banks are static
-    return !DSpec::has_static_rank + !DSpec::has_static_num_banks +
-           (DSpec::fetch_rank() * !DSpec::TensorShapeT::is_static) +
-           (DSpec::fetch_rank() * !DSpec::ShardShapeT::is_static) +
-           (DSpec::fetch_num_banks() * !DSpec::BankCoordsT::is_static);
+    if constexpr (DSpec::has_static_rank and DSpec::has_static_num_banks) {
+        return !DSpec::has_static_rank + !DSpec::has_static_num_banks +
+               (DSpec::rank_ct * !DSpec::TensorShapeT::is_static) + (DSpec::rank_ct * !DSpec::ShardShapeT::is_static) +
+               (DSpec::num_banks_ct * !DSpec::BankCoordsT::is_static);
+    } else {
+        return !DSpec::has_static_rank + !DSpec::has_static_num_banks +
+               (DSpec::fetch_rank() * !DSpec::TensorShapeT::is_static) +
+               (DSpec::fetch_rank() * !DSpec::ShardShapeT::is_static) +
+               (DSpec::fetch_num_banks() * !DSpec::BankCoordsT::is_static);
+    }
 }
 
 template <typename DSpec, size_t PageSize = detail::UNKNOWN>
 struct ShardedAccessor {
     static constexpr auto page_size_ct = PageSize;
-    static constexpr DSpec static_dspec{};  // Used only if DSpec is static
+    using StaticDspec = detail::ConditionalStaticInstance<DSpec, DSpec::is_static>;
 
-    detail::ConditionalBuffer<!DSpec::has_static_rank, uint32_t, MAX_RANK> _page_coord_buffer;
+    mutable detail::ConditionalBuffer<!DSpec::has_static_rank, uint32_t, MAX_RANK> _page_coord_buffer;
     detail::ConditionalField<!DSpec::is_static, DSpec> dspec_instance;  // Used only if DSpec is static
     const size_t bank_base_address;
     const detail::ConditionalField<PageSize == detail::UNKNOWN, uint32_t> page_size_rt;
@@ -72,7 +93,7 @@ struct ShardedAccessor {
     // Helper to get the appropriate DSpec instance
     constexpr auto& get_dspec() const {
         if constexpr (DSpec::is_static) {
-            return static_dspec;
+            return StaticDspec::instance;
         } else {
             return dspec_instance.value;
         }
@@ -120,7 +141,7 @@ struct ShardedAccessor {
         // page_coord
         if constexpr (!DSpec::has_static_rank) {
             // If rank is not known at compile time, we need to compute the page coordinates dynamically
-            for (int i = DSpec::rank_ct - 1; i >= 0; --i) {
+            for (int i = get_dspec().get_rank() - 1; i >= 0; --i) {
                 _page_coord_buffer.value[i] = page_id % get_dspec().get_tensor_shape()[i];
                 page_id /= get_dspec().get_tensor_shape()[i];
             }

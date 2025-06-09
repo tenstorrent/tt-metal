@@ -40,11 +40,11 @@ struct BankCoordWrapperDynamicsNBanks {
     static constexpr bool has_static_num_banks = false;
     using PackedCoordsBase = Span<uint32_t>;
 
-    uint32_t num_banks;                 // Number of banks is dynamic
+    uint32_t num_banks_rt;              // Number of banks is dynamic
     PackedCoordsBase packed_xy_coords;  // Runtime packed coordinates
 
     explicit BankCoordWrapperDynamicsNBanks(PackedCoordsBase&& bank_coords) :
-        num_banks(bank_coords.size()), packed_xy_coords(std::move(bank_coords)) {}
+        num_banks_rt(bank_coords.size()), packed_xy_coords(std::move(bank_coords)) {}
 };
 }  // namespace detail
 }  // namespace nd_sharding
