@@ -103,12 +103,14 @@ ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
         UNPACK((llk_unpack_set_srcb_dummy_valid()));
         MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(idst)));
         MATH((llk_math_transpose_dest<false, true>(idst)));
+	MATH({
+            for (int i = 0; i < 5000; ++i) TTI_NOP;
+        });
     } else {
         UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile, true)));
         MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(idst)));
     }
 #endif
-    for (int i = 0; i < 5000; ++i) TTI_NOP;
 }
 
 }  // namespace ckernel
