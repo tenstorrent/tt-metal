@@ -462,9 +462,9 @@ std::pair<string, string> get_op_init_and_func_default(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::FLOAT32) {
-                op_init_and_name = {"trunc_tile_init();", fmt::format("trunc_tile_float32({});", idst)};
+                op_init_and_name = {"rounding_op_tile_init();", fmt::format("trunc_tile_float32({});", idst)};
             } else {
-                op_init_and_name = {"trunc_tile_init();", fmt::format("trunc_tile({});", idst)};
+                op_init_and_name = {"rounding_op_tile_init();", fmt::format("trunc_tile({});", idst)};
             }
             break;
         case UnaryOpType::RELU6:
