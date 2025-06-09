@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-
+# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
+
 """
 Script Name: tt-triage.py
 
@@ -79,8 +80,9 @@ DEFAULT_TABLE_FORMAT = TableFormat(
     headerrow=DataRow("│", "│", "│"),
     datarow=DataRow("│", "│", "│"),
     padding=1,
-    with_header_hide=None
+    with_header_hide=None,
 )
+
 
 class TTTriageError(Exception):
     """Base class for TT Triage errors."""
@@ -221,7 +223,9 @@ def noc_ping(dev: Device, loc, use_noc1: False):
     noc_id = 0 if not use_noc1 else 1
     noc_str = "noc0" if not use_noc1 else "noc1"
     noc_node_id_address = dev.get_block(loc).get_register_store(noc_id).get_register_noc_address("NOC_NODE_ID")
-    assert noc_node_id_address is not None, f"NOC node ID address not found for {noc_str} at location {loc.to_str('logical')}"
+    assert (
+        noc_node_id_address is not None
+    ), f"NOC node ID address not found for {noc_str} at location {loc.to_str('logical')}"
     data = read_words_from_device(loc, noc_node_id_address, device_id=dev.id(), word_count=1)
     n_x = data[0] & 0x3F
     n_y = (data[0] >> 6) & 0x3F
@@ -550,7 +554,9 @@ def main(argv=None):
 
     log_directory = os.path.join(os.environ.get("TT_METAL_HOME", ""), "generated", "inspector")
     if not os.path.exists(log_directory):
-        print(f"  {ORANGE}Inspector directory {log_directory} does not exist. Running tests that don't include it.{RST}")
+        print(
+            f"  {ORANGE}Inspector directory {log_directory} does not exist. Running tests that don't include it.{RST}"
+        )
         inspector_data = None
     else:
         programs = get_programs(log_directory)
