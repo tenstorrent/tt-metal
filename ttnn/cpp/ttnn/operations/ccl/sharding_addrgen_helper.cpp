@@ -53,12 +53,9 @@ std::vector<CoreCoord> get_shard_cores(const tt::tt_metal::Tensor& t) {
                  x_index++) {
                 for (uint32_t y_index = core_ranges.at(cr).start_coord.y; y_index <= core_ranges.at(cr).end_coord.y;
                      y_index++) {
-                    if (is_dram) {
-                        coordinates.push_back(CoreCoord(x_index, y_index));
-                    } else {
-                        CoreCoord noc_core = device->worker_core_from_logical_core(CoreCoord(x_index, y_index));
-                        coordinates.push_back(noc_core);
-                    }
+                    CoreCoord noc_core = is_dram ? CoreCoord(x_index, y_index)
+                                                 : device->worker_core_from_logical_core(CoreCoord(x_index, y_index));
+                    coordinates.push_back(noc_core);
                 }
             }
         } else {
@@ -66,12 +63,9 @@ std::vector<CoreCoord> get_shard_cores(const tt::tt_metal::Tensor& t) {
                  y_index++) {
                 for (uint32_t x_index = core_ranges.at(cr).start_coord.x; x_index <= core_ranges.at(cr).end_coord.x;
                      x_index++) {
-                    if (is_dram) {
-                        coordinates.push_back(CoreCoord(x_index, y_index));
-                    } else {
-                        CoreCoord noc_core = device->worker_core_from_logical_core(CoreCoord(x_index, y_index));
-                        coordinates.push_back(noc_core);
-                    }
+                    CoreCoord noc_core = is_dram ? CoreCoord(x_index, y_index)
+                                                 : device->worker_core_from_logical_core(CoreCoord(x_index, y_index));
+                    coordinates.push_back(noc_core);
                 }
             }
         }
