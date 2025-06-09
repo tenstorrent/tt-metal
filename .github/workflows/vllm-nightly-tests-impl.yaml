@@ -90,7 +90,7 @@ jobs:
           repository: tenstorrent/vllm
           path: docker-job/vllm
           ref: ${{ inputs.vllm-commit }}
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: 📀 Install vLLM
         run: |
