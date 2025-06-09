@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -281,15 +281,17 @@ def run_test_tusimple(
     dim2 = num_grid_col * num_cls_col * num_lane_on_col
     dim3 = 2 * num_cls_row * num_lane_on_row
     dim4 = 2 * num_cls_col * num_lane_on_col
+    performant_runner = None
     for data in tqdm(loader, desc="Processing images", ncols=100):
         imgs, names = data
         if exp_name == "reference_model_results":
             with torch.no_grad():
                 out, pred = net(imgs)
         else:
-            imgs = imgs.permute(0, 2, 3, 1)
-            imgs = ttnn.from_torch(imgs, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-            out = net(imgs, batch_size=batch_size)
+            if performant_runner is None:
+                performant_runner = net(device=device, torch_input_tensor=imgs)
+                performant_runner._capture_ufldv2_trace_2cqs()
+            out = performant_runner.run(imgs)
             out = ttnn.to_torch(out).squeeze(dim=0).squeeze(dim=0)
             pred = {
                 "loc_row": out[:, :dim1].view(-1, num_grid_row, num_cls_row, num_lane_on_row),
