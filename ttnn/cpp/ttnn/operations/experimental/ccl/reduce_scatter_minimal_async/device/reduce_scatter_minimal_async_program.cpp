@@ -130,12 +130,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     // Will be reworked
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
-    TT_FATAL(
-        !(batch_slice_num_pages_per_link % num_pages_per_packet),
-        "Number of tiles per link ({}) must be divisible by number of tiles per packet ({}).",
-        batch_slice_num_pages_per_link,
-        num_pages_per_packet);
-
+    uint32_t tiles_to_write_per_packet = 1;
     uint32_t tile_granularity = 4 * num_pages_per_packet;
 
     // tile_granularity should be largest power of 2 that is less than 16 and matches the condition
@@ -208,7 +203,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
         ring_size,                                               // ring_size
         num_batches,                                             // num_batches
         fuse_op,                                                 // fused op
-        num_pages_per_packet                                     // contig_pages_advanced
+        tiles_to_write_per_packet,                               // contig_pages_advanced
     };
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -233,7 +228,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
         batch_slice_num_pages,                                   // batch_slice_num_pages
         ring_size,                                               // ring_size
         num_batches,                                             // num_batches
-        num_pages_per_packet,                                    // contig_pages_advanced
+        tiles_to_write_per_packet,                               // contig_pages_advanced
     };
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,

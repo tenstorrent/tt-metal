@@ -157,7 +157,6 @@ def run_reduce_scatter_impl(
 
         # Synchronize the devices
         ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
-
     else:
         for i in range(num_iters):
             tt_reduce_scatter_output_tensor = run_op(i)
@@ -225,8 +224,10 @@ def run_reduce_scatter_impl(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
+    ids=["fabric_ring", "fabric_linear"],
 )
 def test_reduce_scatter_async(
     t3k_mesh_device,

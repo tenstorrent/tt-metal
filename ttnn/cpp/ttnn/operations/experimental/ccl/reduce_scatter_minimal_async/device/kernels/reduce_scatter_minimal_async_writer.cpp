@@ -35,13 +35,6 @@ constexpr uint32_t ring_size = get_compile_time_arg_val(11);
 constexpr uint32_t num_batches = get_compile_time_arg_val(12);
 constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(13);
 
-constexpr uint32_t stride_Wt = input_tensor_Wt;
-constexpr uint32_t slice_Wt = input_tensor_Wt / ring_size;
-
-constexpr uint32_t N_DRAM_BANKS = 12;
-constexpr uint32_t my_chip_id_x = my_chip_id % N_DRAM_BANKS;
-constexpr uint32_t my_chip_id_y = my_chip_id / N_DRAM_BANKS;
-
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
@@ -68,6 +61,15 @@ void kernel_main() {
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
+    // DPRINT << "my_chip_id: " << my_chip_id << "\n";
+    // DPRINT << "tile_granularity: " << tile_granularity << "\n";
+    // DPRINT << "input_tensor_Wt: " << input_tensor_Wt << "\n";
+    // DPRINT << "batch_slice_num_pages: " << batch_slice_num_pages << "\n";
+    // DPRINT << "ring_size: " << ring_size << "\n";
+    // DPRINT << "num_batches: " << num_batches << "\n";
+    // DPRINT << "link: " << link << "\n";
+    // DPRINT << "num_links: " << num_links << "\n";
+
     // packet header cb
     cb_reserve_back(reserved_packet_header_cb_id, 1);
     auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
@@ -90,6 +92,10 @@ void kernel_main() {
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
     pkt_hdr_backward->to_chip_unicast(1);
 
+    uint32_t slice_Wt = input_tensor_Wt / ring_size;
+
+    constexpr uint32_t batch_num_pages = batch_slice_num_pages * ring_size;
+
     // interleaved addrgen
     constexpr bool intermediate_is_dram = intermediate_type == tt::tt_metal::BufferType::DRAM;
     auto intermediate_addrgen = InterleavedAddrGenFast<intermediate_is_dram>{
@@ -107,11 +113,11 @@ void kernel_main() {
     }
 
     for (uint32_t b = 0; b < num_batches; b++) {
-        uint32_t batch_offset = batch_slice_num_pages * b;
-        uint32_t actual_fwd_slice_id_x = my_chip_id_x;
-        uint32_t actual_fwd_slice_id_y = my_chip_id_y;
-        uint32_t actual_bwd_slice_id_x = my_chip_id_x;
-        uint32_t actual_bwd_slice_id_y = my_chip_id_y;
+        int fwd_slice_idx = my_chip_id - 1;
+        int bwd_slice_idx = my_chip_id + 1;
+
+        uint32_t batch_offset = batch_num_pages * b;
+        uint32_t batch_slice_offset = batch_slice_num_pages * b;
         for (uint32_t i = 0; i < ring_size; ++i) {
             actual_fwd_slice_id_x = (actual_fwd_slice_id_x == 0) ? ring_size - 1 : actual_fwd_slice_id_x - 1;
             actual_bwd_slice_id_x = (actual_bwd_slice_id_x == ring_size - 1) ? 0 : actual_bwd_slice_id_x + 1;
@@ -133,17 +139,25 @@ void kernel_main() {
             uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
             // If not the last slice, write what's on cb_output_id forward
             if (i < (ring_size - 1)) {
-                uint32_t pages_read_in_row = pages_read_in_row_0;
-                uint32_t row_offset = row_offset_0;
-                uint32_t tiles_read = tiles_read_0;
-                uint32_t tiles_to_read = tiles_to_read_0;
+                uint32_t stride_Wt = input_tensor_Wt;
+                uint32_t pages_read_in_row = (link * batch_slice_num_pages / num_links) % slice_Wt;
+                uint32_t row_offset = (link * batch_slice_num_pages / num_links) / slice_Wt * stride_Wt;
+                uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
+                uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
+                // DPRINT << "WRITER: for link " << link << ", tiles_read: " << tiles_read
+                //        << ", tiles_to_read: " << tiles_to_read << ", "
+                //        << "pages_read_in_row: " << pages_read_in_row << ", row_offset: " << row_offset << ", "
+                //        << "slice_Wt: " << slice_Wt << ", stride_Wt: " << stride_Wt << ", batch_offset: " <<
+                //        batch_offset
+                //        << "\n";
+                uint32_t fwd_input_tile_id_start = actual_fwd_slice_idx * slice_Wt + batch_offset;
+                uint32_t bwd_input_tile_id_start = actual_bwd_slice_idx * slice_Wt + batch_offset;
                 bool write_forward = true;
 
                 while (tiles_read < tiles_to_read) {
                     // Alternate writes in forward and backward direction
 
                     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
-
                     cb_wait_front(cb_output_id, num_pages_to_read);
                     size_t l1_read_addr = get_read_ptr(cb_output_id);
 
@@ -151,12 +165,11 @@ void kernel_main() {
                         uint32_t payload_size_bytes =
                             std::min(contig_pages_advanced, num_pages_to_read - j) * intermediate_page_size;
                         if (write_forward) {
-                            uint32_t intermediate_packet_first_tile_id =
-                                intermediate_packet_id_fwd_x +
-                                contig_pages_advanced * N_DRAM_BANKS * intermediate_packet_id_fwd_y;
-
                             uint64_t remote_noc0_dest_noc_addr = get_noc_addr(
-                                intermediate_packet_first_tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                                fwd_input_tile_id_start + row_offset + pages_read_in_row,
+                                intermediate_addrgen,
+                                0 /*offset*/,
+                                0 /*noc_id*/);
                             pkt_hdr_forward->to_noc_unicast_write(
                                 tt::tt_fabric::NocUnicastCommandHeader{remote_noc0_dest_noc_addr}, payload_size_bytes);
                             if (fabric_connection.has_forward_connection()) {
@@ -168,12 +181,11 @@ void kernel_main() {
                                     (uint32_t)pkt_hdr_forward, sizeof(PACKET_HEADER_TYPE));
                             }
                         } else {
-                            uint32_t intermediate_packet_first_tile_id =
-                                intermediate_packet_id_bwd_x +
-                                contig_pages_advanced * N_DRAM_BANKS * intermediate_packet_id_bwd_y;
-
                             uint64_t remote_noc0_dest_noc_addr = get_noc_addr(
-                                intermediate_packet_first_tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                                bwd_input_tile_id_start + row_offset + pages_read_in_row,
+                                intermediate_addrgen,
+                                0 /*offset*/,
+                                0 /*noc_id*/);
                             pkt_hdr_backward->to_noc_unicast_write(
                                 tt::tt_fabric::NocUnicastCommandHeader{remote_noc0_dest_noc_addr}, payload_size_bytes);
                             if (fabric_connection.has_backward_connection()) {
@@ -189,16 +201,12 @@ void kernel_main() {
                         // Note: Must flush write for correctness
                         noc_async_writes_flushed();
                         l1_read_addr += payload_size_bytes;
-                        tiles_read += contig_pages_advanced;
-                        intermediate_packet_id_fwd_x += ring_size;
-                        intermediate_packet_id_bwd_x += ring_size;
-                        if (intermediate_packet_id_fwd_x >= N_DRAM_BANKS) {
-                            intermediate_packet_id_fwd_x -= N_DRAM_BANKS;
-                            intermediate_packet_id_fwd_y++;
-                        }
-                        if (intermediate_packet_id_bwd_x >= N_DRAM_BANKS) {
-                            intermediate_packet_id_bwd_x -= N_DRAM_BANKS;
-                            intermediate_packet_id_bwd_y++;
+                        tiles_read++;
+
+                        pages_read_in_row++;
+                        if (pages_read_in_row >= slice_Wt) {
+                            row_offset += stride_Wt;
+                            pages_read_in_row = 0;
                         }
                     }
 
@@ -240,9 +248,9 @@ void kernel_main() {
                 noc_async_writes_flushed();
             } else {
                 // Otherwise, on the last slice, write it to output buffer
-                uint32_t tiles_read = tiles_read_0;
-                uint32_t tiles_to_read = tiles_to_read_0;
-                uint32_t tile_id_start = batch_offset;
+                uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
+                uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
+                uint32_t tile_id_start = batch_slice_offset;
                 while (tiles_read < tiles_to_read) {
                     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
                     cb_wait_front(cb_output_id, num_pages_to_read);
