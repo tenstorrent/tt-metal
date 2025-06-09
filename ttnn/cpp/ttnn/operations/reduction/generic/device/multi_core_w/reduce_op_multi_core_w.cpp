@@ -140,7 +140,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
         } else if (core_group_2.contains(core)) {
             num_rows_per_core = num_rows_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
         uint32_t num_tensor_tiles_per_core = num_rows_per_core * Wt;
         tt_metal::SetRuntimeArgs(

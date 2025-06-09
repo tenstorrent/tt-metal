@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "noc_overlay_parameters.h"
+#include "noc_overlay_parameters.hpp"
 
 using namespace Noc;
 

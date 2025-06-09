@@ -12,7 +12,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "tt-metalium/constants.hpp"
 #include <tt-metalium/hal.hpp>
-#include "tt-metalium/logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
@@ -311,7 +311,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     TT_FATAL(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
     auto shard_spec = tt::tt_metal::ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
-    log_debug("Calculated Shard Spec = {}", shard_spec);
+    log_debug(tt::LogOp, "Calculated Shard Spec = {}", shard_spec);
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
 }
 
@@ -1054,12 +1054,14 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         uint32_t output_size_per_core_in_bytes = per_core_out_matrix_width_ntiles * per_core_out_matrix_height_ntiles *
                                                  tt::tile_size(datatype_to_dataformat_converter(conv_config.dtype));
 
-        uint32_t act_block_num_bytes = act_block_num_tiles * input_tile_size;
         uint32_t tilized_act_block_num_bytes = act_block_num_tiles * output_tile_size;
 
         uint32_t weight_block_w_ntiles = per_core_out_matrix_width_ntiles;
         uint32_t weight_block_num_tiles =
             weight_block_w_ntiles * act_block_w_ntiles;  // act_block_w_ntiles == weight_block_h_ntiles
+        if (conv_config.enable_weights_double_buffer) {
+            weight_block_num_tiles *= 2;
+        }
         uint32_t weight_block_num_bytes = weight_block_num_tiles * weights_tile_size;
 
         uint32_t bias_block_num_bytes = per_core_out_matrix_width_ntiles * bias_tile_size;
@@ -1079,40 +1081,43 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
 
         // ACT CB
         uint32_t act_cb_size = tilized_act_block_num_bytes;
-        tt::log_debug(tt::LogOp, "Act CB Size: {}", act_cb_size);
+        if (conv_config.enable_act_double_buffer) {
+            act_cb_size *= 2;
+        }
+        log_debug(tt::LogOp, "Act CB Size: {}", act_cb_size);
 
         // WEIGHTS CB
         uint32_t weights_cb_size = weight_block_num_bytes;
-        tt::log_debug(tt::LogOp, "Weights CB Size: {}", weights_cb_size);
+        log_debug(tt::LogOp, "Weights CB Size: {}", weights_cb_size);
 
         // BIAS CB
         uint32_t bias_cb_size = bias_block_num_bytes;
-        tt::log_debug(tt::LogOp, "Bias CB Size: {}", bias_cb_size);
+        log_debug(tt::LogOp, "Bias CB Size: {}", bias_cb_size);
 
         // L1 CB
         uint32_t l1_scratchpad_cb_size = conv2d::l1_scratchpad_CB_size;
-        tt::log_debug(tt::LogOp, "L1 CB Size: {}", l1_scratchpad_cb_size);
+        log_debug(tt::LogOp, "L1 CB Size: {}", l1_scratchpad_cb_size);
 
         // ACT ROW MAJOR CB
-        uint32_t row_major_act_cb_size = act_block_num_bytes;
-        tt::log_debug(tt::LogOp, "Act row major CB Size: {}", row_major_act_cb_size);
+        uint32_t row_major_act_cb_size = act_block_w_ntiles * input_tile_size * 2;
+        log_debug(tt::LogOp, "Act row major CB Size: {}", row_major_act_cb_size);
 
         // MATMUL PARTIALs CB
         uint32_t matmul_partials_cb_size = partials_block_num_bytes;
         if (!untilize_out && interm_dtype == conv_config.dtype) {
             matmul_partials_cb_size = 0;
         } else {
-            tt::log_debug(tt::LogOp, "Matmul partial CB Size: {}", matmul_partials_cb_size);
+            log_debug(tt::LogOp, "Matmul partial CB Size: {}", matmul_partials_cb_size);
         }
 
         // TILIZED ACT CB
         uint32_t tilized_act_cb_size = tilized_act_block_num_bytes;
-        tt::log_debug(tt::LogOp, "Tilized act CB Size: {}", tilized_act_cb_size);
+        log_debug(tt::LogOp, "Tilized act CB Size: {}", tilized_act_cb_size);
 
         uint32_t total_CB_size = act_cb_size + weights_cb_size + bias_cb_size + l1_scratchpad_cb_size +
                                  row_major_act_cb_size + matmul_partials_cb_size + tilized_act_cb_size;
 
-        tt::log_debug(tt::LogOp, "Total CB Size: {}", total_CB_size);
+        log_debug(tt::LogOp, "Total CB Size: {}", total_CB_size);
 
         return conv2d::conv_op_l1_usage{
             .tensor_allocation_size = output_size_per_core_in_bytes, .CB_allocation_size = total_CB_size};
@@ -1159,7 +1164,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         }
         // ACT CB
         uint32_t act_cb_size = act_block_split_ntiles * input_tile_size;
-        tt::log_debug(tt::LogOp, "Act CB Size: {}", act_cb_size);
+        log_debug(tt::LogOp, "Act CB Size: {}", act_cb_size);
 
         // WEIGHTS CB
         uint32_t weights_cb_size = weight_block_h_ntiles * weight_block_w_ntiles * weights_tile_size;
@@ -1169,19 +1174,19 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         if (num_blocks_act_h <= 1 && conv_config.enable_weights_double_buffer) {
             weights_cb_size *= 2;
         }
-        tt::log_debug(tt::LogOp, "Weights CB Size: {}", weights_cb_size);
+        log_debug(tt::LogOp, "Weights CB Size: {}", weights_cb_size);
 
         // BIAS CB
         uint32_t bias_cb_size = bias_block_num_bytes;
-        tt::log_debug(tt::LogOp, "Bias CB Size: {}", bias_cb_size);
+        log_debug(tt::LogOp, "Bias CB Size: {}", bias_cb_size);
 
         // L1 CB
         uint32_t l1_scratchpad_cb_size = conv2d::l1_scratchpad_CB_size;
-        tt::log_debug(tt::LogOp, "L1 CB Size: {}", l1_scratchpad_cb_size);
+        log_debug(tt::LogOp, "L1 CB Size: {}", l1_scratchpad_cb_size);
 
         // SPLIT READER CB
         uint32_t split_second_act_reader_cb_size = act_block_split_last_ntiles * input_tile_size;
-        tt::log_debug(tt::LogOp, "Split reader CB Size: {}", split_second_act_reader_cb_size);
+        log_debug(tt::LogOp, "Split reader CB Size: {}", split_second_act_reader_cb_size);
 
         // MATMUL PARTIALS CB
         uint32_t matmul_partials_cb_size = output_block_ntiles * partial_tile_size;
@@ -1192,17 +1197,17 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             matmul_partials_cb_size = output_tile_size;
         }
         if (matmul_partials_cb_size != 0) {
-            tt::log_debug(tt::LogOp, "Matmul partials CB Size: {}", matmul_partials_cb_size);
+            log_debug(tt::LogOp, "Matmul partials CB Size: {}", matmul_partials_cb_size);
         }
         // TILIZED ACT CB
         uint32_t tilized_act_cb_size = tilzed_act_cb_size;
-        tt::log_debug(tt::LogOp, "Tilized act CB Size: {}", tilized_act_cb_size);
+        log_debug(tt::LogOp, "Tilized act CB Size: {}", tilized_act_cb_size);
 
         // TEMP SUM CB
         uint32_t temp_sum_cb_size = 0;
         if (is_1d_depthwise_conv) {
             temp_sum_cb_size = output_tile_size;
-            tt::log_debug(tt::LogOp, "Temp sum CB Size: {}", temp_sum_cb_size);
+            log_debug(tt::LogOp, "Temp sum CB Size: {}", temp_sum_cb_size);
         }
         uint32_t total_CB_size = act_cb_size + weights_cb_size + bias_cb_size + l1_scratchpad_cb_size +
                                  split_second_act_reader_cb_size + matmul_partials_cb_size + tilized_act_cb_size +
@@ -1254,49 +1259,49 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         if (conv_config.enable_act_double_buffer) {
             act_cb_size *= 2;
         }
-        tt::log_debug(tt::LogOp, "Act CB Size: {}", act_cb_size);
+        log_debug(tt::LogOp, "Act CB Size: {}", act_cb_size);
 
         // WEIGHTS CB
         uint32_t weights_cb_size = weight_block_h_ntiles * weight_block_w_ntiles * weights_tile_size;
         if (conv_config.enable_weights_double_buffer) {
             weights_cb_size *= 2;
         }
-        tt::log_debug(tt::LogOp, "Weights CB Size: {}", weights_cb_size);
+        log_debug(tt::LogOp, "Weights CB Size: {}", weights_cb_size);
 
         // BIAS CB
         uint32_t bias_cb_size = bias_block_num_bytes;
-        tt::log_debug(tt::LogOp, "Bias CB Size: {}", bias_cb_size);
+        log_debug(tt::LogOp, "Bias CB Size: {}", bias_cb_size);
 
         // L1 CB
         uint32_t l1_scratchpad_cb_size = conv2d::l1_scratchpad_CB_size;
-        tt::log_debug(tt::LogOp, "L1 CB Size: {}", l1_scratchpad_cb_size);
+        log_debug(tt::LogOp, "L1 CB Size: {}", l1_scratchpad_cb_size);
 
         // ACT ROW MAJOR CB
-        tt::log_debug(tt::LogOp, "Act row major CB Size: {}", row_major_act_cb_size);
+        log_debug(tt::LogOp, "Act row major CB Size: {}", row_major_act_cb_size);
 
         // MATMUL PARTIALS CB
         uint32_t matmul_partials_cb_size = output_block_ntiles * partial_tile_size;
         if (!untilize_out && interm_dtype == conv_config.dtype) {
             matmul_partials_cb_size = 0;
         } else {
-            tt::log_debug(tt::LogOp, "Matmul partials CB Size: {}", matmul_partials_cb_size);
+            log_debug(tt::LogOp, "Matmul partials CB Size: {}", matmul_partials_cb_size);
         }
 
         // TILIZED ACT CB
         uint32_t tilized_act_cb_size = tilized_act_block_cb_size;
-        tt::log_debug(tt::LogOp, "Tilized act CB Size: {}", tilized_act_cb_size);
+        log_debug(tt::LogOp, "Tilized act CB Size: {}", tilized_act_cb_size);
 
         bool need_unpad_after_untilize =
             output_shard_shape[1] * output_shard_shape[0] <
             per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * tt::constants::TILE_HW;
 
-        tt::log_debug(tt::LogOp, "Need Unpad after untilize: {}", need_unpad_after_untilize);
+        log_debug(tt::LogOp, "Need Unpad after untilize: {}", need_unpad_after_untilize);
 
         // UNTILIZED UNPADDED OUT CB
         uint32_t untilized_unpadded_out_cb_size = 0;
         if (need_unpad_after_untilize && untilize_out) {
             untilized_unpadded_out_cb_size = output_block_ntiles * output_tile_size;
-            tt::log_debug(tt::LogOp, "Untilized unapadded out CB Size: {}", untilized_unpadded_out_cb_size);
+            log_debug(tt::LogOp, "Untilized unapadded out CB Size: {}", untilized_unpadded_out_cb_size);
         }
         uint32_t total_CB_size = act_cb_size + weights_cb_size + bias_cb_size + l1_scratchpad_cb_size +
                                  row_major_act_cb_size + matmul_partials_cb_size + tilized_act_cb_size +
@@ -1350,19 +1355,13 @@ ttnn::Tensor fold_tensor(
     tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1]);
 
     if (is_weight_tensor) {
-        tensor_on_device = ttnn::permute(tensor_on_device, ttnn::SmallVector<int64_t>({1, 2, 3, 0}));
-        tensor_on_device = ttnn::to_layout(tensor_on_device, Layout::TILE, std::nullopt, std::nullopt, device);
+        tensor_on_device = ttnn::permute(tensor_on_device, ttnn::SmallVector<int64_t>({0, 3, 1, 2}));
     }
 
     return tensor_on_device;
 }
 
-template <typename T>
-KernelStrideFoldingResult apply_kernel_stride_folding(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    T* device,
+KernelStrideFoldingResult compute_kernel_stride_folding_params(
     uint32_t input_height,
     uint32_t input_width,
     uint32_t in_channels,
@@ -1373,32 +1372,12 @@ KernelStrideFoldingResult apply_kernel_stride_folding(
     TT_FATAL(input_height % stride[0] == 0, "Input height must be divisible by stride for kernel stride folding.");
     TT_FATAL(input_width % stride[1] == 0, "Input width must be divisible by stride for kernel stride folding.");
 
-    // Fold the input tensor to reduce spatial dimensions by stride factors
-    auto folded_input = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4, conv_config.dtype, false);
-
-    // If the weight is not preprocessed on device, fold it
-    auto folded_weight = weight_tensor;
-    if (!tt::tt_metal::is_device_tensor(weight_tensor) || conv_config.always_preprocess_weights) {
-        folded_weight =
-            fold_tensor(weight_tensor, device, stride, kernel_size, padding_n4, conv_config.weights_dtype, true);
-    }
-
-    // If the bias is not on device, move it to device
-    std::optional<ttnn::Tensor> folded_bias = bias_tensor;
-    if (bias_tensor.has_value()) {
-        folded_bias = ttnn::to_device(bias_tensor.value(), device, ttnn::DRAM_MEMORY_CONFIG);
-        folded_bias = ttnn::to_layout(folded_bias.value(), Layout::TILE, std::nullopt, std::nullopt, device);
-    }
-
     // Update dimensions for folded operation
     input_height = input_height / stride[0];
     input_width = input_width / stride[1];
     in_channels = in_channels * stride[0] * stride[1];
 
     return KernelStrideFoldingResult{
-        .input_tensor = folded_input,
-        .weight_tensor = folded_weight,
-        .bias_tensor = folded_bias,
         .input_height = input_height,
         .input_width = input_width,
         .in_channels = in_channels,
@@ -1495,32 +1474,6 @@ template ttnn::Tensor fold_tensor<MeshDevice>(
     std::array<uint32_t, 4> padding_n4,
     std::optional<DataType> dtype,
     bool is_weight_tensor);
-
-template KernelStrideFoldingResult apply_kernel_stride_folding<IDevice>(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    tt::tt_metal::IDevice* device,
-    uint32_t input_height,
-    uint32_t input_width,
-    uint32_t in_channels,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 4> padding_n4,
-    const Conv2dConfig& conv_config);
-
-template KernelStrideFoldingResult apply_kernel_stride_folding<MeshDevice>(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    tt::tt_metal::distributed::MeshDevice* device,
-    uint32_t input_height,
-    uint32_t input_width,
-    uint32_t in_channels,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 4> padding_n4,
-    const Conv2dConfig& conv_config);
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config) {
     tt::stl::reflection::operator<<(os, config);

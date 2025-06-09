@@ -129,14 +129,13 @@ tt::stl::hash::hash_t BatchNormOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& [input, batch_mean, batch_var, weight, bias, output] = tensor_args;
 
-    TT_ASSERT(
+    TT_FATAL(
         std::holds_alternative<DeviceStorage>(input.get_storage()),
         "Unexpected type {}",
         tt::stl::get_active_type_name_in_variant(input.get_storage()));
 
     // For input tensor
-    auto base_tuple = std::make_tuple(
-        attributes, input.dtype(), std::get<tt::tt_metal::DeviceStorage>(input.storage()).memory_config());
+    auto base_tuple = std::make_tuple(attributes, input.dtype(), input.memory_config());
 
     // To extract (optional<DataType>, optional<MemoryConfig>) from optional tensors
     auto get_optional_tensor_info = [](const std::optional<const Tensor>& tensor_opt)
@@ -146,9 +145,7 @@ tt::stl::hash::hash_t BatchNormOperation::compute_program_hash(
         }
 
         const auto& tensor = tensor_opt.value();
-        return std::make_tuple(
-            std::optional{tensor.dtype()},
-            std::optional{std::get<tt::tt_metal::DeviceStorage>(tensor.storage()).memory_config()});
+        return std::make_tuple(std::optional{tensor.dtype()}, std::optional{tensor.memory_config()});
     };
 
     auto args_tuple = std::tuple_cat(

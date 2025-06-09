@@ -353,10 +353,6 @@ Tensor reduce_scatter(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_links_preferred,
     std::optional<SubDeviceId> worker_subdevice_id_opt) {
-    std::vector<IDevice*> devices;
-    for (const auto& spec : input_tensor.device_storage().specs) {
-        devices.push_back(input_tensor.mesh_device()->get_device(spec.first));
-    }
     return reduce_scatter_impl(
         input_tensor,
         dim,
@@ -367,7 +363,7 @@ Tensor reduce_scatter(
         topology,
         num_links_preferred,
         worker_subdevice_id_opt,
-        devices);
+        ttnn::ccl::get_active_physical_devices(input_tensor));
 }
 
 std::vector<Tensor> reduce_scatter(

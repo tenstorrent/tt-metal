@@ -121,7 +121,7 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllToAllAsync::create_mesh_wo
 
 tt::tt_metal::operation::ProgramWithCallbacks AllToAllAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    tt::log_debug(tt::LogOp, "DEBUG: create_program_at is called");
+    log_debug(tt::LogOp, "DEBUG: create_program_at is called");
     auto mesh_device = input_tensors[0].mesh_device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
 
@@ -223,10 +223,7 @@ Tensor all_to_all_async(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "all_to_all_async op is only supported for Fast Dispatch");
 
-    std::vector<IDevice*> devices;
-    for (const auto& spec : input_tensor.device_storage().specs) {
-        devices.push_back(input_tensor.mesh_device()->get_device(spec.first));
-    }
+    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
 
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 0, "all_to_all_async requires at least one device, but has {}", num_devices);

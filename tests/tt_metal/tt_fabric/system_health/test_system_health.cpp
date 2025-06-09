@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <utility>
 
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
@@ -114,18 +114,6 @@ TEST(Cluster, TestMeshFullConnectivity) {
     const auto& eth_connections = cluster.get_ethernet_connections();
     std::uint32_t num_expected_chips = 0;
     std::uint32_t num_connections_per_side = 0;
-    auto cluster_type = cluster.get_cluster_type();
-    if (cluster_type == tt::ClusterType::T3K) {
-        num_expected_chips = 8;
-        num_connections_per_side = 2;
-    } else if (cluster_type == tt::ClusterType::GALAXY) {
-        num_expected_chips = 32;
-        num_connections_per_side = 4;
-    } else {
-        GTEST_SKIP() << "Mesh check not supported for system type " << magic_enum::enum_name(cluster_type);
-    }
-    EXPECT_EQ(eth_connections.size(), num_expected_chips)
-        << " Expected " << num_expected_chips << " in " << magic_enum::enum_name(cluster_type) << " cluster";
 
     auto input_args = ::testing::internal::GetArgvs();
 
@@ -133,8 +121,12 @@ TEST(Cluster, TestMeshFullConnectivity) {
         log_info(LogTest, "Usage:");
         log_info(
             LogTest,
-            "  --min-connections: target minimum number of connections between chips (default depends on system "
-            "type) ");
+            "  --cluster-type: cluster type to check (defaults to inferred from system) Valid values: {}",
+            magic_enum::enum_names<tt::ClusterType>());
+        log_info(
+            LogTest,
+            "  --min-connections: target minimum number of connections between connected chips (default depends on "
+            "system type).");
         log_info(
             LogTest,
             "  --system-topology: system topology to check (defaults to no topology check) Valid values: {}",
@@ -143,6 +135,34 @@ TEST(Cluster, TestMeshFullConnectivity) {
     }
 
     // Parse command line arguments
+    // Cluster type override is mainly needed for detecting T3K clusters
+    // T3K cluster type is inferred based on number of chips and number of connections for MMIO and Remote chips
+    // If it is missing all connections between chips, it will be set to N300
+    // Allow forcing cluster type to enforce error checking if system is expected to be T3K
+    std::string cluster_type_str = "";
+    std::tie(cluster_type_str, input_args) =
+        test_args::get_command_option_and_remaining_args(input_args, "--cluster-type", "");
+    tt::ClusterType cluster_type = cluster.get_cluster_type();
+    if (not cluster_type_str.empty()) {
+        cluster_type = magic_enum::enum_cast<tt::ClusterType>(cluster_type_str, magic_enum::case_insensitive).value();
+    }
+
+    if (cluster_type == tt::ClusterType::T3K) {
+        num_expected_chips = 8;
+        num_connections_per_side = 2;
+    } else if (cluster_type == tt::ClusterType::GALAXY) {
+        num_expected_chips = 32;
+        num_connections_per_side = 4;
+    } else if (cluster_type == tt::ClusterType::P150_X4) {
+        num_expected_chips = 4;
+        num_connections_per_side = 4;
+    } else {
+        GTEST_SKIP() << "Mesh check not supported for system type " << magic_enum::enum_name(cluster_type);
+    }
+
+    EXPECT_EQ(eth_connections.size(), num_expected_chips)
+        << " Expected " << num_expected_chips << " in " << magic_enum::enum_name(cluster_type) << " cluster";
+
     std::uint32_t num_target_connections = 0;
     std::tie(num_target_connections, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args, "--min-connections", 0);
@@ -162,7 +182,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
     if (not target_system_topology_str.empty()) {
         target_system_topology =
             magic_enum::enum_cast<FabricType>(target_system_topology_str, magic_enum::case_insensitive);
-        if (*target_system_topology != FabricType::TORUS_2D) {
+        if (target_system_topology.value() != FabricType::TORUS_2D) {
             log_warning(
                 tt::LogTest,
                 "System topology {} not supported for mesh check, skipping topology verification",
@@ -189,8 +209,8 @@ TEST(Cluster, TestMeshFullConnectivity) {
             if (*target_system_topology == FabricType::TORUS_2D) {
                 static constexpr std::uint32_t num_expected_chip_connections = 4;
                 EXPECT_EQ(num_connections_to_chip.size(), num_expected_chip_connections)
-                    << chip_ss.str() << " has " << num_connections_to_chip.size()
-                    << " connections to other chips, expected " << num_expected_chip_connections << " for "
+                    << chip_ss.str() << " is connected to " << num_connections_to_chip.size()
+                    << " other chips, expected " << num_expected_chip_connections << " chips for "
                     << magic_enum::enum_name(*target_system_topology) << " topology";
             }
         }

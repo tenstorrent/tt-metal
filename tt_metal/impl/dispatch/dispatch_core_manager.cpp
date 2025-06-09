@@ -13,7 +13,7 @@
 #include "core_coord.hpp"
 #include "core_descriptor.hpp"
 #include "dispatch_core_common.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.h>
 
@@ -215,6 +215,23 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_d_core(chip_id_t device_id,
     assignment.dispatcher_d = tt_cxy_pair(device_id, dispatcher_d_coord.x, dispatcher_d_coord.y);
     log_dispatch_assignment("Dispatcher D", assignment.dispatcher_d.value(), device_id, channel, cq_id);
     return assignment.dispatcher_d.value();
+}
+
+const tt_cxy_pair& dispatch_core_manager::fabric_mux_core(
+    chip_id_t device_id, uint16_t channel, uint8_t cq_id, int tunnel) {
+    dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+    if (!assignment.fabric_mux.contains(tunnel)) {
+        CoreCoord coord = this->get_next_available_dispatch_core(device_id);
+        assignment.fabric_mux[tunnel] = tt_cxy_pair(device_id, coord.x, coord.y);
+        log_dispatch_assignment("FabricMux", assignment.fabric_mux[tunnel], device_id, channel, cq_id);
+    }
+    return assignment.fabric_mux[tunnel];
+}
+
+bool dispatch_core_manager::is_fabric_mux_core_allocated(
+    chip_id_t device_id, uint16_t channel, uint8_t cq_id, int tunnel) {
+    dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+    return assignment.fabric_mux.contains(tunnel);
 }
 
 const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {

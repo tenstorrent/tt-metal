@@ -23,7 +23,12 @@ class TtDownsample2D(nn.Module):
 
         self.conv_config = model_config.get_conv_config(conv_path=module_path)
         self.compute_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
-            device, weights, bias, model_config.conv_w_dtype
+            device,
+            weights,
+            bias,
+            self.conv_config.weights_dtype,
+            fp32_dest_acc_en=(self.conv_config.weights_dtype == ttnn.bfloat8_b)
+            and (self.conv_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         )
 
     def forward(self, hidden_states, input_shape):

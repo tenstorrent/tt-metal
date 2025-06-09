@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sliding_window.hpp"
@@ -38,7 +37,8 @@ std::array<uint32_t, 4> get_pair_n4_padding(
             }
         },
         padding);
-    tt::log_debug("Padding = ({}, {}), ({}, {})", ret_padding[0], ret_padding[1], ret_padding[2], ret_padding[3]);
+    log_debug(
+        tt::LogOp, "Padding = ({}, {}), ({}, {})", ret_padding[0], ret_padding[1], ret_padding[2], ret_padding[3]);
     return ret_padding;
 }
 /**
@@ -77,14 +77,33 @@ ttnn::Shape SlidingWindowConfig::get_output_shape() const {
 
     uint32_t output_h;
     uint32_t output_w;
-    float eff_size_h = (float)(input_hw.first + get_pad_h() - dilation_hw.first * (window_hw.first - 1) - 1);
-    float eff_size_w = (float)(input_hw.second + get_pad_w() - dilation_hw.second * (window_hw.second - 1) - 1);
-    if (ceil_mode) {
-        output_h = std::ceil(eff_size_h / stride_hw.first) + 1;
-        output_w = std::ceil(eff_size_w / stride_hw.second) + 1;
+    float output_h_float;
+    float output_w_float;
+
+    // Calculation of the output shapes in pytorch documentation differs for avg and
+    // max pool operations or convolution operations,
+    // therefore conditional substraction using is_avg_pool variable
+
+    // MAX_POOL2D and CONV2D operations
+    // output_h = ((input_hw.first + get_pad_h() - dilation_hw.first * (window_hw.first - 1) - 1) / stride_hw.first) +
+    // 1; output_w = ((input_hw.second + get_pad_w() - dilation_hw.second * (window_hw.second - 1) - 1) /
+    // stride_hw.second) + 1; AVG_POOL2D output_h = ((input_hw.first + get_pad_h() - window_hw.first) / stride_hw.first)
+    // + 1; output_w = ((input_hw.second + get_pad_w() - window_hw.second) / stride_hw.second) + 1;
+    if (is_avg_pool) {
+        output_h_float = (float)(input_hw.first + get_pad_h() - window_hw.first) / stride_hw.first;
+        output_w_float = (float)(input_hw.second + get_pad_w() - window_hw.second) / stride_hw.second;
     } else {
-        output_h = std::floor(eff_size_h / stride_hw.first) + 1;
-        output_w = std::floor(eff_size_w / stride_hw.second) + 1;
+        output_h_float =
+            (float)(input_hw.first + get_pad_h() - dilation_hw.first * (window_hw.first - 1) - 1) / stride_hw.first;
+        output_w_float =
+            (float)(input_hw.second + get_pad_w() - dilation_hw.second * (window_hw.second - 1) - 1) / stride_hw.second;
+    }
+    if (ceil_mode) {
+        output_h = std::ceil(output_h_float) + 1;
+        output_w = std::ceil(output_w_float) + 1;
+    } else {
+        output_h = std::floor(output_h_float) + 1;
+        output_w = std::floor(output_w_float) + 1;
     }
 
     if (is_bilinear) {
@@ -1172,9 +1191,7 @@ std::vector<uint16_t> remap_nhw_scalar_argument_across_full_grid(
 }
 
 Tensor construct_on_host_config_tensor(
-    const std::vector<std::vector<uint16_t>>& config,
-    const SlidingWindowConfig& sw_config,
-    const ParallelConfig& p_config) {
+    const std::vector<std::vector<uint16_t>>& config, const ParallelConfig& p_config) {
     // We need the last dim of tensors to be multiple of 2, pad if needed
     uint32_t extend_with_zeroes = config[0].size() % 2;
     extend_with_zeroes = extend_with_zeroes > 0 ? 2 - extend_with_zeroes : 0;

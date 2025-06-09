@@ -44,8 +44,6 @@
 #include "ttnn/operations/data_movement/untilize/untilize_pybind.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding_pybind.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn::operations::data_movement {
 
 void py_module(py::module& module) {

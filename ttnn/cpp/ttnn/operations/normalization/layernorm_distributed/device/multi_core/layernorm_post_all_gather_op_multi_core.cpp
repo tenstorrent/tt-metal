@@ -33,7 +33,11 @@ inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DR
 
 inline uint16_t bfloat16(float float_num) {
     uint32_t uint32_data;
-    TT_ASSERT(sizeof float_num == sizeof uint32_data);
+    TT_FATAL(
+        sizeof float_num == sizeof uint32_data,
+        "Float size ({}) must equal uint32 size ({})",
+        sizeof float_num,
+        sizeof uint32_data);
 
     uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
     // just move upper 16 to lower 16 (truncate)
@@ -85,14 +89,14 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
 
     uint32_t num_tile_rows = NC * Ht;
 
-    tt::log_debug("is_rmsnorm: {}", is_rmsnorm);
-    tt::log_debug("W: {}", W);
-    tt::log_debug("H: {}", H);
-    tt::log_debug("num_tile_rows: {}", num_tile_rows);
-    tt::log_debug("Wt: {}", Wt);
-    tt::log_debug("Ht: {}", Ht);
-    tt::log_debug("stats_tiles_cols: {}", stats_tiles_cols);
-    tt::log_debug("num_devices: {}", num_devices);
+    log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
+    log_debug(tt::LogOp, "W: {}", W);
+    log_debug(tt::LogOp, "H: {}", H);
+    log_debug(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
+    log_debug(tt::LogOp, "Wt: {}", Wt);
+    log_debug(tt::LogOp, "Ht: {}", Ht);
+    log_debug(tt::LogOp, "stats_tiles_cols: {}", stats_tiles_cols);
+    log_debug(tt::LogOp, "num_devices: {}", num_devices);
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -126,14 +130,14 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     uint32_t gamma_single_tile_size = tt::tt_metal::detail::TileSize(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt::tt_metal::detail::TileSize(beta_cb_data_format);
 
-    tt::log_debug("in_data_format: {}", in_data_format);
-    tt::log_debug("out_data_format: {}", out_data_format);
-    tt::log_debug("cb_data_format: {}", cb_data_format);
-    tt::log_debug("gamma_cb_data_format: {}", gamma_cb_data_format);
-    tt::log_debug("beta_cb_data_format: {}", beta_cb_data_format);
-    tt::log_debug("math_fidelity: {}", math_fidelity);
-    tt::log_debug("math_approx_mode: {}", math_approx_mode);
-    tt::log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
+    log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
+    log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
+    log_debug(tt::LogOp, "gamma_cb_data_format: {}", gamma_cb_data_format);
+    log_debug(tt::LogOp, "beta_cb_data_format: {}", beta_cb_data_format);
+    log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
+    log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
+    log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
     tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
     uint32_t inb_single_tile_size = 0;
@@ -141,7 +145,6 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     auto a_addr = a.buffer()->address();
     auto stats_addr = stats.buffer()->address();
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    TT_FATAL(gamma_dram_addr != 0, "Gamma must be provided");
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto dst_addr = output.buffer()->address();
 
@@ -157,8 +160,8 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         num_beta_tiles = beta.has_value() ? beta.value().volume() / TILE_WIDTH : 0;
     }
 
-    tt::log_debug("num_gamma_tiles: {}", num_gamma_tiles);
-    tt::log_debug("num_beta_tiles: {}", num_beta_tiles);
+    log_debug(tt::LogOp, "num_gamma_tiles: {}", num_gamma_tiles);
+    log_debug(tt::LogOp, "num_beta_tiles: {}", num_beta_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -203,30 +206,47 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     const uint32_t intermed7_tiles = Wt;
     const uint32_t out0_tiles = Wt;
 
-    TT_ASSERT(
-        W <= TILE_WIDTH * in0_tiles &&
-        "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
-    TT_ASSERT(
-        in0_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        in2_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        in3_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        out0_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        intermed5_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        intermed6_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        intermed7_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
+    TT_FATAL(
+        W <= TILE_WIDTH * in0_tiles,
+        "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now)",
+        W,
+        TILE_WIDTH,
+        in0_tiles);
+    TT_FATAL(
+        in0_tiles % block_size == 0,
+        "Buffer size in0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        in0_tiles,
+        block_size);
+    TT_FATAL(
+        in2_tiles % block_size == 0,
+        "Buffer size in2_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        in2_tiles,
+        block_size);
+    TT_FATAL(
+        in3_tiles % block_size == 0,
+        "Buffer size in3_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        in3_tiles,
+        block_size);
+    TT_FATAL(
+        out0_tiles % block_size == 0,
+        "Buffer size out0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        out0_tiles,
+        block_size);
+    TT_FATAL(
+        intermed5_tiles % block_size == 0,
+        "Buffer size im0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        intermed5_tiles,
+        block_size);
+    TT_FATAL(
+        intermed6_tiles % block_size == 0,
+        "Buffer size im6_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        intermed6_tiles,
+        block_size);
+    TT_FATAL(
+        intermed7_tiles % block_size == 0,
+        "Buffer size im7_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        intermed7_tiles,
+        block_size);
 
     auto grid_size = device->compute_with_storage_grid_size();
     auto
@@ -237,12 +257,12 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
          num_tile_rows_per_core_group_1,
          num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
-    tt::log_debug("num_cores: {}", num_cores);
-    tt::log_debug("grid_size: {}", grid_size);
-    tt::log_debug("core_group_1: {}", core_group_1.str());
-    tt::log_debug("num_tile_rows_per_core_group_1: {}", num_tile_rows_per_core_group_1);
-    tt::log_debug("core_group_2: {}", core_group_2.str());
-    tt::log_debug("num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
+    log_debug(tt::LogOp, "num_cores: {}", num_cores);
+    log_debug(tt::LogOp, "grid_size: {}", grid_size);
+    log_debug(tt::LogOp, "core_group_1: {}", core_group_1.str());
+    log_debug(tt::LogOp, "num_tile_rows_per_core_group_1: {}", num_tile_rows_per_core_group_1);
+    log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
+    log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -265,7 +285,8 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
         reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
         // if (gamma_stick_size_is_power_of_two) {
-        uint32_t gamma_log2_stick_size = gamma_stick_size_is_power_of_two ? (std::uint32_t)log2(gamma_stick_size) : 0;
+        uint32_t gamma_log2_stick_size =
+            gamma_stick_size_is_power_of_two ? (std::uint32_t)std::log2(gamma_stick_size) : 0;
         reader_compile_time_args.push_back((std::uint32_t)gamma_log2_stick_size);
     }
 
@@ -289,7 +310,9 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
 
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
-    TT_FATAL(use_row_major_kernel, "Only row major gamma and beta are supported");
+    TT_FATAL(
+        use_row_major_kernel || (!gamma.has_value() && !beta.has_value()),
+        "Only row major gamma and beta are supported");
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
@@ -414,10 +437,10 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
 
     for (const auto& cb : program.circular_buffers()) {
         for (const auto index : cb->buffer_indices()) {
-            tt::log_debug("cb_id {}", index);
-            tt::log_debug("page_size: {}", cb->page_size(index));
-            tt::log_debug("num_pages: {}", cb->num_pages(index));
-            tt::log_debug("data_format: {}", cb->data_format(index));
+            log_debug(tt::LogOp, "cb_id {}", index);
+            log_debug(tt::LogOp, "page_size: {}", cb->page_size(index));
+            log_debug(tt::LogOp, "num_pages: {}", cb->num_pages(index));
+            log_debug(tt::LogOp, "data_format: {}", cb->data_format(index));
         }
     }
 
@@ -439,7 +462,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         } else if (core_group_2.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
         uint32_t tile_offset = curr_row * Wt;

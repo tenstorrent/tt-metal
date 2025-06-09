@@ -30,7 +30,11 @@ inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DR
 
 inline uint16_t bfloat16(float float_num) {
     uint32_t uint32_data;
-    TT_ASSERT(sizeof float_num == sizeof uint32_data);
+    TT_FATAL(
+        sizeof float_num == sizeof uint32_data,
+        "Float size ({}) must equal uint32 size ({})",
+        sizeof float_num,
+        sizeof uint32_data);
 
     uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
     // just move upper 16 to lower 16 (truncate)
@@ -68,12 +72,12 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
 
     uint32_t num_tile_rows = NC * Ht;
 
-    tt::log_debug("is_rmsnorm: {}", is_rmsnorm);
-    tt::log_debug("W: {}", W);
-    tt::log_debug("H: {}", H);
-    tt::log_debug("num_tile_rows: {}", num_tile_rows);
-    tt::log_debug("Wt: {}", Wt);
-    tt::log_debug("Ht: {}", Ht);
+    log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
+    log_debug(tt::LogOp, "W: {}", W);
+    log_debug(tt::LogOp, "H: {}", H);
+    log_debug(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
+    log_debug(tt::LogOp, "Wt: {}", Wt);
+    log_debug(tt::LogOp, "Ht: {}", Ht);
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -97,8 +101,8 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
     uint32_t bfloat16_tile_size = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 
-    tt::log_debug("in_data_format: {}", in_data_format);
-    tt::log_debug("out_data_format: {}", out_data_format);
+    log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
+    log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
 
     tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
     uint32_t inb_single_tile_size = 0;
@@ -133,15 +137,22 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
         out0_tiles = 2;
     }
 
-    TT_ASSERT(
-        W <= TILE_WIDTH * in0_tiles &&
-        "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
-    TT_ASSERT(
-        in0_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
-    TT_ASSERT(
-        intermed0_tiles % block_size == 0 &&
-        "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
+    TT_FATAL(
+        W <= TILE_WIDTH * in0_tiles,
+        "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now).",
+        W,
+        TILE_WIDTH,
+        in0_tiles);
+    TT_FATAL(
+        in0_tiles % block_size == 0,
+        "Size of buffer ({}) must be divisible by the size of block ({}) used by the reader and compute kernel.",
+        in0_tiles,
+        block_size);
+    TT_FATAL(
+        intermed0_tiles % block_size == 0,
+        "Size of buffer ({}) must be divisible by the size of block ({}) used by the reader and compute kernel.",
+        intermed0_tiles,
+        block_size);
 
     auto grid_size = device->compute_with_storage_grid_size();
     auto
@@ -152,12 +163,12 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
          num_tile_rows_per_core_group_1,
          num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
-    tt::log_debug("num_cores: {}", num_cores);
-    tt::log_debug("grid_size: {}", grid_size);
-    tt::log_debug("core_group_1: {}", core_group_1.str());
-    tt::log_debug("num_tile_rows_per_core_group_1: {}", num_tile_rows_per_core_group_1);
-    tt::log_debug("core_group_2: {}", core_group_2.str());
-    tt::log_debug("num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
+    log_debug(tt::LogOp, "num_cores: {}", num_cores);
+    log_debug(tt::LogOp, "grid_size: {}", grid_size);
+    log_debug(tt::LogOp, "core_group_1: {}", core_group_1.str());
+    log_debug(tt::LogOp, "num_tile_rows_per_core_group_1: {}", num_tile_rows_per_core_group_1);
+    log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
+    log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -237,10 +248,10 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     // std::vector<std::shared_ptr<CircularBuffer>>
     for (const auto& cb : program.circular_buffers()) {
         for (const auto index : cb->buffer_indices()) {
-            tt::log_debug("cb_id {}", index);
-            tt::log_debug("page_size: {}", cb->page_size(index));
-            tt::log_debug("num_pages: {}", cb->num_pages(index));
-            tt::log_debug("data_format: {}", cb->data_format(index));
+            log_debug(tt::LogOp, "cb_id {}", index);
+            log_debug(tt::LogOp, "page_size: {}", cb->page_size(index));
+            log_debug(tt::LogOp, "num_pages: {}", cb->num_pages(index));
+            log_debug(tt::LogOp, "data_format: {}", cb->data_format(index));
         }
     }
 
@@ -257,7 +268,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
         } else if (core_group_2.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
         uint32_t in_tile_offset = curr_row * Wt;

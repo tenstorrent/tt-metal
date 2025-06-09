@@ -1,10 +1,9 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import json
 import os
-from datetime import datetime
 
 import cv2
 import fiftyone
@@ -14,6 +13,7 @@ import torch
 from loguru import logger
 from sklearn.metrics import average_precision_score, precision_recall_curve
 from torch import nn
+from ultralytics import YOLO
 
 import ttnn
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs
@@ -146,8 +146,8 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
 
     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_name = f"prediction_{timestamp}.jpg"
+    filename = os.path.basename(image_path)
+    output_name = f"prediction_{filename}"
     output_path = os.path.join(model_save_dir, output_name)
 
     cv2.imwrite(output_path, image)
@@ -218,7 +218,7 @@ def evaluation(
         else:
             ttnn_im = im.permute((0, 2, 3, 1))
 
-        if model_name in ["YOLOv11", "YOLOv9c", "YOLOv10"]:
+        if model_name in ["YOLOv11", "YOLOv9c", "YOLOv8x", "YOLOv10"]:
             ttnn_im = ttnn_im.reshape(
                 1,
                 1,
@@ -226,7 +226,10 @@ def evaluation(
                 ttnn_im.shape[3],
             )
         if model_name != "YOLOv4":
-            ttnn_im = ttnn.from_torch(ttnn_im, dtype=input_dtype, layout=input_layout, device=device)
+            if model_name == "YOLOv8x":
+                ttnn_im = ttnn.from_torch(ttnn_im, dtype=input_dtype, layout=input_layout)
+            else:
+                ttnn_im = ttnn.from_torch(ttnn_im, dtype=input_dtype, layout=input_layout, device=device)
 
         if model_type != "torch_model":
             preprocessed_images.append((ttnn_im, im, im0s))
@@ -245,6 +248,10 @@ def evaluation(
         else:
             if model_name in ["YOLOv11", "YOLOv9c", "YOLOv10"]:
                 preds = model(ttnn_im)
+                preds = ttnn.to_torch(preds, dtype=torch.float32)
+            elif model_name == "YOLOv8x":
+                ttnn_im = ttnn.pad(ttnn_im, [1, 1, ttnn_im.shape[2], 16], [0, 0, 0, 0], 0)
+                preds = model.execute_yolov8x_trace_2cqs_inference(ttnn_im)
                 preds = ttnn.to_torch(preds, dtype=torch.float32)
             elif model_name == "YOLOv4":
                 preds = model._execute_yolov4_trace_2cqs_inference(ttnn_im)
@@ -287,7 +294,8 @@ def evaluation(
             predicted_bbox.append(pred)
             save_yolo_predictions_by_model(results, save_dir, source_list[index], model_type)
             index += 1
-
+    if model_name in ["YOLOv8x"] and model_type == "tt_metal":
+        model.release_yolov8x_trace_2cqs_inference()
     ground_truth = []
     for i in dataset:
         sample = []
@@ -449,4 +457,50 @@ def test_yolov8s_world(device, model_type, res, reset_seeds):
         input_dtype=input_dtype,
         input_layout=input_layout,
         save_dir=save_dir,
+    )
+
+
+@pytest.mark.parametrize(
+    "model_type",
+    [("tt_model"), ("torch_model")],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize("res", [(640, 640)])
+def test_yolov8x(device, model_type, res, use_program_cache, reset_seeds):
+    from models.demos.yolov8x.tests.yolov8x_e2e_performant import Yolov8xTrace2CQ
+
+    torch_model = YOLO("yolov8x.pt")
+    torch_model = torch_model.model
+    model = torch_model.eval()
+
+    if model_type == "torch_model":
+        torch_model = YOLO("yolov8x.pt")
+        torch_model = torch_model.model
+        model = torch_model.eval()
+        logger.info("Inferencing using Torch Model")
+    else:
+        model = Yolov8xTrace2CQ()
+        model.initialize_yolov8x_trace_2cqs_inference(
+            device,
+            1,
+        )
+        logger.info("Inferencing using ttnn Model")
+
+    save_dir = "models/demos/yolov8x/demo/runs"
+
+    input_dtype = ttnn.bfloat16
+    input_layout = ttnn.ROW_MAJOR_LAYOUT
+
+    evaluation(
+        device=device,
+        res=res,
+        model_type=model_type,
+        model=model,
+        parameters=None,
+        input_dtype=input_dtype,
+        input_layout=input_layout,
+        save_dir=save_dir,
+        model_name="YOLOv8x",
     )

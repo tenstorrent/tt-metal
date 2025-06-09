@@ -47,14 +47,14 @@ Tensor to_layout_impl(
     T* device) {
     if (tensor_arg.get_layout() == layout) {
         if (dtype.has_value() and dtype.value() != tensor_arg.get_dtype()) {
-            tt::log_warning(
+            log_warning(
                 tt::LogOp,
                 "ttnn::to_layout: dtype is specified but the tensor is already in the requested layout! So, the "
                 "dtype "
                 "won't be changed!");
         }
         if (memory_config.has_value() and memory_config.value() != get_memory_config(tensor_arg).value()) {
-            tt::log_warning(
+            log_warning(
                 tt::LogOp,
                 "ttnn::to_layout: memory_config is specified but the tensor is already in the requested layout! "
                 "So, "

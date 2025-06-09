@@ -5,11 +5,10 @@
 #pragma once
 
 #include "ttnn-pybind/pybind_fwd.hpp"
-#include "ttnn/events.hpp"
-
-namespace py = pybind11;
 
 namespace ttnn::events {
+
+namespace py = pybind11;
 
 void py_module_types(py::module& module);
 void py_module(py::module& module);

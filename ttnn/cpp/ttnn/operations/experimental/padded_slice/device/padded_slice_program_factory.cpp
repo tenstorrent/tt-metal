@@ -4,7 +4,7 @@
 
 #include "optional"
 #include "tt-metalium/assert.hpp"
-#include "tt-metalium/logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
@@ -94,7 +94,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_padded_
     uint32_t output_row_size_bytes = output_shard_shape[1] * input_tensor.element_size();
     uint32_t output_row_size_elems = output_shard_shape[1];
 
-    tt::log_debug("input_row_size_bytes: {}, output_row_size_bytes: {}", input_row_size_bytes, output_row_size_bytes);
+    log_debug(
+        tt::LogOp, "input_row_size_bytes: {}, output_row_size_bytes: {}", input_row_size_bytes, output_row_size_bytes);
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
     std::vector<uint32_t> num_output_sticks_per_dim(num_dims);
     std::vector<uint32_t> num_input_sticks_per_dim(num_dims);
@@ -108,7 +109,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_padded_
     num_input_sticks_per_dim[0] = 0;
     accumulated_total_per_dim[0] = 1;
 
-    tt::log_debug("Output Shape : {}, Input Shape : {}", actual_output_shape, input_shape);
+    log_debug(tt::LogOp, "Output Shape : {}, Input Shape : {}", actual_output_shape, input_shape);
     for (int32_t i = 1; i < num_dims; i++) {
         uint32_t num_output_dim = actual_output_shape[-(i + 1)];
         uint32_t num_total_dim = input_shape[-(i + 1)];
@@ -119,7 +120,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_padded_
     }
 
     for (int i = 0; i < num_dims; i++) {
-        tt::log_debug(
+        log_debug(
+            tt::LogOp,
             "i = {}, num_output_sticks_per_dim: {}, num_input_sticks_per_dim: {}, accumulated_total_per_dim: {}",
             i,
             num_output_sticks_per_dim[i],
@@ -164,7 +166,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_padded_
             tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core, output_row_size_bytes_offset, max_read_size);
         num_read_per_barrier = num_sticks_per_core / num_sticks_per_core_read;
     }
-    tt::log_debug(
+    log_debug(
+        tt::LogOp,
         "num_stick_per_core: {}, num_stick_per_core_read: {}, num_read_per_barrier: {}",
         num_sticks_per_core,
         num_sticks_per_core_read,
@@ -364,7 +367,7 @@ operation::ProgramWithCallbacks padded_slice_rm_multi_core(
         auto src_tensor = input_tensors.at(0);
         auto dst_tensor = output_tensors.at(0);
         TT_FATAL(dst_tensor.is_sharded(), "Output tensor must be sharded");
-        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_tensor.buffer());
+        UpdateDynamicCircularBufferAddress(program, cb_src0, *dst_tensor.buffer());
 
         auto all_runtime_args = get_padded_slice_runtime_args_rm_sharded_output(
             src_tensor, dst_tensor, output_tensor_start, actual_output_shape, iter_cores, max_read_size);

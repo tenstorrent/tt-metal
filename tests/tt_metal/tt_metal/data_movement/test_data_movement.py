@@ -34,9 +34,17 @@ test_id_to_name = {
     14: "One to All Multicast Linked 11x10 Packet Sizes",
     15: "One from All Packet Sizes",
     16: "Loopback Packet Sizes",
+    30: "One from All Directed Ideal",
     50: "One to One Directed Ideal",
     51: "One from One Directed Ideal",
     52: "One to All Directed Ideal",
+    17: "Reshard Hardcoded Small",
+    18: "Reshard Hardcoded Medium",
+    19: "Reshard Hardcoded Many Cores",
+    20: "Reshard Hardcoded 2 Cores to Many Cores",
+    21: "Conv Act with halo 3x3",
+    22: "Conv Act with halo 3x3 Small",
+    23: "Conv Halo Gather",
 }
 
 # Comments for each test explaining why we get the perf that we do
@@ -92,6 +100,37 @@ test_id_to_comment = {
         increases, the bandwidth approaches 64 B/cycle. Similar to the one from one test.",
     16: "Loopback will have similar characteristics to the one to one test, however it uses two \n\
         ports to send and receive data, as such it is more likely to cause contention.",
+    17: "This is a 2 reader reshard. It seems to be getting expected perf based on number of transactions \n\
+        and transactions size. Reshard perf is dictated based on the number of transactions and the \n\
+        transaction size. A small number of transactions will result in small perf due to large \n\
+        round trip latency. It is suggested to use a large number of transactions, with large transaction \n\
+        size to get the best performance.",
+    18: "This is a 2 reader reshard. It seems to be getting expected perf based on number of transactions \n\
+        and transactions size. Reshard perf is dictated based on the number of transactions and the \n\
+        transaction size. A small number of transactions will result in small perf due to large \n\
+        round trip latency. It is suggested to use a large number of transactions, with large transaction \n\
+        size to get the best performance.",
+    19: "This is a 8 reader reshard. It seems to be getting expected perf based on number of transactions \n\
+        and transactions size. Reshard perf is dictated based on the number of transactions and the \n\
+        transaction size. A small number of transactions will result in small perf due to large \n\
+        round trip latency. It is suggested to use a large number of transactions, with large transaction \n\
+        size to get the best performance.",
+    20: "This is a 2 core to 8 reader reshard. It seems to be getting expected perf based on number of \n\
+        transactions and transactions size. Reshard perf is dictated based on the number of transactions \n\
+        and the transaction size. A small number of transactions will result in small perf due to large \n\
+        round trip latency. It is suggested to use a large number of transactions, with large transaction \n\
+        size to get the best performance.",
+    21: "Convolution has a large number of transactions and a small transaction size. The performance is \n\
+        similar to what it would be for a similarly configured one from one. Convolution may benefit from \n\
+        having multiple cores doing different parts of the convolution at the same time. This would \n\
+        result in a larger effective bandwidth.",
+    22: "Convolution has a large number of transactions and a small transaction size. The performance is \n\
+        similar to what it would be for a similarly configured one from one. Convolution may benefit from \n\
+        having multiple cores doing different parts of the convolution at the same time. This would \n\
+        result in a larger effective bandwidth.",
+    23: "The performance of this test is similar to how other tests perform based on the number of \n\
+        transactions and the transaction size, but with extra degradation due to needing to read \n\
+        parameters from L1.",
 }
 
 # Correspondng test bounds for each arch, test id, riscv core
@@ -108,8 +147,8 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 24000, "upper": 25000}, "bandwidth": 21},
         },
         2: {
-            "riscv_1": {"latency": {"lower": 500, "upper": 600}, "bandwidth": 0.24},
-            "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.30},
+            "riscv_1": {"latency": {"lower": 300, "upper": 600}, "bandwidth": 0.08},
+            "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.08},
         },
         3: {
             "riscv_1": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 22},
@@ -122,41 +161,43 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.1},
         },
         6: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.4},
+            "riscv_0": {"latency": {"lower": 400, "upper": 70000}, "bandwidth": 0.3},
         },
         7: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 1.0},
+            "riscv_0": {"latency": {"lower": 800, "upper": 300000}, "bandwidth": 0.6},
         },
         8: {
-            "riscv_0": {"latency": {"lower": 2000, "upper": 2000000}, "bandwidth": 1.0},
+            "riscv_0": {"latency": {"lower": 1900, "upper": 900000}, "bandwidth": 0.8},
         },
         9: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 300000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 300, "upper": 30000}, "bandwidth": 0.09},
         },
         10: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 400, "upper": 60000}, "bandwidth": 0.07},
         },
         11: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 200000}, "bandwidth": 0.04},
+            "riscv_0": {"latency": {"lower": 500, "upper": 90000}, "bandwidth": 0.04},
         },
         12: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 200, "upper": 20000}, "bandwidth": 0.09},
         },
         13: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 400, "upper": 30000}, "bandwidth": 0.07},
         },
         14: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 100000}, "bandwidth": 0.04},
+            "riscv_0": {"latency": {"lower": 500, "upper": 40000}, "bandwidth": 0.04},
         },
         15: {
-            "riscv_1": {"latency": {"lower": 700, "upper": 120000}, "bandwidth": 0.7},
+            "riscv_1": {"latency": {"lower": 700, "upper": 85000}, "bandwidth": 0.71},
         },
         16: {
             "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
         },
+        30: {
+            "riscv_1": {"latency": {"lower": 20000, "upper": 23500}, "bandwidth": 28},
+        },
         50: {  # One to One Directed Ideal
-            "riscv_1": {"latency": {"lower": 18000, "upper": 23000}, "bandwidth": 23},  # 21882, 23.9
-            "riscv_0": {"latency": {"lower": 15000, "upper": 19000}, "bandwidth": 29},  # 17705, 29.6
+            "riscv_0": {"latency": {"lower": 28000, "upper": 36000}, "bandwidth": 29},  # 33832
         },
         51: {  # One from One Directed Ideal
             "riscv_1": {"latency": {"lower": 15000, "upper": 20000}, "bandwidth": 28},  # 18596, 28.2
@@ -164,15 +205,36 @@ test_bounds = {
         52: {  # One to All Directed Ideal
             "riscv_0": {"latency": {"lower": 24000, "upper": 28000}, "bandwidth": 19},  # 26966, 19.4
         },
+        17: {
+            "riscv_1": {"latency": {"lower": 50, "upper": 700}, "bandwidth": 3},
+        },
+        18: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 3000}, "bandwidth": 15},
+        },
+        19: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 3000}, "bandwidth": 10},
+        },
+        20: {
+            "riscv_1": {"latency": {"lower": 100, "upper": 1000}, "bandwidth": 3},
+        },
+        21: {
+            "riscv_1": {"latency": {"lower": 150000, "upper": 300000}, "bandwidth": 3},
+        },
+        22: {
+            "riscv_1": {"latency": {"lower": 1000000, "upper": 1100000}, "bandwidth": 0.3},
+        },
+        23: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 1000}, "bandwidth": 10},
+        },
     },
     "blackhole": {
         0: {
-            "riscv_1": {"latency": {"lower": 400, "upper": 17000}, "bandwidth": 0.12},
+            "riscv_1": {"latency": {"lower": 400, "upper": 17000}, "bandwidth": 0.1},
             "riscv_0": {"latency": {"lower": 300, "upper": 16000}, "bandwidth": 0.15},
         },
         1: {
-            "riscv_1": {"latency": {"lower": 30000, "upper": 33000}, "bandwidth": 32},
-            "riscv_0": {"latency": {"lower": 30000, "upper": 31000}, "bandwidth": 33},
+            "riscv_1": {"latency": {"lower": 20000, "upper": 33000}, "bandwidth": 32},
+            "riscv_0": {"latency": {"lower": 20000, "upper": 33000}, "bandwidth": 33},
         },
         2: {
             "riscv_1": {"latency": {"lower": 400, "upper": 600}, "bandwidth": 0.13},
@@ -183,53 +245,74 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 34},
         },
         4: {
-            "riscv_0": {"latency": {"lower": 300, "upper": 9200}, "bandwidth": 0.17},
+            "riscv_0": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.17},
         },
         5: {
             "riscv_1": {"latency": {"lower": 300, "upper": 9200}, "bandwidth": 0.17},
         },
         6: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.4},
+            "riscv_0": {"latency": {"lower": 400, "upper": 70000}, "bandwidth": 0.5},
         },
         7: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 300000}, "bandwidth": 1.0},
+            "riscv_0": {"latency": {"lower": 900, "upper": 275000}, "bandwidth": 1.00},
         },
         8: {
-            "riscv_0": {"latency": {"lower": 2000, "upper": 2000000}, "bandwidth": 1.0},
+            "riscv_0": {"latency": {"lower": 3800, "upper": 1700000}, "bandwidth": 1.65},
         },
         9: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 300, "upper": 30000}, "bandwidth": 0.16},
         },
         10: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 500, "upper": 70000}, "bandwidth": 0.12},
         },
         11: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 200000}, "bandwidth": 0.04},
+            "riscv_0": {"latency": {"lower": 700, "upper": 115000}, "bandwidth": 0.08},
         },
         12: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 300, "upper": 20000}, "bandwidth": 0.16},
         },
         13: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 500, "upper": 24000}, "bandwidth": 0.12},
         },
         14: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 100000}, "bandwidth": 0.04},
+            "riscv_0": {"latency": {"lower": 700, "upper": 46000}, "bandwidth": 0.08},
         },
         15: {
-            "riscv_1": {"latency": {"lower": 800, "upper": 135000}, "bandwidth": 1.19},
+            "riscv_1": {"latency": {"lower": 800, "upper": 87000}, "bandwidth": 1.19},
         },
         16: {
             "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
         },
+        30: {"riscv_1": {"latency": {"lower": 10000, "upper": 11500}, "bandwidth": 57}},
         50: {  # One to One Directed Ideal
-            "riscv_1": {"latency": {"lower": 5000, "upper": 10000}, "bandwidth": 50},  # 9201, 57.0
-            "riscv_0": {"latency": {"lower": 5000, "upper": 9500}, "bandwidth": 59},  # 8725, 60.1
+            "riscv_0": {"latency": {"lower": 12000, "upper": 19000}, "bandwidth": 59},  # 17000
         },
         51: {  # One from One Directed Ideal
             "riscv_1": {"latency": {"lower": 5000, "upper": 10000}, "bandwidth": 59},  # 8730, 60.1
         },
         52: {  # One to All Directed Ideal
             "riscv_0": {"latency": {"lower": 10000, "upper": 17000}, "bandwidth": 30},  # 15322, 34.2
+        },
+        17: {
+            "riscv_1": {"latency": {"lower": 50, "upper": 700}, "bandwidth": 7},
+        },
+        18: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 3000}, "bandwidth": 30},
+        },
+        19: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 3000}, "bandwidth": 25},
+        },
+        20: {
+            "riscv_1": {"latency": {"lower": 100, "upper": 1000}, "bandwidth": 7},
+        },
+        21: {
+            "riscv_1": {"latency": {"lower": 150000, "upper": 300000}, "bandwidth": 6},
+        },
+        22: {
+            "riscv_1": {"latency": {"lower": 1000000, "upper": 1100000}, "bandwidth": 0.6},
+        },
+        23: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 1000}, "bandwidth": 20},
         },
     },
 }

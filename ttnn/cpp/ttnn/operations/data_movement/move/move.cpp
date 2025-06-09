@@ -67,7 +67,7 @@ static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const st
     // A tensor moved within L1 it is meant to reallocate at higher addresses and a tensor moved within DRAM is meant to
     // reallocate at lower addresses If the tensor is not allocated in a new address, there is no need to move the data
     if (move_within_same_mem_space and input_address == output_tensor.buffer()->address()) {
-        tt::log_debug(
+        log_debug(
             tt::LogOp,
             "WARNING: No space to move the tensor. Move op's input address and output address are equal: {}",
             input_address);
@@ -166,7 +166,7 @@ static inline Tensor move_sharded(
                 input_tensor.get_padded_shape())),
         input_tensor.device());
     if (input_tensor.buffer()->address() == output_tensor.buffer()->address()) {
-        tt::log_debug(
+        log_debug(
             tt::LogOp,
             "WARNING: No space to move the tensor. Move op's input address and output address are equal: {}",
             input_address);

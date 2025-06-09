@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/sliding_window/halo/device/untilize_with_halo_program_factory.hpp"
@@ -75,7 +74,7 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     }
 
     if (this->in_place_) {
-        tt::log_info(tt::LogAlways, "halo_device_operation - Using in-place mode so deallocating input buffer");
+        log_info(tt::LogOp, "halo_device_operation - Using in-place mode so deallocating input buffer");
         // TODO: `input_tensor` is const qualified, but Tensor::deallocate() is not.
         // Find a nicer way to do this.
         input_tensor.mesh_buffer()->deallocate();
@@ -127,12 +126,11 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         const auto& remote_config1 = std::get<0>(kernel_config)[4];
         const auto& max_ref_size = std::get<1>(kernel_config);
 
-        auto pad_config_tensor1 =
-            sliding_window::construct_on_host_config_tensor(pad_config1, this->config_, this->parallel_config_);
+        auto pad_config_tensor1 = sliding_window::construct_on_host_config_tensor(pad_config1, this->parallel_config_);
         auto local_config_tensor1 =
-            sliding_window::construct_on_host_config_tensor(local_config1, this->config_, this->parallel_config_);
+            sliding_window::construct_on_host_config_tensor(local_config1, this->parallel_config_);
         auto remote_config_tensor1 =
-            sliding_window::construct_on_host_config_tensor(remote_config1, this->config_, this->parallel_config_);
+            sliding_window::construct_on_host_config_tensor(remote_config1, this->parallel_config_);
 
         auto pad_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
             pad_config_tensor1, parallel_config_, is_block_sharded, device);
@@ -178,11 +176,11 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         const auto& gather_config1 = kernel_config.gather_config1;
 
         const auto pad_config_tensor =
-            sliding_window::construct_on_host_config_tensor(pad_config, this->config_, this->parallel_config_);
+            sliding_window::construct_on_host_config_tensor(pad_config, this->parallel_config_);
         const auto gather_config_tensor0 =
-            sliding_window::construct_on_host_config_tensor(gather_config0, this->config_, this->parallel_config_);
+            sliding_window::construct_on_host_config_tensor(gather_config0, this->parallel_config_);
         const auto gather_config_tensor1 =
-            sliding_window::construct_on_host_config_tensor(gather_config1, this->config_, this->parallel_config_);
+            sliding_window::construct_on_host_config_tensor(gather_config1, this->parallel_config_);
 
         auto pad_config_device_tensor =
             sliding_window::move_config_tensor_to_device(pad_config_tensor, parallel_config_, is_block_sharded, device);
@@ -253,8 +251,8 @@ Tensor halo_op(
     p_config.shard_orientation = input_tensor.shard_spec().value().orientation;
 
     if (in_place && in_nsticks_per_core > max_out_nsticks_per_core) {
-        tt::log_info(
-            tt::LogAlways,
+        log_info(
+            tt::LogOp,
             "halo_device_operation - in place operation is not supported for parameterizations with "
             "input shard size larger than output shard size, falling back to normal operation");
         in_place = false;

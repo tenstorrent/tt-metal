@@ -106,8 +106,8 @@ WorkerMemoryMap create_worker_memory_map(const uint32_t base_l1_address) {
 
 // first generates the physical chip id matrix and then returns the sequence of connected chip ids
 std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
-    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    tt::tt_fabric::mesh_id_t mesh_id = control_plane->get_user_physical_mesh_ids()[0];
+    auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    tt::tt_fabric::MeshId mesh_id = control_plane.get_user_physical_mesh_ids()[0];
 
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     uint32_t chip_id_offset = 0;
@@ -121,7 +121,7 @@ std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
     std::unordered_map<tt_fabric::RoutingDirection, chip_id_t> chip_0_neigbors;
     std::optional<tt_fabric::RoutingDirection> chip_1_direction = std::nullopt;
     for (const auto& direction : routing_directions) {
-        auto neighbors = control_plane->get_intra_chip_neighbors(FabricNodeId(mesh_id, 0), direction);
+        auto neighbors = control_plane.get_intra_chip_neighbors(FabricNodeId(mesh_id, 0), direction);
         if (neighbors.empty()) {
             continue;
         }
@@ -204,7 +204,7 @@ std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
                 throw std::runtime_error("Failed to setup neighbor map, logical chip id exceeding bounds");
             }
             chip_id_t phys_chip_id =
-                control_plane->get_physical_chip_id_from_fabric_node_id(FabricNodeId(mesh_id, logical_chip_id));
+                control_plane.get_physical_chip_id_from_fabric_node_id(FabricNodeId(mesh_id, logical_chip_id));
             physical_chip_matrix[i][j] = phys_chip_id;
             logical_chip_id += row_offset;
         }

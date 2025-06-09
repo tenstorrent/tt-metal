@@ -86,5 +86,5 @@ def test_upblock(
     del unet
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.96)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.995)
     logger.info(f"PCC is: {pcc_message}")

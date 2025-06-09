@@ -11,7 +11,6 @@
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "tt-metalium/logger.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 
 namespace ttml::ttnn_fixed::distributed {
@@ -51,7 +50,7 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
 
     auto device_grid_shape = current_device->shape();
     const auto& storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
-    const auto num_tensor_buffers = storage.specs.size();
+    const auto num_tensor_buffers = storage.coords.size();
 
     if (num_devices != num_tensor_buffers) {
         throw std::logic_error(fmt::format(

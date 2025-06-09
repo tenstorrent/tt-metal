@@ -8,8 +8,10 @@
 #include <vector>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
+#include <tt-metalium/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_fabric {
 
@@ -53,6 +55,7 @@ enum class FabricMuxChannelType : uint8_t { FULL_SIZE_CHANNEL = 0, HEADER_ONLY_C
     -> Buffer size in bytes for a full size channel (for a header only channel its equal to the pre-determined packet
         header size)
     -> Base address where the channels start in the mux's L1
+    -> Core Type of the mux. Supports Worker and Idle Ethernet
 
     Advanced configuration parameters:
     -> Number of full size channel iters
@@ -81,6 +84,7 @@ struct FabricMuxConfig {
     uint8_t num_buffers_full_size_channel = 0;
     uint8_t num_buffers_header_only_channel = 0;
     size_t buffer_size_bytes_full_size_channel = 0;
+    uint8_t core_type_index = 0;
 
     FabricMuxConfig(
         uint8_t num_full_size_channels,
@@ -88,7 +92,8 @@ struct FabricMuxConfig {
         uint8_t num_buffers_full_size_channel,
         uint8_t num_buffers_header_only_channel,
         size_t buffer_size_bytes_full_size_channel,
-        size_t base_l1_address) :
+        size_t base_l1_address,
+        CoreType core_type = CoreType::WORKER) :
         num_full_size_channels(num_full_size_channels),
         num_header_only_channels(num_header_only_channels),
         // set to default number of buffers only for compilation purposes, no functional impact
@@ -134,6 +139,15 @@ struct FabricMuxConfig {
             this->full_size_channels_base_address + (num_full_size_channels * this->full_size_channel_size_bytes);
         this->memory_map_end_address =
             this->header_only_channels_base_address + (num_header_only_channels * this->header_only_channel_size_bytes);
+
+        const auto& hal = tt_metal::MetalContext::instance().hal();
+        if (core_type == CoreType::WORKER) {
+            core_type_index = hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::TENSIX);
+        } else if (core_type == CoreType::IDLE_ETH) {
+            core_type_index = hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::IDLE_ETH);
+        } else {
+            TT_THROW("Fabric Mux does not support core type {}", magic_enum::enum_name(core_type));
+        }
     }
 
     size_t get_buffer_size_bytes(FabricMuxChannelType channel_type) const {
@@ -150,9 +164,8 @@ struct FabricMuxConfig {
 
     std::vector<uint32_t> get_fabric_mux_compile_time_args() const {
         const auto& fabric_router_config = tt::tt_metal::MetalContext::instance()
-                                               .get_cluster()
                                                .get_control_plane()
-                                               ->get_fabric_context()
+                                               .get_fabric_context()
                                                .get_fabric_router_config();
         return std::vector<uint32_t>{
             this->num_full_size_channels,
@@ -170,7 +183,8 @@ struct FabricMuxConfig {
             fabric_router_config.edm_status_address,
             fabric_router_config.sender_channels_num_buffers[0],
             this->num_full_size_channel_iters,
-            this->num_iters_between_teardown_checks};
+            this->num_iters_between_teardown_checks,
+            this->core_type_index};
     }
 
     size_t get_status_address() const { return this->status_address; }

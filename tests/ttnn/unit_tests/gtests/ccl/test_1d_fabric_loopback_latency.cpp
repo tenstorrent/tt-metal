@@ -45,7 +45,7 @@ inline void RunPersistent1dFabricLatencyTest(
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     bool is_6u = num_devices == 32 && tt::tt_metal::GetNumPCIeDevices() == num_devices;
     if (num_devices < 4 && !is_6u) {
-        log_info("This test can only be run on T3000 or 6u systems");
+        log_info(tt::LogTest, "This test can only be run on T3000 or 6u systems");
         return;
     }
 
@@ -466,7 +466,7 @@ inline void RunPersistent1dFabricLatencyTest(
     for (size_t i = 0; i < programs.size(); i++) {
         auto d = devices_with_workers.at(i);
         auto& program = programs.at(i);
-        tt_metal::DumpDeviceProfileResults(d, program);
+        tt_metal::detail::DumpDeviceProfileResults(d);
     }
     log_info(tt::LogTest, "Finished");
 }
@@ -496,7 +496,7 @@ int main(int argc, char** argv) {
     size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
     bool is_6u = num_devices == 32 && tt::tt_metal::GetNumPCIeDevices() == num_devices;
     if (num_devices < test_expected_num_devices) {
-        tt::log_warning("This test can only be run on T3000 devices");
+        log_warning(tt::LogTest, "This test can only be run on T3000 devices");
         return 1;
     }
 

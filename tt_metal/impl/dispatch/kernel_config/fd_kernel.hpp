@@ -52,25 +52,26 @@ struct TerminationInfo {
 };
 
 static std::vector<string> dispatch_kernel_file_names = {
-    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",        // PREFETCH
-    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",        // PREFETCH_HD
-    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",        // PREFETCH_H
-    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",        // PREFETCH_D
-    "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",        // DISPATCH
-    "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",        // DISPATCH_HD
-    "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",        // DISPATCH_H
-    "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",        // DISPATCH_D
+    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",              // PREFETCH
+    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",              // PREFETCH_HD
+    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",              // PREFETCH_H
+    "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",              // PREFETCH_D
+    "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",              // DISPATCH
+    "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",              // DISPATCH_HD
+    "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",              // DISPATCH_H
+    "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",              // DISPATCH_D
     "tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp",  // DISPATCH_S
-    "",                                                      // MUX
-    "tt_metal/impl/dispatch/kernels/packet_mux.cpp",         // MUX_D
-    "tt_metal/impl/dispatch/kernels/packet_demux.cpp",       // DEMUX
-    "",                                                      // DEMUX_D
-    "tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp",    // US_TUNNELER_LOCAL
-    "tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp",    // US_TUNNELER_REMOTE
-    "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",   // PACKET_ROUTER_MUX
-    "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",   // PACKET_ROUTER_DEMUX
-    "",                                                      // FABRIC_ROUTER_VC
-    ""                                                       // COUNT
+    "",                                                            // MUX
+    "tt_metal/impl/dispatch/kernels/packet_mux.cpp",               // MUX_D
+    "tt_metal/impl/dispatch/kernels/packet_demux.cpp",             // DEMUX
+    "",                                                            // DEMUX_D
+    "tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp",          // US_TUNNELER_LOCAL
+    "tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp",          // US_TUNNELER_REMOTE
+    "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",         // PACKET_ROUTER_MUX
+    "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",         // PACKET_ROUTER_DEMUX
+    "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",              // FABRIC_MUX
+    "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",              // FABRIC_RETURN_MUX
+    ""                                                             // COUNT
 };
 
 // Top-level class describing a Fast Dispatch Kernel (kernel running on a specific core). All FD kernels should inherit
@@ -106,9 +107,9 @@ public:
     virtual void UpdateArgsForFabric(
         const CoreCoord& fabric_router_virtual,
         uint32_t outbound_eth_chan,
-        tt::tt_fabric::mesh_id_t upstream_mesh_id,
+        tt::tt_fabric::MeshId upstream_mesh_id,
         chip_id_t upstream_chip_id,
-        tt::tt_fabric::mesh_id_t downstream_mesh_id,
+        tt::tt_fabric::MeshId downstream_mesh_id,
         chip_id_t downstream_chip_id) {}
 
     // Generator function to create a kernel of a given type. New kernels need to be added here.
@@ -118,32 +119,43 @@ public:
         chip_id_t servicing_device_id,
         uint8_t cq_id,
         noc_selection_t noc_selection,
-        tt::tt_metal::DispatchWorkerType type);
+        tt::tt_metal::DispatchWorkerType type,
+        int tunnel_index = -1);
+
+    // Translate DispatchCoreType to programmable core type index
+    static uint32_t get_programmable_core_type_index(CoreType dispatch_core_type, bool is_active_eth_core = false);
+
+    // Translate core coord using the chip_id from the logical_cxy
+    //
+    // IDevice::virtual_core_from_logical_core uses the chip_id of the device instance whereas this function uses the
+    // chip_id specified in the logical coordinate.
+    static CoreCoord get_virtual_core_coord(const tt_cxy_pair& logical_cxy, const CoreType& core_type);
 
     // Register another kernel as upstream/downstream of this one
     void AddUpstreamKernel(FDKernel* upstream) { upstream_kernels_.push_back(upstream); }
     void AddDownstreamKernel(FDKernel* downstream) { downstream_kernels_.push_back(downstream); }
 
-    virtual CoreType GetCoreType() {
+    virtual CoreType GetCoreType() const {
         return tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     }
-    FDKernelType GetKernelType() { return kernel_type_; }
-    tt_cxy_pair GetLogicalCore() { return logical_core_; }
-    tt_cxy_pair GetVirtualCore() {
+    FDKernelType GetKernelType() const { return kernel_type_; }
+    tt_cxy_pair GetLogicalCore() const { return logical_core_; }
+    tt_cxy_pair GetVirtualCore() const {
         return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
             logical_core_, GetCoreType());
     }
-    chip_id_t GetDeviceId() { return device_id_; }  // Since this->device may not exist yet
+    chip_id_t GetDeviceId() const { return device_id_; }  // Since this->device may not exist yet
+    int GetNodeId() const { return node_id_; }
     virtual std::optional<tt::tt_metal::TerminationInfo> GetTerminationInfo() const { return std::nullopt; }
 
     // Get the port index for which a given kernel is upstream/downstream of this one
-    int GetUpstreamPort(FDKernel* other) { return GetPort(other, this->upstream_kernels_); }
-    int GetDownstreamPort(FDKernel* other) { return GetPort(other, this->downstream_kernels_); }
+    int GetUpstreamPort(FDKernel* other) const { return GetPort(other, this->upstream_kernels_); }
+    int GetDownstreamPort(FDKernel* other) const { return GetPort(other, this->downstream_kernels_); }
     void AddDevice(tt::tt_metal::IDevice* device) { device_ = device; }
     void AddProgram(tt::tt_metal::Program* program) { program_ = program; }
 
 protected:
-    void configure_kernel_variant(
+    [[maybe_unused]] KernelHandle configure_kernel_variant(
         const string& path,
         const std::vector<uint32_t>& compile_args,
         std::map<string, string> defines_in,
@@ -151,7 +163,7 @@ protected:
         bool send_to_brisc,
         bool force_watcher_no_inline,
         tt::tt_metal::KernelBuildOptLevel opt_level = tt::tt_metal::KernelBuildOptLevel::Os);
-    int GetPort(FDKernel* other, std::vector<FDKernel*>& kernels) {
+    int GetPort(const FDKernel* other, const std::vector<FDKernel*>& kernels) const {
         for (int idx = 0; idx < kernels.size(); idx++) {
             if (kernels[idx] == other) {
                 return idx;
@@ -161,9 +173,11 @@ protected:
         return -1;
     }
 
-    // Some static helper functions commonly used by FD kernels
+    // Helper function to get upstream device in the tunnel from current device, not valid for mmio
     static chip_id_t GetUpstreamDeviceId(chip_id_t device_id);
-    static chip_id_t GetDownstreamDeviceId(chip_id_t device_id);
+    // Helper function to get downstream device in the tunnel from current device
+    static chip_id_t GetDownstreamDeviceId(chip_id_t device_id, int tunnel = -1);
+    // Helper function to get the tunnel stop index of current device
     static uint32_t GetTunnelStop(chip_id_t device_id);
 
     tt::tt_metal::IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
