@@ -120,16 +120,6 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!index_tensor.is_sharded(), "Sharded tensors are not supported - index_tensor is sharded.");
     TT_FATAL(!src_tensor.is_sharded(), "Sharded tensors are not supported - src_tensor is sharded.");
 
-    TT_FATAL(
-        input_tensor.get_layout() == Layout::ROW_MAJOR,
-        "Input tensor doesn't have a row-major layout - only row-major layout is supported.");
-    TT_FATAL(
-        index_tensor.get_layout() == Layout::ROW_MAJOR,
-        "Index tensor doesn't have a row-major layout - only row-major layout is supported.");
-    TT_FATAL(
-        src_tensor.get_layout() == Layout::ROW_MAJOR,
-        "Src tensor doesn't have a row-major layout - only row-major layout is supported.");
-
     TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor's buffer is null.");
     TT_FATAL(index_tensor.buffer() != nullptr, "Index tensor's buffer is null.");
     TT_FATAL(src_tensor.buffer() != nullptr, "Src tensor's buffer is null.");
