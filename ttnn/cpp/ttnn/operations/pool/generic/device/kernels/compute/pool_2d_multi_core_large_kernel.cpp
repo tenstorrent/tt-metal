@@ -146,11 +146,6 @@ void MAIN {
         interm_cb_id,
         num_faces_in_input_tile,
         max_rows_for_reduction);
-    // pack_untilize_dst_init_short<max_tiles_per_iter>(interm_cb_id, num_out_rows, num_faces_in_output_tile);
-
-    // tilize reconfiguration is needed if we have more than one block and the number of tiles
-    // is not a multiple of MAX_TILES_PER_REDUCTION
-    constexpr bool tilize_reconfig_needed = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0;
 
     constexpr uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
