@@ -8,6 +8,7 @@ from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+from tqdm.auto import tqdm
 
 import ttnn
 
@@ -120,3 +121,68 @@ class TtLMSDiscreteScheduler:
             return (prev_sample,)
 
         return TtLMSDiscreteSchedulerOutput(prev_sample=prev_sample, pred_original_sample=pred_original_sample)
+
+
+def tt_guide(noise_pred, guidance_scale):  # will return latents
+    noise_pred_uncond = noise_pred[:1, :, :, :]
+    noise_pred_text = ttnn.slice(
+        noise_pred,
+        [1, 0, 0, 0],
+        [
+            noise_pred.shape[0],
+            noise_pred.shape[1],
+            noise_pred.shape[2],
+            noise_pred.shape[3],
+        ],
+    )
+    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+    return noise_pred
+
+
+def run(
+    model,
+    config,
+    tt_vae,
+    input_latents,
+    input_encoder_hidden_states,
+    _tlist,
+    time_step,
+    guidance_scale,
+    ttnn_scheduler,
+    use_host_decoder=True,
+):
+    ttnn.device.EnableMemoryReports()
+    ttnn_latents = input_latents
+    # Denoising loop
+    for index in tqdm(range(len(time_step))):
+        # expand the latents if we are doing classifier-free guidance to avoid doing two forward passes.
+        ttnn_latent_model_input = ttnn.concat([ttnn_latents, ttnn_latents], dim=0)
+        _t = _tlist[index]
+        t = time_step[index]
+        # predict the noise residual
+        ttnn_output = model(
+            ttnn_latent_model_input,  # input
+            timestep=_t,
+            encoder_hidden_states=input_encoder_hidden_states,
+            class_labels=None,
+            attention_mask=None,
+            cross_attention_kwargs=None,
+            return_dict=True,
+            config=config,
+        )
+        # perform guidance
+        noise_pred = tt_guide(ttnn_output, guidance_scale)
+
+        ttnn_latents = ttnn_scheduler.step(noise_pred, t, ttnn_latents).prev_sample
+
+    # scale and decode the image latents with vae
+    latents = 1 / 0.18215 * ttnn_latents
+
+    # on blackhole, we use the original vae decoder until #20760 is fixed
+    if use_host_decoder:
+        return ttnn_latents
+
+    ttnn_output = ttnn.permute(latents, [0, 2, 3, 1])
+    ttnn_output = tt_vae.decode(ttnn_output)
+    ttnn_output = ttnn.reshape(ttnn_output, [1, 512, 512, ttnn_output.shape[3]])
+    return ttnn.permute(ttnn_output, [0, 3, 1, 2])
