@@ -86,7 +86,6 @@ target_sources(
             api/tt-metalium/shape.hpp
             api/tt-metalium/shape2d.hpp
             api/tt-metalium/shape_base.hpp
-            api/tt-metalium/small_vector.hpp
             api/tt-metalium/sub_device.hpp
             api/tt-metalium/sub_device_types.hpp
             api/tt-metalium/system_mesh.hpp
@@ -328,8 +327,6 @@ target_link_libraries(
         umd::device
         magic_enum::magic_enum
         fmt::fmt-header-only
-        span
-        small_vector
         TracyClient
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon
