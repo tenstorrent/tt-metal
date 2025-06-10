@@ -83,7 +83,7 @@ struct DistributionSpec {
         }
     }
 
-    constexpr const size_t get_rank() const {
+    constexpr const uint32_t get_rank() const {
         if constexpr (has_static_rank) {
             return rank_ct;
         } else {
@@ -91,7 +91,7 @@ struct DistributionSpec {
         }
     }
 
-    constexpr const size_t get_num_banks() const {
+    constexpr const uint32_t get_num_banks() const {
         if constexpr (has_static_num_banks) {
             return num_banks_ct;
         } else {
@@ -212,9 +212,9 @@ struct DistributionSpec {
     static constexpr auto rank_ct = TensorShape::has_static_rank  ? TensorShape::rank
                                     : ShardShape::has_static_rank ? ShardShape::rank
                                                                   : UNKNOWN;
-    static constexpr size_t num_banks_ct = BankCoords::has_static_num_banks ? BankCoords::num_banks : UNKNOWN;
-    size_t rank_rt = 0;
-    size_t num_banks_rt = 0;
+    static constexpr uint32_t num_banks_ct = BankCoords::has_static_num_banks ? BankCoords::num_banks : UNKNOWN;
+    uint32_t rank_rt = 0;
+    uint32_t num_banks_rt = 0;
 
     std::conditional_t<all_shapes_static, std::monostate, ShapeBase> shard_grid_rt{};
     std::conditional_t<all_shapes_static, std::monostate, ShapeBase> shard_grid_strides_rt{};
@@ -228,7 +228,7 @@ struct DistributionSpec {
     ShardShape shard_shape_;    // Shard shape
     BankCoords bank_coords_;    // Bank coordinates
 
-    static constexpr size_t fetch_rank() {
+    static constexpr uint32_t fetch_rank() {
         if constexpr (has_static_rank) {
             return rank_ct;
         } else {
@@ -237,7 +237,7 @@ struct DistributionSpec {
         }
     }
 
-    static constexpr size_t fetch_num_banks() {
+    static constexpr uint32_t fetch_num_banks() {
         if constexpr (has_static_num_banks) {
             return num_banks_ct;
         } else {
@@ -248,43 +248,43 @@ struct DistributionSpec {
 };
 
 // TODO: Should we merge ShapeWrapperTypeSelector and BankCoordsWrapperTypeSelector into one?
-template <bool RankCTA, bool ShapeCTA, size_t CTA_BASE, size_t Rank>
+template <bool RankCTA, bool ShapeCTA, size_t CTA_BASE, uint32_t Rank>
 struct ShapeWrapperTypeSelector;
 
-template <size_t CTA_BASE, size_t Rank>
+template <size_t CTA_BASE, uint32_t Rank>
 struct ShapeWrapperTypeSelector<true, true, CTA_BASE, Rank> {
     // Both rank and dims are known at compile time -- we can construct a static wrapper
     using type = struct_cta_sequence_wrapper_t<ShapeWrapperStaticDimsStaticRank, CTA_BASE, Rank>;
 };
 
-template <size_t CTA_BASE, size_t Rank>
+template <size_t CTA_BASE, uint32_t Rank>
 struct ShapeWrapperTypeSelector<true, false, CTA_BASE, Rank> {
     // Rank is known at compile time, but dims are not
     using type = ShapeWrapperDynamicDimsStaticRank<Rank>;
 };
 
-template <bool ShapeCTA, size_t CTA_BASE, size_t Rank>
+template <bool ShapeCTA, size_t CTA_BASE, uint32_t Rank>
 struct ShapeWrapperTypeSelector<false, ShapeCTA, CTA_BASE, Rank> {
     // Rank is not known at compile time, doesn't matter if dims are known or not, use poorly dynamic wrapper
     using type = ShapeWrapperDynamicRank;
 };
 
-template <bool NumBanksCTA, bool BankCoordsCTA, size_t CTA_BASE, size_t NumBanks>
+template <bool NumBanksCTA, bool BankCoordsCTA, size_t CTA_BASE, uint32_t NumBanks>
 struct BankCoordsWrapperTypeSelector;
 
-template <size_t CTA_BASE, size_t NumBanks>
+template <size_t CTA_BASE, uint32_t NumBanks>
 struct BankCoordsWrapperTypeSelector<true, true, CTA_BASE, NumBanks> {
     // Both num_banks and coords are known at compile time -- we can construct a static wrapper
     using type = struct_cta_sequence_wrapper_t<BankCoordWrapperStaticNBanksStaticCoords, CTA_BASE, NumBanks>;
 };
 
-template <size_t CTA_BASE, size_t NumBanks>
+template <size_t CTA_BASE, uint32_t NumBanks>
 struct BankCoordsWrapperTypeSelector<true, false, CTA_BASE, NumBanks> {
     // Num_banks is known at compile time, but coords are not
     using type = BankCoordWrapperDynamicStaticNBanksDynamicCoords<NumBanks>;
 };
 
-template <bool BankCoordsCTA, size_t CTA_BASE, size_t NumBanks>
+template <bool BankCoordsCTA, size_t CTA_BASE, uint32_t NumBanks>
 struct BankCoordsWrapperTypeSelector<false, BankCoordsCTA, CTA_BASE, NumBanks> {
     // Num_banks is not known at compile time, doesn't matter if coords are known or not, use poorly dynamic wrapper
     using type = BankCoordWrapperDynamicsNBanks;
@@ -345,10 +345,10 @@ struct DistributionSpecWrapper {
 
     // Figure out locations (offsets) of compile-time arguments (if they are compile time)
     constexpr static size_t NEW_CTA_BASE = CTA_BASE + 1;  // +1 for args_config
-    constexpr static size_t RankBase = NEW_CTA_BASE;
-    constexpr static size_t NumBanksBase = RankBase + (RankStatic ? 1 : 0);
+    constexpr static uint32_t RankBase = NEW_CTA_BASE;
+    constexpr static uint32_t NumBanksBase = RankBase + (RankStatic ? 1 : 0);
 
-    constexpr static size_t RANK = RankStatic ? get_compile_time_arg_val(RankBase) : 0;
+    constexpr static uint32_t RANK = RankStatic ? get_compile_time_arg_val(RankBase) : 0;
     constexpr static size_t NUM_BANKS = NumBanksStatic ? get_compile_time_arg_val(NumBanksBase) : 0;
 
     constexpr static size_t TensorShapeBase = NumBanksBase + (NumBanksStatic ? 1 : 0);
@@ -379,12 +379,12 @@ auto build_dspec_from_args() {
     typename DSpec::PackedCoordsBase bank_coord_array;
 
     // Calculate CRTA offsets that can be calculated at compile time
-    static constexpr size_t rank_crta_offset = CRTA_BASE;
+    static constexpr uint32_t rank_crta_offset = CRTA_BASE;
     static constexpr size_t num_banks_crta_offset = CRTA_BASE + (!RankStatic ? 1 : 0);
     static constexpr size_t tensor_shape_crta_offset = num_banks_crta_offset + (!NumBanksStatic ? 1 : 0);
 
-    size_t rank = DSpec::fetch_rank();
-    size_t num_banks = DSpec::fetch_num_banks();
+    auto rank = DSpec::fetch_rank();
+    auto num_banks = DSpec::fetch_num_banks();
 
     if constexpr (RankStatic) {
         // In such case shape base is std::array<uint32_t, RANK>

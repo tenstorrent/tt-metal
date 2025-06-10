@@ -41,19 +41,19 @@ constexpr size_t compile_time_args_skip() {
     }
 }
 
-template <typename DSpec>
-size_t runtime_args_skip() {
+template <typename DSpec, std::enable_if_t<DSpec::has_static_rank && DSpec::has_static_num_banks, int> = 0>
+constexpr size_t runtime_args_skip() {
     // should be evaluated at compile time if rank and num_banks are static
-    if constexpr (DSpec::has_static_rank and DSpec::has_static_num_banks) {
-        return !DSpec::has_static_rank + !DSpec::has_static_num_banks +
-               (DSpec::rank_ct * !DSpec::TensorShapeT::is_static) + (DSpec::rank_ct * !DSpec::ShardShapeT::is_static) +
-               (DSpec::num_banks_ct * !DSpec::BankCoordsT::is_static);
-    } else {
-        return !DSpec::has_static_rank + !DSpec::has_static_num_banks +
-               (DSpec::fetch_rank() * !DSpec::TensorShapeT::is_static) +
-               (DSpec::fetch_rank() * !DSpec::ShardShapeT::is_static) +
-               (DSpec::fetch_num_banks() * !DSpec::BankCoordsT::is_static);
-    }
+    return !DSpec::has_static_rank + !DSpec::has_static_num_banks + (DSpec::rank_ct * !DSpec::TensorShapeT::is_static) +
+           (DSpec::rank_ct * !DSpec::ShardShapeT::is_static) + (DSpec::num_banks_ct * !DSpec::BankCoordsT::is_static);
+}
+
+template <typename DSpec, std::enable_if_t<!DSpec::has_static_rank || !DSpec::has_static_num_banks, int> = 0>
+size_t runtime_args_skip() {
+    return !DSpec::has_static_rank + !DSpec::has_static_num_banks +
+           (DSpec::fetch_rank() * !DSpec::TensorShapeT::is_static) +
+           (DSpec::fetch_rank() * !DSpec::ShardShapeT::is_static) +
+           (DSpec::fetch_num_banks() * !DSpec::BankCoordsT::is_static);
 }
 
 template <typename DSpec, size_t PageSize = detail::UNKNOWN>

@@ -9,9 +9,9 @@
 
 namespace nd_sharding {
 namespace detail {
-template <size_t... Dims>
+template <uint32_t... Dims>
 struct ShapeWrapperStaticDimsStaticRank {
-    static constexpr size_t rank = sizeof...(Dims);
+    static constexpr uint32_t rank = sizeof...(Dims);
     static constexpr bool is_static = true;
     static constexpr bool has_static_rank = true;
     using ShapeBase = std::array<uint32_t, rank>;
@@ -24,7 +24,7 @@ struct ShapeWrapperStaticDimsStaticRank {
     static_assert(((Dims > 0) && ...), "Shape dims must be greater than 0!");
 
     // Compute shape properities at compile time
-    static constexpr std::pair<size_t, ShapeBase> compute_volume_and_strides(const ShapeBase& shape) {
+    static constexpr std::pair<uint32_t, ShapeBase> compute_volume_and_strides(const ShapeBase& shape) {
         ShapeBase strides = {};
         uint32_t stride = 1;
         for (int i = rank - 1; i >= 0; --i) {
@@ -43,9 +43,9 @@ struct ShapeWrapperStaticDimsStaticRank {
     constexpr explicit ShapeWrapperStaticDimsStaticRank(ShapeBase&&) {}
 };
 
-template <size_t Rank>
+template <uint32_t Rank>
 struct ShapeWrapperDynamicDimsStaticRank {
-    static constexpr size_t rank = Rank;
+    static constexpr uint32_t rank = Rank;
     static constexpr bool is_static = false;
     static constexpr bool has_static_rank = true;
     using ShapeBase = std::array<uint32_t, rank>;
@@ -84,7 +84,7 @@ struct ShapeWrapperDynamicDimsStaticRank {
 struct ShapeWrapperDynamicRank {
     static constexpr bool is_static = false;
     static constexpr bool has_static_rank = false;
-    static constexpr size_t rank = static_cast<size_t>(-1);  // Rank is not known at compile time
+    static constexpr uint32_t rank = static_cast<uint32_t>(-1);  // Rank is not known at compile time
     using ShapeBase = Span<uint32_t>;
 
     // uint32_t shape_buffer[10];
