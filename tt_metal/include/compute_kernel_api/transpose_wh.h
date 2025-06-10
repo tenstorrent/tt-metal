@@ -30,9 +30,9 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
 
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t src_format = get_operand_src_format(icb);
-    const bool is_32bit = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
+    const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
 
-    if (is_32bit) {
+    if (is_int32) {
         UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb, false)));
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(true, false)));
         MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(true, false, icb)));
@@ -58,16 +58,13 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
 ALWI void transpose_wh_init_short(uint32_t icb) {
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t src_format = get_operand_src_format(icb);
-    const bool is_32bit = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
+    const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
 
-    if (is_32bit)
-    {
+    if (is_int32) {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(true, false)));
         MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(true, false, icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
-    }
-    else
-    {
+    } else {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true)));
         MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(true, true, icb)));
     }
@@ -96,9 +93,9 @@ ALWI void transpose_wh_init_short(uint32_t icb) {
 ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t src_format = get_operand_src_format(icb);
-    const bool is_32bit = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
+    const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
 
-    if (is_32bit) {
+    if (is_int32) {
         UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, itile, true)));
         UNPACK((llk_unpack_set_srcb_dummy_valid()));
         MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(idst)));
