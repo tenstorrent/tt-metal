@@ -183,7 +183,7 @@ def create_tt_model(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            200,  # max_generated_tokens
+            50,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -291,7 +291,7 @@ def test_demo_text(
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("Llama TG only supports batch-32")
 
-    enable_trace = True  # Use tracing for better perf
+    enable_trace = False  # Use tracing for better perf
     prefill_enable_trace = True  # repeat_batches > 1
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
@@ -499,6 +499,7 @@ def test_demo_text(
         except Exception as e:
             logger.error(f"Error during prefill: {str(e)}")
             raise e
+        print("LOGITS: ", logits.shape, logits)
         prefilled_token = logits.view(-1, 1)  # torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
@@ -530,6 +531,7 @@ def test_demo_text(
         users_decoding = True
 
         out_tok = prefilled_token  # .repeat(batch_size, 1)
+        print(f"!! {prefilled_token=}")
         try:
             model.switch_mode("decode")
         except Exception as e:
@@ -555,6 +557,7 @@ def test_demo_text(
                     kv_cache=tt_kv_cache,
                     sampling_params=device_sampling_params,
                 )
+                print(f"{out_tok_cpu=}")
             except Exception as e:
                 logger.error(f"Error during decoding: {str(e)}")
                 break
@@ -585,6 +588,7 @@ def test_demo_text(
                     user_tok not in tokenizer.stop_tokens and user_done[user] == False
                 ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
                     all_outputs[user].append(user_tok)
+                    print(f"{user_tok=}")
                 else:
                     if (
                         stop_at_eos

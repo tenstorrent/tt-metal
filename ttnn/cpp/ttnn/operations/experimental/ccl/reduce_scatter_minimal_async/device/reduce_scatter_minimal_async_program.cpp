@@ -124,6 +124,15 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     const auto num_batches = input_tensor_shape[0];
     const auto batch_slice_num_pages = input_tensor_num_pages / ring_size / num_batches;
 
+    // Tensor Info
+    const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
+    const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
+    const auto input_tensor_shape = input_tensor.get_padded_shape();
+    const auto intermediate_tensor_buffer_type = intermediate_tensor.buffer()->buffer_type();
+    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const auto num_batches = input_tensor_shape[0];
+    const auto batch_slice_num_pages = input_tensor_num_pages / ring_size / num_batches;
+
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
