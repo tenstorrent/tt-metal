@@ -15,8 +15,8 @@ void kernel_main() {
     uint32_t Ht = get_arg_val<uint32_t>(5);
     uint32_t Wt = get_arg_val<uint32_t>(6);
     uint32_t HtWt = get_arg_val<uint32_t>(7);
-    uint32_t HtWtTileBytes = HtWt * 2048;  // TODO(AP): assumed 16-bits
-    uint32_t WtTileBytes = Wt * 2048;      // TODO(AP): assumed 16-bits
+    uint32_t HtWtTileBytes = HtWt * 1024 * 2;  // TODO(AP): assumed 16-bits
+    uint32_t WtTileBytes = Wt * 1024 * 2;      // TODO(AP): assumed 16-bits
 
     constexpr uint32_t cb_id_in0 = 0;
 
