@@ -3,6 +3,23 @@ name: "(TG) Choose your pipeline"
 on:
   workflow_dispatch:
     inputs:
+      model-selection:
+        description: "Select model to run tests on. ⚠️ If 'llama3_70b' is selected, all checkbox selections would be ignored."
+        required: true
+        type: choice
+        options:
+          - all
+          - llama3_70b
+      trigger_type:
+        description: "Select the type of trigger for the pipeline."
+        required: true
+        type: choice
+        options:
+          - manual
+          - model-pr
+          - op-pr
+          - nightly
+          - hw-self-test
       build-type:
         required: false
         type: choice
