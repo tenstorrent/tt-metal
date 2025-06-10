@@ -6,12 +6,18 @@ import ttnn
 
 
 def get_DRAM_GN_config(module_path, idx):
-    if "mid_block" in module_path:
+    core_x = 8
+    if module_path is None:
+        core_x = 4
+        core_y = 4
+        num_out_blocks = 128
+    elif "mid_block" in module_path:
         core_y = 4
         num_out_blocks = 4
     else:
         parts = module_path.split(".")
         block_id = int(parts[parts.index("up_blocks") + 1])
+        resnet_id = int(parts[parts.index("resnets") + 1])
 
         if block_id == 0:
             core_y = 4
@@ -23,17 +29,26 @@ def get_DRAM_GN_config(module_path, idx):
             core_y = 8
             num_out_blocks = 16
         else:
-            if idx == 1:
+            if idx == 1 and resnet_id == 0:
                 core_y = 8
+                num_out_blocks = 64
             else:
+                core_x = 4
                 core_y = 4
-            num_out_blocks = 64
+                num_out_blocks = 128
 
-    return core_y, num_out_blocks
+    return core_x, core_y, num_out_blocks
 
 
 def get_DRAM_conv_config(module_path, idx):
-    if "mid_block" in module_path:
+    if module_path is None:
+        if idx == 1:
+            slice_type = None
+            num_slices = 1
+        else:
+            slice_type = ttnn.Conv2dSliceWidth
+            num_slices = 16
+    elif "mid_block" in module_path:
         slice_type = None
         num_slices = 1
     else:

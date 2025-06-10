@@ -7,7 +7,7 @@
 #include "ttnn/decorators.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
-#include "cpp/ttnn/distributed/api.hpp"
+#include "ttnn/distributed/api.hpp"
 
 namespace ttnn {
 namespace operations::experimental::ccl {
@@ -18,6 +18,7 @@ struct ExecuteAllGatherMatmul {
         const ttnn::Tensor& weight_tensor,
         const uint32_t dim,
         const CoreCoord all_gather_core_grid_offset,
+        const std::optional<const Tensor>& bias = std::nullopt,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config_ag = std::nullopt,
         const std::optional<size_t> num_workers = std::nullopt,
@@ -35,6 +36,7 @@ struct ExecuteAllGatherMatmul {
         const std::vector<ttnn::Tensor>& weight_tensor,
         const uint32_t dim,
         const CoreCoord all_gather_core_grid_offset,
+        const std::optional<const Tensor>& bias = std::nullopt,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config_ag = std::nullopt,
         const std::optional<size_t> num_workers = std::nullopt,

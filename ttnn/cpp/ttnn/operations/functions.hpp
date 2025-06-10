@@ -6,6 +6,7 @@
 
 #include <iterator>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <optional>
 #include <random>
@@ -14,8 +15,7 @@
 #include <ttnn/tensor/tensor_utils.hpp>
 #include <ttnn/tensor/types.hpp>
 #include <ttnn/tensor/tensor_impl.hpp>
-#include "cpp/ttnn/common/constants.hpp"
-#include "ttnn/tensor/host_buffer/host_buffer.hpp"
+#include "ttnn/common/constants.hpp"
 
 namespace ttnn {
 
@@ -64,7 +64,7 @@ static Tensor index_trilu(
         index += offset;
     }
     auto output = Tensor(
-                      tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(output_buffer))},
+                      tt::tt_metal::HostBuffer(std::move(output_buffer)),
                       TensorSpec(
                           logical_shape,
                           TensorLayout::fromPaddedShape(
@@ -105,7 +105,7 @@ static Tensor index_width(
         }  // dim c
     }  // dim N
     auto output = Tensor(
-                      tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(output_buffer))},
+                      tt::tt_metal::HostBuffer(std::move(output_buffer)),
                       TensorSpec(
                           logical_shape,
                           TensorLayout::fromPaddedShape(
@@ -146,7 +146,7 @@ static Tensor index_height(
         }  // dim C
     }  // dim N
     auto output = Tensor(
-                      tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(output_buffer))},
+                      tt::tt_metal::HostBuffer(std::move(output_buffer)),
                       TensorSpec(
                           logical_shape,
                           TensorLayout::fromPaddedShape(
@@ -186,7 +186,7 @@ static Tensor index_all(
         }  // dim C
     }  // dim N
     auto output = Tensor(
-                      tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(output_buffer))},
+                      tt::tt_metal::HostBuffer(std::move(output_buffer)),
                       TensorSpec(
                           logical_shape,
                           TensorLayout::fromPaddedShape(
@@ -226,11 +226,7 @@ static Tensor mask_padded_input(
             }  // dim H
         }  // dim C
     }  // dim N
-    auto output = Tensor(
-                      tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(output_buffer))},
-                      padded_shape,
-                      data_type,
-                      Layout::ROW_MAJOR)
+    auto output = Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), padded_shape, data_type, Layout::ROW_MAJOR)
                       .to_layout(layout);
     if (device != nullptr) {
         output = output.to_device(device, output_mem_config);
@@ -245,7 +241,7 @@ static Tensor fill_first_val_into_tensor(
     const Layout layout,
     IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{}) {
-    auto physical_volume = input_tensor.volume();
+    auto physical_volume = input_tensor.physical_volume();
     auto output_buffer = std::vector<T>(physical_volume);
     auto input_cpu_tensor = input_tensor.cpu();
     tt::stl::Span<const T> host_buffer = tt::tt_metal::host_buffer::get_as<T>(input_cpu_tensor);
@@ -254,15 +250,15 @@ static Tensor fill_first_val_into_tensor(
         output_buffer[i] = host_buffer[0];
     }
     auto output = Tensor(
-                      tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(output_buffer))},
+                      tt::tt_metal::HostBuffer(std::move(output_buffer)),
                       TensorSpec(
-                          input_tensor.get_logical_shape(),
+                          input_tensor.logical_shape(),
                           TensorLayout::fromPaddedShape(
                               data_type,
                               PageConfig(Layout::ROW_MAJOR),
                               MemoryConfig{},
-                              input_tensor.get_logical_shape(),
-                              input_tensor.get_padded_shape())))
+                              input_tensor.logical_shape(),
+                              input_tensor.padded_shape())))
                       .to_layout(layout);
     if (device != nullptr) {
         output = output.to_device(device, output_mem_config);
@@ -289,7 +285,7 @@ static Tensor prod_result_computation_WH_B0(
     }
     output_buffer[0] = result;
     auto output = Tensor(
-                      tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(output_buffer))},
+                      tt::tt_metal::HostBuffer(std::move(output_buffer)),
                       TensorSpec(
                           ttnn::Shape({}),
                           TensorLayout::fromPaddedShape(
@@ -335,7 +331,7 @@ static Tensor index_channel(
         value = 0;
     }  // dim N
     auto output = Tensor(
-                      tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(output_buffer))},
+                      tt::tt_metal::HostBuffer(std::move(output_buffer)),
                       TensorSpec(
                           logical_shape,
                           TensorLayout::fromPaddedShape(
@@ -375,7 +371,7 @@ static Tensor index_batch(
         value = value + 1;
     }  // dim N
     auto output = Tensor(
-                      tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(output_buffer))},
+                      tt::tt_metal::HostBuffer(std::move(output_buffer)),
                       TensorSpec(
                           logical_shape,
                           TensorLayout::fromPaddedShape(
@@ -396,13 +392,13 @@ static Tensor manual_insertion(
     const Layout layout = Layout::ROW_MAJOR,
     IDevice* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{}) {
-    TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR);
+    TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR);
     TT_ASSERT(
-        padded_shape[0] * padded_shape[1] * padded_shape[2] * padded_shape[3] == input_tensor.volume(),
+        padded_shape[0] * padded_shape[1] * padded_shape[2] * padded_shape[3] == input_tensor.physical_volume(),
         "Required shape volume must match old shape volume");
     auto input_cpu_tensor = input_tensor.cpu();
     auto output = Tensor(
-                      tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::get_host_buffer(input_cpu_tensor)},
+                      tt::tt_metal::host_buffer::get_host_buffer(input_cpu_tensor),
                       TensorSpec(
                           logical_shape,
                           TensorLayout::fromPaddedShape(
@@ -469,8 +465,7 @@ static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layo
         }
     }
 
-    return Tensor(tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(output_buffer))}, spec)
-        .to_layout(layout);
+    return Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec).to_layout(layout);
 }
 
 static Tensor random(
@@ -493,7 +488,7 @@ static bool nearly_equal(float a, float b, float epsilon = 1e-5f, float abs_thre
     auto norm = std::min((std::abs(a) + std::abs(b)), std::numeric_limits<float>::max());
     auto result = diff < std::max(abs_threshold, epsilon * norm);
     if (not result) {
-        tt::log_error(tt::LogTest, "{} != {}", a, b);
+        log_error(tt::LogTest, "{} != {}", a, b);
     }
     return result;
 }
@@ -506,11 +501,11 @@ static bool nearly_equal(::bfloat16 a, ::bfloat16 b, Args... args) {
 
 template <typename DataType, typename... Args>
 static bool allclose(const Tensor& tensor_a, const Tensor& tensor_b, Args... args) {
-    if (tensor_a.get_padded_shape() != tensor_b.get_padded_shape()) {
+    if (tensor_a.padded_shape() != tensor_b.padded_shape()) {
         return false;
     }
 
-    if (tensor_a.get_dtype() != tensor_b.get_dtype()) {
+    if (tensor_a.dtype() != tensor_b.dtype()) {
         return false;
     }
 

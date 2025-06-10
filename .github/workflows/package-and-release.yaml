@@ -4,7 +4,7 @@ on:
   schedule:
     # Create rc every day at EOD of PST Mon-Fri + night of Sunday to kick off
     # releases for beginning of work week
-    - cron: "0 1,14 * * *"
+    - cron: "0 0 * * *"
 
 permissions:
   contents: write
@@ -14,12 +14,16 @@ jobs:
   build-artifact:
     needs: create-tag
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       version: 22.04
       build-wheel: true
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       version: 22.04
@@ -58,7 +62,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
       build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-  tg-demos:
+  galaxy-4u-demos:
     needs: build-artifact
     uses: ./.github/workflows/tg-demo-tests-impl.yaml
     secrets: inherit
@@ -66,6 +70,24 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  galaxy-6u-demos:
+    needs: build-artifact
+    uses: ./.github/workflows/tg-demo-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      topology: topology-6u
+  blackhole-demos:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
+    with:
+      runner-label: BH
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   get-params:
     runs-on: ubuntu-latest
     outputs:

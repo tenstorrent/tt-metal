@@ -3,22 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
-import torch
+from typing import Optional
+
 import pytest
+import torch
 from loguru import logger
 from transformers import AutoTokenizer
-from typing import Optional
+
 import ttnn
+from models.demos.wormhole.mamba.reference.args import ModelMode
 from models.demos.wormhole.mamba.reference.decode_model import MambaPretrainedModelName
 from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba
-from models.demos.wormhole.mamba.reference.args import ModelMode
-from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
 from models.demos.wormhole.mamba.tt import model_config
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
-    comp_pcc,
-)
+from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
 from models.utility_functions import skip_for_grayskull
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
 class MambaPytorch(torch.nn.Module):

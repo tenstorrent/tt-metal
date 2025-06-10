@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -40,6 +40,7 @@ class TtConv:
         enable_split_reader=False,
         reshard_if_not_optimal=True,
         batch_size=1,
+        conv_math_fidelity=None,
     ):
         self.device = device
         self.parameters = parameters
@@ -64,7 +65,7 @@ class TtConv:
         self.reshape_tensor = reshape_tensor
 
         self.conv_config = self._initialize_conv_config()
-        self.compute_config = self._initialize_compute_config()
+        self.compute_config = self._initialize_compute_config(conv_math_fidelity)
         if conv_alone:
             self.weights, self.bias = self.parameters["weight"], self.parameters["bias"]
         else:
@@ -76,9 +77,7 @@ class TtConv:
             weights_dtype=ttnn.bfloat16,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            input_channels_alignment=16 if self.input_params[4] < 16 else 32,
             act_block_w_div=1,
-            transpose_shards=False,
             deallocate_activation=False,
             enable_act_double_buffer=self.enable_act_double_buffer,
             enable_split_reader=self.enable_split_reader,
@@ -111,13 +110,13 @@ class TtConv:
 
         return conv_config
 
-    def _initialize_compute_config(self):
+    def _initialize_compute_config(self, math_fidelity):
         return ttnn.init_device_compute_kernel_config(
             self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=math_fidelity if math_fidelity is not None else ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
 
     def __call__(self, x):
@@ -309,7 +308,12 @@ class TtSPPF:
         self.batch_size = batch_size
         self.cv1 = TtConv(device, parameters["cv1"], input_params=input_params[0], deallocate_activation=True)
         self.cv2 = TtConv(
-            device, parameters["cv2"], input_params=input_params[1], change_shard=True, deallocate_activation=True
+            device,
+            parameters["cv2"],
+            input_params=input_params[1],
+            change_shard=True,
+            deallocate_activation=True,
+            conv_math_fidelity=ttnn.MathFidelity.HiFi2,
         )
 
     def __call__(self, x):
@@ -318,9 +322,11 @@ class TtSPPF:
         y = [cv1]
         for i in range(3):
             output = ttnn.max_pool2d(
-                input_tensor=ttnn.to_layout(ttnn.sharded_to_interleaved(y[-1]), layout=ttnn.ROW_MAJOR_LAYOUT)
-                if y[-1].is_sharded()
-                else y[-1],
+                input_tensor=(
+                    ttnn.to_layout(ttnn.sharded_to_interleaved(y[-1]), layout=ttnn.ROW_MAJOR_LAYOUT)
+                    if y[-1].is_sharded()
+                    else y[-1]
+                ),
                 batch_size=self.batch_size,
                 input_h=out_h,
                 input_w=out_w,
@@ -422,7 +428,7 @@ class TtMaxSigmoidAttnBlock:
         ttnn.deallocate(guide)
         aw = ttnn.reshape(aw, (batch, m, height, width, n))
 
-        aw = ttnn.max(aw, dim=-1)
+        aw = ttnn.max(aw, dim=-1, keepdim=True)
         aw = ttnn.permute(aw, (0, 1, 2, 4, 3))  # To increase the perfomance of squeeze operation
         aw = ttnn.squeeze(aw, -2)  # If the above permute is removed use ttnn.squeeze(aw, -1)
         aw = ttnn.div(aw, (self.hc**0.5))
@@ -485,6 +491,7 @@ class TtC2fAttn:
             input_params=input_params[1],
             change_shard=True,
             deallocate_activation=self.deallocate_activation,
+            conv_math_fidelity=ttnn.MathFidelity.HiFi2,
         )
         self.m = [
             TtBottleneck(
@@ -856,10 +863,8 @@ class TtWorldDetect:
         self.strides = None
         self.self_shape = None
         self.cv4 = [
-            BNContrastiveHead(embed)
-            if with_bn
-            else TtContrastiveHead(
-                self.device, self.parameters["cv4"][i]
+            (
+                BNContrastiveHead(embed) if with_bn else TtContrastiveHead(self.device, self.parameters["cv4"][i])
             )  # BNContrastiveHead(embed) is not invoked So, Not defined.
             for i, _ in enumerate(ch)
         ]

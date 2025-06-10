@@ -2,20 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import os
-import torch
-import pytest
 import re
-import os
-import ttnn
-from models.demos.qwen.tt.qwen_common import (
-    HostEmbedding,
-    get_single_rot_mat,
-)
-from models.demos.qwen.tt.qwen_model import TtTransformer
-from models.demos.qwen.tt.qwen_embedding import TtQwenEmbedding
-from models.demos.qwen.tt.model_config import TtModelArgs
-from models.demos.qwen.reference.tokenizer import Tokenizer
 
+import pytest
+import torch
+
+import ttnn
+from models.demos.qwen.reference.tokenizer import Tokenizer
+from models.demos.qwen.tt.model_config import TtModelArgs
+from models.demos.qwen.tt.qwen_common import HostEmbedding, get_single_rot_mat
+from models.demos.qwen.tt.qwen_embedding import TtQwenEmbedding
+from models.demos.qwen.tt.qwen_model import TtTransformer
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import profiler, skip_for_grayskull
 

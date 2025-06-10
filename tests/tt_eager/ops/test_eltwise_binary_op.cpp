@@ -31,17 +31,17 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
     auto input_a_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(input_tensor_a);
     auto input_b_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(input_tensor_b);
 
-    auto output_buffer = std::vector<bfloat16>(input_tensor_a.volume());
+    auto output_buffer = std::vector<bfloat16>(input_tensor_a.physical_volume());
 
     for (auto index = 0; index < output_buffer.size(); index++) {
         auto value = BinaryFunction{}(input_a_buffer[index].to_float(), input_b_buffer[index].to_float());
         output_buffer[index] = bfloat16(value);
     }
     return Tensor(
-        tt::tt_metal::HostStorage{tt::tt_metal::host_buffer::create(std::move(output_buffer))},
-        input_tensor_a.get_logical_shape(),
-        input_tensor_a.get_dtype(),
-        input_tensor_a.get_layout());
+        tt::tt_metal::HostBuffer(std::move(output_buffer)),
+        input_tensor_a.logical_shape(),
+        input_tensor_a.dtype(),
+        input_tensor_a.layout());
 }
 
 template <auto HostFunction, typename DeviceFunction, typename... Args>

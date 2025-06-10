@@ -2,12 +2,19 @@ name: "vLLM nightly tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      vllm-commit:
+        description: "vLLM branch or sha"
+        required: false
+        default: dev
   schedule:
     - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
 
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       version: 22.04
@@ -20,3 +27,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      vllm-commit: ${{ inputs.vllm-commit }}

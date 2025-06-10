@@ -7,15 +7,15 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/ttnn-pybind/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail {
+namespace {
 
 template <typename ccl_operation_t>
 void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
@@ -68,10 +68,10 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace detail
+}  // namespace
 
 void py_bind_all_gather_concat(pybind11::module& module) {
-    detail::bind_all_gather_concat(
+    bind_all_gather_concat(
         module,
         ttnn::experimental::all_gather_concat,
         R"doc(

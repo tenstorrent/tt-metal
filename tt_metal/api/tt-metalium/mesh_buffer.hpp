@@ -31,10 +31,13 @@ struct DeviceLocalBufferConfig {
     TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED;
 
     // Must be set for sharded buffer layouts.
-    std::optional<ShardSpecBuffer> shard_parameters;
+    std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>> shard_parameters;
 
     // The direction in which memory for this buffer is allocated.
     std::optional<bool> bottom_up;
+
+    // Optional: Specify the worker sub device this buffer will be allocated on
+    std::optional<SubDeviceId> sub_device_id = std::nullopt;
 };
 
 // Specifies MeshBuffer that is replicated across the virtual mesh.
@@ -79,7 +82,7 @@ class MeshBuffer {
 public:
     static std::shared_ptr<MeshBuffer> create(
         const MeshBufferConfig& mesh_buffer_config,
-        const DeviceLocalBufferConfig& device_local_layout,
+        const DeviceLocalBufferConfig& device_local_config,
         MeshDevice* mesh_device,
         std::optional<DeviceAddr> address = std::nullopt);
     ~MeshBuffer();

@@ -1,19 +1,18 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
 import torch
-from diffusers import (
-    AutoencoderKL,
-)
+from diffusers import AutoencoderKL
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
-    MIDBLOCK_RESNET_NORM_NUM_BLOCKS,
+    GROUPNORM_DECODER_NUM_BLOCKS,
     MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
-    UPBLOCK_RESNET_NORM_NUM_BLOCKS,
+    MIDBLOCK_RESNET_NORM_NUM_BLOCKS,
     UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
+    UPBLOCK_RESNET_NORM_NUM_BLOCKS,
     UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_decoder import VaeDecoder
@@ -25,7 +24,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     """input_channels, input_height, input_width, out_channels, output_height, output_width,
     midblock_in_channels, midblock_resnet_norm_blocks, midblock_conv_channel_split_factors,
     upblock_out_channels, upblock_out_dimensions, upblock_resnet_norm_blocks,
-    upblock_resnet_conv_in_channel_split_factors, upblock_upsample_conv_channel_split_factors""",
+    upblock_resnet_conv_in_channel_split_factors, upblock_upsample_conv_channel_split_factors, norm_num_blocks""",
     [
         (
             4,  # input_channels
@@ -42,6 +41,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             UPBLOCK_RESNET_NORM_NUM_BLOCKS,
             UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
             UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS,
+            GROUPNORM_DECODER_NUM_BLOCKS,
         ),
     ],
 )
@@ -61,6 +61,7 @@ def test_decoder(
     upblock_resnet_norm_blocks,
     upblock_resnet_conv_in_channel_split_factors,
     upblock_upsample_conv_channel_split_factors,
+    norm_num_blocks,
     use_program_cache,
 ):
     torch.manual_seed(0)
@@ -90,6 +91,7 @@ def test_decoder(
         upblock_resnet_norm_blocks,
         upblock_resnet_conv_in_channel_split_factors,
         upblock_upsample_conv_channel_split_factors,
+        norm_num_blocks,
     )
 
     # Prepare ttnn input
@@ -109,4 +111,4 @@ def test_decoder(
     ttnn_output = ttnn.to_torch(ttnn_output)
 
     # TODO: Improve PCC (issue #21131)
-    assert_with_pcc(torch_output, ttnn_output, 0.959)
+    assert_with_pcc(torch_output, ttnn_output, 0.9588)

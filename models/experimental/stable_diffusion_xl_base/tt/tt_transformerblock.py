@@ -10,18 +10,40 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_feedforward import TtFee
 
 class TtBasicTransformerBlock(nn.Module):
     def __init__(
-        self, device, state_dict, module_path, query_dim, num_attn_heads, out_dim, weights_dtype=ttnn.bfloat16
+        self,
+        device,
+        state_dict,
+        module_path,
+        model_config,
+        query_dim,
+        num_attn_heads,
+        out_dim,
+        weights_dtype=ttnn.bfloat16,
     ):
         super().__init__()
 
         self.attn1 = TtAttention(
-            device, state_dict, f"{module_path}.attn1", query_dim, num_attn_heads, out_dim, weights_dtype=weights_dtype
+            device,
+            state_dict,
+            f"{module_path}.attn1",
+            model_config,
+            query_dim,
+            num_attn_heads,
+            out_dim,
+            weights_dtype=weights_dtype,
         )
         self.attn2 = TtAttention(
-            device, state_dict, f"{module_path}.attn2", query_dim, num_attn_heads, out_dim, weights_dtype=weights_dtype
+            device,
+            state_dict,
+            f"{module_path}.attn2",
+            model_config,
+            query_dim,
+            num_attn_heads,
+            out_dim,
+            weights_dtype=weights_dtype,
         )
 
-        self.ff = TtFeedForward(device, state_dict, f"{module_path}.ff", weights_dtype=weights_dtype)
+        self.ff = TtFeedForward(device, state_dict, f"{module_path}.ff", model_config, weights_dtype=weights_dtype)
 
         norm1_weights = state_dict[f"{module_path}.norm1.weight"]
         norm1_bias = state_dict[f"{module_path}.norm1.bias"]

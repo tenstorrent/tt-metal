@@ -2,28 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-##### Python imports #####
-import pytest
-from loguru import logger
 import os
 
-##### PyTorch imports #####
-import torch
-
-##### TTNN imports #####
-import ttnn
-from ttnn import ConcatMeshToTensor
-from models.utility_functions import skip_for_grayskull
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.tt_transformers.tt.multimodal.llama_conv2d_patch import (
-    TtLlamaConv2dPatch,
-)
-
-from models.tt_transformers.tt.model_config import ModelArgs
 import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.multimodal.llama_conv2d_patch import TtLlamaConv2dPatch
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from ttnn import ConcatMeshToTensor
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")

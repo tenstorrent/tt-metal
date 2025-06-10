@@ -5,11 +5,11 @@
 #pragma once
 
 #include <stdint.h>
-#include <tt-metalium/command_queue_common.hpp>
 #include <utility>
 #include <vector>
 
 #include <umd/device/tt_core_coordinates.h>
+#include "command_queue_common.hpp"
 #include "dispatch_settings.hpp"
 
 namespace tt {
@@ -47,6 +47,8 @@ public:
     uint32_t scratch_db_base() const;
 
     uint32_t scratch_db_size() const;
+
+    uint32_t ringbuffer_size() const;
 
     uint32_t dispatch_buffer_block_size_pages() const;
 

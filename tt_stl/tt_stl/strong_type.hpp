@@ -79,6 +79,7 @@ public:
     constexpr StrongType& operator=(StrongType&&) noexcept = default;
 
     constexpr const T& operator*() const { return value_; }
+    constexpr const T& get() const { return value_; }
 
     // requires() = default on a constexpr function doesn't behave on gcc/clang
     // so it needed the explicit definition to compile.

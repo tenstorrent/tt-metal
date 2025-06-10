@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,13 +10,12 @@
 //  - # blocks must evenly divide the dispatch buffer size
 //  - dispatch buffer base must be page size aligned
 
+#include "dataflow_api.h"
 #include "debug/assert.h"
 #include "debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 
 // The command queue write interface controls writes to the completion region, host owns the completion region read
 // interface Data requests from device and event states are written to the completion region
@@ -54,28 +53,43 @@ constexpr uint32_t host_completion_q_wr_ptr = get_compile_time_arg_val(26);
 constexpr uint32_t dev_completion_q_wr_ptr = get_compile_time_arg_val(27);
 constexpr uint32_t dev_completion_q_rd_ptr = get_compile_time_arg_val(28);
 
-// used for fd on fabric
-constexpr uint32_t downstream_mesh_id = get_compile_time_arg_val(29);
-constexpr uint32_t downstream_dev_id = get_compile_time_arg_val(30);
-constexpr uint32_t upstream_mesh_id = get_compile_time_arg_val(31);
-constexpr uint32_t upstream_dev_id = get_compile_time_arg_val(32);
-constexpr uint32_t fabric_router_noc_xy = get_compile_time_arg_val(33);
-constexpr uint32_t outbound_eth_chan = get_compile_time_arg_val(34);
-constexpr uint32_t client_interface_addr = get_compile_time_arg_val(35);
+constexpr uint32_t first_stream_used = get_compile_time_arg_val(29);
 
-constexpr uint32_t first_stream_used = get_compile_time_arg_val(36);
+constexpr uint32_t virtualize_unicast_cores = get_compile_time_arg_val(30);
+constexpr uint32_t num_virtual_unicast_cores = get_compile_time_arg_val(31);
+constexpr uint32_t num_physical_unicast_cores = get_compile_time_arg_val(32);
 
-constexpr uint32_t virtualize_unicast_cores = get_compile_time_arg_val(37);
-constexpr uint32_t num_virtual_unicast_cores = get_compile_time_arg_val(38);
-constexpr uint32_t num_physical_unicast_cores = get_compile_time_arg_val(39);
+// fabric mux connection
+constexpr uint32_t fabric_header_rb_base = get_compile_time_arg_val(33);
+constexpr uint32_t fabric_header_rb_entries = get_compile_time_arg_val(34);
+constexpr uint32_t my_fabric_sync_status_addr = get_compile_time_arg_val(35);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(40);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(41);
+constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(36);
+constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(37);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(38);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(39);
+constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(40);
+constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(41);
+constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(42);
+constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(43);
+constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(44);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(45);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(46);
+constexpr size_t worker_credits_stream_id = get_compile_time_arg_val(47);
+
+constexpr size_t fabric_worker_flow_control_sem = get_compile_time_arg_val(48);
+constexpr size_t fabric_worker_teardown_sem = get_compile_time_arg_val(49);
+constexpr size_t fabric_worker_buffer_index_sem = get_compile_time_arg_val(50);
+
+constexpr uint32_t num_hops = get_compile_time_arg_val(51);
+
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(52);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(53);
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
-constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SLAVE_NOC_X, DOWNSTREAM_SLAVE_NOC_Y));
+constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
 constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint64_t pcie_noc_xy =
@@ -104,12 +118,9 @@ static uint32_t rd_block_idx;
 static uint32_t cb_fence;  // walks through cb page by page
 static uint32_t cmd_ptr;   // walks through pages in cb cmd by cmd
 static uint32_t downstream_cb_data_ptr = downstream_cb_base;
-static uint32_t write_offset[3];  // added to write address on non-host writes
+static uint32_t write_offset[CQ_DISPATCH_MAX_WRITE_OFFSETS];  // added to write address on non-host writes
 
 static uint32_t upstream_total_acquired_page_count;
-
-static auto client_interface =
-    reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
 
 constexpr uint32_t packed_write_max_multicast_sub_cmds =
     get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
@@ -919,7 +930,7 @@ static void process_wait() {
     if (wait_stream) {
         volatile uint32_t* sem_addr = reinterpret_cast<volatile uint32_t*>(
             STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
-        DPRINT << " DISPATCH WAIT STREAM " << HEX() << stream << DEC() << " count " << count << ENDL();
+        // DPRINT << " DISPATCH WAIT STREAM " << HEX() << stream << DEC() << " count " << count << ENDL();
         do {
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         } while (!stream_wrap_ge(*sem_addr, count));
@@ -1026,7 +1037,7 @@ void process_notify_dispatch_s_go_signal_cmd() {
     uint32_t wait = cmd->notify_dispatch_s_go_signal.wait;
     // write barrier to wait before sending the go signal
     if (wait) {
-        DPRINT << " DISPATCH_S_NOTIFY BARRIER\n";
+        // DPRINT << " DISPATCH_S_NOTIFY BARRIER\n";
 #ifdef TRACE_WRITE_BARRIERS
         DeviceZoneScopedN("noc_async_write_barrier");
 #endif
@@ -1123,7 +1134,7 @@ re_run_command:
             }
         } break;
 
-        case CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL:
+        case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL:
             // DPRINT << "cmd_notify_dispatch_s_go_signal" << ENDL();
             process_notify_dispatch_s_go_signal_cmd();
             break;
@@ -1176,17 +1187,23 @@ re_run_command:
 
         case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
 
-        case CQ_DISPATCH_CMD_SET_WRITE_OFFSET:
+        case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: {
             // DPRINT << "write offset: " << cmd->set_write_offset.offset0 << " " << cmd->set_write_offset.offset1 << "
             // "
             //        << cmd->set_write_offset.offset2 << " host id " << cmd->set_write_offset.program_host_id <<
             //        ENDL();
             DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
-            write_offset[0] = cmd->set_write_offset.offset0;
-            write_offset[1] = cmd->set_write_offset.offset1;
-            write_offset[2] = cmd->set_write_offset.offset2;
-            cmd_ptr += sizeof(CQDispatchCmd);
+            uint32_t offset_count = cmd->set_write_offset.offset_count;
+
+            ASSERT(offset_count <= std::size(write_offset));
+            uint32_t* cmd_write_offset = (uint32_t*)(cmd_ptr + sizeof(CQDispatchCmd));
+
+            for (uint32_t i = 0; i < offset_count; i++) {
+                write_offset[i] = cmd_write_offset[i];
+            }
+            cmd_ptr += sizeof(CQDispatchCmd) + sizeof(uint32_t) * offset_count;
             break;
+        }
 
         case CQ_DISPATCH_CMD_TERMINATE:
             // DPRINT << "dispatch terminate\n";
@@ -1258,9 +1275,6 @@ static inline bool process_cmd_h(
 
 void kernel_main() {
     // DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
-    if constexpr (use_fabric(fabric_router_noc_xy)) {
-        tt::tt_fabric::fabric_endpoint_init(client_interface, 0 /*unused*/);
-    }
 
     // Initialize local state of any additional nocs used instead of the default
     static_assert(my_noc_index != upstream_noc_index);

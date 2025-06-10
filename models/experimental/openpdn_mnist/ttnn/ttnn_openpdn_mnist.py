@@ -46,7 +46,6 @@ class OpenPDNMnistConv2D:
             weights_dtype=weights_dtype,
             activation=activation,
             shard_layout=shard_layout,
-            input_channels_alignment=16 if conv.in_channels < 16 else 32,
             deallocate_activation=self.deallocate_activation,
             output_layout=ttnn.TILE_LAYOUT,
         )

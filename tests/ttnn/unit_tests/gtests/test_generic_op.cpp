@@ -9,7 +9,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/constants.hpp>
 
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "ttnn_test_fixtures.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -30,15 +30,15 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
     Tensor device_input_tensor = input_tensor.to_device(this->device_);
     Tensor golden = ttnn::argmax(device_input_tensor).cpu();
 
-    Tensor device_output_tensor = tt::tt_metal::create_device_tensor(golden.get_tensor_spec(), this->device_);
+    Tensor device_output_tensor = tt::tt_metal::create_device_tensor(golden.tensor_spec(), this->device_);
 
-    const tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    const tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const uint32_t unit_size = input_tensor.element_size();
 
     const CoreCoord core_coord(0, 0);
     const CoreRangeSet core = std::set<CoreRange>({core_coord, core_coord});
 
-    const auto& input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     const uint32_t rank = input_shape.size();
     const bool reduce_all = true;
     const uint32_t red_dim_units = input_shape[rank - 1];  // Last dimension in input i.e. reduction dimension
@@ -78,7 +78,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
     const bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     const auto inner_dim_units = output_last_dim;
-    const auto outer_dim_units = input_tensor.get_logical_volume() / inner_dim_units / red_dim_units;
+    const auto outer_dim_units = input_tensor.logical_volume() / inner_dim_units / red_dim_units;
 
     const KernelDescriptor::CompileTimeArgs compile_time_args = {
         (uint32_t)src_cb_idx,
@@ -115,7 +115,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
 
     ttnn::generic_op(std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor);
     Tensor output_tensor = device_output_tensor.cpu();
-    auto dtype = golden.get_dtype();
+    auto dtype = golden.dtype();
     auto allclose = ttnn::allclose<uint32_t>(golden, output_tensor);
     ASSERT_TRUE(allclose);
 }
@@ -146,18 +146,17 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
 
     auto input_tensor = ttnn::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), shape, Layout::TILE);
     auto device_input_tensor = input_tensor.to_device(this->device_, mem_config);
-    auto device_output_tensor =
-        tt::tt_metal::create_device_tensor(device_input_tensor.get_tensor_spec(), this->device_);
+    auto device_output_tensor = tt::tt_metal::create_device_tensor(device_input_tensor.tensor_spec(), this->device_);
 
     auto shard_spec = device_input_tensor.shard_spec().value();
     TT_FATAL(shard_spec.grid == all_cores, "shard spec grid should be same as all_cores");
 
-    tt::log_info(tt::LogTest, "Running ttnn unary relu sharded");
+    log_info(tt::LogTest, "Running ttnn unary relu sharded");
     auto golden = ttnn::relu(device_input_tensor).cpu();
 
-    tt::log_info(tt::LogTest, "Running generic_op unary relu sharded");
-    auto act_df = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor.get_dtype());
-    auto out_df = tt::tt_metal::datatype_to_dataformat_converter(device_output_tensor.get_dtype());
+    log_info(tt::LogTest, "Running generic_op unary relu sharded");
+    auto act_df = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor.dtype());
+    auto out_df = tt::tt_metal::datatype_to_dataformat_converter(device_output_tensor.dtype());
     uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
     uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
     TT_FATAL(input_tile_size == output_tile_size, "input and output tile size should be the same");
@@ -246,7 +245,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
         {"ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD"},
     };
 
-    tt::log_info(tt::LogTest, "Running ttnn binary add interleaved");
+    log_info(tt::LogTest, "Running ttnn binary add interleaved");
     ttnn::Shape shape{11, 9, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
     auto input_tensor_a = ttnn::random::random(shape, DataType::BFLOAT16);
     auto input_tensor_b = ttnn::random::random(shape, DataType::BFLOAT16);
@@ -255,11 +254,10 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
 
     auto golden = ttnn::add(device_input_tensor_a, device_input_tensor_b).cpu().to_layout(Layout::ROW_MAJOR);
 
-    tt::log_info(tt::LogTest, "Running generic add interleaved");
+    log_info(tt::LogTest, "Running generic add interleaved");
 
     // Data movement kernel needs output tensor address to be passed as a runtime argument.
-    auto device_output_tensor =
-        tt::tt_metal::create_device_tensor(device_input_tensor_a.get_tensor_spec(), this->device_);
+    auto device_output_tensor = tt::tt_metal::create_device_tensor(device_input_tensor_a.tensor_spec(), this->device_);
 
     auto compute_with_storage_grid_size = this->device_->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -268,9 +266,9 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
         CoreCoord(0, 0), CoreCoord(compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1)};
     CoreRangeSet all_cores = std::set<CoreRange>({all_cores_range});
 
-    auto input_a_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor_a.get_dtype());
-    auto input_b_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor_b.get_dtype());
-    auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_output_tensor.get_dtype());
+    auto input_a_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor_a.dtype());
+    auto input_b_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor_b.dtype());
+    auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_output_tensor.dtype());
 
     tt::CBIndex src0_cb_index = tt::CBIndex::c_0;
     tt::CBIndex src1_cb_index = tt::CBIndex::c_1;
@@ -318,7 +316,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
 
     // setup runtime arguments for data movement kernels
     uint32_t num_cores_total = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
-    uint32_t num_tiles = device_input_tensor_a.volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = device_input_tensor_a.physical_volume() / tt::constants::TILE_HW;
     bool row_major = true;
     auto [num_cores, _, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles, row_major);
@@ -420,7 +418,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
 }
 
 TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
-    tt::log_info(tt::LogTest, "Running ttnn matmul");
+    log_info(tt::LogTest, "Running ttnn matmul");
     uint32_t Mt_original = 10;
     uint32_t Kt_original = 2;
     uint32_t Nt_original = 4;
@@ -443,7 +441,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
         matmul::MatmulMultiCoreProgramConfig{}  // program_config to indicate we want multi-core
     );
 
-    tt::log_info(tt::LogTest, "Running matmul generic test");
+    log_info(tt::LogTest, "Running matmul generic test");
 
     // Parameters for matmul call - copy paste from matmul_multi_core in bmm_op_multi_core.cpp
     bool bcast_batch = false;
@@ -452,15 +450,15 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
         ttnn::Shape{B_original, 1, Mt_original * tt::constants::TILE_HEIGHT, Nt_original * tt::constants::TILE_WIDTH};
     auto output = tt::tt_metal::create_device_tensor(
         output_shape,
-        input_tensor_a.get_dtype(),
-        input_tensor_a.get_layout(),
+        input_tensor_a.dtype(),
+        input_tensor_a.layout(),
         input_tensor_a.device(),
         input_tensor_a.memory_config());
 
     tt::tt_metal::Buffer* src0_buffer = input_tensor_a.buffer();
     tt::tt_metal::Buffer* src1_buffer = input_tensor_b.buffer();
 
-    ttnn::Shape cshape = output.get_logical_shape();  // C=A*B, N1MK*11KN->N1MN
+    ttnn::Shape cshape = output.logical_shape();  // C=A*B, N1MK*11KN->N1MN
 
     auto compute_with_storage_grid_size = this->device_->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -483,7 +481,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    const auto &ashape = input_tensor_a.get_logical_shape(), bshape = input_tensor_b.get_logical_shape();
+    const auto &ashape = input_tensor_a.logical_shape(), bshape = input_tensor_b.logical_shape();
     uint32_t B = get_batch_size(ashape);
     uint32_t Mt = ashape[-2] / tt::constants::TILE_HEIGHT;
     uint32_t Kt = ashape[-1] / tt::constants::TILE_WIDTH;
@@ -502,9 +500,9 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
     uint32_t num_input_tiles = 2;
     uint32_t num_output_tiles = 2;
 
-    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.get_dtype());
-    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.get_dtype());
-    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.dtype());
+    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype());
+    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t in0_single_tile_size = tt::tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt::tt_metal::detail::TileSize(in1_data_format);
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
@@ -550,7 +548,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
     uint32_t dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(uint32_t)output_cb_index, dst_is_dram};
 
-    tt::log_info(tt::LogTest, "num_cores: {}, num_core_x: {}, num_core_y: {}", num_cores, num_cores_x, num_cores_y);
+    log_info(tt::LogTest, "num_cores: {}, num_core_x: {}, num_core_y: {}", num_cores, num_cores_x, num_cores_y);
     KernelDescriptor::RuntimeArgs reader_rt_args_per_core(
         num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
     KernelDescriptor::RuntimeArgs writer_rt_args_per_core(
@@ -587,7 +585,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
 
         writer_rt_args_per_core[core_x][core_y] = {dst_addr, num_output_tiles_per_core, num_tiles_written};
 
-        tt::log_info(
+        log_info(
             tt::LogTest,
             "core: {}, reader_rt_args {}, writer_rt_args {}",
             core,
@@ -628,7 +626,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
         Kt,                                // Kt
         num_output_tiles_per_core_group_2  // Nt
     };
-    tt::log_info(tt::LogTest, "core_group_1: {}, core_group_2: {}", core_group_1.ranges(), core_group_2.ranges());
+    log_info(tt::LogTest, "core_group_1: {}, core_group_2: {}", core_group_1.ranges(), core_group_2.ranges());
     tt::tt_metal::KernelDescriptor compute_kernel_descriptor_1 = {
         .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         .core_ranges = core_group_1,
@@ -681,14 +679,14 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
     Tensor device_input_tensor = input_tensor.to_layout(Layout::TILE).to_device(this->device_, dram_memory_config);
     Tensor device_output_tensor = tt::tt_metal::create_device_tensor(
         ttnn::TensorSpec(
-            device_input_tensor.get_logical_shape(),
+            device_input_tensor.logical_shape(),
             ttnn::TensorLayout(
-                device_input_tensor.get_dtype(),
-                ttnn::PageConfig(device_input_tensor.get_layout()),
+                device_input_tensor.dtype(),
+                ttnn::PageConfig(device_input_tensor.layout()),
                 device_input_tensor.memory_config())),
         device_input_tensor.device());
 
-    auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor.get_dtype());
+    auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor.dtype());
     uint32_t is_dram_input = device_input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     CoreCoord core = {0, 0};
@@ -764,9 +762,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
         .cbs = {input_cb_descriptor, output_cb_descriptor},
     };
 
-    tt::log_info(tt::LogTest, "Running ttnn unary exp");
+    log_info(tt::LogTest, "Running ttnn unary exp");
     Tensor golden = ttnn::exp(device_input_tensor);
-    tt::log_info(tt::LogTest, "Running generic_op unary exp");
+    log_info(tt::LogTest, "Running generic_op unary exp");
     Tensor device_output = ttnn::generic_op(std::vector{device_input_tensor, device_output_tensor}, program_descriptor);
 
     auto allclose = ttnn::allclose<bfloat16>(golden.cpu(), device_output.cpu());

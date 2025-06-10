@@ -8,7 +8,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_resnetblock2d import
 
 
 class TtUNetMidBlock2D(nn.Module):
-    def __init__(self, device, state_dict, module_path):
+    def __init__(self, device, state_dict, module_path, model_config, gn_fallback=False):
         super().__init__()
 
         num_layers_attn = 1
@@ -22,7 +22,9 @@ class TtUNetMidBlock2D(nn.Module):
             )
 
         for i in range(num_layers_resn):
-            self.resnets.append(TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}"))
+            self.resnets.append(
+                TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}", model_config, gn_fallback=gn_fallback)
+            )
 
     def forward(self, input_tensor, input_shape):
         B, C, H, W = input_shape

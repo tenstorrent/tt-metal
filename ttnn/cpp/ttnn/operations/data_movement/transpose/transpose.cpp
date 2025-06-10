@@ -10,7 +10,7 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "cpp/ttnn/operations/copy.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 #include <tt-metalium/hal.hpp>
 
@@ -68,7 +68,7 @@ ttnn::Tensor transpose_nd(
     const uint32_t dim2,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<float>& pad_value) {
-    const auto rank = input_tensor.get_logical_shape().rank();
+    const auto rank = input_tensor.logical_shape().rank();
     ttnn::SmallVector<int64_t> permutation;
     permutation.reserve(rank);
     for (uint32_t i = 0; i < rank; ++i) {
@@ -87,7 +87,7 @@ ttnn::Tensor ExecuteTranspose::invoke(
     const int64_t& dim2,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<float>& pad_value) {
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     uint32_t normalized_dim1 = input_shape.get_normalized_index(dim1);
     uint32_t normalized_dim2 = input_shape.get_normalized_index(dim2);
 
@@ -106,7 +106,7 @@ ttnn::Tensor ExecuteTranspose::invoke(
     bool cn = (normalized_dim1 == 0 && normalized_dim2 == 1) || (normalized_dim2 == 0 && normalized_dim1 == 1);
     bool bfloat8_supported = cn || wh;
     bool typecast =
-        input_unsqueezed.get_dtype() == DataType::BFLOAT8_B and !bfloat8_supported and !input_unsqueezed.is_sharded();
+        input_unsqueezed.dtype() == DataType::BFLOAT8_B and !bfloat8_supported and !input_unsqueezed.is_sharded();
     Tensor input_typecasted = typecast ? ttnn::typecast(input_unsqueezed, DataType::BFLOAT16) : input_unsqueezed;
 
     auto memory_config = memory_config_arg.value_or(input_typecasted.memory_config());
@@ -115,8 +115,8 @@ ttnn::Tensor ExecuteTranspose::invoke(
     TT_FATAL(normalized_dim2 <= 3, "dimension has to be 0-3 only corresponding to N,C,H,W");
 
     Tensor output;
-    if ((normalized_dim1 == normalized_dim2) || (input_typecasted.get_padded_shape()[normalized_dim1] == 1 &&
-                                                 input_typecasted.get_padded_shape()[normalized_dim2] == 1)) {
+    if ((normalized_dim1 == normalized_dim2) || (input_typecasted.padded_shape()[normalized_dim1] == 1 &&
+                                                 input_typecasted.padded_shape()[normalized_dim2] == 1)) {
         output = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
             input_typecasted, memory_config);
     } else {

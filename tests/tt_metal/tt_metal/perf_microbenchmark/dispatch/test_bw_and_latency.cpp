@@ -25,19 +25,19 @@
 #include <vector>
 
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
-#include <tt-metalium/command_queue_common.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/command_queue_common.hpp"
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/tt_xy_pair.h"
 #include "umd/device/types/xy_pair.h"
@@ -450,8 +450,7 @@ int main(int argc, char** argv) {
                         vec.data(),
                         vec.size() * sizeof(uint32_t),
                         tt_cxy_pair(device->id(), w),
-                        dispatch_l1_unreserved_base,
-                        vec.size() == 1);
+                        dispatch_l1_unreserved_base);
                 }
             }
 
@@ -465,8 +464,7 @@ int main(int argc, char** argv) {
                         vec.data(),
                         vec.size() * sizeof(uint32_t),
                         tt_cxy_pair(device->id(), w),
-                        dispatch_l1_unreserved_base,
-                        vec.size() == 1);
+                        dispatch_l1_unreserved_base);
                 }
             }
             auto end = std::chrono::system_clock::now();
@@ -492,7 +490,7 @@ int main(int argc, char** argv) {
         pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
     if (pass) {

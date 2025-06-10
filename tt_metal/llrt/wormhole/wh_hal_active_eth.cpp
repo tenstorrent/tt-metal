@@ -4,7 +4,7 @@
 
 #define COMPILE_FOR_ERISC
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -15,6 +15,7 @@
 #include "llrt/hal.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include "wormhole/wh_hal.hpp"
+#include "wormhole/wh_hal_eth_asserts.hpp"
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) \
     ((uint64_t)&(((mailboxes_t*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
@@ -24,7 +25,7 @@ namespace tt::tt_metal::wormhole {
 HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     std::vector<DeviceAddr> mem_map_bases;
 
-    mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
+    mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = 0x0;  // Anything better to use?
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = eth_l1_mem::address_map::ERISC_BARRIER_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] =
@@ -56,7 +57,7 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
 
     std::vector<uint32_t> mem_map_sizes;
-    mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
+    mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BASE)] =
         eth_l1_mem::address_map::MAX_SIZE;  // Anything better to use?
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = eth_l1_mem::address_map::ERISC_BARRIER_SIZE;
@@ -83,6 +84,9 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE;
 
+    // Base FW api not supported on WH
+    std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
+
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
     std::vector<HalJitBuildConfig> processor_types(1);
     for (uint8_t processor_class_idx = 0; processor_class_idx < NumEthDispatchClasses; processor_class_idx++) {
@@ -91,6 +95,7 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
             .local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
             .fw_launch_addr = eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG,
             .fw_launch_addr_value = 0x1,
+            .memory_load = ll_api::memory::Loading::DISCRETE,
         };
         processor_classes[processor_class_idx] = processor_types;
     }
@@ -104,6 +109,7 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
         processor_classes,
         mem_map_bases,
         mem_map_sizes,
+        fw_mailbox_addr,
         false /*supports_cbs*/,
         false /*supports_receiving_multicast_cmds*/};
 }

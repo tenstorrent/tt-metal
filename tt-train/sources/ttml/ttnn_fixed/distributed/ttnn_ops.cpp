@@ -11,7 +11,6 @@
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "tt-metalium/logger.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 
 namespace ttml::ttnn_fixed::distributed {
@@ -23,7 +22,7 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor) {
         throw std::logic_error("All reduce should not be called for a single device case");
     }
 
-    auto shape = tensor.get_logical_shape();
+    auto shape = tensor.logical_shape();
     if (shape.rank() != 4U) {
         throw std::logic_error("All reduce supports only 4D tensors");
     }
@@ -50,8 +49,8 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
     }
 
     auto device_grid_shape = current_device->shape();
-    const auto& storage = std::get<tt::tt_metal::DeviceStorage>(tensor.get_storage());
-    const auto num_tensor_buffers = storage.specs.size();
+    const auto& storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
+    const auto num_tensor_buffers = storage.coords.size();
 
     if (num_devices != num_tensor_buffers) {
         throw std::logic_error(fmt::format(
@@ -61,7 +60,7 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
             num_tensor_buffers));
     }
 
-    auto tensor_shape = tensor.get_logical_shape();
+    auto tensor_shape = tensor.logical_shape();
     auto tensor_rank = tensor_shape.rank();
     if (tensor_rank != 4U) {
         throw std::logic_error(
@@ -88,7 +87,7 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
     ttnn::Tensor scattered_tensor = tt::tt_metal::allocate_tensor_on_mesh(
         ttnn::TensorSpec(
             ttnn::Shape(scattered_shape),
-            tt::tt_metal::TensorLayout(tensor.get_dtype(), tensor.get_layout(), tensor.memory_config())),
+            tt::tt_metal::TensorLayout(tensor.dtype(), tensor.layout(), tensor.memory_config())),
         current_device);
     auto scattered_tensors = ttnn::distributed::get_device_tensors(scattered_tensor);
     if (scattered_tensors.size() != num_devices) {
@@ -110,7 +109,7 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
         ttnn::slice(tensor_shard, start, end, stride, std::nullopt, scattered_tensors[idx]);
         ++idx;
     }
-    return ttnn::distributed::aggregate_as_tensor(scattered_tensors, tt::tt_metal::AllGatherTensor{});
+    return ttnn::distributed::combine_device_tensors(scattered_tensors);
 }
 
 }  // namespace ttml::ttnn_fixed::distributed

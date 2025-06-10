@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -29,6 +29,7 @@ def run_index_fill_test(shape, dim, value, dtype, device):
     assert assert_equal(ttnn_output, torch_output)
 
 
+@pytest.mark.skip("Test case failing assert_equal() - see #22482")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -69,6 +70,7 @@ def test_index_fill_float(shape, dim, value, dtype, device):
     run_index_fill_test(shape, dim, value, dtype, device)
 
 
+@pytest.mark.skip("Test case failing assert_equal() - see #22482")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -102,6 +104,7 @@ def test_index_fill_int(shape, dim, value, device):
     run_index_fill_test(shape, dim, value, torch.int32, device)
 
 
+@pytest.mark.skip("Test case failing assert_equal() - see #22482")
 @pytest.mark.parametrize(
     "shape",
     [

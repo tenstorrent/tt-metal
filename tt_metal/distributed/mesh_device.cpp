@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <boost/container/vector.hpp>
-#include <device_impl.hpp>
-#include <logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
 #include <mesh_device.hpp>
@@ -25,6 +24,7 @@
 
 #include "allocator.hpp"
 #include "assert.hpp"
+#include "device/device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "mesh_trace.hpp"
 #include "shape_base.hpp"
@@ -521,6 +521,9 @@ void MeshDevice::enable_program_cache() {
 
 void MeshDevice::disable_and_clear_program_cache() {
     log_info(tt::LogMetal, "Disabling and clearing program cache on MeshDevice {}", this->id());
+    if (program_cache_->is_enabled()) {
+        program_cache_->disable();
+    }
     program_cache_->clear();
 }
 
@@ -636,16 +639,8 @@ std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(chip_id_t /*connected_ch
 
 uint32_t MeshDevice::num_virtual_eth_cores(SubDeviceId sub_device_id) {
     // Issue #19729: Return the maximum number of active ethernet cores across physical devices in the Mesh.
-    TT_FATAL(
-        *(sub_device_manager_tracker_->get_active_sub_device_manager()->id()) ==
-            *(this->get_default_sub_device_manager_id()),
-        "Virtualizing Ethernet Cores across a MeshDevice is not supported when a custom SubDeviceManager is loaded.");
-    if (not max_num_eth_cores_) {
-        for (auto device : this->get_devices()) {
-            max_num_eth_cores_ = std::max(device->num_virtual_eth_cores(SubDeviceId{0}), max_num_eth_cores_);
-        }
-    }
-    return max_num_eth_cores_;
+    TT_FATAL(*sub_device_id == 0, "Cannot query virtual ethernet cores per sub-device when using MeshDevice");
+    return num_virtual_eth_cores_;
 }
 
 // Core and worker management methods (These are OK)
@@ -667,6 +662,11 @@ CoreCoord MeshDevice::logical_core_from_dram_channel(uint32_t dram_channel) cons
 uint32_t MeshDevice::dram_channel_from_logical_core(const CoreCoord& logical_core) const {
     return validate_and_get_reference_value(scoped_devices_->root_devices(), [logical_core](const auto& device) {
         return device->dram_channel_from_logical_core(logical_core);
+    });
+}
+uint32_t MeshDevice::dram_channel_from_virtual_core(const CoreCoord& virtual_core) const {
+    return validate_and_get_reference_value(scoped_devices_->root_devices(), [virtual_core](const auto& device) {
+        return device->dram_channel_from_virtual_core(virtual_core);
     });
 }
 
@@ -703,11 +703,6 @@ CommandQueue& MeshDevice::command_queue(size_t cq_id) {
     return reference_device()->command_queue(cq_id);
 }
 
-bool MeshDevice::dispatch_firmware_active() const {
-    return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->dispatch_firmware_active(); });
-}
-
 // Trace management
 void MeshDevice::begin_trace(const uint8_t cq_id, const uint32_t tid) {
     TT_THROW("begin_trace() is not supported on MeshDevice");
@@ -730,6 +725,14 @@ std::shared_ptr<MeshTraceBuffer>& MeshDevice::create_mesh_trace(const MeshTraceI
 
 void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) {
     TracyTTMetalReleaseMeshTrace(this->get_device_ids(), *trace_id);
+    const auto& trace_mesh_buffer = trace_buffer_pool_.at(trace_id)->mesh_buffer;
+    TT_FATAL(
+        trace_mesh_buffer and trace_mesh_buffer->is_allocated(),
+        "Trace buffer for {} is not allocated when calling {}",
+        *trace_id,
+        __FUNCTION__);
+    auto current_trace_buffers_size = this->get_trace_buffers_size();
+    this->set_trace_buffers_size(current_trace_buffers_size - trace_mesh_buffer->size());
     trace_buffer_pool_.erase(trace_id);
 }
 
@@ -791,6 +794,9 @@ bool MeshDevice::initialize(
     const auto& allocator = reference_device()->allocator();
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
         this, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
+    // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
+    // as the number of virtual ethernet cores seen by the MeshDevice
+    num_virtual_eth_cores_ = DevicePool::instance().get_max_num_eth_cores_across_all_devices();
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (this->using_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
@@ -834,6 +840,10 @@ void MeshDevice::init_fabric() {
 program_cache::detail::ProgramCache& MeshDevice::get_program_cache() { return *program_cache_; }
 HalProgrammableCoreType MeshDevice::get_programmable_core_type(CoreCoord virtual_core) const {
     return reference_device()->get_programmable_core_type(virtual_core);
+}
+
+HalMemType MeshDevice::get_mem_type_of_core(CoreCoord virtual_core) const {
+    return reference_device()->get_mem_type_of_core(virtual_core);
 }
 
 // Methods for SubDevice Management

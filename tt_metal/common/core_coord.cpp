@@ -626,6 +626,15 @@ std::vector<CoreCoord> corerange_to_cores(const CoreRangeSet& crs, std::optional
     return all_cores;
 }
 
+CoreRangeSet select_from_corerange(const CoreRangeSet& crs, uint32_t start_index, uint32_t end_index, bool row_wise) {
+    auto all_cores = corerange_to_cores(crs, end_index + 1, row_wise);
+    std::vector<CoreRange> selected_cores;
+    for (uint32_t i = start_index; i <= end_index; i++) {
+        selected_cores.push_back(CoreRange(all_cores[i], all_cores[i]));
+    }
+    return CoreRangeSet(selected_cores);
+}
+
 bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b) { return !(a == b); }
 
 auto fmt::formatter<CoreRangeSet>::format(const CoreRangeSet& core_range_set, format_context& ctx) const

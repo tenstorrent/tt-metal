@@ -15,7 +15,7 @@
 #include <vector>
 
 #include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -23,7 +23,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
@@ -56,8 +56,10 @@ static void test_sems_across_core_types(
             continue;
         }
 
-        const auto& eth_cores =
+        const auto& eth_cores_unordered =
             active_eth ? device->get_active_ethernet_cores() : device->get_inactive_ethernet_cores();
+
+        std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
         if (eth_cores.size() > 0) {
             auto program = tt::tt_metal::CreateProgram();
 
@@ -122,8 +124,10 @@ TEST_F(DispatchFixture, EthTestBlank) {
     Program program = CreateProgram();
 
     // TODO: tweak when FD supports idle eth
-    const auto& eth_cores =
+    const auto& eth_cores_unordered =
         this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores();
+
+    std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
 
     if (eth_cores.size() > 0) {
         CoreCoord eth_core = *eth_cores.begin();
@@ -168,7 +172,7 @@ TEST_F(DispatchFixture, EthTestInitLocalMemory) {
     // This test will hang/assert if there is a failure
 
     if (not this->slow_dispatch_) {
-        tt::log_warning("Skipping fast dispatch test until active eth memory map is fixed");
+        log_warning(tt::LogTest, "Skipping fast dispatch test until active eth memory map is fixed");
         return;
     }
 

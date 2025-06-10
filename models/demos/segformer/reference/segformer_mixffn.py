@@ -4,6 +4,7 @@
 
 import torch.nn as nn
 from transformers.activations import ACT2FN
+
 from models.demos.segformer.reference.segformer_dwconv import SegformerDWConv
 
 

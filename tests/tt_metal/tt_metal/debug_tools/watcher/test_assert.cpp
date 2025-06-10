@@ -17,11 +17,11 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
-#include <tt-metalium/dev_msgs.h>
+#include "dev_msgs.h"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/utils.hpp>
@@ -78,7 +78,7 @@ static void RunTest(
                     .noc = tt_metal::NOC::RISCV_0_default
                 }
             );
-            risc = "brisc";
+            risc = " brisc";
             break;
         case DebugNCrisc:
             assert_kernel = CreateKernel(
@@ -148,9 +148,7 @@ static void RunTest(
             );
             risc = "erisc";
             break;
-        default:
-            log_info("Unsupported risc type: {}, skipping test...", riscv_type);
-            GTEST_SKIP();
+        default: log_info(tt::LogTest, "Unsupported risc type: {}, skipping test...", riscv_type); GTEST_SKIP();
     }
 
     // Write runtime args that should not trip an assert.
@@ -188,7 +186,7 @@ static void RunTest(
             "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. Current kernel: "
             "{}.",
             device->id(),
-            (riscv_type == DebugErisc) ? "active ethnet" : "worker",
+            (riscv_type == DebugErisc) ? "acteth" : "worker",
             logical_core.x,
             logical_core.y,
             virtual_core.x,
@@ -216,7 +214,7 @@ static void RunTest(
             "kernel completing with pending NOC transactions (missing {} barrier). Current kernel: "
             "{}.",
             device->id(),
-            (riscv_type == DebugErisc) ? "active ethnet" : "worker",
+            (riscv_type == DebugErisc) ? "acteth" : "worker",
             logical_core.x,
             logical_core.y,
             virtual_core.x,

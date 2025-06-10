@@ -226,7 +226,6 @@ ALWI void abs_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_abs<APPROX
  */
 ALWI void abs_tile_init() { MATH((llk_math_eltwise_unary_sfpu_abs_init<APPROX>())); }
 
-#ifndef ARCH_GRAYSKULL
 // clang-format off
 /**
  * Performs element-wise computation of absolute value on each element of a tile
@@ -244,7 +243,6 @@ ALWI void abs_tile_init() { MATH((llk_math_eltwise_unary_sfpu_abs_init<APPROX>()
  */
  // clang-format on
 ALWI void abs_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_abs_int32<APPROX>(idst))); }
-#endif
 
 // clang-format off
 /**
@@ -1030,6 +1028,25 @@ ALWI void unary_gt_tile(uint32_t idst, uint32_t param0) {
  */
 ALWI void unary_gt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_gt_init<APPROX>())); }
 
+// unary gt : if x > value --> 1, else 0
+// clang-format off
+/**
+ * Performs element-wise computation of:  result = 1 if x>value , where x is each element of a tile
+ * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
+ */
+// clang-format on
+ALWI void unary_gt_tile_int32(uint32_t idst, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_gt_int32<APPROX>(idst, param0)));
+}
 // unary lt : if x < value --> 1.0, else 0.0
 // clang-format off
 /**
@@ -1048,6 +1065,26 @@ ALWI void unary_gt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_gt_init
 // clang-format on
 ALWI void unary_lt_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_lt<APPROX>(idst, param0)));
+}
+
+// unary lt : if x < value --> 1, else 0
+// clang-format off
+/**
+ * Performs element-wise computation of:  result = 1 if x<value , where x is each element of a tile
+ * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
+ */
+// clang-format on
+ALWI void unary_lt_tile_int32(uint32_t idst, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_lt_int32<APPROX>(idst, param0)));
 }
 
 /**

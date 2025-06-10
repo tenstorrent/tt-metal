@@ -40,15 +40,16 @@ Glossary:
 """
 
 from __future__ import annotations
+
 import json
+from typing import Literal, cast
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange, repeat, einsum
+from einops import einsum, rearrange, repeat
 
 from models.demos.wormhole.mamba.reference.args import ModelArgs, ModelMode
-
-from typing import Literal, cast
 
 MambaPretrainedModelName = Literal[
     "state-spaces/mamba-2.8b-slimpj",
@@ -153,7 +154,7 @@ class Mamba(nn.Module):
             model: Mamba model with weights loaded
 
         """
-        from transformers.utils import WEIGHTS_NAME, CONFIG_NAME
+        from transformers.utils import CONFIG_NAME, WEIGHTS_NAME
         from transformers.utils.hub import cached_file
 
         def load_config_hf(model_name):

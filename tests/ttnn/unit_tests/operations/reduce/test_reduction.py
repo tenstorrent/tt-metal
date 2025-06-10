@@ -9,22 +9,24 @@ import ttnn
 import sys
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull, torch_random
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole, torch_random
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
 @pytest.mark.parametrize("dim", [-1, -2])
-def test_std(device, batch_size, h, w, dim):
+@pytest.mark.parametrize("correction", [True, False])
+@pytest.mark.parametrize("keepdim", [True, False])
+def test_std(device, batch_size, h, w, dim, correction, keepdim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((batch_size, h, w), dtype=torch.bfloat16)
-    torch_output_tensor = torch.std(torch_input_tensor, dim=dim, keepdim=True)
+    torch_output_tensor = torch.std(torch_input_tensor, dim=dim, keepdim=keepdim, correction=correction)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.std(input_tensor, dim=dim)
+    output_tensor = ttnn.std(input_tensor, dim=dim, keepdim=keepdim, correction=correction)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
 
@@ -37,15 +39,16 @@ def test_std(device, batch_size, h, w, dim):
 @pytest.mark.parametrize("w", [32, 64])
 @pytest.mark.parametrize("dim", [None, [], -1, -2])
 @pytest.mark.parametrize("keepdim", [True])
-def test_var(device, batch_size, h, w, dim, keepdim):
+@pytest.mark.parametrize("correction", [True, False])
+def test_var(device, batch_size, h, w, dim, keepdim, correction):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((batch_size, h, w), dtype=torch.bfloat16)
-    torch_output_tensor = torch.var(torch_input_tensor, dim=dim, keepdim=keepdim)
+    torch_output_tensor = torch.var(torch_input_tensor, dim=dim, keepdim=keepdim, correction=correction)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.var(input_tensor, dim=dim, keepdim=keepdim)
+    output_tensor = ttnn.var(input_tensor, dim=dim, keepdim=keepdim, correction=correction)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
 
@@ -61,20 +64,21 @@ def test_var(device, batch_size, h, w, dim, keepdim):
 @pytest.mark.parametrize("w", [77])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
 @pytest.mark.parametrize("keepdim", [True, False])
-def test_prod(device, batch_size, c, h, w, dim, keepdim):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_prod(device, batch_size, c, h, w, dim, keepdim, dtype):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((batch_size, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.prod(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     input_tensor = ttnn.from_torch(
-        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=dtype
     )
 
     output_tensor = ttnn.prod(input_tensor, dim=dim, keepdim=keepdim, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.from_device(output_tensor)
 
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.bfloat16)
     assert len(output_tensor.shape) == len(torch_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape
     # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
@@ -203,6 +207,7 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@skip_for_blackhole("Bad CosineSimilarity on BH. Issue #21881")
 @pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize(
     "dim2", [50257]
@@ -217,6 +222,10 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     torch_dtype = torch.bfloat16
 
     input = torch.randn(shape, dtype=torch_dtype) * 0.9
+    # Make every 256th element 10000
+    # This produced a reproducible failure for WH/BH: https://github.com/tenstorrent/tt-metal/issues/21881
+    for i in range(256, input.numel(), 256):
+        input[0][i] = 10000
 
     pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
 
@@ -248,9 +257,9 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
 
     cosine = torch.nn.CosineSimilarity(dim=dim)
     ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
-    print("Cosine Similarity:\n", ttnn_torch_cosine)
-
-    assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
+    assert (
+        ttnn_torch_cosine > 0.99
+    ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
@@ -302,7 +311,9 @@ def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
     cosine = torch.nn.CosineSimilarity(dim=dim)
     ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
 
-    assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
+    assert (
+        ttnn_torch_cosine > 0.99
+    ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
@@ -354,7 +365,9 @@ def test_6d_topk(device, dim1, dim2, dim3, dim4, dim5, dim6, dim, k, largest, dt
     cosine = torch.nn.CosineSimilarity(dim=dim)
     ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
 
-    assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
+    assert (
+        ttnn_torch_cosine > 0.99
+    ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
@@ -404,7 +417,7 @@ def test_sum_2d_tensor_dims(device, h, w, dim, keepdim):
 @pytest.mark.parametrize("h", [37])
 @pytest.mark.parametrize("w", [63])
 @pytest.mark.parametrize("dim", [None, [], 0, 2, [0, 1], [1, 3], [0, 1, 2], [1, 2, 3], [0, 1, 2, 3]])
-@pytest.mark.parametrize("keepdim", [True])
+@pytest.mark.parametrize("keepdim", [True, False])
 def test_mean_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     torch.manual_seed(0)
 
@@ -425,7 +438,7 @@ def test_mean_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
 @pytest.mark.parametrize("h", [31])
 @pytest.mark.parametrize("w", [32])
 @pytest.mark.parametrize("dim", [[0, 2], [0, 1, 2]])
-@pytest.mark.parametrize("keepdim", [True])
+@pytest.mark.parametrize("keepdim", [True, False])
 def test_mean_3d_tensor_dims(device, c, h, w, dim, keepdim):
     torch.manual_seed(0)
 
@@ -445,7 +458,7 @@ def test_mean_3d_tensor_dims(device, c, h, w, dim, keepdim):
 @pytest.mark.parametrize("h", [41])
 @pytest.mark.parametrize("w", [31])
 @pytest.mark.parametrize("dim", [0, 1, [0, 1]])
-@pytest.mark.parametrize("keepdim", [True])
+@pytest.mark.parametrize("keepdim", [True, False])
 def test_mean_2d_tensor_dims(device, h, w, dim, keepdim):
     torch.manual_seed(0)
 
@@ -491,7 +504,7 @@ def run_maxpool(device, input_shape, kernel_size, stride, padding, dilation):
 
 def run_reduce_sum_h(device, batch_size, h, w, dim):
     torch_input_tensor = torch_random((batch_size, h, w), -1, 1, dtype=torch.bfloat16)
-    torch_output_tensor = torch.mean(torch_input_tensor, dim=dim, keepdim=True, dtype=torch.bfloat16)
+    torch_output_tensor = torch.mean(torch_input_tensor, dim=dim, dtype=torch.bfloat16)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.mean(input_tensor, dim=dim)

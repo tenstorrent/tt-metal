@@ -80,9 +80,9 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
         out_shard_spec.num_cores(),
         ncores);
 
-    tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat b_df = tt_metal::datatype_to_dataformat_converter(b->get_dtype());
-    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat b_df = tt_metal::datatype_to_dataformat_converter(b->dtype());
+    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
     uint32_t input1_tile_size = tt::tt_metal::detail::TileSize(b_df);
@@ -115,6 +115,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     TT_ASSERT(
         (shard_spec.shape[0] % TILE_HEIGHT == 0) && (shard_spec.shape[0] % TILE_WIDTH == 0),
         "Shard shapes must be multiple of TILE_HEIGHT ");
+    TT_FATAL(ncores_x >= bN, "Batch size {} exceeds number of cores along x-axis {}", bN, ncores_x);
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t aligned_input_tile_nbytes =
@@ -172,6 +173,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     uint32_t batch_b = Ht / Ht_per_batch_b;
 
     log_debug(
+        tt::LogOp,
         "ncores {}, ncores_x {}, Wt {}, Ht {}, h_blk {}, w_blk {}, src0_cb_index {}, src1_cb_index {}, output_cb_index "
         "{}, src1_is_dram {}, dst_is_dram {}, Ht_per_batch_b {}, batch_b {}",
         ncores,

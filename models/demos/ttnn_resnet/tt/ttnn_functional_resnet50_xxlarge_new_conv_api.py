@@ -2,15 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
-from models.utility_functions import (
-    is_grayskull,
-    is_wormhole_b0,
-    pad_and_fold_conv_activation_for_unity_stride,
-)
 from typing import List
+
+import torch
 from loguru import logger
+
+import ttnn
+from models.utility_functions import is_grayskull, is_wormhole_b0, pad_and_fold_conv_activation_for_unity_stride
 
 hardcoded_matmul_config_linear = {
     1: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -183,7 +181,6 @@ class resnet50Bottleneck:
                     deallocate_activation=True,
                     reallocate_halo_output=True,
                     reshard_if_not_optimal=reshard_if_not_optimal,
-                    transpose_shards=height_sharding,
                 ),
             }
 
@@ -262,7 +259,6 @@ class resnet50Bottleneck:
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
-                transpose_shards=height_sharding,
             ),
         }
 
@@ -396,7 +392,6 @@ class resnet50Bottleneck:
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
-                transpose_shards=height_sharding,
             ),
         }
 
@@ -452,7 +447,6 @@ class resnet50Bottleneck:
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
-                transpose_shards=height_sharding,
             ),
         }
         if not ttnn.is_tensor_storage_on_device(self.conv3_weight_tensor):
@@ -699,7 +693,6 @@ class resnet50:
                 activation="relu",
                 deallocate_activation=True,
                 reallocate_halo_output=True,
-                input_channels_alignment=16 if not is_wormhole_b0() else 32,
                 act_block_h_override=act_block_h_override,
             ),
         }
@@ -1054,7 +1047,6 @@ class resnet50:
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
                 deallocate_activation=True,
-                input_channels_alignment=16 if not is_wormhole_b0() else 32,
                 act_block_h_override=act_block_h_override,
             ),
         }

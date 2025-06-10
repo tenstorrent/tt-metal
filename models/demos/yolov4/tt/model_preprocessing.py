@@ -3,11 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from ttnn.model_preprocessing import (
-    fold_batch_norm2d_into_conv2d,
-    infer_ttnn_module_args,
-    preprocess_model_parameters,
-)
+from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
 
 import ttnn
 from models.demos.yolov4.reference import yolov4
@@ -108,7 +104,6 @@ def _create_ds1_model_parameters(conv_args, resolution):
         conv_args.c1["deallocate_activation"] = True
         conv_args.c1["reshard_if_not_optimal"] = False
         conv_args.c1["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        conv_args.c1["transpose_shards"] = False
 
         conv_args.c2["act_block_h"] = None
         conv_args.c2["enable_split_reader"] = True
@@ -116,7 +111,6 @@ def _create_ds1_model_parameters(conv_args, resolution):
         conv_args.c2["deallocate_activation"] = True
         conv_args.c2["reshard_if_not_optimal"] = False
         conv_args.c2["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        conv_args.c2["transpose_shards"] = False
 
         conv_args.c3["act_block_h"] = None
         conv_args.c3["enable_split_reader"] = True
@@ -124,7 +118,6 @@ def _create_ds1_model_parameters(conv_args, resolution):
         conv_args.c3["deallocate_activation"] = False
         conv_args.c3["reshard_if_not_optimal"] = False
         conv_args.c3["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        conv_args.c3["transpose_shards"] = False
 
         conv_args.c4["act_block_h"] = None
         conv_args.c4["enable_split_reader"] = True
@@ -132,7 +125,6 @@ def _create_ds1_model_parameters(conv_args, resolution):
         conv_args.c4["deallocate_activation"] = True
         conv_args.c4["reshard_if_not_optimal"] = False
         conv_args.c4["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        conv_args.c4["transpose_shards"] = False
 
         conv_args.c5["act_block_h"] = None
         conv_args.c5["enable_split_reader"] = True
@@ -140,7 +132,6 @@ def _create_ds1_model_parameters(conv_args, resolution):
         conv_args.c5["deallocate_activation"] = False
         conv_args.c5["reshard_if_not_optimal"] = False
         conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        conv_args.c5["transpose_shards"] = False
 
         conv_args.c6["act_block_h"] = None
         conv_args.c6["enable_split_reader"] = True
@@ -148,7 +139,6 @@ def _create_ds1_model_parameters(conv_args, resolution):
         conv_args.c6["deallocate_activation"] = True
         conv_args.c6["reshard_if_not_optimal"] = False
         conv_args.c6["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        conv_args.c6["transpose_shards"] = False
 
         conv_args.c7["act_block_h"] = None
         conv_args.c7["enable_split_reader"] = True
@@ -156,7 +146,6 @@ def _create_ds1_model_parameters(conv_args, resolution):
         conv_args.c7["deallocate_activation"] = True
         conv_args.c7["reshard_if_not_optimal"] = False
         conv_args.c7["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        conv_args.c7["transpose_shards"] = False
 
         conv_args.c8["act_block_h"] = None
         conv_args.c8["enable_split_reader"] = True
@@ -164,7 +153,6 @@ def _create_ds1_model_parameters(conv_args, resolution):
         conv_args.c8["deallocate_activation"] = True
         conv_args.c8["reshard_if_not_optimal"] = False
         conv_args.c8["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        conv_args.c8["transpose_shards"] = False
     elif resolution == (640, 640):
         conv_args.c1["act_block_h"] = 256
         conv_args.c1["enable_split_reader"] = False
@@ -172,7 +160,6 @@ def _create_ds1_model_parameters(conv_args, resolution):
         conv_args.c1["deallocate_activation"] = True
         conv_args.c1["reshard_if_not_optimal"] = False
         conv_args.c1["shard_layout"] = None
-        conv_args.c1["transpose_shards"] = True
 
         conv_args.c2["act_block_h"] = None
         conv_args.c2["enable_split_reader"] = False
@@ -180,7 +167,6 @@ def _create_ds1_model_parameters(conv_args, resolution):
         conv_args.c2["deallocate_activation"] = True
         conv_args.c2["reshard_if_not_optimal"] = False
         conv_args.c2["shard_layout"] = None
-        conv_args.c2["transpose_shards"] = False
 
         conv_args.c3["act_block_h"] = None
         conv_args.c3["enable_split_reader"] = True
@@ -188,7 +174,6 @@ def _create_ds1_model_parameters(conv_args, resolution):
         conv_args.c3["deallocate_activation"] = False
         conv_args.c3["reshard_if_not_optimal"] = False
         conv_args.c3["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        conv_args.c3["transpose_shards"] = False
 
         conv_args.c4["act_block_h"] = None
         conv_args.c4["enable_split_reader"] = True
@@ -196,7 +181,6 @@ def _create_ds1_model_parameters(conv_args, resolution):
         conv_args.c4["deallocate_activation"] = True
         conv_args.c4["reshard_if_not_optimal"] = False
         conv_args.c4["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        conv_args.c4["transpose_shards"] = False
 
         conv_args.c5["act_block_h"] = None
         conv_args.c5["enable_split_reader"] = True
@@ -204,7 +188,6 @@ def _create_ds1_model_parameters(conv_args, resolution):
         conv_args.c5["deallocate_activation"] = False
         conv_args.c5["reshard_if_not_optimal"] = False
         conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        conv_args.c5["transpose_shards"] = False
 
         conv_args.c6["act_block_h"] = 256
         conv_args.c6["enable_split_reader"] = False
@@ -212,7 +195,6 @@ def _create_ds1_model_parameters(conv_args, resolution):
         conv_args.c6["deallocate_activation"] = True
         conv_args.c6["reshard_if_not_optimal"] = False
         conv_args.c6["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        conv_args.c6["transpose_shards"] = False
 
         conv_args.c7["act_block_h"] = None
         conv_args.c7["enable_split_reader"] = True
@@ -220,7 +202,6 @@ def _create_ds1_model_parameters(conv_args, resolution):
         conv_args.c7["deallocate_activation"] = True
         conv_args.c7["reshard_if_not_optimal"] = False
         conv_args.c7["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        conv_args.c7["transpose_shards"] = False
 
         conv_args.c8["act_block_h"] = None
         conv_args.c8["enable_split_reader"] = True
@@ -228,7 +209,6 @@ def _create_ds1_model_parameters(conv_args, resolution):
         conv_args.c8["deallocate_activation"] = True
         conv_args.c8["reshard_if_not_optimal"] = False
         conv_args.c8["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        conv_args.c8["transpose_shards"] = False
     else:
         raise ValueError(f"Unsupported resolution: {resolution}")
 
@@ -255,7 +235,6 @@ def _create_ds2_model_parameters(conv_args):
     conv_args.c1["deallocate_activation"] = True
     conv_args.c1["reshard_if_not_optimal"] = False
     conv_args.c1["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c1["transpose_shards"] = False
 
     conv_args.c2["act_block_h"] = None
     conv_args.c2["enable_split_reader"] = True
@@ -263,7 +242,6 @@ def _create_ds2_model_parameters(conv_args):
     conv_args.c2["deallocate_activation"] = False
     conv_args.c2["reshard_if_not_optimal"] = False
     conv_args.c2["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c2["transpose_shards"] = False
 
     conv_args.c3["act_block_h"] = None
     conv_args.c3["enable_split_reader"] = True
@@ -271,7 +249,6 @@ def _create_ds2_model_parameters(conv_args):
     conv_args.c3["deallocate_activation"] = True
     conv_args.c3["reshard_if_not_optimal"] = False
     conv_args.c3["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c3["transpose_shards"] = False
 
     conv_args.c4["act_block_h"] = None
     conv_args.c4["enable_split_reader"] = True
@@ -279,7 +256,6 @@ def _create_ds2_model_parameters(conv_args):
     conv_args.c4["deallocate_activation"] = False
     conv_args.c4["reshard_if_not_optimal"] = False
     conv_args.c4["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c4["transpose_shards"] = False
 
     conv_args.c5["act_block_h"] = None
     conv_args.c5["enable_split_reader"] = True
@@ -287,7 +263,6 @@ def _create_ds2_model_parameters(conv_args):
     conv_args.c5["deallocate_activation"] = True
     conv_args.c5["reshard_if_not_optimal"] = False
     conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c5["transpose_shards"] = False
 
     conv_args.res["0"]["act_block_h"] = None
     conv_args.res["0"]["enable_split_reader"] = True
@@ -295,7 +270,6 @@ def _create_ds2_model_parameters(conv_args):
     conv_args.res["0"]["deallocate_activation"] = False
     conv_args.res["0"]["reshard_if_not_optimal"] = False
     conv_args.res["0"]["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.res["0"]["transpose_shards"] = False
 
     conv_args.res["3"]["act_block_h"] = None
     conv_args.res["3"]["enable_split_reader"] = True
@@ -303,7 +277,6 @@ def _create_ds2_model_parameters(conv_args):
     conv_args.res["3"]["deallocate_activation"] = True
     conv_args.res["3"]["reshard_if_not_optimal"] = False
     conv_args.res["3"]["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.res["3"]["transpose_shards"] = False
 
 
 def create_ds2_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, resolution, device):
@@ -328,7 +301,6 @@ def _create_ds3_model_parameters(conv_args):
     conv_args.c1["deallocate_activation"] = True
     conv_args.c1["reshard_if_not_optimal"] = False
     conv_args.c1["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c1["transpose_shards"] = False
 
     conv_args.c2["act_block_h"] = None
     conv_args.c2["enable_split_reader"] = False
@@ -336,7 +308,6 @@ def _create_ds3_model_parameters(conv_args):
     conv_args.c2["deallocate_activation"] = False
     conv_args.c2["reshard_if_not_optimal"] = False
     conv_args.c2["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c2["transpose_shards"] = False
 
     conv_args.c3["act_block_h"] = None
     conv_args.c3["enable_split_reader"] = False
@@ -344,7 +315,6 @@ def _create_ds3_model_parameters(conv_args):
     conv_args.c3["deallocate_activation"] = True
     conv_args.c3["reshard_if_not_optimal"] = False
     conv_args.c3["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c3["transpose_shards"] = False
 
     conv_args.c4["act_block_h"] = None
     conv_args.c4["enable_split_reader"] = False
@@ -352,7 +322,6 @@ def _create_ds3_model_parameters(conv_args):
     conv_args.c4["deallocate_activation"] = False
     conv_args.c4["reshard_if_not_optimal"] = False
     conv_args.c4["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c4["transpose_shards"] = False
 
     conv_args.c5["act_block_h"] = None
     conv_args.c5["enable_split_reader"] = False
@@ -360,7 +329,6 @@ def _create_ds3_model_parameters(conv_args):
     conv_args.c5["deallocate_activation"] = True
     conv_args.c5["reshard_if_not_optimal"] = False
     conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c5["transpose_shards"] = False
 
     conv_args.res["0"]["act_block_h"] = None
     conv_args.res["0"]["enable_split_reader"] = False
@@ -368,7 +336,6 @@ def _create_ds3_model_parameters(conv_args):
     conv_args.res["0"]["deallocate_activation"] = False
     conv_args.res["0"]["reshard_if_not_optimal"] = False
     conv_args.res["0"]["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.res["0"]["transpose_shards"] = False
 
     conv_args.res["3"]["act_block_h"] = None
     conv_args.res["3"]["enable_split_reader"] = False
@@ -376,7 +343,6 @@ def _create_ds3_model_parameters(conv_args):
     conv_args.res["3"]["deallocate_activation"] = True
     conv_args.res["3"]["reshard_if_not_optimal"] = False
     conv_args.res["3"]["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.res["3"]["transpose_shards"] = False
 
 
 def create_ds3_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, resolution, device):
@@ -401,7 +367,6 @@ def _create_ds4_model_parameters(conv_args):
     conv_args.c1["deallocate_activation"] = False
     conv_args.c1["reshard_if_not_optimal"] = True
     conv_args.c1["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c1["transpose_shards"] = False
 
     conv_args.c2["act_block_h"] = None
     conv_args.c2["enable_split_reader"] = False
@@ -409,7 +374,6 @@ def _create_ds4_model_parameters(conv_args):
     conv_args.c2["deallocate_activation"] = False
     conv_args.c2["reshard_if_not_optimal"] = False
     conv_args.c2["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c2["transpose_shards"] = False
 
     conv_args.c3["act_block_h"] = None
     conv_args.c3["enable_split_reader"] = False
@@ -417,7 +381,6 @@ def _create_ds4_model_parameters(conv_args):
     conv_args.c3["deallocate_activation"] = False
     conv_args.c3["reshard_if_not_optimal"] = False
     conv_args.c3["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c3["transpose_shards"] = False
 
     conv_args.c4["act_block_h"] = None
     conv_args.c4["enable_split_reader"] = False
@@ -425,7 +388,6 @@ def _create_ds4_model_parameters(conv_args):
     conv_args.c4["deallocate_activation"] = False
     conv_args.c4["reshard_if_not_optimal"] = False
     conv_args.c4["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c4["transpose_shards"] = False
 
     conv_args.c5["act_block_h"] = None
     conv_args.c5["enable_split_reader"] = False
@@ -433,7 +395,6 @@ def _create_ds4_model_parameters(conv_args):
     conv_args.c5["deallocate_activation"] = True
     conv_args.c5["reshard_if_not_optimal"] = False
     conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c5["transpose_shards"] = False
 
     conv_args.res["0"]["act_block_h"] = None
     conv_args.res["0"]["enable_split_reader"] = False
@@ -441,7 +402,6 @@ def _create_ds4_model_parameters(conv_args):
     conv_args.res["0"]["deallocate_activation"] = False
     conv_args.res["0"]["reshard_if_not_optimal"] = False
     conv_args.res["0"]["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.res["0"]["transpose_shards"] = False
 
     conv_args.res["3"]["act_block_h"] = None
     conv_args.res["3"]["enable_split_reader"] = False
@@ -449,7 +409,6 @@ def _create_ds4_model_parameters(conv_args):
     conv_args.res["3"]["deallocate_activation"] = True
     conv_args.res["3"]["reshard_if_not_optimal"] = False
     conv_args.res["3"]["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.res["3"]["transpose_shards"] = False
 
 
 def create_ds4_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, resolution, device):
@@ -474,7 +433,6 @@ def _create_ds5_model_parameters(conv_args):
     conv_args.c1["deallocate_activation"] = False
     conv_args.c1["reshard_if_not_optimal"] = True
     conv_args.c1["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c1["transpose_shards"] = False
 
     conv_args.c2["act_block_h"] = None
     conv_args.c2["enable_split_reader"] = False
@@ -482,7 +440,6 @@ def _create_ds5_model_parameters(conv_args):
     conv_args.c2["deallocate_activation"] = False
     conv_args.c2["reshard_if_not_optimal"] = False
     conv_args.c2["shard_layout"] = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    conv_args.c2["transpose_shards"] = False
 
     conv_args.c3["act_block_h"] = None
     conv_args.c3["enable_split_reader"] = False
@@ -490,7 +447,6 @@ def _create_ds5_model_parameters(conv_args):
     conv_args.c3["deallocate_activation"] = True
     conv_args.c3["reshard_if_not_optimal"] = False
     conv_args.c3["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c3["transpose_shards"] = False
 
     conv_args.c4["act_block_h"] = None
     conv_args.c4["enable_split_reader"] = False
@@ -498,7 +454,6 @@ def _create_ds5_model_parameters(conv_args):
     conv_args.c4["deallocate_activation"] = False
     conv_args.c4["reshard_if_not_optimal"] = False
     conv_args.c4["shard_layout"] = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    conv_args.c4["transpose_shards"] = False
 
     conv_args.c5["act_block_h"] = None
     conv_args.c5["enable_split_reader"] = False
@@ -506,7 +461,6 @@ def _create_ds5_model_parameters(conv_args):
     conv_args.c5["deallocate_activation"] = True
     conv_args.c5["reshard_if_not_optimal"] = False
     conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c5["transpose_shards"] = False
 
     conv_args.res["0"]["act_block_h"] = None
     conv_args.res["0"]["enable_split_reader"] = False
@@ -514,7 +468,6 @@ def _create_ds5_model_parameters(conv_args):
     conv_args.res["0"]["deallocate_activation"] = False
     conv_args.res["0"]["reshard_if_not_optimal"] = False
     conv_args.res["0"]["shard_layout"] = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    conv_args.res["0"]["transpose_shards"] = False
 
     conv_args.res["3"]["act_block_h"] = None
     conv_args.res["3"]["enable_split_reader"] = False
@@ -522,7 +475,6 @@ def _create_ds5_model_parameters(conv_args):
     conv_args.res["3"]["deallocate_activation"] = True
     conv_args.res["3"]["reshard_if_not_optimal"] = False
     conv_args.res["3"]["shard_layout"] = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    conv_args.res["3"]["transpose_shards"] = False
 
 
 def create_ds5_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, resolution, device):
@@ -547,7 +499,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c1["deallocate_activation"] = True
     conv_args.c1["reshard_if_not_optimal"] = True
     conv_args.c1["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c1["transpose_shards"] = False
 
     conv_args.c2["act_block_h"] = None
     conv_args.c2["enable_split_reader"] = False
@@ -555,7 +506,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c2["deallocate_activation"] = True
     conv_args.c2["reshard_if_not_optimal"] = False
     conv_args.c2["shard_layout"] = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    conv_args.c2["transpose_shards"] = False
 
     conv_args.c3["act_block_h"] = None
     conv_args.c3["enable_split_reader"] = False
@@ -563,7 +513,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c3["deallocate_activation"] = True
     conv_args.c3["reshard_if_not_optimal"] = False
     conv_args.c3["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c3["transpose_shards"] = False
 
     conv_args.c4["act_block_h"] = None
     conv_args.c4["enable_split_reader"] = False
@@ -571,7 +520,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c4["deallocate_activation"] = True
     conv_args.c4["reshard_if_not_optimal"] = False
     conv_args.c4["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c4["transpose_shards"] = False
 
     conv_args.c5["act_block_h"] = None
     conv_args.c5["enable_split_reader"] = False
@@ -579,7 +527,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c5["deallocate_activation"] = True
     conv_args.c5["reshard_if_not_optimal"] = False
     conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    conv_args.c5["transpose_shards"] = False
 
     conv_args.c6["act_block_h"] = None
     conv_args.c6["enable_split_reader"] = False
@@ -587,7 +534,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c6["deallocate_activation"] = True
     conv_args.c6["reshard_if_not_optimal"] = False
     conv_args.c6["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c6["transpose_shards"] = False
 
     conv_args.c7["act_block_h"] = None
     conv_args.c7["enable_split_reader"] = False
@@ -595,7 +541,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c7["deallocate_activation"] = False
     conv_args.c7["reshard_if_not_optimal"] = False
     conv_args.c7["shard_layout"] = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    conv_args.c7["transpose_shards"] = False
 
     conv_args.c7_2["act_block_h"] = None
     conv_args.c7_2["enable_split_reader"] = True
@@ -603,7 +548,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c7_2["deallocate_activation"] = True
     conv_args.c7_2["reshard_if_not_optimal"] = False
     conv_args.c7_2["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c7_2["transpose_shards"] = False
 
     conv_args.c7_3["act_block_h"] = None
     conv_args.c7_3["enable_split_reader"] = True
@@ -611,7 +555,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c7_3["deallocate_activation"] = True
     conv_args.c7_3["reshard_if_not_optimal"] = False
     conv_args.c7_3["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c7_3["transpose_shards"] = False
 
     conv_args.c7_4["act_block_h"] = None
     conv_args.c7_4["enable_split_reader"] = True
@@ -619,7 +562,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c7_4["deallocate_activation"] = True
     conv_args.c7_4["reshard_if_not_optimal"] = False
     conv_args.c7_4["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c7_4["transpose_shards"] = False
 
     conv_args.c7_5["act_block_h"] = None
     conv_args.c7_5["enable_split_reader"] = True
@@ -627,7 +569,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c7_5["deallocate_activation"] = True
     conv_args.c7_5["reshard_if_not_optimal"] = False
     conv_args.c7_5["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c7_5["transpose_shards"] = False
 
     conv_args.c8["act_block_h"] = None
     conv_args.c8["enable_split_reader"] = False
@@ -635,7 +576,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c8["deallocate_activation"] = True
     conv_args.c8["reshard_if_not_optimal"] = False
     conv_args.c8["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c8["transpose_shards"] = False
 
     conv_args.c8_2["act_block_h"] = None
     conv_args.c8_2["enable_split_reader"] = False
@@ -643,7 +583,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c8_2["deallocate_activation"] = True
     conv_args.c8_2["reshard_if_not_optimal"] = False
     conv_args.c8_2["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c8_2["transpose_shards"] = False
 
     conv_args.c9["act_block_h"] = None
     conv_args.c9["enable_split_reader"] = True
@@ -651,7 +590,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c9["deallocate_activation"] = False
     conv_args.c9["reshard_if_not_optimal"] = False
     conv_args.c9["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c9["transpose_shards"] = False
 
     conv_args.c9_2["act_block_h"] = None
     conv_args.c9_2["enable_split_reader"] = False
@@ -659,7 +597,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c9_2["deallocate_activation"] = True
     conv_args.c9_2["reshard_if_not_optimal"] = False
     conv_args.c9_2["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c9_2["transpose_shards"] = False
 
     conv_args.c9_3["act_block_h"] = None
     conv_args.c9_3["enable_split_reader"] = False
@@ -667,7 +604,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c9_3["deallocate_activation"] = True
     conv_args.c9_3["reshard_if_not_optimal"] = False
     conv_args.c9_3["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c9_3["transpose_shards"] = False
 
     conv_args.c9_4["act_block_h"] = None
     conv_args.c9_4["enable_split_reader"] = False
@@ -675,7 +611,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c9_4["deallocate_activation"] = True
     conv_args.c9_4["reshard_if_not_optimal"] = False
     conv_args.c9_4["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c9_4["transpose_shards"] = False
 
     conv_args.c9_5["act_block_h"] = None
     conv_args.c9_5["enable_split_reader"] = False
@@ -683,7 +618,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c9_5["deallocate_activation"] = True
     conv_args.c9_5["reshard_if_not_optimal"] = False
     conv_args.c9_5["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c9_5["transpose_shards"] = False
 
     conv_args.c10["act_block_h"] = None
     conv_args.c10["enable_split_reader"] = False
@@ -691,7 +625,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c10["deallocate_activation"] = True
     conv_args.c10["reshard_if_not_optimal"] = False
     conv_args.c10["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c10["transpose_shards"] = False
 
     conv_args.c10_2["act_block_h"] = None
     conv_args.c10_2["enable_split_reader"] = False
@@ -699,7 +632,6 @@ def _create_neck_model_parameters(conv_args):
     conv_args.c10_2["deallocate_activation"] = True
     conv_args.c10_2["reshard_if_not_optimal"] = False
     conv_args.c10_2["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c10_2["transpose_shards"] = False
 
 
 def create_neck_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, resolution, device):
@@ -726,7 +658,6 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c1["deallocate_activation"] = False
     conv_args.c1["reshard_if_not_optimal"] = True
     conv_args.c1["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c1["transpose_shards"] = False
 
     conv_args.c2["act_block_h"] = None
     conv_args.c2["enable_split_reader"] = False
@@ -734,7 +665,6 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c2["deallocate_activation"] = True
     conv_args.c2["reshard_if_not_optimal"] = False
     conv_args.c2["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    conv_args.c2["transpose_shards"] = False
     conv_args.c2["out_channels"] = 256
 
     conv_args.c3["act_block_h"] = None
@@ -743,7 +673,6 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c3["deallocate_activation"] = False
     conv_args.c3["reshard_if_not_optimal"] = True
     conv_args.c3["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c3["transpose_shards"] = False
 
     conv_args.c4["act_block_h"] = None
     conv_args.c4["enable_split_reader"] = False
@@ -751,7 +680,6 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c4["deallocate_activation"] = True
     conv_args.c4["reshard_if_not_optimal"] = False
     conv_args.c4["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c4["transpose_shards"] = False
 
     conv_args.c5["act_block_h"] = None
     conv_args.c5["enable_split_reader"] = False
@@ -759,7 +687,6 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c5["deallocate_activation"] = True
     conv_args.c5["reshard_if_not_optimal"] = False
     conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c5["transpose_shards"] = False
 
     conv_args.c6["act_block_h"] = None
     conv_args.c6["enable_split_reader"] = False
@@ -767,7 +694,6 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c6["deallocate_activation"] = True
     conv_args.c6["reshard_if_not_optimal"] = False
     conv_args.c6["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c6["transpose_shards"] = False
 
     conv_args.c7["act_block_h"] = None
     conv_args.c7["enable_split_reader"] = False
@@ -775,7 +701,6 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c7["deallocate_activation"] = True
     conv_args.c7["reshard_if_not_optimal"] = False
     conv_args.c7["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c7["transpose_shards"] = False
 
     conv_args.c8["act_block_h"] = None
     conv_args.c8["enable_split_reader"] = False
@@ -783,7 +708,6 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c8["deallocate_activation"] = True
     conv_args.c8["reshard_if_not_optimal"] = False
     conv_args.c8["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c8["transpose_shards"] = False
 
     conv_args.c9["act_block_h"] = None
     conv_args.c9["enable_split_reader"] = False
@@ -791,7 +715,6 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c9["deallocate_activation"] = False
     conv_args.c9["reshard_if_not_optimal"] = False
     conv_args.c9["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c9["transpose_shards"] = False
 
     conv_args.c10["act_block_h"] = None
     conv_args.c10["enable_split_reader"] = False
@@ -799,7 +722,6 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c10["deallocate_activation"] = True
     conv_args.c10["reshard_if_not_optimal"] = False
     conv_args.c10["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c10["transpose_shards"] = False
     conv_args.c10["out_channels"] = 256
 
     conv_args.c11["act_block_h"] = None
@@ -813,7 +735,6 @@ def _create_head_model_parameters(conv_args, resolution):
         conv_args.c11["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     else:
         raise ValueError(f"Unsupported resolution: {resolution}")
-    conv_args.c11["transpose_shards"] = False
 
     conv_args.c12["act_block_h"] = None
     conv_args.c12["enable_split_reader"] = False
@@ -821,7 +742,6 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c12["deallocate_activation"] = True
     conv_args.c12["reshard_if_not_optimal"] = False
     conv_args.c12["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c12["transpose_shards"] = False
 
     conv_args.c13["act_block_h"] = None
     conv_args.c13["enable_split_reader"] = False
@@ -829,7 +749,6 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c13["deallocate_activation"] = True
     conv_args.c13["reshard_if_not_optimal"] = False
     conv_args.c13["shard_layout"] = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    conv_args.c13["transpose_shards"] = False
 
     conv_args.c14["act_block_h"] = None
     conv_args.c14["enable_split_reader"] = False
@@ -837,7 +756,6 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c14["deallocate_activation"] = True
     conv_args.c14["reshard_if_not_optimal"] = False
     conv_args.c14["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c14["transpose_shards"] = False
 
     conv_args.c15["act_block_h"] = None
     conv_args.c15["enable_split_reader"] = False
@@ -845,7 +763,6 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c15["deallocate_activation"] = True
     conv_args.c15["reshard_if_not_optimal"] = False
     conv_args.c15["shard_layout"] = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    conv_args.c15["transpose_shards"] = False
 
     conv_args.c16["act_block_h"] = None
     conv_args.c16["enable_split_reader"] = False
@@ -853,7 +770,6 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c16["deallocate_activation"] = True
     conv_args.c16["reshard_if_not_optimal"] = False
     conv_args.c16["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c16["transpose_shards"] = False
 
     conv_args.c17["act_block_h"] = None
     conv_args.c17["enable_split_reader"] = False
@@ -861,7 +777,6 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c17["deallocate_activation"] = True
     conv_args.c17["reshard_if_not_optimal"] = False
     conv_args.c17["shard_layout"] = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    conv_args.c17["transpose_shards"] = False
 
     conv_args.c18["act_block_h"] = None
     conv_args.c18["enable_split_reader"] = False
@@ -869,7 +784,6 @@ def _create_head_model_parameters(conv_args, resolution):
     conv_args.c18["deallocate_activation"] = True
     conv_args.c18["reshard_if_not_optimal"] = False
     conv_args.c18["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    conv_args.c18["transpose_shards"] = False
     conv_args.c18["out_channels"] = 256
 
 

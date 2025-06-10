@@ -32,9 +32,7 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/trace_buffer.hpp>
 #include <umd/device/types/arch.h>
-#include <tt-metalium/work_executor_types.hpp>
 
 enum class CoreType;
 namespace tt {
@@ -55,7 +53,7 @@ namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
 class ThreadPool;
-class ProgramCache;
+class TraceDescriptor;
 
 namespace distributed {
 
@@ -114,7 +112,8 @@ private:
     uint32_t max_num_eth_cores_ = 0;
     std::shared_ptr<ThreadPool> dispatch_thread_pool_;
     std::shared_ptr<ThreadPool> reader_thread_pool_;
-
+    // Num Virtual Eth Cores == Max Number of Eth Cores across all opened devices (Issue #19729)
+    std::size_t num_virtual_eth_cores_ = 0;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
@@ -176,6 +175,7 @@ public:
     const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const override;
     CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const override;
     uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;
+    uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
         tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
@@ -185,7 +185,6 @@ public:
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
     SystemMemoryManager& sysmem_manager() override;
     CommandQueue& command_queue(size_t cq_id = 0) override;
-    bool dispatch_firmware_active() const override;
 
     // Trace APIs
     void begin_trace(const uint8_t cq_id, const uint32_t tid) override;
@@ -234,6 +233,7 @@ public:
     program_cache::detail::ProgramCache& get_program_cache() override;
     std::size_t num_program_cache_entries() override;
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
+    HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
     uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const override;

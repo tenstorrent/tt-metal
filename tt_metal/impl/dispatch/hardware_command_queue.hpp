@@ -22,15 +22,16 @@
 #include "event.hpp"
 #include "host_runtime_commands.hpp"
 #include "launch_message_ring_buffer_state.hpp"
-#include "multi_producer_single_consumer_queue.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
 #include "sub_device_types.hpp"
-#include "trace_buffer.hpp"
-#include "tt_metal/impl/buffers/dispatch.hpp"
+#include "trace/trace_buffer.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
+#include "trace/trace_node.hpp"
+#include "tt_metal/impl/buffers/dispatch.hpp"
+#include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -97,7 +98,7 @@ public:
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
 
-    void enqueue_read_from_core_l1(
+    void enqueue_read_from_core(
         const CoreCoord& virtual_core,
         void* dst,
         DeviceAddr address,
@@ -105,7 +106,7 @@ public:
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
-    void enqueue_write_to_core_l1(
+    void enqueue_write_to_core(
         const CoreCoord& virtual_core,
         const void* src,
         DeviceAddr address,
@@ -125,6 +126,8 @@ private:
     std::shared_ptr<TraceDescriptor> trace_ctx_;
     std::thread completion_queue_thread_;
     SystemMemoryManager& manager_;
+
+    std::vector<TraceNode> trace_nodes_;
 
     // Shared across all CommandQueue instances for a Device.
     std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>> worker_launch_message_buffer_state_;
@@ -162,6 +165,7 @@ private:
     CoreCoord completion_queue_writer_core_;
     NOC noc_index_;
 
+    void allocate_trace_programs();
     void read_completion_queue();
 
     // sub_device_ids only needs to be passed when blocking and there are specific sub_devices to wait on

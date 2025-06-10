@@ -26,6 +26,8 @@ on:
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       build-wheel: true
@@ -38,6 +40,19 @@ jobs:
       arch: ${{ inputs.arch || 'wormhole_b0' }}
       runner-label: ${{ inputs.runner-label || 'N150' }}
       timeout: ${{ (github.event_name == 'schedule' && 120) || fromJSON(inputs.timeout) }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  didt-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/didt-tests.yaml
+    strategy:
+      fail-fast: false
+    with:
+      arch: ${{ inputs.arch || 'wormhole_b0' }}
+      runner-label: ${{ inputs.runner-label || 'N300' }}
+      timeout: 10
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

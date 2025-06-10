@@ -1,22 +1,18 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import bz2
-import torch
-import pytest
-from loguru import logger
 import os
+
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from models.tt_transformers.tt.common import (
-    PagedAttentionConfig,
-    create_tt_model,
-)
-from models.tt_transformers.tt.model_config import DecodersPrecision
+from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_model
 from models.tt_transformers.tt.generator import Generator
-from models.utility_functions import (
-    comp_pcc,
-)
-from models.utility_functions import skip_for_grayskull
+from models.tt_transformers.tt.model_config import DecodersPrecision
+from models.utility_functions import comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
@@ -99,13 +95,6 @@ def test_model_inference(
             pytest.skip("CI only runs full model for 4k seq len to reduce CI pipeline load")
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
-    cache_pcc = True  # Flag to measure KV cache PCC for all layers
-
-    model_name_env = os.getenv("HF_MODEL")
-    if model_name_env and "Mistral-7B" in model_name_env:
-        # TODO: Per layer KV cache fetching is not implemented yet. See issue https://github.com/tenstorrent/tt-metal/issues/19806"
-        cache_pcc = False
-
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
 
@@ -133,6 +122,13 @@ def test_model_inference(
         dtype=dtype,
         num_layers=num_layers,
     )
+
+    if model_args.base_model_name.startswith("Mistral-") or model_args.base_model_name.startswith("Qwen3-"):
+        # TODO: Per layer KV cache fetching is not implemented for all models
+        # See issue https://github.com/tenstorrent/tt-metal/issues/19806"
+        cache_pcc = False
+    else:
+        cache_pcc = True
 
     # This sets the minimum PCC for each iteration based on optimization mode
     # TODO: See issue https://github.com/tenstorrent/tt-metal/issues/19806

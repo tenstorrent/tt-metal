@@ -40,7 +40,6 @@ struct CreateCircularBufferCommand;
 struct LightMetalCompareCommand;
 struct RuntimeArg;
 
-struct TraceDescriptor;
 struct TraceDescriptorByTraceId;
 struct LightMetalBinary;
 }  // namespace tt::tt_metal::flatbuffer

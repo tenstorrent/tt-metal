@@ -4,11 +4,17 @@
 
 #include "events.hpp"
 
-#include <tt-metalium/event.hpp>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <vector>
+
 #include "pybind11/pybind11.h"
 #include <pybind11/stl.h>
 
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/events.hpp"
+#include <tt-metalium/event.hpp>
 
 using namespace tt::tt_metal;
 
@@ -94,6 +100,17 @@ void py_module(py::module& module) {
                 cq_id (int): The Command Queue on which the barrier is being issued.
                 mesh_event (MeshEvent): The Command Queue will stall until this event is completed.
             )doc");
+
+    module.def(
+        "event_synchronize",
+        py::overload_cast<const MeshEvent&>(&event_synchronize),
+        py::arg("mesh_event"),
+        R"doc(
+            Synchronizes a mesh event, blocking until the event is completed.
+
+            Args:
+                mesh_event (MeshEvent): The mesh event to synchronize.
+        )doc");
 }
 
 }  // namespace ttnn::events

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -139,43 +139,56 @@ void kernel_main() {
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
     noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), conv_act_c_read_bytes);
 
+    constexpr uint32_t TILE_HEIGHT = 32;
+    constexpr uint32_t ntile_height = act_block_h_datums / TILE_HEIGHT;
+    constexpr uint32_t block_width = act_block_num_tiles / ntile_height;
+    constexpr uint32_t act_block_h_datums_per_tile_half = (act_block_h_datums / ntile_height) / 2;
+
     // Reset reader_idx to finish act_block_h_datums
     for (uint32_t block_h_index = 0; block_h_index < act_num_blocks_h; block_h_index++) {
         act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
         for (uint32_t block_w_index = 0; block_w_index < act_num_blocks_w; block_w_index++) {
             uint32_t reader_idx = block_h_index * (act_block_h_datums / 2);
-            cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
-            if (this_core_id < num_input_cores) {
-                uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
-                for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
-                    uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-                    read_channels<weight_size_h, weight_size_w>(
-                        l1_write_addr_act,
-                        act_l1_read_addr,
-                        two_reader_indices & 0xffff,
-                        conv_act_c_bytes,
-                        conv_act_c_read_bytes,
-                        stride_h_bytes,
-                        stride_w_bytes);
-                    read_channels<weight_size_h, weight_size_w>(
-                        l1_write_addr_act,
-                        act_l1_read_addr,
-                        two_reader_indices >> 16,
-                        conv_act_c_bytes,
-                        conv_act_c_read_bytes,
-                        stride_h_bytes,
-                        stride_w_bytes);
 
-                    reader_idx++;
+            if (this_core_id < num_input_cores) {
+                for (uint32_t tile_h_index = 0; tile_h_index < ntile_height; tile_h_index++) {
+                    cb_reserve_back(cb_id_act_row_major_bfloat16, block_width);
+                    uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
+                    for (uint32_t bh = 0; bh < act_block_h_datums_per_tile_half; bh++) {
+                        uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+                        read_channels<weight_size_h, weight_size_w>(
+                            l1_write_addr_act,
+                            act_l1_read_addr,
+                            two_reader_indices & 0xffff,
+                            conv_act_c_bytes,
+                            conv_act_c_read_bytes,
+                            stride_h_bytes,
+                            stride_w_bytes);
+                        read_channels<weight_size_h, weight_size_w>(
+                            l1_write_addr_act,
+                            act_l1_read_addr,
+                            two_reader_indices >> 16,
+                            conv_act_c_bytes,
+                            conv_act_c_read_bytes,
+                            stride_h_bytes,
+                            stride_w_bytes);
+
+                        reader_idx++;
+                    }
+
+                    noc_async_read_barrier();
+                    cb_push_back(cb_id_act_row_major_bfloat16, block_width);
                 }
 
                 // After reading one block, increment the starting read pointer by the width of the block.
                 // Next read uses the next set of channels.
                 act_l1_read_addr += conv_act_c_read_bytes;
-
-                noc_async_read_barrier();
+            } else {
+                for (uint32_t tile_h_index = 0; tile_h_index < ntile_height; tile_h_index++) {
+                    cb_reserve_back(cb_id_act_row_major_bfloat16, block_width);
+                    cb_push_back(cb_id_act_row_major_bfloat16, block_width);
+                }
             }
-            cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
 
             // Round robin self-mcast and receive tilized act matrix in cb_id_act
             // Compute should function like regular mm
@@ -198,13 +211,13 @@ void kernel_main() {
 
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-                    // // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
+                    // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
                     cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
 
-                    // // Now we have the block in the CB address, we can mcast to dests!
+                    // Now we have the block in the CB address, we can mcast to dests!
                     uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
 
-                    // // num_dests will source, since we are copying to a different local CB as well
+                    // num_dests will source, since we are copying to a different local CB as well
                     uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
 
                     noc_async_write_multicast_loopback_src(
@@ -212,8 +225,7 @@ void kernel_main() {
                         act_multicast_data_addr,
                         act_mcast_sender_size_bytes,
                         num_reader_cores,
-                        false,
-                        false);
+                        true);
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and same
                     // vc even though cmd bufs are different Also, this only works because we are setting VCs statically
@@ -224,16 +236,13 @@ void kernel_main() {
                     // not be sent in order they are issued
                     noc_async_writes_flushed();
 #endif
-                    // // We should also multicast VALID flag to destinations for receiver semaphore
+                    // We should also multicast VALID flag to destinations for receiver semaphore
                     noc_semaphore_set_multicast_loopback_src(
                         act_mcast_sender_semaphore_valid_addr,
                         act_mcast_receiver_semaphore_noc_addr,
                         num_reader_cores,
-                        false,
                         false);
-
                     noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
-
                 } else {
                     // MCAST RECEIVER: receive entire tilized input from sender core
                     // Set act semaphore value to INVALID

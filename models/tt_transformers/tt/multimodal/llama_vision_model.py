@@ -2,34 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import collections
 import logging
 from functools import partial
 from typing import List, Tuple
 
+import llama_models.llama3.reference_impl.multimodal.image_transform as llama_reference_image_transforms
 import torch
-import collections
-
 from PIL import Image as PIL_Image
-
 from torch import Tensor
 
-import llama_models.llama3.reference_impl.multimodal.image_transform as llama_reference_image_transforms
-
 import ttnn
-from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_vision import (
-    TtLlamaCrossAttentionTransformerVision,
-)
+from models.tt_transformers.tt.common import copy_host_to_device, get_padded_prefill_len, get_prefill_rot_mat
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
 )
-from models.tt_transformers.tt.common import (
-    get_prefill_rot_mat,
-    copy_host_to_device,
-    get_padded_prefill_len,
+from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_vision import (
+    TtLlamaCrossAttentionTransformerVision,
 )
-from models.utility_functions import (
-    nearest_32,
-)
+from models.utility_functions import nearest_32
 
 logger = logging.getLogger(__name__)
 MP_SCALE = 8

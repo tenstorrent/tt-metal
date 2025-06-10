@@ -1,0 +1,35 @@
+name: 'Fetch Workflow Data'
+description: 'Fetches workflow run data and caches it for analysis'
+
+inputs:
+  workflow-name:
+    description: 'Exact workflow name to match'
+    required: false
+  name-prefix:
+    description: 'Workflow name prefix to match'
+    required: false
+  branch:
+    description: 'Branch to filter runs by'
+    required: false
+  actor:
+    description: 'Actor to filter runs by'
+    required: false
+  days:
+    description: 'Number of days of data to fetch (default: 7)'
+    required: false
+  cache-path:
+    description: 'Path to save the cached workflow data'
+    required: true
+  GITHUB_TOKEN:
+    description: 'GitHub token for API access'
+    required: true
+
+outputs:
+  total-runs:
+    description: 'Total number of runs fetched'
+  workflow-count:
+    description: 'Number of unique workflows found'
+
+runs:
+  using: 'node20'
+  main: 'fetch-workflow-data.js'

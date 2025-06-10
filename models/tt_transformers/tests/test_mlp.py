@@ -2,18 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-from loguru import logger
 import os
+
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
@@ -36,13 +34,6 @@ from models.utility_functions import skip_for_grayskull
     (1,),
 )
 def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
-    # TODO Fix long seqlen for Mistral-7B
-    model_name_env = os.getenv("HF_MODEL")
-    if seq_len >= 1024 and model_name_env and "Mistral-7B" in model_name_env:
-        pytest.skip(
-            "Mistral-7B models do not support seq_len >= 1024, See issue: https://github.com/tenstorrent/tt-metal/issues/19806"
-        )
-
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
 

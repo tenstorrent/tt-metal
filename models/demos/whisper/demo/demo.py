@@ -3,32 +3,30 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import time
 from os import listdir
 from os.path import isfile, join
+
+import jiwer
 import pytest
 import torch
 from datasets import load_dataset
 from loguru import logger
 from scipy.io import wavfile
+from tqdm import tqdm
 from transformers import (
     AutoFeatureExtractor,
     AutoProcessor,
-    WhisperForConditionalGeneration,
     WhisperForAudioClassification,
+    WhisperForConditionalGeneration,
 )
-from tqdm import tqdm
-import time
-import jiwer
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.whisper.tt import ttnn_optimized_functional_whisper
-from models.demos.whisper.tt.ttnn_optimized_functional_whisper import (
-    init_kv_cache,
-    WHISPER_L1_SMALL_SIZE,
-)
-from models.generation_utils import get_logits_processor
 from models.demos.utils.llm_demo_utils import verify_perf
+from models.demos.whisper.tt import ttnn_optimized_functional_whisper
+from models.demos.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
+from models.generation_utils import get_logits_processor
 from models.utility_functions import is_blackhole
 
 
@@ -309,7 +307,7 @@ def run_demo_whisper_for_audio_classification_inference(input_path, ttnn_model, 
         hidden_states = ttnn.matmul(encoder_outputs, parameters.projector.weight)
         hidden_states = ttnn.add(hidden_states, parameters.projector.bias)
 
-        pooled_output = ttnn.mean(hidden_states, dim=-2)
+        pooled_output = ttnn.mean(hidden_states, dim=-2, keepdim=True)
 
         logits = ttnn.matmul(pooled_output, parameters.classifier.weight)
         logits = ttnn.add(logits, parameters.classifier.bias)
@@ -361,7 +359,7 @@ def run_demo_whisper_for_audio_classification_dataset(ttnn_model, device):
     hidden_states = ttnn.matmul(encoder_outputs, parameters.projector.weight)
     hidden_states = ttnn.add(hidden_states, parameters.projector.bias)
 
-    pooled_output = ttnn.mean(hidden_states, dim=-2)
+    pooled_output = ttnn.mean(hidden_states, dim=-2, keepdim=True)
 
     logits = ttnn.matmul(pooled_output, parameters.classifier.weight)
     logits = ttnn.add(logits, parameters.classifier.bias)
@@ -474,7 +472,7 @@ def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inp
     )
     if is_ci_env:
         if is_blackhole():
-            expected_perf_metrics = {"prefill_t/s": 7.67, "decode_t/s/u": 92.9}
+            expected_perf_metrics = {"prefill_t/s": 7.67, "decode_t/s/u": 85.0}
         else:  # wormhole_b0
             expected_perf_metrics = {"prefill_t/s": 3.85, "decode_t/s/u": 51.8}
         expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"]  # Only supporting batch 1

@@ -4,13 +4,11 @@
 
 #pragma once
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
-namespace py = pybind11;
+#include "ttnn-pybind/pybind_fwd.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
+namespace py = pybind11;
 void py_module(py::module& module);
 
 }  // namespace ttnn::operations::experimental::ccl

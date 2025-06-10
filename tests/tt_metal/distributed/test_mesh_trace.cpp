@@ -25,7 +25,7 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -35,7 +35,7 @@
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
@@ -109,41 +109,43 @@ TEST_F(MeshTraceTestSuite, Sanity) {
     uint32_t num_workloads_per_trace = 5;
     uint32_t num_traces = 4;
     uint32_t num_iters = 10;
+    uint32_t num_trace_setup_teardown_loops = 10;
 
     MeshCoordinateRange all_devices(mesh_device_->shape());
-
-    std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
-    for (int i = 0; i < num_workloads_per_trace * num_traces; i++) {
-        auto workload = std::make_shared<MeshWorkload>();
-        auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-            1, mesh_device_->compute_with_storage_grid_size(), seed);
-        AddProgramToMeshWorkload(*workload, std::move(*programs[0]), all_devices);
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
-        mesh_workloads.push_back(workload);
-    }
-
-    std::vector<MeshTraceId> trace_ids = {};
-    for (int trace_idx = 0; trace_idx < num_traces; trace_idx++) {
-        auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
-        for (int workload_idx = 0; workload_idx < num_workloads_per_trace; workload_idx++) {
-            EnqueueMeshWorkload(
-                mesh_device_->mesh_command_queue(),
-                *mesh_workloads[trace_idx * num_workloads_per_trace + workload_idx],
-                false);
+    for (int outer_loop = 0; outer_loop < num_trace_setup_teardown_loops; outer_loop++) {
+        std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
+        for (int i = 0; i < num_workloads_per_trace * num_traces; i++) {
+            auto workload = std::make_shared<MeshWorkload>();
+            auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+                1, mesh_device_->compute_with_storage_grid_size(), seed);
+            AddProgramToMeshWorkload(*workload, std::move(*programs[0]), all_devices);
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+            mesh_workloads.push_back(workload);
         }
-        EndTraceCapture(mesh_device_.get(), 0, trace_id);
-        trace_ids.push_back(trace_id);
-    }
 
-    for (int i = 0; i < num_iters; i++) {
+        std::vector<MeshTraceId> trace_ids = {};
+        for (int trace_idx = 0; trace_idx < num_traces; trace_idx++) {
+            auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
+            for (int workload_idx = 0; workload_idx < num_workloads_per_trace; workload_idx++) {
+                EnqueueMeshWorkload(
+                    mesh_device_->mesh_command_queue(),
+                    *mesh_workloads[trace_idx * num_workloads_per_trace + workload_idx],
+                    false);
+            }
+            EndTraceCapture(mesh_device_.get(), 0, trace_id);
+            trace_ids.push_back(trace_id);
+        }
+
+        for (int i = 0; i < num_iters; i++) {
+            for (auto trace_id : trace_ids) {
+                ReplayTrace(mesh_device_.get(), 0, trace_id, false);
+            }
+        }
+        Finish(mesh_device_->mesh_command_queue());
+
         for (auto trace_id : trace_ids) {
-            ReplayTrace(mesh_device_.get(), 0, trace_id, false);
+            ReleaseTrace(mesh_device_.get(), trace_id);
         }
-    }
-    Finish(mesh_device_->mesh_command_queue());
-
-    for (auto trace_id : trace_ids) {
-        ReleaseTrace(mesh_device_.get(), trace_id);
     }
 }
 

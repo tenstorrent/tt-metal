@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
 
         std::vector<uint32_t> shape_vec = {1, num_tiles, 32, 32};
         std::vector<float> tiled_fp32_vec = convert_layout(
-            tt::stl::MakeConstSpan(fp32_vec),
+            tt::stl::make_const_span(fp32_vec),
             shape_vec,
             TensorLayoutType::LIN_ROW_MAJOR,
             TensorLayoutType::TILED_NFACES);
@@ -51,12 +51,12 @@ int main(int argc, char** argv) {
         // //                      Validation
         // ////////////////////////////////////////////////////////////////////////////
         std::vector<float> tiled_to_rm_fp32_vec = convert_layout(
-            tt::stl::MakeConstSpan(unpacked_bfp4b_tile_vec_tile_out),
+            tt::stl::make_const_span(unpacked_bfp4b_tile_vec_tile_out),
             shape_vec,
             TensorLayoutType::TILED_NFACES,
             TensorLayoutType::LIN_ROW_MAJOR);
         std::vector<float> rm_to_tiled_fp32_vec = convert_layout(
-            tt::stl::MakeConstSpan(unpacked_bfp4b_tile_vec_rm_out),
+            tt::stl::make_const_span(unpacked_bfp4b_tile_vec_rm_out),
             shape_vec,
             TensorLayoutType::LIN_ROW_MAJOR,
             TensorLayoutType::TILED_NFACES);

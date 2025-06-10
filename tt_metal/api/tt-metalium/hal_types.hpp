@@ -42,10 +42,11 @@ enum class HalL1MemAddrType : uint8_t {
     RETRAIN_COUNT,
     RETRAIN_FORCE,
     FABRIC_ROUTER_CONFIG,
+    ETH_FW_MAILBOX,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 
-enum class HalDramMemAddrType : uint8_t { DRAM_BARRIER = 0, COUNT = 1 };
+enum class HalDramMemAddrType : uint8_t { BARRIER = 0, PROFILER = 1, UNRESERVED = 2, COUNT = 3 };
 
 enum class HalMemType : uint8_t { L1 = 0, DRAM = 1, HOST = 2, COUNT = 3 };
 

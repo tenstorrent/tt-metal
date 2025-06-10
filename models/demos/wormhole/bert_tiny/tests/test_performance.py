@@ -2,24 +2,24 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import torch
-import pytest
-import ttnn
 import time
 
+import pytest
+import torch
 from loguru import logger
-import ttnn
-from ttnn.model_preprocessing import preprocess_model_parameters
-from models.utility_functions import (
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
-)
-from models.perf.perf_utils import prep_perf_report
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 from transformers import BertForQuestionAnswering
+from ttnn.model_preprocessing import preprocess_model_parameters
+
+import ttnn
 from models.demos.wormhole.bert_tiny.tt.bert_tiny import bert_for_question_answering
-from models.utility_functions import is_wormhole_b0, skip_for_grayskull
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    is_wormhole_b0,
+    skip_for_grayskull,
+)
 
 
 def get_expected_times(bert_tiny):

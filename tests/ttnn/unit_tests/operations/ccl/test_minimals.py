@@ -22,6 +22,7 @@ from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.concat_fuse_test impor
 )
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from conftest import is_6u
 
 
 def run_allgather_only_with_trace(
@@ -355,8 +356,9 @@ def test_all_gather_only(
 )
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("use_new_version", [True])
-@pytest.mark.parametrize("num_iters, warmup_iters", [[100, 10]])
+@pytest.mark.parametrize("num_iters, warmup_iters", [[200, 20]])
 @pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("fused_add", [True])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -381,6 +383,7 @@ def test_tg_trace_rms_fuse(
     output_shard_grid,
     trace_mode,
     use_new_version,
+    fused_add,
 ):
     profiler = BenchmarkProfiler()
     run_rms_trace(
@@ -393,10 +396,12 @@ def test_tg_trace_rms_fuse(
         input_shard_grid,
         output_shard_grid,
         ttnn.Topology.Linear,
+        fused_add,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
         profiler=profiler,
         use_new_version=use_new_version,
+        trace_mode=trace_mode,
     )
 
 
@@ -430,12 +435,17 @@ def test_tg_trace_rms_fuse(
 )
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("num_iters", [20])
+@pytest.mark.parametrize("fused_add", [True, False])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("residual_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 def test_rms_fuse(
     mesh_device,
     num_devices,
@@ -446,6 +456,11 @@ def test_rms_fuse(
     function_level_defaults,
     input_shard_grid,
     output_shard_grid,
+    fused_add,
+    input_dtype,
+    residual_dtype,
+    output_dtype,
+    topology,
 ):
     run_rms_fuse_impl(
         mesh_device,
@@ -456,8 +471,12 @@ def test_rms_fuse(
         function_level_defaults,
         input_shard_grid,
         output_shard_grid,
-        ttnn.Topology.Linear,
+        topology,
+        fused_add,
+        output_dtype=output_dtype,
         num_iters=num_iters,
+        input_dtype=input_dtype,
+        residual_dtype=residual_dtype,
     )
 
 
@@ -566,6 +585,121 @@ def test_concat_fuse(
         input_shard_shape,
         input_shard_grid,
         all_gather_topology=ttnn.Topology.Linear,
+        warmup_iters=warmup_iters,
+        num_iters=num_iters,
+        output_shard_shape=output_shard_shape,
+        output_shard_grid=output_shard_grid,
+        tensor_mem_layout=tensor_mem_layout,
+        trace_mode=trace_mode,
+        profiler=profiler,
+    )
+
+
+@pytest.mark.skipif(not is_6u(), reason="skip when not 6u")
+@pytest.mark.parametrize(
+    "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
+    [
+        # Before Concat Heads
+        (
+            4,
+            [1, 32, 32, 128],
+            1,
+            ttnn.ROW_MAJOR_LAYOUT,
+            (32, 128),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                }
+            ),
+            (32, 64),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 6), ttnn.CoreCoord(6, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 7), ttnn.CoreCoord(6, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 1), ttnn.CoreCoord(6, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 2), ttnn.CoreCoord(6, 2)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 4), ttnn.CoreCoord(6, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 5), ttnn.CoreCoord(5, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 6), ttnn.CoreCoord(5, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 7), ttnn.CoreCoord(5, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 9), ttnn.CoreCoord(5, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 1), ttnn.CoreCoord(5, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(5, 2)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 4), ttnn.CoreCoord(5, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 4), ttnn.CoreCoord(1, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 5), ttnn.CoreCoord(1, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 9), ttnn.CoreCoord(1, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 4), ttnn.CoreCoord(2, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 9), ttnn.CoreCoord(2, 9)),
+                ]
+            ),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        # ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize("num_iters, warmup_iters", [[75, 5]])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_concat_fuse_6u(
+    mesh_device,
+    num_devices,
+    output_shape,
+    dim,
+    num_links,
+    input_dtype,
+    layout,
+    num_iters,
+    warmup_iters,
+    use_program_cache,
+    function_level_defaults,
+    input_shard_shape,
+    input_shard_grid,
+    output_shard_shape,
+    output_shard_grid,
+    tensor_mem_layout,
+    trace_mode,
+):
+    profiler = BenchmarkProfiler()
+    run_concat_fuse_impl(
+        mesh_device,
+        num_devices,
+        output_shape,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        use_program_cache,
+        function_level_defaults,
+        input_shard_shape,
+        input_shard_grid,
+        all_gather_topology=ttnn.Topology.Ring,
         warmup_iters=warmup_iters,
         num_iters=num_iters,
         output_shard_shape=output_shard_shape,

@@ -31,7 +31,8 @@ enum DispatchWorkerType : uint32_t {
     US_TUNNELER_REMOTE = 14,
     PACKET_ROUTER_MUX = 15,
     PACKET_ROUTER_DEMUX = 16,
-    FABRIC_ROUTER_VC = 17,
+    FABRIC_MUX = 17,         // Downstream from MMIO to remote mux. Tunnel index is required.
+    RETURN_FABRIC_MUX = 18,  // Upstream from remote to MMIO mux. Tunnel index will be determined from the device id.
     COUNT,
 };
 
@@ -54,7 +55,7 @@ public:
     DispatchCoreConfig(DispatchCoreType type, DispatchCoreAxis axis) : type_(type), axis_(axis) {}
 
     static constexpr auto attribute_names = std::forward_as_tuple("type", "axis");
-    const auto attribute_values() const { return std::forward_as_tuple(this->type_, this->axis_); }
+    auto attribute_values() const { return std::forward_as_tuple(this->type_, this->axis_); }
 
     CoreType get_core_type() const {
         switch (type_) {

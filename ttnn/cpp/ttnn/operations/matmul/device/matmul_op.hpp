@@ -52,9 +52,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast(
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
+    const std::vector<Tensor>& input_tensors_b,
     const std::optional<const Tensor>& bias,
-    Tensor& output_tensor,
+    const std::vector<Tensor>& output_tensors,
     bool bcast_batch,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -165,6 +165,7 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     bool gather_in0;
     CoreRangeSet hop_cores;
     std::size_t num_global_cb_receivers;
+    bool untilize_out;
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
@@ -230,9 +231,9 @@ Matmul create_matmul_struct(
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
+    const std::vector<Tensor>& input_tensors_b,
     const std::optional<const Tensor>& bias,
-    Tensor& output_tensor,
+    const std::vector<Tensor>& output_tensors,
     bool bcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     const MatmulProgramConfig& program_config,
@@ -260,6 +261,14 @@ Tensor matmul(
     const QueueId queue_id = DefaultQueueId,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
+std::vector<Tensor> matmul_batched_weights(
+    const Tensor& input_tensor_a,
+    const std::vector<Tensor>& input_tensors_b,
+    const std::optional<const Tensor>& bias = std::nullopt,
+    const struct Matmul& parameters = Matmul{},
+    const QueueId queue_id = DefaultQueueId,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
 }  // namespace matmul
 
 }  // namespace operations
@@ -274,8 +283,5 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
     const bool per_core_M_equals_subblock_h_constraint,
     const bool per_core_N_equals_subblock_w_constraint,
     const bool fp32_dest_acc_en);
-
-void add_stagger_defines_if_needed(
-    const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines);
 
 }  // namespace bmm_op_utils

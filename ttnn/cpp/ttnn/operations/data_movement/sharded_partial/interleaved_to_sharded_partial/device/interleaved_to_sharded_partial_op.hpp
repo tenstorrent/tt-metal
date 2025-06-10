@@ -26,7 +26,7 @@ struct InterleavedToShardedPartialDeviceOperation {
 
     static constexpr auto attribute_names =
         std::make_tuple("grid_size", "shard_spec", "output_mem_config", "output_dtype");
-    const auto attribute_values() const {
+    auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->grid_size),
             std::cref(this->shard_spec),

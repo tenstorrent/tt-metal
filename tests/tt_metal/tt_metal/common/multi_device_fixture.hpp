@@ -31,7 +31,7 @@ protected:
         this->slow_dispatch_ = true;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
-            tt::log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
+            log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             this->slow_dispatch_ = false;
             GTEST_SKIP();
         }
@@ -62,7 +62,7 @@ protected:
         this->slow_dispatch_ = true;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
-            tt::log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
+            log_info(tt::LogTest, "This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             this->slow_dispatch_ = false;
             GTEST_SKIP();
         }
@@ -88,6 +88,12 @@ protected:
 };
 
 class MeshDeviceFixtureBase : public ::testing::Test {
+public:
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> get_mesh_device() {
+        TT_FATAL(mesh_device_, "MeshDevice not initialized in {}", __FUNCTION__);
+        return mesh_device_;
+    }
+
 protected:
     using MeshDevice = ::tt::tt_metal::distributed::MeshDevice;
     using MeshDeviceConfig = ::tt::tt_metal::distributed::MeshDeviceConfig;
@@ -111,6 +117,7 @@ protected:
         int num_cqs = 1;
         uint32_t trace_region_size = 0;
         uint32_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
+        FabricConfig fabric_config = FabricConfig::DISABLED;
     };
 
     MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
@@ -151,6 +158,9 @@ protected:
         auto core_type =
             (config_.num_cqs >= 2 and is_n300_or_t3k_cluster) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
 
+        if (config_.fabric_config != FabricConfig::DISABLED) {
+            tt::tt_metal::detail::InitializeFabricConfig(config_.fabric_config);
+        }
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(get_mesh_shape(*mesh_device_type)),
             0,
@@ -167,6 +177,9 @@ protected:
         }
         mesh_device_->close();
         mesh_device_.reset();
+        if (config_.fabric_config != FabricConfig::DISABLED) {
+            tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+        }
     }
 
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
@@ -256,6 +269,22 @@ class TGMultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
 protected:
     TGMultiCQMeshDeviceFixture() :
         MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::TG}, .num_cqs = 2}) {}
+};
+
+class T3000MeshDevice1DFabricFixture : public MeshDeviceFixtureBase {
+protected:
+    T3000MeshDevice1DFabricFixture() :
+        MeshDeviceFixtureBase(Config{
+            .mesh_device_types = {MeshDeviceType::T3000}, .num_cqs = 1, .fabric_config = FabricConfig::FABRIC_1D}) {}
+};
+
+class T3000MeshDevice2DFabricFixture : public MeshDeviceFixtureBase {
+protected:
+    T3000MeshDevice2DFabricFixture() :
+        MeshDeviceFixtureBase(Config{
+            .mesh_device_types = {MeshDeviceType::T3000},
+            .num_cqs = 1,
+            .fabric_config = FabricConfig::FABRIC_2D_DYNAMIC}) {}
 };
 
 }  // namespace tt::tt_metal

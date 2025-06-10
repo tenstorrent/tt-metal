@@ -2,15 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import transformers
 import torch
-from ttnn.model_preprocessing import (
-    preprocess_linear_weight,
-    preprocess_linear_bias,
-)
+import transformers
+from ttnn.dot_access import DotAccessDict
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 import ttnn
-from ttnn.dot_access import DotAccessDict
 
 
 def update_model_config(config, batch_size):

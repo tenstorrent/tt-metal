@@ -18,7 +18,7 @@
 #include "dprint_server.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
@@ -101,10 +101,6 @@ void RunTest(
 }
 
 TEST_F(DPrintFixture, ActiveEthTestPrint) {
-    if (this->arch_ == ARCH::BLACKHOLE) {  // TODO: Re-enable when this is supported on BH
-        log_info(tt::LogTest, "DPrint on BH active eth not yet supported");
-        GTEST_SKIP();
-    }
     for (IDevice* device : this->devices_) {
         // Skip if no ethernet cores on this device
         if (device->get_active_ethernet_cores(true).size() == 0) {

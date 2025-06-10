@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import transformers
-import torch
 from typing import Optional
+
+import torch
+import transformers
 from loguru import logger
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
-from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
 import ttnn
-
 from models.utility_functions import nearest_32
 
 WHISPER_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG

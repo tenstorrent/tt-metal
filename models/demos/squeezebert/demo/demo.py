@@ -2,22 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import json
-import torch
-import pytest
+
 import evaluate
-
+import pytest
+import torch
 from loguru import logger
-from models.utility_functions import (
-    profiler,
-    disable_persistent_kernel_cache,
-)
+from transformers import SqueezeBertForQuestionAnswering, SqueezeBertTokenizer, pipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.squeezebert.tt import ttnn_functional_squeezebert
-from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 
-from transformers import SqueezeBertForQuestionAnswering, pipeline, SqueezeBertTokenizer
+import ttnn
+from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
+from models.demos.squeezebert.tt import ttnn_functional_squeezebert
+from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def load_inputs(input_path, batch):

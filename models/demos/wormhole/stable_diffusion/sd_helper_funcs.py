@@ -5,9 +5,10 @@
 import warnings
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
-import ttnn
+
 import numpy as np
 import torch
+
 import ttnn
 
 
@@ -111,7 +112,7 @@ class TtLMSDiscreteScheduler:
         derivative_tensor = derivative_tensor * lms_coeffs
         if derivative_tensor.shape[0] > 1:
             derivative_tensor = ttnn.permute(derivative_tensor, (3, 1, 2, 0))
-            derivative_tensor = ttnn.sum(derivative_tensor, dim=-1)
+            derivative_tensor = ttnn.sum(derivative_tensor, dim=-1, keepdim=True)
             derivative_tensor = ttnn.permute(derivative_tensor, (3, 1, 2, 0))
         prev_sample = sample + derivative_tensor
 

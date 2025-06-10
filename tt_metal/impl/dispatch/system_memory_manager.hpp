@@ -5,7 +5,7 @@
 #pragma once
 
 // needed for private members
-#include <tt-metalium/system_memory_cq_interface.hpp>
+#include "system_memory_cq_interface.hpp"
 #include <umd/device/chip_helpers/tlb_manager.h>  // needed because tt_io.hpp requires needs TLBManager
 #include <umd/device/tt_io.hpp>                   // for tt::Writer
 #include <umd/device/tt_xy_pair.h>                // for tt_cxy_pair
@@ -93,8 +93,8 @@ private:
     std::vector<SystemMemoryCQInterface> cq_interfaces;
     uint32_t cq_size = 0;
     uint32_t channel_offset = 0;
-    std::vector<int> cq_to_event;
-    std::vector<int> cq_to_last_completed_event;
+    std::vector<uint32_t> cq_to_event;
+    std::vector<uint32_t> cq_to_last_completed_event;
     std::vector<std::mutex> cq_to_event_locks;
     std::vector<tt_cxy_pair> prefetcher_cores;
     std::vector<tt::Writer> prefetch_q_writers;

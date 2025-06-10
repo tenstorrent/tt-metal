@@ -147,9 +147,11 @@ int main(int argc, char* argv[]) {
         } else if (s == "-w" || s == "--dump-watcher") {
             dump_watcher = true;
         } else if (s == "-c" || s == "--dump-cqs") {
-            dump_cqs = true;
+            cout << "CQ dumping currently disabled" << endl;
+            // dump_cqs = true;
         } else if (s == "--dump-cqs-data") {
-            dump_cqs_raw_data = true;
+            cout << "CQ raw data dumping currently disabled" << endl;
+            // dump_cqs_raw_data = true;
         } else if (s == "--dump-noc-transfer-data") {
             tt::tt_metal::MetalContext::instance().rtoptions().set_record_noc_transfers(true);
             dump_noc_xfers = true;

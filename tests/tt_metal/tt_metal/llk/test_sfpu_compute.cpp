@@ -24,14 +24,14 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -264,7 +264,7 @@ TEST_P(SingleCoreSingleDeviceSfpuParameterizedFixture, TensixSfpuCompute) {
         .cores = core_range_set,
         .sfpu_op = sfpu_op,
         .approx_mode = false};
-    log_info("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
+    log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
     for (unsigned int id = 0; id < num_devices_; id++) {
         EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
     }
@@ -315,7 +315,7 @@ TEST_P(SingleCoreSingleDeviceSfpuParameterizedApproxFixture, TensixSfpuCompute) 
             .cores = core_range_set,
             .sfpu_op = sfpu_op,
             .approx_mode = true};
-        log_info("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
+        log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
         for (unsigned int id = 0; id < num_devices_; id++) {
             EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
         }

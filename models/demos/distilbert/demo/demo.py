@@ -3,28 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+
+import evaluate
 import pytest
 import torch
 from loguru import logger
+from transformers import AutoTokenizer, DistilBertForQuestionAnswering, pipeline
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    profiler,
-)
+from models.demos.distilbert.distilbert_utils import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from models.demos.distilbert.tt import ttnn_optimized_distilbert
-
-from models.demos.distilbert.distilbert_utils import (
-    squadv2_1K_samples_input,
-    squadv2_answer_decode_batch,
-)
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-)
-
-from transformers import DistilBertForQuestionAnswering, AutoTokenizer, pipeline
-
-import evaluate
+from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def load_inputs(input_path, batch):

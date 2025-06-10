@@ -92,7 +92,7 @@ DatacopyParams setup_datacopy(
     const uint32_t page_size = all_gather_output_tensor.buffer()->page_size();
 
     const tt::DataFormat cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(all_gather_output_tensor.get_dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(all_gather_output_tensor.dtype());
 
     auto all_gather_output_buffer = all_gather_output_tensor.buffer();
     auto datacopy_output_buffer = datacopy_output_tensor.buffer();
@@ -101,7 +101,7 @@ DatacopyParams setup_datacopy(
     bool datacopy_output_is_dram = datacopy_output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     uint32_t last_output_page_offset = (ring_size - 1) * tensor_slicer.output_page_offset;
-    uint32_t num_rows = input_tensor.get_padded_shape()[2] / tile_size;
+    uint32_t num_rows = input_tensor.padded_shape()[2] / tile_size;
     bool is_clockwise_dir = true;  // Specifically for the first half of the all gather
 
     uint32_t datacopy_buffer_size = 200;
@@ -114,10 +114,10 @@ DatacopyParams setup_datacopy(
         static_cast<uint32_t>(page_size),
         static_cast<uint32_t>(ring_index),
         static_cast<uint32_t>(ring_size),
-        static_cast<uint32_t>(all_gather_output_tensor.get_padded_shape()[3] / tile_size),  // tesnor width
-        static_cast<uint32_t>(all_gather_output_tensor.get_padded_shape()[2] / tile_size),  // tensor height
-        static_cast<uint32_t>(tensor_slicer.num_cols),  // tensor slice width in tiles
-        static_cast<uint32_t>(num_rows),                // tnesor slice height in tiles
+        static_cast<uint32_t>(all_gather_output_tensor.padded_shape()[3] / tile_size),  // tesnor width
+        static_cast<uint32_t>(all_gather_output_tensor.padded_shape()[2] / tile_size),  // tensor height
+        static_cast<uint32_t>(tensor_slicer.num_cols),                                  // tensor slice width in tiles
+        static_cast<uint32_t>(num_rows),                                                // tnesor slice height in tiles
         static_cast<uint32_t>(tensor_slicer.output_page_offset),
         static_cast<uint32_t>(last_output_page_offset),
         static_cast<bool>(is_clockwise_dir),
@@ -225,13 +225,13 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
         ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input_tensor, all_gather_output_tensor, dim, ring_index);
     bool is_clockwise_direction = true;
     const uint32_t num_transfers = 4;
-    const uint32_t weight_tensor_width = weight_tensor.get_padded_shape()[3] / 32;
+    const uint32_t weight_tensor_width = weight_tensor.padded_shape()[3] / 32;
 
     ////////////////////////////////////////////////////////
 
     // Create a matmul signal info object that gets populated by the matmul kernel
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
-        ttnn::experimental::ccl::MatmulFusedOpSignaler();
+        ttnn::experimental::ccl::MatmulFusedOpSignaler(ttnn::experimental::ccl::MatmulFusedOpSignalerType::ALL_GATHER);
     matmul_fused_op_signaler->init_all_gather(
         num_transfers,
         ring_size,
@@ -270,9 +270,9 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
                 matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
                     program,
                     all_gather_output_tensor,
-                    weight_tensor,
+                    {weight_tensor},
                     bias,
-                    matmul_output_tensor,
+                    {matmul_output_tensor},
                     bcast_batch,
                     compute_kernel_config,
                     config,

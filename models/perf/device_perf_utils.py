@@ -4,19 +4,19 @@
 
 import json
 import time
-import pandas as pd
-
-from loguru import logger
 from collections import defaultdict
 
+import pandas as pd
+from loguru import logger
+
+from models.perf.perf_utils import process_perf_results
 from tt_metal.tools.profiler.common import clear_profiler_runtime_artifacts
 from tt_metal.tools.profiler.process_model_log import (
     get_latest_ops_log_filename,
+    get_samples_per_s,
     post_process_ops_log,
     run_device_profiler,
-    get_samples_per_s,
 )
-from models.perf.perf_utils import process_perf_results
 
 
 def run_device_perf(command, subdir, num_iterations, cols, batch_size, op_name="", has_signposts=False):

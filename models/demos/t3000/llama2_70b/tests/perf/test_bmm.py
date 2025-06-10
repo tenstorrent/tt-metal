@@ -1,16 +1,12 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import pytest
+import torch
 
 import ttnn
-from models.demos.t3000.llama2_70b.tt.model_config import (
-    get_model_config,
-    # get_tt_cache_path,
-)
+from models.demos.t3000.llama2_70b.tt.model_config import get_model_config  # get_tt_cache_path,
 from models.utility_functions import torch2tt_tensor
-
 
 TILE_SIZE = 32
 

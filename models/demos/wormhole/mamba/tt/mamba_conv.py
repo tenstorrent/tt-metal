@@ -52,7 +52,6 @@ class MambaConv:
             dtype=self.config.output_dtype,
             weights_dtype=self.config.weights_dtype,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            input_channels_alignment=32,
             deallocate_activation=True,
         )
         self.conv1d_compute_config = ttnn.init_device_compute_kernel_config(

@@ -39,16 +39,16 @@ void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
             name);
 
         TT_FATAL(
-            tensor.get_layout() == tt::tt_metal::Layout::TILE,
+            tensor.layout() == tt::tt_metal::Layout::TILE,
             "RMSNormForward operation requires tensor to be in Tile layout. {} tensor layout: {}",
             name,
-            static_cast<int>(tensor.get_layout()));
+            static_cast<int>(tensor.layout()));
 
         TT_FATAL(
-            tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16,
+            tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
             "RMSNormForward operation requires tensor to be of BFLOAT16 data type. {} tensor data type: {}",
             name,
-            static_cast<int>(tensor.get_dtype()));
+            static_cast<int>(tensor.dtype()));
 
         TT_FATAL(
             tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
@@ -78,25 +78,25 @@ spec_return_value_t RMSNormForwardDeviceOperation::compute_output_specs(
     output_specs.reserve(1U + static_cast<uint32_t>(args.return_intermediates));
 
     if (tensor_args.preallocated_output.has_value()) {
-        output_specs.push_back(tensor_args.preallocated_output->get_tensor_spec());
+        output_specs.push_back(tensor_args.preallocated_output->tensor_spec());
     } else {
         output_specs.emplace_back(
-            tensor_args.input.get_logical_shape(),
+            tensor_args.input.logical_shape(),
             tt::tt_metal::TensorLayout(
-                tensor_args.input.get_dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
+                tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
     }
 
     if (args.return_intermediates) {
         if (tensor_args.preallocated_rms.has_value()) {
-            output_specs.push_back(tensor_args.preallocated_rms->get_tensor_spec());
+            output_specs.push_back(tensor_args.preallocated_rms->tensor_spec());
         } else {
-            auto shape = tensor_args.input.get_logical_shape();
+            auto shape = tensor_args.input.logical_shape();
             shape[-1] = 1U;  // RMS is a scalar per row
 
             output_specs.emplace_back(
                 shape,
                 tt::tt_metal::TensorLayout(
-                    tensor_args.input.get_dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
+                    tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
         }
     }
 
@@ -130,7 +130,7 @@ tensor_return_value_t RMSNormForwardDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t RMSNormForwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& input_logical_shape = input_tensor.get_logical_shape();
+    const auto& input_logical_shape = input_tensor.logical_shape();
     auto program_factory = select_program_factory(args, tensor_args);
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RMSNormForwardDeviceOperation>(
         args, program_factory.index(), input_tensor.dtype(), input_logical_shape);

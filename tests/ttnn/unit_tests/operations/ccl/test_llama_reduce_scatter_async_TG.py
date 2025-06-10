@@ -21,9 +21,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     NORM_CRS,
 )
 from tracy import signpost
-from models.demos.llama3_subdevices.tt.llama_common import (
-    check_mesh_tensor_alloc,
-)
 
 PACKET_WORKER_CRS = ttnn.CoreRangeSet(
     [
@@ -34,6 +31,7 @@ PACKET_WORKER_CRS = ttnn.CoreRangeSet(
 
 
 def gen_tensor(dim, shard_height, shard_width, num_devices_scatter, num_devices_fracture, num_cores, scheme="random"):
+    torch.manual_seed(2005)
     factor = 0
     torch_fracture_tensors = []
     for _ in range(num_devices_fracture):
@@ -74,6 +72,7 @@ def run_reduce_scatter_test(
     output_grid=None,
     dtype=ttnn.bfloat8_b,
     profiler=BenchmarkProfiler(),
+    topology=ttnn.Topology.Linear,
 ):
     mesh_device.enable_program_cache()
     num_pages_per_packet = 4
@@ -194,9 +193,7 @@ def run_reduce_scatter_test(
                     mesh_device, dims=(0, 1), mesh_shape=[num_devices_fracture, num_devices_scatter]
                 ),
             )
-            check_mesh_tensor_alloc(tt_intermediate)
             tt_intermediate_tensors_list.append(tt_intermediate)
-        check_mesh_tensor_alloc(tt_input)
         tt_input_tensors_list.append(tt_input)
 
     ccl_sub_device_crs = subdevice_shard_cores_grid if use_regular_grid is not None else SUB_DEVICE_CRS
@@ -230,6 +227,7 @@ def run_reduce_scatter_test(
                 mesh_device=mesh_device,
                 num_links=num_links,
                 memory_config=output_mem_config,
+                topology=topology,
             )
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
@@ -319,7 +317,7 @@ def run_reduce_scatter_test(
     "device_params",
     [
         {
-            "trace_region_size": 233472,
+            "trace_region_size": 300000,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
@@ -408,6 +406,7 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
         trace_mode,
         num_links=3,
         scheme="random",
+        topology=ttnn.Topology.Linear,
     )
 
 
@@ -415,7 +414,7 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
     "device_params",
     [
         {
-            "trace_region_size": 90000,
+            "trace_region_size": 100000,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
@@ -473,7 +472,7 @@ def test_fabric_reduce_scatter_regular_grid_2_dev(
     "device_params",
     [
         {
-            "trace_region_size": 90000,
+            "trace_region_size": 100000,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }

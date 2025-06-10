@@ -6,20 +6,22 @@ import pytest
 
 from loguru import logger
 
+from ttnn.device import is_wormhole_b0
+
 from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 from models.utility_functions import (
     skip_for_grayskull,
 )
 
-from models.experimental.functional_unet.tests.common import UNET_TRACE_REGION_SIZE
+from models.experimental.functional_unet.tests.common import UNET_TRACE_REGION_SIZE, UNET_L1_SMALL_REGION_SIZE
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, groups, expected_device_perf_fps",
-    ((1, 4, 1378.0),),
+    ((1, 4, 1420.0),),
 )
 def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: float):
     command = f"pytest models/experimental/functional_unet/tests/test_unet_model.py::test_unet_model[device_params0-{groups}-{batch}]"
@@ -33,7 +35,7 @@ def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: flo
     )
     expected_perf_cols = {inference_time_key: expected_device_perf_fps}
     expected_results = check_device_perf(
-        post_processed_results, margin=0.02, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+        post_processed_results, margin=0.015, expected_perf_cols=expected_perf_cols, assert_on_fail=True
     )
     prep_device_perf_report(
         model_name=f"unet-shallow_batch-{batch}_groups-{groups}",
@@ -48,12 +50,18 @@ def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: flo
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE, "num_command_queues": 2}],
+    [
+        {
+            "l1_small_size": UNET_L1_SMALL_REGION_SIZE,
+            "trace_region_size": UNET_TRACE_REGION_SIZE,
+            "num_command_queues": 2,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations, expected_compile_time, expected_throughput",
-    ((1, 4, 256, 30.0, 1225.0),),
+    ((1, 4, 256, 30.0, 1268.0),),
 )
 def test_unet_trace_perf(
     batch: int,
@@ -65,12 +73,18 @@ def test_unet_trace_perf(
     use_program_cache,
     reset_seeds,
 ):
+    if (
+        not is_wormhole_b0(device)
+        and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110
+    ):
+        pytest.skip(f"shallow unet only support 110 cores on bh (was {device.compute_with_storage_grid_size()})")
+
     from models.experimental.functional_unet.tests.test_unet_trace import (
-        test_unet_trace_2cq_same_io,
+        test_unet_trace_2cq,
     )
 
     logger.info(f"Invoking underlying model test for {iterations} iterations...")
-    result = test_unet_trace_2cq_same_io(batch, groups, iterations, device, use_program_cache, reset_seeds)
+    result = test_unet_trace_2cq(batch, groups, iterations, device, use_program_cache, reset_seeds)
 
     total_num_samples = result.batch * result.groups * result.num_devices
     expected_inference_time = total_num_samples / expected_throughput
@@ -92,11 +106,17 @@ def test_unet_trace_perf(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE, "num_command_queues": 2}],
+    [
+        {
+            "l1_small_size": UNET_L1_SMALL_REGION_SIZE,
+            "trace_region_size": UNET_TRACE_REGION_SIZE,
+            "num_command_queues": 2,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "batch, groups, iterations, expected_compile_time, expected_throughput", ((1, 4, 256, 30.0, 2440.0),)
+    "batch, groups, iterations, expected_compile_time, expected_throughput", ((1, 4, 256, 30.0, 2419.0),)
 )
 def test_unet_trace_perf_multi_device(
     batch: int,
@@ -109,15 +129,13 @@ def test_unet_trace_perf_multi_device(
     reset_seeds,
 ):
     from models.experimental.functional_unet.tests.test_unet_trace import (
-        test_unet_trace_2cq_same_io_multi_device,
+        test_unet_trace_2cq_multi_device,
     )
 
     model_name = "unet_shallow-trace_2cq_same_io-multi_device"
 
     logger.info(f"Invoking underlying model test for {iterations} iterations...")
-    result = test_unet_trace_2cq_same_io_multi_device(
-        batch, groups, iterations, mesh_device, use_program_cache, reset_seeds
-    )
+    result = test_unet_trace_2cq_multi_device(batch, groups, iterations, mesh_device, use_program_cache, reset_seeds)
 
     total_num_samples = result.batch * result.groups * result.num_devices
     expected_inference_time = total_num_samples / expected_throughput

@@ -1,22 +1,19 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
 import json
-import numpy as np
 import os
+
+import numpy as np
+import pytest
+import torch
 from loguru import logger
-from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34
+
 from models.demos.ufld_v2.demo import model_config as cfg
-from models.demos.ufld_v2.demo.demo_utils import (
-    run_test_tusimple,
-    LaneEval,
-)
-from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
-from tests.ttnn.integration_tests.ufld_v2.test_ttnn_ufld_v2 import custom_preprocessor_whole_model
-from ttnn.model_preprocessing import preprocess_model_parameters, infer_ttnn_module_args
+from models.demos.ufld_v2.demo.demo_utils import LaneEval, run_test_tusimple
+from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34
+from models.demos.ufld_v2.tests.ufld_v2_e2e_performant import UFLDPerformantRunner
 
 
 @pytest.mark.parametrize(
@@ -36,9 +33,12 @@ from ttnn.model_preprocessing import preprocess_model_parameters, infer_ttnn_mod
         "pretrained_weight_true",
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
-def test_UFLD_v2_demo(batch_size, input_channels, height, width, device, use_pretrained_weight):
-    torch_input_tensor = torch.randn((batch_size, input_channels, height, width))
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
+)
+def test_ufld_v2_demo(
+    batch_size, input_channels, height, width, device, use_pretrained_weight, use_program_cache, reset_seeds
+):
     reference_model = TuSimple34(input_height=height, input_width=width)
     if use_pretrained_weight:
         logger.info(f"Demo Inference using Pre-trained Weights")
@@ -69,19 +69,8 @@ def test_UFLD_v2_demo(batch_size, input_channels, height, width, device, use_pre
         col_anchor=cfg.col_anchor,
         device=None,
     )
-
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model,
-        custom_preprocessor=custom_preprocessor_whole_model,
-        device=device,
-    )
-    parameters.conv_args = {}
-    parameters.conv_args = infer_ttnn_module_args(
-        model=reference_model, run_model=lambda model: reference_model(torch_input_tensor), device=device
-    )
-    ttnn_model = TtnnUFLDv2(conv_args=parameters.conv_args, conv_pth=parameters, device=device)
     run_test_tusimple(
-        ttnn_model,
+        UFLDPerformantRunner,
         cfg.data_root,
         cfg.data_root,
         "ttnn_model_results",

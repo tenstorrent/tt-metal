@@ -56,6 +56,10 @@ inline bool does_device_have_active_eth_cores(const IDevice* device) {
     return !(device->get_active_ethernet_cores(true).empty());
 }
 
+inline bool does_device_have_idle_eth_cores(const IDevice* device) {
+    return !(device->get_inactive_ethernet_cores().empty());
+}
+
 inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(
     const uint32_t num_unique_rt_args,
     const uint32_t num_common_rt_args,
@@ -117,12 +121,15 @@ inline void verify_kernel_coordinates(
     uint32_t cb_addr,
     bool idle_eth = false) {
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
-    tt::tt_metal::HalProgrammableCoreType hal_core_type = processor_class == tt::RISCV::ERISC
-                                                              ? tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH
-                                                              : tt::tt_metal::HalProgrammableCoreType::TENSIX;
+    tt::tt_metal::HalProgrammableCoreType hal_core_type =
+        (processor_class == tt::RISCV::ERISC || processor_class == tt::RISCV::ERISC1)
+            ? tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH
+            : tt::tt_metal::HalProgrammableCoreType::TENSIX;
     hal_core_type = idle_eth ? tt::tt_metal::HalProgrammableCoreType::IDLE_ETH : hal_core_type;
 
-    CoreType core_type = processor_class == tt::RISCV::ERISC ? CoreType::ETH : CoreType::WORKER;
+    CoreType core_type = (processor_class == tt::RISCV::ERISC || processor_class == tt::RISCV::ERISC1)
+                             ? CoreType::ETH
+                             : CoreType::WORKER;
     core_type = idle_eth ? CoreType::IDLE_ETH : core_type;
 
     const auto& sub_device_origin = device->worker_cores(hal_core_type, sub_device_id).bounding_box().start_coord;

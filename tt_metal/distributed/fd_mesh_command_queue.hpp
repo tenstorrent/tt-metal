@@ -7,17 +7,27 @@
 #include "mesh_command_queue_base.hpp"
 
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/multi_producer_single_consumer_queue.hpp>
 
+#include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
+#include "dispatch/worker_config_buffer.hpp"
+#include "mesh_trace.hpp"
 
 namespace tt::tt_metal::distributed {
 
 struct MeshReadEventDescriptor;
 struct MeshBufferReadDescriptor;
+struct MeshCoreDataReadDescriptor;
 
-using MeshCompletionReaderVariant = std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor>;
+using MeshCompletionReaderVariant =
+    std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
+
+struct DeviceMemoryAddress {
+    MeshCoordinate device_coord;
+    CoreCoord virtual_core_coord;
+    DeviceAddr address;
+};
 
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
@@ -87,6 +97,12 @@ private:
     SystemMemoryManager& reference_sysmem_manager();
     MultiProducerSingleConsumerQueue<CompletionReaderVariant>& get_read_descriptor_queue(IDevice* device);
 
+    void submit_core_data_memcpy_request(
+        const ReadCoreDataDescriptor& read_descriptor,
+        const MeshCoordinate& device_coord,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+
     // Shared across all MeshCommandQueue instances for a MeshDevice.
     std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>> worker_launch_message_buffer_state_;
 
@@ -134,18 +150,20 @@ private:
     inline static std::mutex reader_thread_pool_mutex_;
     // Used to Maintain state: Mark/Check if this data structure is being used for dispatch.
     // This is temporary - will not be needed when we MeshCommandQueue is the only dispatch interface.
-    bool in_use_ = false;
+    std::atomic<bool> in_use_ = false;
 
 protected:
     void write_shard_to_device(
-        Buffer* shard_view,
+        const MeshBuffer& buffer,
+        const MeshCoordinate& device_coord,
         const void* src,
-        const BufferRegion& region,
+        const std::optional<BufferRegion>& region,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void read_shard_from_device(
-        Buffer* shard_view,
+        const MeshBuffer& buffer,
+        const MeshCoordinate& device_coord,
         void* dst,
-        const BufferRegion& region,
+        const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) override;
@@ -162,6 +180,21 @@ public:
 
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override { return config_buffer_mgr_[index]; };
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
+
+    // TODO: This will error out for SD mesh command queues
+    // - Need to add equivalent APIs for SD and expose via mesh command queue base or mesh command queue
+    void enqueue_write_shard_to_core(
+        DeviceMemoryAddress address,
+        const void* src,
+        uint32_t size_bytes,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    void enqueue_read_shard_from_core(
+        DeviceMemoryAddress address,
+        void* dst,
+        uint32_t size_bytes,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
     MeshEvent enqueue_record_event(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
@@ -186,6 +219,8 @@ public:
     void read_completion_queue_event(MeshReadEventDescriptor& read_event_descriptor);
     // Helper function - read buffer data from Completion Queue
     void copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor);
+    // Helper function - read L1 data from Completion Queue
+    void read_l1_data_from_completion_queue(MeshCoreDataReadDescriptor& read_l1_data_descriptor);
 };
 
 }  // namespace tt::tt_metal::distributed

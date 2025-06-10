@@ -57,7 +57,7 @@ std::vector<DataFormat> get_pack_src_formats(
     bool fp32_dest_acc_en,
     bool bfp8_pack_precise,
     bool int_fpu_en = false,
-    tt::ARCH arch = tt::ARCH::GRAYSKULL);
+    tt::ARCH arch = tt::ARCH::WORMHOLE_B0);
 std::vector<DataFormat> get_pack_dst_formats(DataFormat buf_formats[NUM_CIRCULAR_BUFFERS]);
 
 }  // namespace tt

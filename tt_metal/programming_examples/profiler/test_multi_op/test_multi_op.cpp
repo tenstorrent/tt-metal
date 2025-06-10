@@ -5,6 +5,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
+#include <hostdevcommon/profiler_common.h>
 
 using namespace tt;
 

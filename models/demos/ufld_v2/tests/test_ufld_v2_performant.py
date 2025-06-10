@@ -1,8 +1,9 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
 from models.demos.ufld_v2.tests.ufld_v2_performant import (
     run_ufld_v2_inference,
     run_ufld_v2_trace_inference,

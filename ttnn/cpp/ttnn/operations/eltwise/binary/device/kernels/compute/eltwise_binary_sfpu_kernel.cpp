@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,12 +12,13 @@
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/binary_bitwise_sfpu.h"
 #include "compute_kernel_api/binary_shift.h"
-#include "compute_kernel_api/add_int32_sfpu.h"
-#include "compute_kernel_api/add_uint32_sfpu.h"
-#include "compute_kernel_api/add_uint16_sfpu.h"
+#include "compute_kernel_api/add_int_sfpu.h"
 #include "compute_kernel_api/sub_int32_sfpu.h"
 #include "compute_kernel_api/sub_uint16_sfpu.h"
+#include "compute_kernel_api/mul_uint16_sfpu.h"
 #include "compute_kernel_api/binary_max_min.h"
+#include "compute_kernel_api/gcd.h"
+#include "compute_kernel_api/lcm.h"
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
@@ -115,14 +116,8 @@ void MAIN {
 #ifdef BINOP_INIT
             BINOP_INIT
 #endif
-#ifdef ADD_INT32_INIT
-            ADD_INT32_INIT
-#endif
-#ifdef ADD_UINT32_INIT
-            ADD_UINT32_INIT
-#endif
-#ifdef ADD_UINT16_INIT
-            ADD_UINT16_INIT
+#ifdef ADD_INT_INIT
+            ADD_INT_INIT
 #endif
 #ifdef SUB_INT32_INIT
             SUB_INT32_INIT
@@ -130,8 +125,14 @@ void MAIN {
 #ifdef SUB_UINT16_INIT
             SUB_UINT16_INIT
 #endif
+#ifdef MUL_UINT16_INIT
+            MUL_UINT16_INIT
+#endif
 #ifdef BITWISE_INIT
             BITWISE_INIT
+#endif
+#ifdef BITWISE_UINT16_INIT
+            BITWISE_UINT16_INIT
 #endif
 #ifdef SHIFT_INIT
             SHIFT_INIT

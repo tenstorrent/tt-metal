@@ -21,7 +21,7 @@ Note the current compatibility matrix:
 | Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
 |----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
 | Galaxy (Wormhole 4U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.10.1.0                          | v2.2.3 or lower       | v1.1.3, `mesh` config          |
-| Galaxy (Wormhole 6U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | N/A                            |
+| Galaxy (Wormhole 6U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.15 or above      | N/A                            |
 | Wormhole             | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | N/A                            |
 | T3000 (Wormhole)     | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | v1.2.5 or above, `mesh` config |
 | Blackhole            | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.18.0.0 (v80.18.0.0)             | v3.0.12 or above      | N/A                            |
@@ -38,7 +38,7 @@ sudo ./install_dependencies.sh
 #### Install the Driver (TT-KMD)
 - DKMS must be installed:
 
-| OS              | Command                |
+| OS                     | Command                                            |
 |------------------------|----------------------------------------------------|
 | Ubuntu / Debian        | ```apt install dkms```                             |
 | Fedora                 | ```dnf install dkms```                             |
@@ -60,8 +60,6 @@ cd ..
 
 #### Update Device TT-Firmware with TT-Flash
 
-> [!CAUTION]
-> Be sure to align the FW version with the compatible version in the table above for your particular configuration.
 
 - Install TT-Flash:
 
@@ -69,22 +67,21 @@ cd ..
 pip install git+https://github.com/tenstorrent/tt-flash.git
 ```
 
-- Reboot to load changes:
-```
-sudo reboot
-```
+- Update TT-Firmware:
 
-- Check if TT-Flash is installed:
-```
-tt-flash --version
-```
+  - First, set the appropriate TT-Firmware version per device:
 
-- Download and install the TT-Firmware version according to the table above. We will use latest here as example:
-```
-file_name=$(curl -s "https://raw.githubusercontent.com/tenstorrent/tt-firmware/main/latest.fwbundle")
-curl -L -o "$file_name" "https://github.com/tenstorrent/tt-firmware/raw/main/$file_name"
-tt-flash flash --fw-tar $file_name
-```
+  | Device                        | Command                                                    |
+  |-------------------------------|------------------------------------------------------------|
+  | Blackhole                     | ```fw_tag=v80.18.0.0 fw_pack=fw_pack-80.18.0.0.fwbundle``` |
+  | Galaxy (6U) / Wormhole / T300 | ```fw_tag=v80.17.0.0 fw_pack=fw_pack-80.17.0.0.fwbundle``` |
+
+  - Then Download and install TT-Firmware:
+
+  ```
+  wget https://github.com/tenstorrent/tt-firmware/raw/refs/tags/$fw_tag/$fw_pack
+  tt-flash flash --fw-tar $fw_pack
+  ```
 
 - For more information visit Tenstorrent's [TT-Firmware GitHub Repository](https://github.com/tenstorrent/tt-firmware) and [TT-Flash Github Repository](https://github.com/tenstorrent/tt-flash).
 
@@ -163,11 +160,6 @@ source python_env/bin/activate
 ```
 
 - (optional) Software dependencies for profiling use:
-  - Install dependencies:
-  ```sh
-  sudo apt install pandoc libtbb-dev libcapstone-dev pkg-config
-  ```
-
   - Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
 
 - Continue to [You Are All Set!](#you-are-all-set)
@@ -186,7 +178,7 @@ docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstor
 
 - For more information on the Docker Release Images, visit our [Docker registry page](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64).
 
-- Continue to [You Are All Set!](#you-are-all-set)
+- You are all set! Try some [TT-NN Basic Examples](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) next.
 
 ---
 
@@ -223,7 +215,7 @@ To try our pre-built models in `models/`, you must:
 
 ### You are All Set!
 
-#### To verify your installation, try executing a programming example:
+#### To verify your installation (for source or wheel installation only), try executing a programming example:
 
 - First, set the following environment variables:
 

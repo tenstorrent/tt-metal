@@ -7,7 +7,7 @@
 #include <buffer_types.hpp>
 #include <core_coord.hpp>
 #include <device.hpp>
-#include <global_circular_buffer_impl.hpp>
+#include <global_circular_buffer.hpp>
 #include <host_api.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
@@ -97,7 +97,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
     // Write the config buffer to the device
     // Only block for the slow dispatch case
     auto config_buffer_address = cb_config_buffer_.get_buffer()->address();
-    const auto& core_to_core_id = cb_config_buffer_.get_buffer()->get_buffer_page_mapping()->core_to_core_id_;
+    const auto& core_to_core_id = cb_config_buffer_.get_buffer()->get_buffer_page_mapping()->core_to_core_id;
     std::vector<uint32_t> cb_config_host_buffer(cb_config_size / sizeof(uint32_t), 0);
     uint32_t noc_xy_address = config_buffer_address + num_config_elements * sizeof(uint32_t);
     uint32_t pages_sent_address = tt::align(noc_xy_address + num_noc_xy_words * sizeof(uint32_t), l1_alignment);

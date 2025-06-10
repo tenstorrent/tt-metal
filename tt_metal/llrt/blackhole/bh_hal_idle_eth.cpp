@@ -6,7 +6,7 @@
 #define COMPILE_FOR_ERISC
 
 #include "tt_align.hpp"
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -14,6 +14,7 @@
 
 #include "assert.hpp"
 #include "blackhole/bh_hal.hpp"
+#include "blackhole/bh_hal_eth_asserts.hpp"
 #include "core_config.h"
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
@@ -31,7 +32,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     static_assert(MEM_IERISC_MAP_END % L1_ALIGNMENT == 0);
 
     std::vector<DeviceAddr> mem_map_bases;
-    mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
+    mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_ETH_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = MEM_L1_BARRIER;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_IERISC_MAILBOX_BASE;
@@ -49,7 +50,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SCRATCH;
 
     std::vector<std::uint32_t> mem_map_sizes;
-    mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
+    mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_ETH_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_IERISC_MAILBOX_SIZE;
@@ -60,16 +61,20 @@ HalCoreInfoType create_idle_eth_mem_map() {
     // TODO: this is wrong, need eth specific value. For now use same value as idle
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_ERISC_KERNEL_CONFIG_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
-        MEM_ETH_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)];
+        MEM_ERISC_MAX_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)];
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_IERISC_BANK_TO_NOC_SIZE;
+
+    // No active fw on this core
+    std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
     std::vector<HalJitBuildConfig> processor_types(1);
     for (std::uint8_t processor_class_idx = 0; processor_class_idx < NumEthDispatchClasses; processor_class_idx++) {
         DeviceAddr fw_base, local_init, fw_launch;
         uint32_t fw_launch_value;
+        ll_api::memory::Loading memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP;
         switch (static_cast<EthProcessorTypes>(processor_class_idx)) {
             case EthProcessorTypes::DM0: {
                 fw_base = MEM_IERISC_FIRMWARE_BASE;
@@ -78,9 +83,9 @@ HalCoreInfoType create_idle_eth_mem_map() {
                 fw_launch_value = fw_base;
             } break;
             case EthProcessorTypes::DM1: {
-                fw_base = MEM_SLAVE_IERISC_FIRMWARE_BASE;
-                local_init = MEM_SLAVE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                fw_launch = SLAVE_IERISC_RESET_PC;
+                fw_base = MEM_SUBORDINATE_IERISC_FIRMWARE_BASE;
+                local_init = MEM_SUBORDINATE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH;
+                fw_launch = SUBORDINATE_IERISC_RESET_PC;
                 fw_launch_value = fw_base;
             } break;
             default:
@@ -90,7 +95,8 @@ HalCoreInfoType create_idle_eth_mem_map() {
             .fw_base_addr = fw_base,
             .local_init_addr = local_init,
             .fw_launch_addr = fw_launch,
-            .fw_launch_addr_value = fw_launch_value
+            .fw_launch_addr_value = fw_launch_value,
+            .memory_load = memory_load,
         };
         processor_classes[processor_class_idx] = processor_types;
     }
@@ -103,6 +109,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
         processor_classes,
         mem_map_bases,
         mem_map_sizes,
+        fw_mailbox_addr,
         false /*supports_cbs*/,
         false /*supports_receiving_multicast_cmds*/};
 }
