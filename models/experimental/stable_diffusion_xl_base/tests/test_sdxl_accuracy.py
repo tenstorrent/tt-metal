@@ -11,12 +11,13 @@ import urllib
 from loguru import logger
 import statistics
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 test_demo.__test__ = False
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 6 * 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "num_inference_steps",
     ((50),),
