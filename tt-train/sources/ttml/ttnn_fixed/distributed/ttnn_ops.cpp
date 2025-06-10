@@ -109,7 +109,7 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
         ttnn::slice(tensor_shard, start, end, stride, std::nullopt, scattered_tensors[idx]);
         ++idx;
     }
-    return ttnn::distributed::aggregate_as_tensor(scattered_tensors, tt::tt_metal::AllGatherTensor{});
+    return ttnn::distributed::combine_device_tensors(scattered_tensors);
 }
 
 }  // namespace ttml::ttnn_fixed::distributed

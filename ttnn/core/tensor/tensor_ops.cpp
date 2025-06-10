@@ -111,16 +111,16 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
                         // Multi-Thread Host tilization of shards.
                         mesh_device->enqueue_to_thread_pool([shard_idx, &s, &shards, target_layout, &input_tensor]() {
                             ZoneScopedN("HostTilize");
-                            Tensor shard(s.get_buffer(shard_idx), input_tensor.get_tensor_spec());
+                            Tensor shard(s.get_buffer(shard_idx), input_tensor.tensor_spec());
                             shards[shard_idx] = tensor_impl::to_layout_wrapper(shard, target_layout);
                         });
                     }
                     mesh_device->wait_for_thread_pool();
-                    return ttnn::distributed::aggregate_as_tensor(shards, input_tensor.get_distributed_tensor_config());
+                    return ttnn::distributed::aggregate_as_tensor(shards, input_tensor.distributed_tensor_config());
                 },
                 [&](const DeviceStorage& s) -> Tensor { TT_THROW("Unexpected storage type"); },
             },
-            input_tensor.get_storage());
+            input_tensor.storage());
 
         tensor_modified_layout = tt::tt_metal::set_tensor_id(tensor_modified_layout);
         GraphTracker::instance().track_function_end(tensor_modified_layout);
@@ -151,11 +151,11 @@ Tensor tensor_pad(
     TT_ASSERT(
         is_cpu_tensor(input_tensor) || is_multi_device_host_tensor(input_tensor), "Tensor must be on host for padding");
     // TODO: Flip to assert when we remove use cases in python and c++
-    if (input_tensor.get_layout() != Layout::ROW_MAJOR) {
+    if (input_tensor.layout() != Layout::ROW_MAJOR) {
         log_warning(
             tt::LogOp,
             "Tensor layout {} must be ROW_MAJOR for padding! Returning original tensor!",
-            input_tensor.get_layout());
+            input_tensor.layout());
         return input_tensor;
     }
 
@@ -170,7 +170,7 @@ Tensor tensor_unpad(
     ZoneScoped;
     GraphTracker::instance().track_function_start(
         "Tensor::unpad", input_tensor, output_tensor_start, output_tensor_end);
-    TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
+    TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
     auto output = tensor_impl::unpad_wrapper(input_tensor, output_tensor_start, output_tensor_end);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
@@ -180,16 +180,16 @@ Tensor tensor_unpad(
 Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::pad_to_tile", input_tensor, pad_value);
-    uint32_t height = input_tensor.get_padded_shape()[-2];
-    uint32_t width = input_tensor.get_padded_shape()[-1];
+    uint32_t height = input_tensor.padded_shape()[-2];
+    uint32_t width = input_tensor.padded_shape()[-1];
     uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
     uint32_t padded_width = round_up(width, constants::TILE_WIDTH);
 
     ttnn::SmallVector<uint32_t> padded_shape;
     ttnn::SmallVector<uint32_t> input_tensor_start;
 
-    for (auto index = 0; index < static_cast<int>(input_tensor.get_padded_shape().rank()) - 2; index++) {
-        padded_shape.push_back(input_tensor.get_padded_shape()[index]);
+    for (auto index = 0; index < static_cast<int>(input_tensor.padded_shape().rank()) - 2; index++) {
+        padded_shape.push_back(input_tensor.padded_shape()[index]);
         input_tensor_start.push_back(0);
     }
 
@@ -209,18 +209,18 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::Shape& out
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::unpad_from_tile", input_tensor, output_tensor_shape);
 
-    for (auto index = -3; index >= -static_cast<int>(input_tensor.get_padded_shape().rank()); index--) {
+    for (auto index = -3; index >= -static_cast<int>(input_tensor.padded_shape().rank()); index--) {
         TT_ASSERT(
-            input_tensor.get_logical_shape()[index] == output_tensor_shape[index],
+            input_tensor.logical_shape()[index] == output_tensor_shape[index],
             "Input shape must match output shape apart from last 2 dims");
     }
     TT_ASSERT(
-        input_tensor.get_padded_shape()[-2] % constants::TILE_HEIGHT == 0 &&
-            input_tensor.get_padded_shape()[-1] % constants::TILE_WIDTH == 0,
+        input_tensor.padded_shape()[-2] % constants::TILE_HEIGHT == 0 &&
+            input_tensor.padded_shape()[-1] % constants::TILE_WIDTH == 0,
         "Last 2 dims of input shape must be multiples of 32");
     TT_ASSERT(
-        input_tensor.get_padded_shape()[-2] < output_tensor_shape[-2] + constants::TILE_HEIGHT &&
-            input_tensor.get_padded_shape()[-1] < output_tensor_shape[-1] + constants::TILE_WIDTH,
+        input_tensor.padded_shape()[-2] < output_tensor_shape[-2] + constants::TILE_HEIGHT &&
+            input_tensor.padded_shape()[-1] < output_tensor_shape[-1] + constants::TILE_WIDTH,
         "Last 2 dims of output must be within range to have been padded to input");
     Shape output_tensor_start(ttnn::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 0));
     Shape output_tensor_end(ttnn::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 1));
