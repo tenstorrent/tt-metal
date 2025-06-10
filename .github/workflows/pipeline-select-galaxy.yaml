@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       model-selection:
-        description: "Select model to run tests on. ⚠️ If 'llama3_70b' is selected, all checkbox selections would be ignored."
+        description: "⚠️ If 'llama3_70b' is selected, all checkbox selections would be ignored.⚠️"
         required: true
         type: choice
         options:
@@ -12,7 +12,7 @@ on:
           - llama3_70b
         default: "all"
       trigger_type:
-        description: "Select the type of trigger for the pipeline."
+        description: "Select appropriate trigger."
         required: true
         type: choice
         options:
@@ -71,7 +71,7 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type }}
-      tracy: ${{ inputs.tg-model-perf || inputs.tg-nightly }}
+      tracy: ${{ inputs.tg-model-perf }}
       build-wheel: true
       version: 22.04
   tg-quick:
