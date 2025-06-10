@@ -22,7 +22,7 @@
 
 namespace ttnn::operations::experimental::reduction {
 
-static constexpr uint64_t compute_padded_volume(const Shape& logical_shape, const tt::tt_metal::Tile& tile) {
+uint64_t compute_padded_volume(const Shape& logical_shape, const tt::tt_metal::Tile& tile) {
     unsigned tile_width = tile.get_width();
     unsigned tile_height = tile.get_height();
 
