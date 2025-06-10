@@ -106,7 +106,9 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     tt::tt_metal::CircularBufferConfig output_cb_out_config =
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
             .set_page_size(out_cb_index, output_page_size)
-            .set_globally_allocated_address(*output.buffer());
+    if (!dst_is_dram) {
+        output_cb_out_config = output_cb_out_config.set_globally_allocated_address(*output.buffer());
+    }
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
     uint32_t dram_alignment = hal::get_dram_alignment();
     if (src_is_dram && input_unit_size % dram_alignment != 0 or is_blackhole or keep_l1_aligned) {
