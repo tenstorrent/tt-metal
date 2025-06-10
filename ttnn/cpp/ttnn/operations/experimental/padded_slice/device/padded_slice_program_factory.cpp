@@ -6,7 +6,6 @@
 #include "optional"
 #include "tt-metalium/assert.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "tt-metalium/logger.hpp"
 #include "tt-metalium/math.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/cb_utils.hpp"
@@ -136,7 +135,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
 
     const auto num_sticks_per_core = output_shard_spec.shape[0];
 
-    tt::log_debug(tt::LogOp,"num_stick_per_core: {}", num_sticks_per_core);
+    log_debug(tt::LogOp, "num_stick_per_core: {}", num_sticks_per_core);
 
     uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(input_tensor, output_tensor_start);
 
@@ -413,7 +412,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
                                    tt::round_down(output_tensor_start[-2], TILE_HEIGHT)) /
                                   TILE_HEIGHT;
 
-    tt::log_debug("Output Start : {}, Output Shape : {}", output_tensor_start, actual_output_shape);
+    log_debug(tt::LogOp, "Output Start : {}, Output Shape : {}", output_tensor_start, actual_output_shape);
 
     accumulated_total_tiles_per_dim[0] = tt::div_up(actual_output_shape[-1], TILE_WIDTH);
     accumulated_total_tiles_per_dim[1] = tt::div_up(input_shape[-2], TILE_HEIGHT) * accumulated_total_tiles_per_dim[0];
@@ -429,7 +428,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
     for (int32_t i = 2; i < num_dims; i++) {
         uint32_t num_output_dim = actual_output_shape[-(i + 1)];
         uint32_t num_total_dim = input_shape[-(i + 1)];
-        tt::log_debug("i = {}, num_output_dim: {}, num_total_dim: {}", i, num_output_dim, num_total_dim);
+        log_debug(tt::LogOp, "i = {}, num_output_dim: {}, num_total_dim: {}", i, num_output_dim, num_total_dim);
         uint32_t num_input_dim = (num_total_dim - num_output_dim) * accumulated_total_tiles_per_dim[i - 1];
         num_output_tiles_per_dim[i] = num_output_dim;
         num_input_tiles_per_dim[i] = num_input_dim;
@@ -446,7 +445,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
     }
 
     for (int i = 0; i < num_dims; i++) {
-        tt::log_debug(
+        log_debug(
+            tt::LogOp,
             "i = {}, num_output_tiles_per_dim: {}, num_input_tiles_per_dim: {}, accumulated_total_tiles_per_dim: {}",
             i,
             num_output_tiles_per_dim[i],
@@ -455,7 +455,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
     }
 
     for (int i = 0; i < num_dims; i++) {
-        tt::log_debug(
+        log_debug(
+            tt::LogOp,
             "i = {}, num_output_sticks_per_dim: {}, num_input_sticks_per_dim: {}, accumulated_total_per_dim: {}",
             i,
             num_output_sticks_per_dim[i],
@@ -481,7 +482,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
     const auto num_sticks_per_core = output_shard_spec.shape[0];
     const auto num_tiles_per_full_row = num_output_tiles_per_dim[1] * num_output_tiles_per_dim[0];
     uint32_t start_offset = ttnn::operations::data_movement::get_tiled_start_offset(input_tensor, output_tensor_start);
-    tt::log_debug("Start Offset: {}", start_offset);
+    log_debug(tt::LogOp, "Start Offset: {}", start_offset);
     uint32_t core_index = 0;
     for (const auto& core : cores) {
         uint32_t core_w_index = 0;
@@ -545,7 +546,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
                                     TILE_HEIGHT) *
                                    num_output_tiles_per_dim[0];
         }
-        tt::log_debug(
+        log_debug(
+            tt::LogOp,
             "For Core {}, Input Start ID {}, End ID {}, Output Start Coord: {}, End Coord : {}, Input Start Coord: {}, "
             "End Coord "
             ": {}, Num Full Rows "
@@ -711,8 +713,11 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         cb_buffer_size * num_tiles_per_channel,
         output_cb_data_format);
 
-    tt::log_debug(
-        "output_row_size_bytes: {}, num_output_sticks_per_core: {}", output_row_size_bytes, num_output_sticks_per_core);
+    log_debug(
+        tt::LogOp,
+        "output_row_size_bytes: {}, num_output_sticks_per_core: {}",
+        output_row_size_bytes,
+        num_output_sticks_per_core);
     auto cb_output_tuple = tt::tt_metal::create_cb(
         2,
         program,
@@ -722,7 +727,7 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         output_cb_data_format,
         output.buffer());
 
-    tt::log_debug(
+    log_debug(
         tt::LogOp,
         "num_tiles_height_per_core: {}, num_tiles_per_channel: {}",
         num_tiles_height_per_core,
