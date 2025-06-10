@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
-from models.experimental.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
+from models.demos.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
 from models.utility_functions import run_for_wormhole_b0
 
 

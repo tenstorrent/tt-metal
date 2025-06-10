@@ -6,8 +6,7 @@
 import torch.nn.functional as F
 
 import ttnn
-from models.experimental.yolov8s_world.runner.performant_runner_infra import YOLOv8sWorldPerformanceRunnerInfra
-
+from models.demos.yolov8s_world.runner.performant_runner_infra import YOLOv8sWorldPerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

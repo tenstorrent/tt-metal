@@ -3,23 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-
-import torch
-import pytest
-import cv2
-from loguru import logger
-import torch.nn.functional as F
 from datetime import datetime
 
-import ttnn
-from models.experimental.yolov8s_world.reference import yolov8s_world
-from models.utility_functions import disable_persistent_kernel_cache
-from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
-    attempt_load,
-)
+import cv2
+import pytest
+import torch
+import torch.nn.functional as F
+from loguru import logger
 
-from models.experimental.yolov8s_world.demo.demo_utils import LoadImages, preprocess, postprocess, load_coco_class_names
-from models.experimental.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
+import ttnn
+from models.demos.yolov8s_world.demo.demo_utils import LoadImages, load_coco_class_names, postprocess, preprocess
+from models.demos.yolov8s_world.reference import yolov8s_world
+from models.demos.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
+from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import attempt_load
+from models.utility_functions import disable_persistent_kernel_cache
 
 
 def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
@@ -62,8 +59,8 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
 @pytest.mark.parametrize(
     "source",
     [
-        ("models/experimental/yolov8s_world/demo/images/bus.jpg"),
-        # ("models/experimental/yolov8s_world/demo/images/elephants.jpg"), # Uncomment to run the demo with another image for the second example.
+        ("models/demos/yolov8s_world/demo/images/bus.jpg"),
+        # ("models/demos/yolov8s_world/demo/images/elephants.jpg"), # Uncomment to run the demo with another image for the second example.
     ],
 )
 @pytest.mark.parametrize(
@@ -103,7 +100,7 @@ def test_demo(device, source, model_type, res, use_pretrained_weight, use_progra
         yolov8s_world_trace_2cq._capture_yolov8s_world_trace_2cqs()
         logger.info("Inferencing using ttnn Model")
 
-    save_dir = "models/experimental/yolov8s_world/demo/runs"
+    save_dir = "models/demos/yolov8s_world/demo/runs"
 
     dataset = LoadImages(path=source)
 
