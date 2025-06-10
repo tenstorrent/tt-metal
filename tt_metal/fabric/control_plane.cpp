@@ -119,8 +119,9 @@ void ControlPlane::load_physical_chip_mapping(
 }
 
 void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
-    std::uint32_t mesh_ns_size = routing_table_generator_->mesh_graph->get_mesh_ns_size(mesh_id);
-    std::uint32_t mesh_ew_size = routing_table_generator_->mesh_graph->get_mesh_ew_size(mesh_id);
+    MeshShape mesh_shape = routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id);
+    std::uint32_t mesh_ns_size = mesh_shape[0];
+    std::uint32_t mesh_ew_size = mesh_shape[1];
     std::uint32_t num_ports_per_side =
         routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
     for (std::uint32_t i = 0; i < mesh_ns_size; i++) {
@@ -343,8 +344,9 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_physical_chip_mapping_from_m
 
         nw_chip_physical_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord({0, 3, 7, 0, 1});
-        mesh_ns_size = routing_table_generator_->mesh_graph->get_mesh_ns_size(/*mesh_id=*/MeshId{4});
-        mesh_ew_size = routing_table_generator_->mesh_graph->get_mesh_ew_size(/*mesh_id=*/MeshId{4});
+        auto mesh_shape = routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{4});
+        mesh_ns_size = mesh_shape[0];
+        mesh_ew_size = mesh_shape[1];
         // Main board
         const auto& physical_chip_ids =
             this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id);
@@ -361,8 +363,9 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_physical_chip_mapping_from_m
         mesh_graph_desc_filename == "p150_x4_mesh_graph_descriptor.yaml") {
         // TODO: update to pick out chip automatically
         nw_chip_physical_id = 0;
-        mesh_ns_size = routing_table_generator_->mesh_graph->get_mesh_ns_size(/*mesh_id=*/MeshId{0});
-        mesh_ew_size = routing_table_generator_->mesh_graph->get_mesh_ew_size(/*mesh_id=*/MeshId{0});
+        auto mesh_shape = routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0});
+        mesh_ns_size = mesh_shape[0];
+        mesh_ew_size = mesh_shape[1];
         // Main board
         const auto& physical_chip_ids =
             this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id);
@@ -372,14 +375,40 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_physical_chip_mapping_from_m
     } else if (
         mesh_graph_desc_filename == "t3k_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "n150_mesh_graph_descriptor.yaml" ||
-        mesh_graph_desc_filename == "n300_mesh_graph_descriptor.yaml") {
+        mesh_graph_desc_filename == "n300_mesh_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "multihost_t3k_mesh_graph_descriptor.yaml") {
+        // Pick out the chip with the lowest ethernet coordinate (i.e. NW chip)
+        const auto& chip_eth_coords =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_all_chip_ethernet_coordinates();
+        TT_FATAL(!chip_eth_coords.empty(), "No chip ethernet coordinates found in ethernet coordinates map");
+
+        // TODO: Support custom operator< for eth_coord_t to allow usage in std::set
+        const auto min_coord =
+            *std::min_element(chip_eth_coords.begin(), chip_eth_coords.end(), [](const auto& a, const auto& b) {
+                const auto& [chip_a, eth_coord_a] = a;
+                const auto& [chip_b, eth_coord_b] = b;
+
+                if (eth_coord_a.cluster_id != eth_coord_b.cluster_id) {
+                    return eth_coord_a.cluster_id < eth_coord_b.cluster_id;
+                }
+                if (eth_coord_a.x != eth_coord_b.x) {
+                    return eth_coord_a.x < eth_coord_b.x;
+                }
+                if (eth_coord_a.y != eth_coord_b.y) {
+                    return eth_coord_a.y < eth_coord_b.y;
+                }
+                if (eth_coord_a.rack != eth_coord_b.rack) {
+                    return eth_coord_a.rack < eth_coord_b.rack;
+                }
+                return eth_coord_a.shelf < eth_coord_b.shelf;
+            });
+
         nw_chip_physical_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord({0, 0, 0, 0, 0});
-        mesh_ns_size = routing_table_generator_->mesh_graph->get_mesh_ns_size(/*mesh_id=*/MeshId{0});
-        mesh_ew_size = routing_table_generator_->mesh_graph->get_mesh_ew_size(/*mesh_id=*/MeshId{0});
-        // Main board
+            tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord(min_coord.second);
+        auto mesh_shape = routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0});
+
         const auto& physical_chip_ids =
-            this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id);
+            this->get_mesh_physical_chip_ids(mesh_shape[0], mesh_shape[1], nw_chip_physical_id);
         for (std::uint32_t i = 0; i < physical_chip_ids.size(); i++) {
             logical_mesh_chip_id_to_physical_chip_id_mapping.insert({FabricNodeId(MeshId{0}, i), physical_chip_ids[i]});
         }
@@ -741,8 +770,9 @@ void ControlPlane::write_routing_tables_to_chip(MeshId mesh_id, chip_id_t chip_i
 
             fabric_router_config.my_mesh_id = *mesh_id;
             fabric_router_config.my_device_id = chip_id;
-            fabric_router_config.north_dim = this->routing_table_generator_->mesh_graph->get_mesh_ns_size(mesh_id);
-            fabric_router_config.east_dim = this->routing_table_generator_->mesh_graph->get_mesh_ew_size(mesh_id);
+            MeshShape fabric_mesh_shape = this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id);
+            fabric_router_config.north_dim = fabric_mesh_shape[0];
+            fabric_router_config.east_dim = fabric_mesh_shape[1];
 
             // Write data to physical eth core
             CoreCoord virtual_eth_core =
@@ -1035,9 +1065,7 @@ std::vector<MeshId> ControlPlane::get_user_physical_mesh_ids() const {
 }
 
 MeshShape ControlPlane::get_physical_mesh_shape(MeshId mesh_id) const {
-    uint32_t x = this->routing_table_generator_->mesh_graph->get_mesh_ns_size(mesh_id);
-    uint32_t y = this->routing_table_generator_->mesh_graph->get_mesh_ew_size(mesh_id);
-    return MeshShape(x, y);
+    return this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id);
 };
 
 void ControlPlane::print_routing_tables() const {
