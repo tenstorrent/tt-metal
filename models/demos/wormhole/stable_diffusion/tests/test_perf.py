@@ -6,7 +6,7 @@ import os
 
 import pytest
 import torch
-from diffusers import StableDiffusionPipeline
+from diffusers import AutoencoderKL, StableDiffusionPipeline
 from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
@@ -16,6 +16,7 @@ from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMSched
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
+from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae import Vae
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import is_blackhole, is_wormhole_b0, profiler
@@ -181,140 +182,68 @@ def test_stable_diffusion_trace_2cq(device, use_program_cache):
     print(f"SD1.4 is running at {fps} FPS")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 0}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 8192, "trace_region_size": 3472384}], indirect=True)
 def test_stable_diffusion_vae_trace(device):
-    assert is_wormhole_b0() or is_blackhole(), "SD 1.4 runs on Wormhole B0 or Blackhole"
-
     profiler.clear()
     torch.manual_seed(0)
+    device.enable_program_cache()
 
-    model_name = "CompVis/stable-diffusion-v1-4"
-    pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
-    torch_model = pipe.unet
-    torch_model.eval()
-    config = torch_model.config
+    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
+    ttnn_model = Vae(torch_vae=vae, device=device)
 
-    # Setup scheduler
-    ttnn_scheduler = TtPNDMScheduler(
-        beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000, device=device
-    )
-    ttnn_scheduler.set_timesteps(4)
-
-    parameters = preprocess_model_parameters(
-        model_name=model_name,
-        initialize_model=lambda: torch_model,
-        custom_preprocessor=custom_preprocessor,
-        device=device,
-    )
-    parameters = unsqueeze_all_params_to_4d(parameters)
-
-    batch_size = 2
-    in_channels = 4
+    input_channels = 4
     input_height = 64
     input_width = 64
-    encoder_hidden_states_shape = [1, 2, 77, 768]
-    hidden_states_shape = [batch_size, in_channels, input_height, input_width]
-    class_labels = None
-    attention_mask = None
-    cross_attention_kwargs = None
-    return_dict = True
+    out_channels = 3
+    output_height = 512
+    output_width = 512
 
+    input_shape = [1, input_channels, input_height, input_width]
+    ttnn_input_device = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(input_shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
     # Run torch model
-    torch_input = torch.randn(hidden_states_shape)
-    torch_encoder_hidden_states = torch.randn(encoder_hidden_states_shape)
-    time_step = ttnn_scheduler.timesteps.tolist()
-    torch_output = torch_model(
-        torch_input, timestep=time_step[0], encoder_hidden_states=torch_encoder_hidden_states.squeeze(0)
-    ).sample
+    torch_input = torch.randn(input_shape)
+    torch_output = vae.decode(torch_input).sample
 
-    # Set up ttnn inputs
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    torch_encoder_hidden_states = torch.nn.functional.pad(torch_encoder_hidden_states, (0, 0, 0, 19))
-    encoder_hidden_states = ttnn.from_torch(
-        torch_encoder_hidden_states, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
-    )
-    encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    _tlist = []
-    for t in ttnn_scheduler.timesteps:
-        _t = constant_prop_time_embeddings(t, ttnn_input, torch_model.time_proj)
-        _t = _t.unsqueeze(0).unsqueeze(0)
-        _t = _t.permute(2, 0, 1, 3)  # pre-permute temb
-        _t = ttnn.from_torch(_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        _tlist.append(_t)
-
-    ttnn_model = UNet2D(device, parameters, batch_size, input_height, input_width)
-
-    input_tensor = ttnn.allocate_tensor_on_device(
-        ttnn_input.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
-    )
-    op_event = ttnn.record_event(device, 0)
+    def wrapper(ttnn_input_device):
+        ttnn_nhwc = ttnn.permute(ttnn_input_device, [0, 2, 3, 1])
+        ttnn_output = ttnn_model.decode(ttnn_nhwc)
+        ttnn_output = ttnn.reshape(ttnn_output, [1, output_height, output_width, out_channels])
+        ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
+        return ttnn_output
 
     # COMPILE
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=1)
-    write_event = ttnn.record_event(device, 1)
-    ttnn.wait_for_event(0, write_event)
-    output_tensor = ttnn.from_device(
-        ttnn_model(
-            input_tensor,
-            timestep=_tlist[0],
-            encoder_hidden_states=encoder_hidden_states,
-            class_labels=class_labels,
-            attention_mask=attention_mask,
-            cross_attention_kwargs=cross_attention_kwargs,
-            return_dict=return_dict,
-            config=config,
-        ),
-        blocking=True,
-    )
+    ttnn.copy_host_to_device_tensor(ttnn_input, ttnn_input_device)
+    ttnn_output = wrapper(ttnn_input_device)
+
+    ttnn_output.deallocate(True)
 
     # CAPTURE
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=1)
-    write_event = ttnn.record_event(device, 1)
-    ttnn.wait_for_event(0, write_event)
-    output_tensor.deallocate(True)
+    ttnn.copy_host_to_device_tensor(ttnn_input, ttnn_input_device)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
-    output_tensor = ttnn_model(
-        input_tensor,
-        timestep=_tlist[0],
-        encoder_hidden_states=encoder_hidden_states,
-        class_labels=class_labels,
-        attention_mask=attention_mask,
-        cross_attention_kwargs=cross_attention_kwargs,
-        return_dict=return_dict,
-        config=config,
-    )
+    ttnn_output = wrapper(ttnn_input_device)
     ttnn.end_trace_capture(device, tid, cq_id=0)
-
-    # TRACE
     ttnn.synchronize_device(device)
-    profiler.start(f"model_run_for_inference_{0}")
 
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=1)
-    write_event = ttnn.record_event(device, 1)
-    ttnn.wait_for_event(0, write_event)
+    # EXECUTE TRACE
+    profiler.start(f"vae_run_for_inference_{0}")
+    ttnn.copy_host_to_device_tensor(ttnn_input, ttnn_input_device)
     ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-    host_output_tensor = output_tensor.cpu(blocking=False)
+    ttnn_out = ttnn.to_torch(ttnn_output)
     ttnn.synchronize_device(device)
+    profiler.end(f"vae_run_for_inference_{0}")
 
-    profiler.end(f"model_run_for_inference_{0}")
-    ttnn.release_trace(device, tid)
+    assert_with_pcc(torch_output, ttnn_out, 0.985)
 
-    assert_with_pcc(torch_output, ttnn.to_torch(host_output_tensor), 0.996)
-
-    inference_time = profiler.get(f"model_run_for_inference_{0}")
-    expected_inference_time = 0.113 if is_wormhole_b0() else 0.072
+    inference_time = profiler.get(f"vae_run_for_inference_{0}")
+    expected_inference_time = 0.749 if is_wormhole_b0() else 0.072
 
     assert (
         inference_time <= expected_inference_time
-    ), f"Inference time with trace and 2 cqs is {inference_time}s, while expected time is {expected_inference_time}s"
-
-    num_model_iterations_per_image = 51
-    fps = 1 / (inference_time * num_model_iterations_per_image)
-    print(f"SD1.4 is running at {fps} FPS")
+    ), f"Inference time with trace is {inference_time}s, while expected time is {expected_inference_time}s"
 
 
 @pytest.mark.models_performance_bare_metal
