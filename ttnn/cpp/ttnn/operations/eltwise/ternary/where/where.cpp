@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "device/where_device_operation.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -65,8 +66,11 @@ Tensor WhereOperation::invoke(
     const Tensor& value_false,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor) {
-    // should call ttnn::prim::where here
-    // return ttnn::prim::where(queue_id, predicate, value_true, value_false, output_mem_config, output_tensor);
+    std::optional<DataType> output_dtype = output_tensor.has_value() ? std::optional<DataType>(output_tensor->dtype())
+                                                                     : std::optional<DataType>(predicate.dtype());
+
+    return ttnn::prim::where(
+        queue_id, predicate, value_true, value_false, output_dtype, output_mem_config, output_tensor);
 }
 
 Tensor WhereOperation::invoke(
