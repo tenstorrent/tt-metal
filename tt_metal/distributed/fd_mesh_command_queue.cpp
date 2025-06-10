@@ -201,7 +201,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     if (!sysmem_manager.get_bypass_mode()) {
         auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
         auto& sub_device = sub_device_cq_owner[*sub_device_id];
-        sub_device.TakeOwnership(sub_device_id, this->id_);
+        sub_device.take_ownership(sub_device_id, this->id_);
     }
 
     TT_FATAL(
@@ -398,7 +398,7 @@ void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids)
     reads_processed_cv_.wait(lock, [this] { return num_outstanding_reads_.load() == 0; });
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
-        sub_device_cq_owner[*sub_device_id].Finished(this->id_);
+        sub_device_cq_owner[*sub_device_id].finished(this->id_);
     }
 }
 
@@ -587,7 +587,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event(
     MeshEvent event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/false, device_range);
     for (const auto& sub_device_id : sub_device_ids) {
         auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
-        sub_device_entry.RecordedEvent(event.id(), event.mesh_cq_id());
+        sub_device_entry.recorded_event(event.id(), event.mesh_cq_id());
     }
     return event;
 }
@@ -601,7 +601,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host(
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (const auto& sub_device_id : sub_device_ids) {
         auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
-        sub_device_entry.RecordedEvent(event.id(), event.mesh_cq_id());
+        sub_device_entry.recorded_event(event.id(), event.mesh_cq_id());
     }
     return event;
 }
@@ -615,7 +615,7 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
     }
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto& sub_device_entry : sub_device_cq_owner) {
-        sub_device_entry.WaitedForEvent(sync_event.id(), sync_event.mesh_cq_id(), this->id_);
+        sub_device_entry.waited_for_event(sync_event.id(), sync_event.mesh_cq_id(), this->id_);
     }
 }
 
@@ -880,7 +880,7 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto sub_device_id : descriptor->sub_device_ids) {
         auto& sub_device = sub_device_cq_owner[*sub_device_id];
-        sub_device.TakeOwnership(sub_device_id, this->id_);
+        sub_device.take_ownership(sub_device_id, this->id_);
     }
 
     auto cmd_sequence_sizeB = trace_dispatch::compute_trace_cmd_size(num_sub_devices);

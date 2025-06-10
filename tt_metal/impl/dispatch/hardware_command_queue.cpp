@@ -434,7 +434,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     if (!this->manager_.get_bypass_mode()) {
         auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
         auto& sub_device = sub_device_cq_owner[*sub_device_ids[0]];
-        sub_device.TakeOwnership(sub_device_ids[0], this->id_);
+        sub_device.take_ownership(sub_device_ids[0], this->id_);
     }
 
     // Finalize Program: Compute relative offsets for data structures (semaphores, kernel binaries, etc) in L1
@@ -567,7 +567,7 @@ void HWCommandQueue::enqueue_record_event(
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (const auto& sub_device_id : sub_device_ids) {
         auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
-        sub_device_entry.RecordedEvent(event->event_id, event->cq_id);
+        sub_device_entry.recorded_event(event->event_id, event->cq_id);
     }
 }
 
@@ -576,7 +576,7 @@ void HWCommandQueue::enqueue_wait_for_event(const std::shared_ptr<Event>& sync_e
     event_dispatch::issue_wait_for_event_commands(id_, sync_event->cq_id, this->manager_, sync_event->event_id);
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto& sub_device : sub_device_cq_owner) {
-        sub_device.WaitedForEvent(sync_event->event_id, sync_event->cq_id, this->id_);
+        sub_device.waited_for_event(sync_event->event_id, sync_event->cq_id, this->id_);
     }
 }
 
@@ -591,7 +591,7 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto sub_device_id : descriptor->sub_device_ids) {
         auto& sub_device = sub_device_cq_owner[*sub_device_id];
-        sub_device.TakeOwnership(sub_device_id, this->id_);
+        sub_device.take_ownership(sub_device_id, this->id_);
     }
 
     auto cmd_sequence_sizeB = trace_dispatch::compute_trace_cmd_size(num_sub_devices);
@@ -719,7 +719,7 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids)) {
         auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
-        sub_device_entry.Finished(this->id_);
+        sub_device_entry.finished(this->id_);
     }
 }
 
