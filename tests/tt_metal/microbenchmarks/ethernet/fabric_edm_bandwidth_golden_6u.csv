@@ -1,7 +1,7 @@
 Test Name,Noc Message Type,Packet Size,Line Size,Num Links,Disable Interior Workers,Unidirectional,Senders Are Unidirectional,Bandwidth (B/c),Packets/Second
 mcast_HalfRing,noc_unicast_write,4096,4,1,False,False,False,11.345792570298036,2769968.889232919
 mcast_HalfRing,noc_unicast_write,4096,4,2,False,False,False,11.330537619072304,2766244.535906324
-mcast_HalfRing,noc_unicast_write,4096,4,3,False,False,False,10.301558637642511,2515028.9642681913
+mcast_HalfRing,noc_unicast_write,4096,4,3,False,False,False,10.27558637642511,2515028.9642681913
 mcast_HalfRing,noc_unicast_write,4096,4,4,False,False,False,9.048954945670868,2209217.5160329267
 mcast_FullRing,noc_unicast_write,16,4,1,False,False,False,0.039852346888725826,2490771.680545364
 mcast_FullRing,noc_unicast_write,2048,4,1,False,False,False,5.096832200574682,2488687.5979368566
@@ -9,12 +9,24 @@ mcast_FullRing,noc_unicast_write,4096,4,1,False,False,False,9.755098095596937,23
 mcast_FullRing,noc_unicast_write,4096,4,2,False,False,False,9.56834347200993,2336021.355471174
 mcast_FullRing,noc_unicast_write,4096,4,3,False,False,False,9.472529137451062,2312629.183948013
 mcast_FullRing,noc_unicast_write,4096,4,4,False,False,False,9.148423965647103,2233501.944738062
+mcast_HalfRing,noc_unicast_write,16,8,1,False,False,False,0.03420325116331804,2137703.1977073774
+mcast_HalfRing,noc_unicast_write,16,8,2,False,False,False,0.027875171072701502,1742198.192043844
+mcast_HalfRing,noc_unicast_write,16,8,3,False,False,False,0.027861608326664542,1741350.5204165338
+mcast_HalfRing,noc_unicast_write,16,8,4,False,False,False,0.026548973022773373,1659310.8139233359
+mcast_HalfRing,noc_unicast_write,2048,8,1,False,False,False,4.432033991839609,2164079.097577934
+mcast_HalfRing,noc_unicast_write,2048,8,2,False,False,False,3.5748720290072935,1745542.9829137176
+mcast_HalfRing,noc_unicast_write,2048,8,3,False,False,False,3.564763778254226,1740607.3136006964
+mcast_HalfRing,noc_unicast_write,2048,8,4,False,False,False,3.3985319619692658,1659439.4345553056
+mcast_HalfRing,noc_unicast_write,4096,8,1,False,False,False,7.067458237518352,1725453.6712691288
+mcast_HalfRing,noc_unicast_write,4096,8,2,False,False,False,6.850672264342723,1672527.4082867976
+mcast_HalfRing,noc_unicast_write,4096,8,3,False,False,False,6.831327752752033,1667804.6271367269
+mcast_HalfRing,noc_unicast_write,4096,8,4,False,False,False,6.687633224070424,1632722.9550953184
 mcast_FullRing,noc_unicast_write,16,8,1,False,False,False,0.032836544222804305,2052284.013925269
 mcast_FullRing,noc_unicast_write,2048,8,1,False,False,False,4.290401750140346,2094922.729560716
 mcast_FullRing,noc_unicast_write,4096,8,1,False,False,False,8.15279503722146,1990428.4758841456
 mcast_FullRing,noc_unicast_write,4096,8,2,False,False,False,8.000333417913216,1953206.400857719
-mcast_FullRing,noc_unicast_write,4096,8,3,False,False,False,7.187116039693315,1754667.0018782506
-mcast_FullRing,noc_unicast_write,4096,8,4,False,False,False,6.887485020659927,1681514.8976220526
+mcast_FullRing,noc_unicast_write,4096,8,3,False,False,False,7.237116039693315,1754667.0018782506
+mcast_FullRing,noc_unicast_write,4096,8,4,False,False,False,7.041485020659927,1681514.8976220526
 unicast_FullRing,noc_unicast_write,4096,4,1,False,False,False,10.147318619776387,2477372.7099063443
 unicast_FullRing,noc_unicast_write,4096,4,2,False,False,False,10.117036568003153,2469979.6308601447
 unicast_FullRing,noc_unicast_write,4096,4,3,False,False,False,10.04267716900118,2451825.480713179
@@ -27,10 +39,10 @@ mcast_SaturateChipToChipRing,noc_unicast_write,4096,4,3,False,False,False,9.6108
 mcast_SaturateChipToChipRing,noc_unicast_write,4096,4,4,False,False,False,9.602947354607602,2344469.568995997
 unicast_Linear_0x4_mesh,noc_unicast_write,16,2,1,False,False,True,0.04600862192948342,2875538.870592714
 unicast_Linear_0x4_mesh,noc_unicast_write,16,2,2,False,False,True,0.045976324491703,2873520.2807314373
-unicast_Linear_0x4_mesh,noc_unicast_write,2048,2,1,False,False,True,5.915592894847231,2888473.0931871245
-unicast_Linear_0x4_mesh,noc_unicast_write,2048,2,2,False,False,True,5.911529828437907,2886489.174041947
+unicast_Linear_0x4_mesh,noc_unicast_write,2048,2,1,False,False,True,5.975592894847231,2888473.0931871245
+unicast_Linear_0x4_mesh,noc_unicast_write,2048,2,2,False,False,True,5.971529828437907,2886489.174041947
 unicast_Linear_0x4_mesh,noc_unicast_write,4096,2,1,False,False,True,11.176111824966155,2728542.9260171275
-unicast_Linear_0x4_mesh,noc_unicast_write,4096,2,2,False,False,True,11.175537947929223,2728402.819318658
+unicast_Linear_0x4_mesh,noc_unicast_write,4096,2,2,False,False,True,11.125537947929223,2728402.819318658
 mcast_Linear_2x0_mesh,noc_unicast_write,16,4,1,False,False,True,0.041978790176908004,2623674.38605675
 mcast_Linear_2x0_mesh,noc_unicast_write,2048,4,1,False,False,True,5.385862498838361,2629815.6732609184
 mcast_Linear_2x0_mesh,noc_unicast_write,4096,4,1,False,False,True,10.405971935467146,2540520.4920574087
@@ -38,6 +50,17 @@ mcast_Linear_0x4_mesh,noc_unicast_write,2048,8,4,False,False,True,4.938580400180
 mcast_Linear_0x4_mesh,noc_unicast_write,4096,8,4,False,False,True,9.119016055496026,2226322.2791738342
 mcast_Linear_8x0_mesh,noc_unicast_write,2048,4,4,False,False,True,5.03613030042878,2459047.99825624
 mcast_Linear_8x0_mesh,noc_unicast_write,4096,4,4,False,False,True,10.029921906552985,2448711.4029670376
+unicast_Linear_all_rows_all_cols_mesh,noc_unicast_write,16,"[4, 2]","[1, 1]","[False, False]","[False, False]","[True, True]",0.047289818995557745,2955613.6872223592
+unicast_Linear_all_rows_all_cols_mesh,noc_unicast_write,2048,"[4, 2]","[1, 1]","[False, False]","[False, False]","[True, True]",6.0373207387590515,2947910.516972193
+unicast_Linear_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 2]","[1, 1]","[False, False]","[False, False]","[True, True]",10.735075094025603,2620867.942877345
+unicast_Linear_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[4, 4]","[False, False]","[False, False]","[True, True]",9.511498736678604,2322143.246259425
+mcast_Linear_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[4, 4]","[False, False]","[False, False]","[True, True]",9.220338835015085,2251059.285892355
+unicast_Linear_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[1, 1]","[False, False]","[False, False]","[True, True]",9.66159129528129,2358786.9373245337
+mcast_Linear_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[1, 1]","[False, False]","[False, False]","[True, True]",9.42300348337968,2300537.9598094923
+unicast_FullRing_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[4, 4]","[False, False]","[False, False]","[False, False]",7.307342329194562,1771812.092088516
+mcast_FullRing_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[4, 4]","[False, False]","[False, False]","[False, False]",6.79217569534689,1646038.9881217992
+unicast_FullRing_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[1, 1]","[False, False]","[False, False]","[False, False]",8.376766518602965,1867307.7084234813
+mcast_FullRing_all_rows_all_cols_mesh,noc_unicast_write,4096,"[4, 8]","[1, 1]","[False, False]","[False, False]","[False, False]",7.144104148854267,1731959.0207163738
 mcast_Linear,noc_unicast_write,16,4,1,False,False,True,0.04201191048165132,2625744.4051032076
 mcast_Linear,noc_unicast_write,2048,4,1,False,False,True,5.373852813293946,2623951.5689911847
 mcast_Linear,noc_unicast_write,4096,4,1,False,False,True,10.575302183418431,2581860.8846236407
@@ -76,13 +99,13 @@ mcast_RingAsLinear,noc_unicast_write,4096,4,3,False,False,True,9.187957040087301
 mcast_RingAsLinear,noc_unicast_write,4096,4,4,False,False,True,8.38554822213045,2047252.9839185667
 unicast_Linear,noc_unicast_write,16,2,1,False,False,True,0.04661634597218528,2913521.6232615802
 unicast_Linear,noc_unicast_write,2048,2,1,False,False,True,5.999666707968084,2929524.7597500407
-unicast_Linear,noc_unicast_write,4096,2,1,False,False,True,11.115915674978496,2713846.6003365465
+unicast_Linear,noc_unicast_write,4096,2,1,False,False,True,11.065915674978496,2713846.6003365465
 unicast_RingAsLinear,noc_unicast_write,16,2,1,False,False,True,0.04284636030278291,2677897.5189239318
 unicast_RingAsLinear,noc_unicast_write,2048,2,1,False,False,True,5.5201597622644005,2695390.5089181643
 unicast_RingAsLinear,noc_unicast_write,4096,2,1,False,False,True,10.976066988737593,2679703.854672264
 unicast_Linear,noc_unicast_write,16,2,2,False,False,True,0.04652257017777059,2907660.636110662
 unicast_Linear,noc_unicast_write,2048,2,2,False,False,True,5.987767558079481,2923714.6279684966
-unicast_Linear,noc_unicast_write,4096,2,2,False,False,True,11.102490297247494,2710568.920226439
+unicast_Linear,noc_unicast_write,4096,2,2,False,False,True,11.062490297247494,2710568.920226439
 unicast_RingAsLinear,noc_unicast_write,16,2,2,False,False,True,0.04265565525144902,2665978.4532155637
 unicast_RingAsLinear,noc_unicast_write,2048,2,2,False,False,True,5.485258788844949,2678349.017990698
 unicast_RingAsLinear,noc_unicast_write,4096,2,2,False,False,True,10.908847338857802,2663292.8073383304

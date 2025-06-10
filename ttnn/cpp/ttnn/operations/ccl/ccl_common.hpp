@@ -485,16 +485,16 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
     InterleavedRingAllGatherTensorSlicer(
          const Tensor & input_tensor,  const Tensor & output_tensor, int slice_dim, uint32_t slice_idx) :
         LegacyCclTensorSlicer() {
-        this->row_major = input_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR;
-        this->slice_dim_is_width = input_tensor.get_padded_shape().rank() - 1 == slice_dim;
+        this->row_major = input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR;
+        this->slice_dim_is_width = input_tensor.padded_shape().rank() - 1 == slice_dim;
         this->is_sharded = input_tensor.is_sharded();
 
         this->input_page_size = input_tensor.buffer()->page_size();
 
         if (row_major) {
-            this->num_cols = input_tensor.get_padded_shape()[-1];
-            auto input_shape = input_tensor.get_padded_shape();
-            auto output_shape = output_tensor.get_padded_shape();
+            this->num_cols = input_tensor.padded_shape()[-1];
+            auto input_shape = input_tensor.padded_shape();
+            auto output_shape = output_tensor.padded_shape();
             this->num_rows =
                 std::accumulate(input_shape.cbegin() + slice_dim, input_shape.cend() - 1, 1, std::multiplies<uint32_t>());
             this->row_offset =
@@ -502,12 +502,12 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
                     output_shape.cbegin() + slice_dim, output_shape.cend() - 1, 1, std::multiplies<uint32_t>()) -
                 num_rows;
         } else {
-            auto input_shape = input_tensor.get_padded_shape();
-            auto output_shape = output_tensor.get_padded_shape();
+            auto input_shape = input_tensor.padded_shape();
+            auto output_shape = output_tensor.padded_shape();
             auto input_tile = input_tensor.tensor_spec().tile();
             auto output_tile = output_tensor.tensor_spec().tile();
             this->num_cols = input_shape[-1] / input_tile.get_width();
-            uint32_t num_output_cols = output_tensor.get_padded_shape()[-1] / output_tile.get_width();
+            uint32_t num_output_cols = output_tensor.padded_shape()[-1] / output_tile.get_width();
             this->num_rows =
                 std::accumulate(
                     input_shape.cbegin() + slice_dim, input_shape.cend() - 1, 1, std::multiplies<uint32_t>()) /

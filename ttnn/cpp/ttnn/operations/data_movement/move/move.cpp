@@ -29,7 +29,7 @@ bool can_deallocate(const Tensor& input_tensor) {
                 return false;
             }
         },
-        input_tensor.get_storage());
+        input_tensor.storage());
 }
 
 static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
@@ -52,13 +52,13 @@ static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const st
 
     auto output_tensor = create_device_tensor(
         TensorSpec(
-            input_tensor.get_logical_shape(),
+            input_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
-                input_tensor.get_dtype(),
-                PageConfig(input_tensor.get_layout()),
+                input_tensor.dtype(),
+                PageConfig(input_tensor.layout()),
                 output_mem_config,
-                input_tensor.get_logical_shape(),
-                input_tensor.get_padded_shape())),
+                input_tensor.logical_shape(),
+                input_tensor.padded_shape())),
         input_tensor.device());
 
     // get_parallelization_strategy
@@ -143,8 +143,8 @@ static inline Tensor move_sharded(
     auto shard_spec = input_tensor.shard_spec().value();
     auto shard_shape = shard_spec.shape;
     auto shard_grid = shard_spec.grid;
-    auto input_dtype = input_tensor.get_dtype();
-    auto input_layout = input_tensor.get_layout();
+    auto input_dtype = input_tensor.dtype();
+    auto input_layout = input_tensor.layout();
     // Special handling for Mesh vs single device. Needs to be consolidated after full
     // migration
 
@@ -157,13 +157,13 @@ static inline Tensor move_sharded(
     auto shard_mem_config = output_mem_config.with_shard_spec(shard_spec);
     auto output_tensor = create_device_tensor(
         TensorSpec(
-            input_tensor.get_logical_shape(),
+            input_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 input_dtype,
                 PageConfig(input_layout),
                 shard_mem_config,
-                input_tensor.get_logical_shape(),
-                input_tensor.get_padded_shape())),
+                input_tensor.logical_shape(),
+                input_tensor.padded_shape())),
         input_tensor.device());
     if (input_tensor.buffer()->address() == output_tensor.buffer()->address()) {
         log_debug(

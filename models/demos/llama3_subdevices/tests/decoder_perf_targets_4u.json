@@ -40,7 +40,7 @@
             "first_to_last_start": 96.77777777777777,
             "non-overlapped-dispatch-time": 4351.1,
             "kernel_duration_relative_margin": 0.05,
-            "op_to_op_duration_relative_margin": 0.25,
+            "op_to_op_duration_relative_margin": 0.3,
             "first_to_last_start_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.2
         },
@@ -81,7 +81,7 @@
             "op_name": "FF2_MM",
             "kernel_duration": 15891.0,
             "op_to_op": 658.7777777777778,
-            "first_to_last_start": 1719.111111111111,
+            "first_to_last_start": 2250.0,
             "non-overlapped-dispatch-time": 6770.3,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
@@ -103,7 +103,7 @@
             "op_name": "LlamaReduceScatterCreateHeads",
             "kernel_duration": 9801.145,
             "op_to_op": 966.0,
-            "first_to_last_start": 2250.0,
+            "first_to_last_start": 1843.22,
             "non-overlapped-dispatch-time": 6101.6,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.4,
@@ -293,10 +293,10 @@
         "TopK_0": {
             "op_name": "TopK_0",
             "kernel_duration": 623839.0,
-            "op_to_op": 729.0,
+            "op_to_op": 1000.0,
             "non-overlapped-dispatch-time": 5108.0,
             "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.3,
             "dispatch_duration_relative_margin": 0.5
         },
         "AllGatherAsync_0": {

@@ -59,7 +59,7 @@ class TT_CCL:
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
         if mode == "prefill":
-            self.support_seqlens = [16 * 1024, 8192, 4096, 1024, 2048, 128]
+            self.support_seqlens = [32 * 1024, 16 * 1024, 8192, 4096, 1024, 2048, 128]
             if allocate_prefill_buffers:
                 self.persistent_buffers = self.get_prefill_reduce_scatter_buffers()
                 self.all_gather_buffers = self.get_prefill_all_gather_buffers()
@@ -849,7 +849,7 @@ def tt_distributed_rmsnorm(
         tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="LAYERNORM"
     )
 
-    # tt_stats.deallocate(True)
+    tt_stats.deallocate(True)
 
     # Run distributed rmsnorm part 2
     tt_out = ttnn.rms_norm_post_all_gather(

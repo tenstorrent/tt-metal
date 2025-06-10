@@ -40,6 +40,7 @@ target_sources(
             api/tt-metalium/blockfloat_common.hpp
             api/tt-metalium/buffer.hpp
             api/tt-metalium/buffer_distribution_spec.hpp
+            api/tt-metalium/buffer_page_mapping.hpp
             api/tt-metalium/buffer_types.hpp
             api/tt-metalium/circular_buffer.hpp
             api/tt-metalium/circular_buffer_constants.h
@@ -54,7 +55,6 @@ target_sources(
             api/tt-metalium/device.hpp
             api/tt-metalium/device_pool.hpp
             api/tt-metalium/dispatch_core_common.hpp
-            api/tt-metalium/distribution_spec.hpp
             api/tt-metalium/event.hpp
             api/tt-metalium/fabric_host_interface.h
             api/tt-metalium/fabric_edm_packet_header.hpp
@@ -174,7 +174,7 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/common/inc/cunpack_common.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_abs.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_activations.h
-            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_add_int32.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_add_int.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary_bitwise.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h
@@ -249,7 +249,7 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/cunpack_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_abs.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_activations.h
-            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_add_int32.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_add_int.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary_bitwise.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h

@@ -67,33 +67,33 @@ void MorehAdamWDeviceOperation::validate_on_program_cache_hit(
 
 MorehAdamWDeviceOperation::spec_return_value_t MorehAdamWDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_shape = tensor_args.param_in.get_logical_shape();
-    auto dtype = tensor_args.param_in.get_dtype();
+    auto output_shape = tensor_args.param_in.logical_shape();
+    auto dtype = tensor_args.param_in.dtype();
     auto memory_config = operation_attributes.memory_config;
 
     std::vector<std::optional<TensorSpec>> result;
     TensorSpec outSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
 
     if (tensor_args.param_out.has_value()) {
-        result.push_back(tensor_args.param_out->get_tensor_spec());
+        result.push_back(tensor_args.param_out->tensor_spec());
     } else {
         result.push_back(outSpec);
     }
 
     if (tensor_args.exp_avg_out.has_value()) {
-        result.push_back(tensor_args.exp_avg_out->get_tensor_spec());
+        result.push_back(tensor_args.exp_avg_out->tensor_spec());
     } else {
         result.push_back(outSpec);
     }
 
     if (tensor_args.exp_avg_sq_out.has_value()) {
-        result.push_back(tensor_args.exp_avg_sq_out->get_tensor_spec());
+        result.push_back(tensor_args.exp_avg_sq_out->tensor_spec());
     } else {
         result.push_back(outSpec);
     }
 
     if (tensor_args.max_exp_avg_sq_out.has_value()) {
-        result.push_back(tensor_args.max_exp_avg_sq_out->get_tensor_spec());
+        result.push_back(tensor_args.max_exp_avg_sq_out->tensor_spec());
     } else if (operation_attributes.amsgrad) {
         result.push_back(outSpec);
     } else {
