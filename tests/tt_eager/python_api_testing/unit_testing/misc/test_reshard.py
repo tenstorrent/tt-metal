@@ -9,6 +9,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
+import random
 
 from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
@@ -722,6 +723,7 @@ def test_dram_to_l1_reshard_fruit(
     output_mem_config = ttnn.MemoryConfig(output_sharding_scheme, output_buffer_type, output_shard_spec)
 
     input = torch.randn(input_shape).bfloat16()
+    # input = random.random()*torch.ones(input_shape).bfloat16()
     input_tensor = ttnn.Tensor(input, ttnn.bfloat16, device=device, layout=input_layout, mem_config=input_mem_config)
 
     output_tensor = ttnn.reshard(input_tensor, output_mem_config)

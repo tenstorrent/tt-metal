@@ -419,7 +419,9 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
                         remote_buffer_type, remote_cores[remote_core_idx])[0];
                     kernel_args.insert(
                         kernel_args.end(),
-                        {bank_id, (remote_units_per_shard - remote_core_units_rem) * unit_size, units_to_transfer});
+                        {bank_id,
+                         (remote_units_per_shard - remote_core_units_rem) * remote_unit_size_padded,
+                         units_to_transfer});
                     local_units_per_core -= units_to_transfer;
                     local_units_to_transfer -= units_to_transfer;
                     remote_core_units_rem -= units_to_transfer;
