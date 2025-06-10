@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "device/where_device_operation.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -57,64 +58,56 @@ Tensor where_impl(
         /* use_legacy */ false);
 }
 
+inline bool have_same_shape(const Tensor& a, const Tensor& b) { return (a.logical_shape() == b.logical_shape()); }
+
 }  // namespace ternary_utils
-Tensor WhereOperation::invoke(
-    QueueId queue_id,
-    const Tensor& predicate,
-    const Tensor& value_true,
-    const Tensor& value_false,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> output_tensor) {
-    // should call ttnn::prim::where here
-    // return ttnn::prim::where(queue_id, predicate, value_true, value_false, output_mem_config, output_tensor);
-}
 
 Tensor WhereOperation::invoke(
     QueueId queue_id,
     const Tensor& predicate,
-    const float value_true,
-    const Tensor& value_false,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> output_tensor) {
-    return ternary_utils::where_impl(
-        queue_id,
-        predicate,
-        value_true,
-        value_false,
-        output_mem_config.value_or(predicate.memory_config()),
-        std::move(output_tensor));
-}
+    const std::variant<float, Tensor>& value_true,
+    const std::variant<float, Tensor>& value_false,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<Tensor> output) {
+    bool is_value_true_Tensor = std::holds_alternative<Tensor>(value_true);
+    bool is_value_false_Tensor = std::holds_alternative<Tensor>(value_false);
 
-Tensor WhereOperation::invoke(
-    QueueId queue_id,
-    const Tensor& predicate,
-    const Tensor& value_true,
-    const float value_false,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> output_tensor) {
-    return ternary_utils::where_impl(
-        queue_id,
-        predicate,
-        value_true,
-        value_false,
-        output_mem_config.value_or(predicate.memory_config()),
-        std::move(output_tensor));
-}
+    bool has_shard_spec =
+        predicate.memory_config().is_sharded() ||
+        (is_value_true_Tensor ? std::get<Tensor>(value_true).memory_config().is_sharded() : false) ||
+        (is_value_false_Tensor ? std::get<Tensor>(value_false).memory_config().is_sharded() : false) ||
+        (memory_config.has_value() ? memory_config.value().is_sharded() : false) ||
+        (output.has_value() ? output.value().memory_config().is_sharded() : false);
 
-Tensor WhereOperation::invoke(
-    QueueId queue_id,
-    const Tensor& predicate,
-    const float value_true,
-    const float value_false,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> output_tensor) {
-    return ternary_utils::where_impl(
-        queue_id,
-        predicate,
+    // Check if both are Tensors and no sharding is present and involves no broadcast
+    if (is_value_true_Tensor && is_value_false_Tensor && !has_shard_spec) {
+        const auto& t_true = std::get<Tensor>(value_true);
+        const auto& t_false = std::get<Tensor>(value_false);
+
+        if (ternary_utils::have_same_shape(t_true, predicate) && ternary_utils::have_same_shape(predicate, t_false)) {
+            std::cout << "ternary LLK where op" << std::endl;
+
+            std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
+                                                                      : std::optional<DataType>(predicate.dtype());
+            return ttnn::prim::where(
+                queue_id,
+                predicate,
+                t_true,
+                t_false,
+                output_dtype,
+                memory_config.value_or(predicate.memory_config()),
+                output);
+        }
+    }
+
+    std::cout << "Legacy where op" << std::endl;
+    return std::visit(
+        [&](const auto&... values) {
+            return ternary_utils::where_impl(
+                queue_id, predicate, values..., memory_config.value_or(predicate.memory_config()), std::move(output));
+        },
         value_true,
-        value_false,
-        output_mem_config.value_or(predicate.memory_config()),
-        std::move(output_tensor));
+        value_false);
 }
 
 }  // namespace ternary
