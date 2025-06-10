@@ -33,5 +33,5 @@ FORCE_INLINE std::pair<tt::tt_fabric::WorkerXY, uint32_t> get_noc_address_compon
     const size_t bank_addr = noc_addr & 0xFFFFFFFF;
     const size_t noc_x = NOC_UNICAST_ADDR_X(noc_addr);
     const size_t noc_y = NOC_UNICAST_ADDR_Y(noc_addr);
-    return {ttnn::ccl::WorkerXY(noc_x, noc_y), bank_addr};
+    return {tt::tt_fabric::WorkerXY(noc_x, noc_y), bank_addr};
 }
