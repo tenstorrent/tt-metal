@@ -92,7 +92,7 @@
             "op_name": "FF2_MM",
             "kernel_duration": 15891.0,
             "op_to_op": 658.7777777777778,
-            "first_to_last_start": 1719.111111111111,
+            "first_to_last_start": 2250.0,
             "non-overlapped-dispatch-time": 6770.3,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
