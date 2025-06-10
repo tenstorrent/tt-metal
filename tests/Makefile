@@ -48,27 +48,7 @@ INCLUDES := -I../$(ARCH_LLK_ROOT)/llk_lib -I../$(ARCH_LLK_ROOT)/common/inc \
 			-Ifirmware/riscv/common -Ifirmware/riscv/$(CHIP_ARCH) \
 			-Isfpi/include -Ihelpers/include
 
-FORMAT_ARG := $(foreach var, unpack_A_src unpack_A_dst unpack_B_src unpack_B_dst fpu pack_src pack_dst, $(if $($(var)),-D$($(var))))
-MATHOP_ARG := $(if $(mathop),-D$(mathop) -DAPPROX_MODE=$(approx_mode) -DPOOL_TYPE=$(pool_type) -DREDUCE_DIM=$(reduce_dim))
-
-OPTIONS_COMPILE += $(INCLUDES) $(FORMAT_ARG) $(MATHOP_ARG) -DTILE_SIZE_CNT=0x1000 -DMATH_FIDELITY=$(math_fidelity) -DUNPACKING_TO_DEST=$(unpack_to_dest)
-
-ifeq ($(llk_profiler), true)
-	OPTIONS_COMPILE += -DLLK_PROFILER
-endif
-ifeq ($(dest_acc), DEST_ACC)
-	OPTIONS_COMPILE += -DDEST_ACC
-endif
-
-# =========================
-# Special Test Options
-# =========================
-ifeq ($(testname), multiple_tiles_eltwise_test)
-	MULTIPLE_OPS   := -DMULTIPLE_OPS
-	OPTIONS_UNPACK := -DKERN_CNT=$(kern_cnt)
-	OPTIONS_MATH   := -DKERN_CNT=$(kern_cnt)
-	OPTIONS_PACK   := -DKERN_CNT=$(kern_cnt) -DPACK_ADDR_CNT=$(pack_addr_cnt) -DPACK_ADDRS=$(pack_addrs)
-endif
+OPTIONS_COMPILE += $(INCLUDES)
 
 # =========================
 # Targets
@@ -120,11 +100,11 @@ $(OUTPUT_ELFS)/brisc.elf: $(BUILD_DIR)/tmu-crt0.o $(BUILD_DIR)/brisc.o
         $(BUILD_DIR)/main_unpack.o $(BUILD_DIR)/main_math.o $(BUILD_DIR)/main_pack.o
 
 $(BUILD_DIR)/$(testname)_unpack.o: sources/$(testname).cpp
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) $(OPTIONS_UNPACK) -DLLK_TRISC_UNPACK -c -o $@ $<
+	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -DLLK_TRISC_UNPACK -c -o $@ $<
 $(BUILD_DIR)/$(testname)_math.o: sources/$(testname).cpp
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) $(OPTIONS_MATH) -DLLK_TRISC_MATH -c -o $@ $<
+	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -DLLK_TRISC_MATH -c -o $@ $<
 $(BUILD_DIR)/$(testname)_pack.o: sources/$(testname).cpp
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) $(OPTIONS_PACK) -DLLK_TRISC_PACK -c -o $@ $<
+	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -DLLK_TRISC_PACK -c -o $@ $<
 
 #compiling main for every TRISC core
 $(BUILD_DIR)/main_unpack.o : $(RISCV_SOURCES)/trisc.cpp

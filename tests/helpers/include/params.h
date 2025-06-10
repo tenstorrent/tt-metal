@@ -7,6 +7,8 @@
 #include <cstdarg>
 #include <type_traits>
 
+// Include auto-generated build configuration
+#include "build.h"
 #include "ckernel_sfpu_binary.h"
 #include "ckernel_sfpu_log.h"
 #include "ckernel_sfpu_sqrt.h"
