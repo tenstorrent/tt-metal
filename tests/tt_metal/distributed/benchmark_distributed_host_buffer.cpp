@@ -10,8 +10,10 @@ namespace tt::tt_metal {
 namespace {
 
 DistributedHostBuffer create_distributed_host_buffer(int num_shards) {
+    constexpr size_t kShardSize = 1 << 20;
+
     auto buffer = DistributedHostBuffer::create(distributed::MeshShape(num_shards));
-    std::vector<int> data(num_shards);
+    std::vector<int> data(kShardSize);
     std::iota(data.begin(), data.end(), 0);
     for (size_t i = 0; i < num_shards; ++i) {
         buffer.emplace_shard(distributed::MeshCoordinate(i), [&data]() { return HostBuffer(data); });
@@ -35,7 +37,9 @@ void BM_DistributedHostBufferSequentialTransform(benchmark::State& state) {
     auto transform_fn = get_transform_fn();
 
     for (auto _ : state) {
-        buffer.transform(transform_fn, DistributedHostBuffer::ProcessShardExecutionPolicy::SEQUENTIAL);
+        auto transformed_buffer =
+            buffer.transform(transform_fn, DistributedHostBuffer::ProcessShardExecutionPolicy::SEQUENTIAL);
+        benchmark::DoNotOptimize(transformed_buffer);
     }
 }
 
@@ -44,7 +48,9 @@ void BM_DistributedHostBufferParallelTransform(benchmark::State& state) {
     auto transform_fn = get_transform_fn();
 
     for (auto _ : state) {
-        buffer.transform(transform_fn, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+        auto transformed_buffer =
+            buffer.transform(transform_fn, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+        benchmark::DoNotOptimize(transformed_buffer);
     }
 }
 
