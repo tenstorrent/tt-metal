@@ -63,7 +63,8 @@ std::tuple<Matmul_RS::operation_attributes_t, Matmul_RS::tensor_args_t> Matmul_R
     const GlobalSemaphore& semaphore,
     const uint32_t cluster_axis,
     const uint32_t ring_devices,
-    const uint32_t num_links,                                                            // default 1
+    const uint32_t num_links,
+    const tt::tt_metal::SubDeviceId& subdevice_id,
     const std::optional<ttnn::MemoryConfig>& memory_config_rs,                           // default std::nullopt
     const std::optional<ttnn::MemoryConfig>& memory_config_mm,                           // default std::nullopt
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,    // default std::nullopt
@@ -89,6 +90,7 @@ std::tuple<Matmul_RS::operation_attributes_t, Matmul_RS::tensor_args_t> Matmul_R
             LlamaReduceScatterDeviceOperation::operation_attributes_t{
                 .dim = (dim < 0 ? uint32_t(rs_tensor.get_logical_shape().rank() + dim) : (uint32_t)dim),
                 .cross_device_semaphore = semaphore,
+                .subdevice_id = subdevice_id,
                 .cluster_axis = cluster_axis,
                 .output_mem_config = memory_config_rs,
                 .ring_devices = ring_devices,

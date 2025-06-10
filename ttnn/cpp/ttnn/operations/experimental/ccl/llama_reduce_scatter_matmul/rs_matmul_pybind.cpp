@@ -60,6 +60,7 @@ void py_bind_rs_matmul(pybind11::module& module) {
                const uint32_t cluster_axis,                    // rs 5
                const MeshDevice& mesh_device,                  // rs 6
                const uint32_t num_links,                       // rs 7 default 1
+               const tt::tt_metal::SubDeviceId& subdevice_id,
                tt::tt_fabric::Topology topology,
                const std::optional<ttnn::MemoryConfig>& memory_config_rs,  // rs 8 default std::nullopt
                const std::optional<ttnn::MemoryConfig>& memory_config_mm,  // mm4 used but default std::nullopt
@@ -88,6 +89,7 @@ void py_bind_rs_matmul(pybind11::module& module) {
                     cluster_axis,
                     mesh_device,
                     num_links,
+                    subdevice_id,
                     topology,
                     memory_config_rs,
                     memory_config_mm,
@@ -111,6 +113,7 @@ void py_bind_rs_matmul(pybind11::module& module) {
             py::arg("cluster_axis"),
             py::arg("mesh_device"),
             py::arg("num_links"),
+            py::arg("subdevice_id"),
             py::kw_only(),
             py::arg("topology") = tt::tt_fabric::Topology::Linear,
             py::arg("memory_config_rs") = std::nullopt,

@@ -89,6 +89,7 @@ struct Matmul_RS {
         const uint32_t cluster_axis,
         const uint32_t ring_devices,
         const uint32_t num_links,
+        const tt::tt_metal::SubDeviceId& subdevice_id,
         const std::optional<ttnn::MemoryConfig>& memory_config_rs = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config_mm = std::nullopt,
         const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,

@@ -596,6 +596,7 @@ class TT_CCL:
             cluster_axis,
             self.mesh_device,
             num_links,
+            self.worker_sub_device_id,
             memory_config_rs=RS_memory_config,
             compute_kernel_config=compute_kernel_config,
             dtype=dtype,
