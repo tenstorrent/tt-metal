@@ -118,7 +118,7 @@ void kernel_main() {
             uint64_t noc_addr_ex_par =
                 remote_noc_addrs_first_stage[block] | (l1_read_addr_ex_par);  // Updating read address for reading
                                                                               // SUm(X) and Sum(X2) per core
-            noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
+            noc_async_read<single_tile_size_bytes>(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
             l1_write_addr_external += single_tile_size_bytes;
         }
         l1_read_addr_ex_par += single_tile_size_bytes;
@@ -133,7 +133,7 @@ void kernel_main() {
                 // read data from other cores - second stage reduce
                 for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
                     uint64_t noc_addr_ex = remote_noc_addrs_second_stage[block + 1] | l1_read_addr_ex;
-                    noc_async_read_one_packet(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
+                    noc_async_read<single_tile_size_bytes>(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
                     l1_write_addr_external += single_tile_size_bytes;
                 }
                 l1_read_addr_ex += single_tile_size_bytes;

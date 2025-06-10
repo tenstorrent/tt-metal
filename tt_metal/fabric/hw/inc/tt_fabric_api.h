@@ -139,7 +139,7 @@ inline void fabric_send_pull_request(
         tt_fabric_check_pull_request_slot<true>(router_addr, pull_request, header_wrptr);
         uint32_t header_wr_index = header_wrptr & CHAN_REQ_BUF_SIZE_MASK;
         uint64_t noc_addr = router_addr + offsetof(chan_req_buf, chan_req) + header_wr_index * sizeof(pull_request_t);
-        noc_async_write_one_packet((uint32_t)header, noc_addr, sizeof(pull_request_t), noc_index);
+        noc_async_write<sizeof(pull_request_t)>((uint32_t)header, noc_addr, sizeof(pull_request_t), noc_index);
     } else {
         tt_fabric_check_pull_request_slot<true>(router_addr, pull_request, wrptr);
     }
@@ -536,7 +536,7 @@ inline void fabric_client_connect(
     uint64_t curr_client_idx_addr = client_q_addr + offsetof(fabric_push_client_queue_t, curr_client_idx);
     // wait until the client ahead in the queue disconnects
     while (true) {
-        noc_async_read_one_packet(curr_client_idx_addr, (uint32_t)&(local_req_entry->remote_curr_client_idx.ptr), 4);
+        noc_async_read<4>(curr_client_idx_addr, (uint32_t)&(local_req_entry->remote_curr_client_idx.ptr), 4);
         noc_async_read_barrier();
         if (local_req_entry->my_client_idx.ptr == local_req_entry->remote_curr_client_idx.ptr) {
             break;
@@ -544,7 +544,7 @@ inline void fabric_client_connect(
     }
 
     uint64_t router_wr_ptr_addr = client_q_addr + offsetof(fabric_push_client_queue_t, router_wr_ptr);
-    noc_async_read_one_packet(router_wr_ptr_addr, (uint32_t)&(local_req_entry->remote_router_wr_ptr.ptr), 4);
+    noc_async_read<4>(router_wr_ptr_addr, (uint32_t)&(local_req_entry->remote_router_wr_ptr.ptr), 4);
     noc_async_read_barrier();
 
     uint64_t router_addr = get_noc_addr_helper(router_addr_h, FABRIC_ROUTER_REQ_QUEUE_START);
@@ -610,11 +610,12 @@ inline void fabric_async_write_push_data(
         (client_interface->buffer_start + (client_interface->wr_ptr * FABRIC_ROUTER_BUF_SLOT_SIZE)));
     if constexpr (data_mode == ClientDataMode::RAW_DATA) {
         // In raw mode, pick up the header from header buffer in client interface.
-        noc_async_write_one_packet((uint32_t)header, buffer_wr_addr, PACKET_HEADER_SIZE_BYTES, noc_index);
+        noc_async_write<PACKET_HEADER_SIZE_BYTES>(
+            (uint32_t)header, buffer_wr_addr, PACKET_HEADER_SIZE_BYTES, noc_index);
         buffer_wr_addr += PACKET_HEADER_SIZE_BYTES;
         size -= PACKET_HEADER_SIZE_BYTES;
     }
-    noc_async_write_one_packet(src_addr, buffer_wr_addr, size, noc_index);
+    noc_async_write<1>(src_addr, buffer_wr_addr, size, noc_index);
     noc_inline_dw_write(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
     client_interface->wr_ptr++;
     *(volatile uint32_t*)client_interface->update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
@@ -1066,7 +1067,8 @@ inline void fabric_endpoint_init(tt_l1_ptr ClientInterfaceType client_interface,
         // read routing table
         uint64_t dest_addr = get_noc_addr_helper(
             eth_chan_to_noc_xy[noc_index][outbound_eth_chan], eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
-        noc_async_read_one_packet(dest_addr, routing_tables_offset, sizeof(fabric_router_l1_config_t));
+        noc_async_read<sizeof(fabric_router_l1_config_t)>(
+            dest_addr, routing_tables_offset, sizeof(fabric_router_l1_config_t));
         noc_async_read_barrier();
     }
 }

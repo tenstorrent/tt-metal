@@ -124,7 +124,7 @@ void kernel_main() {
                 for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_partial_result; ++tile_idx) {
                     uint64_t noc_addr_ex_par =
                         remote_noc_addrs[block] | (l1_read_addr_ex_par + tile_idx * single_tile_size_bytes);
-                    noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
+                    noc_async_read<1>(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
                     l1_write_addr_external += single_tile_size_bytes;
                 }
             }
@@ -144,7 +144,7 @@ void kernel_main() {
                     for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_partial_result; ++tile_idx) {
                         uint64_t noc_addr_ex =
                             remote_noc_addrs[curr_block_index] | (l1_read_addr_ex + tile_idx * single_tile_size_bytes);
-                        noc_async_read_one_packet(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
+                        noc_async_read<1>(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
                         l1_write_addr_external += single_tile_size_bytes;
                     }
                     curr_block_index += block_index_stride;
