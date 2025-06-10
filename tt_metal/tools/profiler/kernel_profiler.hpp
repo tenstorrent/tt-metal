@@ -385,9 +385,12 @@ void quick_push_if_linked(uint32_t cmd_buf, bool linked) {
 #if (                                                                                          \
     defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC))
+    if (!linked) {
+        return;
+    }
     uint32_t cmd_buf_reg_val = NOC_CMD_BUF_READ_REG(noc_index, cmd_buf, NOC_CTRL);
     bool cmd_buf_currently_linked = cmd_buf_reg_val & NOC_CMD_VC_LINKED;
-    if (linked && !cmd_buf_currently_linked) {
+    if (!cmd_buf_currently_linked) {
         kernel_profiler::quick_push();
     }
 #endif
