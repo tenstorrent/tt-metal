@@ -62,7 +62,7 @@ void MAIN {
 
     pack_untilize_init(cb_in, cb_transpose_in0);
     transpose_wh_init(cb_in, cb_transpose_in0);
-    pack_untilize_dst_init_short<1>(cb_in);
+    pack_untilize_dst_init<1>(cb_in);
 
     for (uint32_t idx = 0; idx < total_tiles; idx++) {
         const uint32_t cb_transpose_in = idx % 2 == 0 ? cb_transpose_in0 : cb_transpose_in1;

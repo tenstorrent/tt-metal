@@ -76,7 +76,7 @@ void MAIN {
                         cb_pop_front(cb_in1, num_kv_heads_skip);
 
 			// This init changes DEST mapping, hence needs to be called before MATH does any processing, so that it has correct DEST mapping.
-                        pack_untilize_dst_init_short<intermediate_num_tiles>(cb_intermed0);
+                        pack_untilize_dst_init<intermediate_num_tiles>(cb_intermed0);
 
                         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) { // TODO: Must be 1; need to review inner dim blocking and the untilizing
                             uint32_t in1_index_subblock_offset = 0;

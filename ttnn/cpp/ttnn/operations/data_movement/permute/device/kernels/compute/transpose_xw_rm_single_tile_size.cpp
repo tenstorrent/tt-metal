@@ -40,7 +40,7 @@ void MAIN {
         // transpose input
         cb_wait_front(cb_tilize, 1);
         transpose_wh_init_short(cb_tilize);
-        pack_untilize_dst_init_short<1>(cb_out);
+        pack_untilize_dst_init<1>(cb_out);
 
         tile_regs_acquire();
         transpose_wh_tile(cb_tilize, 0, 0);  // transpose call
