@@ -704,11 +704,8 @@ SliceWidth = ttnn.Conv2dSliceWidth
     [[True, False, False]],
 )
 @pytest.mark.parametrize(
-    "input_layout",
-    [
-        ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.TILE_LAYOUT,
-    ],
+    "input_dtype, input_layout",
+    [[ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT], [ttnn.bfloat8_b, ttnn.TILE_LAYOUT]],
 )
 def test_conv_dram(
     device,
@@ -729,6 +726,7 @@ def test_conv_dram(
     act_block_h_override,
     math_fidelity,
     fp32_accum,
+    input_dtype,
     input_layout,
     packer_l1_acc,
 ):
@@ -760,6 +758,7 @@ def test_conv_dram(
         dilation_w=dilation[1],
         has_bias=True,
         fp32_accum=fp32_accum,
+        input_dtype=input_dtype,
         input_layout=input_layout,
         packer_l1_acc=packer_l1_acc,
         preprocess_weights_on_device=False,
