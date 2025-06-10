@@ -393,11 +393,14 @@ struct TrainingConfig {
     // mpi config
     bool enable_mpi = false;
     uint32_t num_mh_workers = 0U;
-    tt::tt_metal::distributed::MeshShape mesh_shape{1, 2};  // for TP/DPP, default to N300 mesh configuration.
+
+    // multidevice config: default to single device with default mapping of
+    // physical devices onto the mesh shape.
+    tt::tt_metal::distributed::MeshShape mesh_shape{1, 1};
     std::vector<int> device_ids{};
 };
 
-TrainingConfig parse_config(const YAML::Node &yaml_config) {
+TrainingConfig parse_config(const YAML::Node &yaml_config, bool multidevice) {
     TrainingConfig config;
     auto training_config = yaml_config["training_config"];
     config.project_name = training_config["project_name"].as<std::string>("tt_train_nano_gpt");
@@ -423,11 +426,13 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
 
     auto mesh_shape_node = training_config["mesh_shape"];
+    if (multidevice && !mesh_shape_node) {
+        throw std::runtime_error("Mesh shape is required for multidevice training");
+    }
     if (mesh_shape_node) {
         assert(mesh_shape_node.size() == 2);
-        auto mesh_shape_x = mesh_shape_node[0].as<int>(1);
-        auto mesh_shape_y = mesh_shape_node[1].as<int>(2);
-        config.mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_shape_x, mesh_shape_y);
+        auto mesh_shape = mesh_shape_node.as<std::vector<int>>();
+        config.mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_shape[0], mesh_shape[1]);
     }
 
     auto device_ids_node = training_config["device_ids"];
@@ -484,7 +489,7 @@ int main(int argc, char **argv) {
     }
 
     auto yaml_config = YAML::LoadFile(config_name);
-    TrainingConfig config = parse_config(yaml_config);
+    TrainingConfig config = parse_config(yaml_config, ddp || enable_tp);
     EvalConfig eval_config = parse_eval_config(yaml_config);
 
     if (config.enable_mpi) {
@@ -641,7 +646,7 @@ int main(int argc, char **argv) {
     fmt::println("Mesh shape: {}", config.mesh_shape);
     fmt::println("Device IDs: {}", config.device_ids);
 
-    initialize_device(ddp, enable_tp, config.mesh_shape, config.device_ids);
+    initialize_device(config.mesh_shape, config.device_ids);
 
     auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
