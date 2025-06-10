@@ -101,6 +101,7 @@ from ttnn._ttnn.multi_device import (
     MeshComposerConfig,
     get_device_tensors,
     aggregate_as_tensor,
+    combine_device_tensors,
     replicate_tensor_to_mesh_mapper,
     shard_tensor_to_mesh_mapper,
     create_mesh_mapper,

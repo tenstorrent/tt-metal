@@ -1850,13 +1850,12 @@ def test_sharded_all_gather_nightly(
 )
 @pytest.mark.parametrize("num_links", [1, 2])
 def test_all_gather_fp32(  # https://github.com/tenstorrent/tt-metal/issues/9686 ... need to tag with post_commit
-    pcie_devices, input_shape, dim, num_links, layout, mem_config, use_program_cache, function_level_defaults
+    mesh_device, input_shape, dim, num_links, layout, mem_config, use_program_cache, function_level_defaults
 ):
     if (layout == ttnn.ROW_MAJOR_LAYOUT or num_links == 2) and mem_config.buffer_type == ttnn.BufferType.DRAM:
         pytest.skip("All gather tests are hanging for RM in DRAM")
-    devices = pcie_devices
     input_tensor = torch.rand(input_shape).bfloat16()
-    num_devices = len(devices)
+    num_devices = mesh_device.get_num_devices()
     if num_devices < 2:
         pytest.skip("Requires multiple devices to run")
     elif num_devices == 2 and num_links == 2:
@@ -1868,9 +1867,9 @@ def test_all_gather_fp32(  # https://github.com/tenstorrent/tt-metal/issues/9686
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttnn.Tensor(t, ttnn.float32).to(layout).to(devices[i], mem_config))
+        tt_input_tensors.append(ttnn.Tensor(t, ttnn.float32).to(layout))
 
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, mem_config)
     tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):

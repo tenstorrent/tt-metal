@@ -162,10 +162,10 @@ class TtConv2d:
         ]
 
         if len(results) > 1:
-            x = ttnn.aggregate_as_tensor([result.output for result in results])
-            self._weight = ttnn.aggregate_as_tensor([result.prepared_weight for result in results])
+            x = ttnn.combine_device_tensors([result.output for result in results])
+            self._weight = ttnn.combine_device_tensors([result.prepared_weight for result in results])
             self._bias = (
-                ttnn.aggregate_as_tensor([result.prepared_bias for result in results])
+                ttnn.combine_device_tensors([result.prepared_bias for result in results])
                 if self._bias is not None
                 else None  # type: ignore
             )
