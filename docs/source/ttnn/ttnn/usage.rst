@@ -7,6 +7,13 @@ Using TT-NN
    These basic snippets currently work on Grayskull only. We are working on
    updating the API for other architectures, like Wormhole.
 
+.. note::
+   If you are using a wheel or a Docker Release Image,
+   you will need to install Pytorch for these examples to work.
+   ```sh
+   pip install torch
+   ```
+
 Basic Examples
 **************
 
