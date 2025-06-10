@@ -88,13 +88,23 @@ def create_dit_parallel_config(
 
 class StableDiffusionParallelManager:
     def __init__(
-        self, mesh_device, cfg_factor, sp_factor, tp_factor, rp_factor, up_factor, topology, sp_axis=0, tp_axis=1
+        self,
+        mesh_device,
+        cfg_factor,
+        sp_factor,
+        tp_factor,
+        rp_factor,
+        up_factor,
+        topology,
+        cfg_axis=1,
+        sp_axis=0,
+        tp_axis=1,
     ):
         self.mesh_device = mesh_device
         mesh_shape = tuple(mesh_device.shape)
-        cfg_parallel = ParallelConfig(
-            mesh_shape=(mesh_shape[0], mesh_shape[1] // cfg_factor), factor=cfg_factor, mesh_axis=1
-        )
+        cfg_shape = list(mesh_shape)
+        cfg_shape[cfg_axis] = cfg_shape[cfg_axis] // cfg_factor
+        cfg_parallel = ParallelConfig(mesh_shape=tuple(cfg_shape), factor=cfg_factor, mesh_axis=cfg_axis)
         sp_mesh = list(cfg_parallel.mesh_shape)
         sp_mesh[sp_axis] = sp_mesh[sp_axis] // sp_factor
         sequence_parallel = ParallelConfig(
@@ -143,9 +153,8 @@ class StableDiffusionParallelManager:
 
     def _init_submeshes(self):
         # Set up submeshes for CFG parallelism
-        mesh_shape = tuple(self.mesh_device.shape)
         self.submesh_devices = (
-            self.mesh_device.create_submeshes(ttnn.MeshShape(mesh_shape[0], mesh_shape[1] // self.cfg_factor))
+            self.mesh_device.create_submeshes(ttnn.MeshShape(*self.dit_parallel_config.cfg_parallel.mesh_shape))
             if isinstance(self.mesh_device, ttnn.MeshDevice) and self.cfg_factor > 1
             else [self.mesh_device]
         )
