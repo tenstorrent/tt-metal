@@ -89,7 +89,7 @@ def test_interleaved_to_dram_height_sharded(
     # Output memory config
     output_shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec  # TODO (GR): Buffer Type
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec  # TODO: (GR) Buffer Type
     )
 
     # Test
@@ -125,7 +125,7 @@ def test_interleaved_to_dram_width_sharded(
     # Output memory config
     output_shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec  # TODO (GR): Buffer Type
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec  # TODO: (GR) Buffer Type
     )
 
     # Test
@@ -176,7 +176,7 @@ def test_interleaved_to_dram_block_sharded(
     # Output memory config
     output_shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, output_shard_spec  # TODO (GR): Buffer Type
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, output_shard_spec  # TODO: (GR) Buffer Type
     )
 
     # Test
@@ -225,7 +225,7 @@ def test_interleaved_to_dram_sharded_convert_dtype(
 ):
     # Output memory config
     output_shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
-    output_mem_config = ttnn.MemoryConfig(shard_type, ttnn.BufferType.L1, output_shard_spec)  # TODO (GR): Buffer Type
+    output_mem_config = ttnn.MemoryConfig(shard_type, ttnn.BufferType.L1, output_shard_spec)  # TODO: (GR) Buffer Type
 
     # Test
     torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
