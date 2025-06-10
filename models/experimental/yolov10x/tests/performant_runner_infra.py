@@ -2,40 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import ttnn
 import torch
-import requests
 from loguru import logger
 import torch.nn.functional as F
 
 
-from models.experimental.yolov10.tests.common import (
+from models.experimental.yolov10x.tests.common import (
     load_torch_model,
 )
-from models.experimental.yolov10.tt.model_preprocessing import (
+from models.experimental.yolov10x.tt.model_preprocessing import (
     create_yolov10x_model_parameters,
 )
-from models.experimental.yolov10.tt.yolov10 import TtnnYolov10
+from models.experimental.yolov10x.tt.yolov10x import TtnnYolov10
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-def load_coco_class_names():
-    url = "https://raw.githubusercontent.com/pjreddie/darknet/master/data/coco.names"
-    path = f"models/demos/yolov4/demo/coco.names"
-    response = requests.get(url)
-    try:
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            return response.text.strip().split("\n")
-    except requests.RequestException:
-        pass
-    if os.path.exists(path):
-        with open(path, "r") as f:
-            return [line.strip() for line in f.readlines()]
-
-    raise Exception("Failed to fetch COCO class names from both online and local sources.")
 
 
 class YOLOv10PerformanceRunnerInfra:
@@ -47,6 +28,7 @@ class YOLOv10PerformanceRunnerInfra:
         weight_dtype,
         model_location_generator=None,
         resolution=(640, 640),
+        torch_input_tensor=None,
     ):
         torch.manual_seed(0)
         self.resolution = resolution
@@ -57,12 +39,14 @@ class YOLOv10PerformanceRunnerInfra:
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype
         self.model_location_generator = model_location_generator
+        torch_input_tensor = (
+            torch.randn((1, 3, 640, 640), dtype=torch.float32) if torch_input_tensor is None else torch_input_tensor
+        )
+        self.torch_input_tensor = torch_input_tensor
 
         self.torch_model = load_torch_model()
 
-        self.torch_input_tensor = torch.randn((1, 3, 640, 640), dtype=torch.float32)
         model_type = f"torch_model"
-
         self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
 
         self.parameters = create_yolov10x_model_parameters(

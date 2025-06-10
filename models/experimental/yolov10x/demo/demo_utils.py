@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -340,24 +340,24 @@ def attempt_download(file, repo="ultralytics/assets"):
         try:
             url = f"https://github.com/{repo}/releases/download/v8.3.0/{name}"
 
-            print(f"Downloading {url} to {file_path}...")
+            logger.info(f"Downloading {url} to {file_path}...")
             torch.hub.download_url_to_file(url, file_path)
 
             # Validate the file
             assert file_path.exists() and file_path.stat().st_size > 1e6, f"Download failed for {name}"
 
         except Exception as e:
-            print(f"Error downloading from GitHub: {e}. Trying secondary source...")
+            logger.info(f"Error downloading from GitHub: {e}. Trying secondary source...")
 
             url = f"https://storage.googleapis.com/{repo}/ckpt/{name}"
-            print(f"Downloading {url} to {file_path}...")
+            logger.info(f"Downloading {url} to {file_path}...")
             os.system(f"curl -L {url} -o {file_path}")
 
             if not file_path.exists() or file_path.stat().st_size < 1e6:
                 file_path.unlink(missing_ok=True)
-                print(f"ERROR: Download failure for {msg}")
+                logger.error(f"ERROR: Download failure for {msg}")
             else:
-                print(f"Download succeeded from secondary source!")
+                logger.info(f"Download succeeded from secondary source!")
     return file_path
 
 
