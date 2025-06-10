@@ -35,6 +35,7 @@ class TtCrossAttnUpBlock2D(nn.Module):
                     device,
                     state_dict,
                     f"{module_path}.attentions.{i}",
+                    model_config,
                     query_dim,
                     num_attn_heads,
                     out_dim,
@@ -91,6 +92,5 @@ class TtCrossAttnUpBlock2D(nn.Module):
         if self.upsamplers is not None:
             hidden_states = ttnn.reshape(hidden_states, [B, H, W, C])
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
             hidden_states, [C, H, W] = self.upsamplers.forward(hidden_states)
         return hidden_states, [C, H, W]

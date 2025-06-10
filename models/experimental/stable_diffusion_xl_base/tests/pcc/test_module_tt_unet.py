@@ -11,6 +11,7 @@ from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelO
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
 def prepare_ttnn_tensors(
@@ -74,7 +75,7 @@ def prepare_ttnn_tensors(
 )
 @pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_unet(
     device,
     input_shape,
