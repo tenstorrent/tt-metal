@@ -22,7 +22,10 @@
 
 #include <kernel_includes.hpp>
 
-extern "C" uint32_t kernel_launch() {
+extern "C" [[gnu::section(".start")]]
+uint32_t _start() {
+    // Enable GPREL optimizations.
+    asm("0: .reloc 0b, R_RISCV_NONE, __global_pointer$");
     mark_stack_usage();
     extern uint32_t __kernel_data_lma[];
     do_crt1((uint32_t tt_l1_ptr *)__kernel_data_lma);

@@ -321,21 +321,20 @@ void JitBuildState::finish_init() {
     // Append hw build objects compiled offline
     std::string build_dir =
         tt_metal::MetalContext::instance().rtoptions().get_root_dir() + "runtime/hw/lib/" + get_alias(env_.arch_) + "/";
-    if (this->is_fw_) {
-        if (this->target_name_ != "erisc") {
-            this->link_objs_ += build_dir + "tmu-crt0.o ";
-        }
-        if (this->target_name_ == "ncrisc" and this->env_.arch_ == tt::ARCH::WORMHOLE_B0) {
-            this->link_objs_ += build_dir + "ncrisc-halt-wormhole.o ";
+    if (this->is_fw_ and this->target_name_ != "erisc") {
+        this->link_objs_ += build_dir + "tmu-crt0.o ";
+    }
+
+    if (this->env_.arch_ == tt::ARCH::WORMHOLE_B0 and this->target_name_ == "ncrisc") {
+        // ncrisc wormhole kernels have an exciting entry sequence
+        if (this->is_fw_) {
+            this->link_objs_ += build_dir + "wh-iram-trampoline.o ";
             this->link_objs_ += build_dir + "tdma_xmov.o ";
-        }
-    } else {
-        if (this->target_name_ == "ncrisc" and this->env_.arch_ == tt::ARCH::WORMHOLE_B0) {
-            this->link_objs_ += build_dir + "tmu-crt0k-ncrisc.o ";
-        } else if (this->target_name_ != "erisc") {
-            this->link_objs_ += build_dir + "tmu-crt0k.o ";
+        } else {
+            this->link_objs_ += build_dir + "wh-iram-start.o ";
         }
     }
+
     if (this->target_name_ == "brisc" or this->target_name_ == "idle_erisc") {
         this->link_objs_ += build_dir + "noc.o ";
     }
