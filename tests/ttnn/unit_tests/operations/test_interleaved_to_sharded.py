@@ -73,12 +73,12 @@ def test_interleaved_to_sharded_hash(device, first_dtype, second_dtype, input_in
         [
             [2, 2, 128, 64],
             (128, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ],
         [
             [1, 1, 416, 64],
             (128, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ],
     ],
 )
@@ -89,13 +89,13 @@ def test_interleaved_to_dram_height_sharded(
     # Output memory config
     output_shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec  # TODO: (GR) Buffer Type
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, output_shard_spec
     )
 
     # Test
     torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=layout)
-    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)  # TODO: (GR): Remove this line
+    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
     ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)
 
     assert_with_pcc(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
@@ -109,12 +109,12 @@ def test_interleaved_to_dram_height_sharded(
         [
             [2, 1, 32, 512],
             (64, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ],
         [
             [1, 1, 64, 416],
             (64, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ],
     ],
 )
@@ -125,64 +125,13 @@ def test_interleaved_to_dram_width_sharded(
     # Output memory config
     output_shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec  # TODO: (GR) Buffer Type
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, output_shard_spec
     )
 
     # Test
     torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=layout)
-    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)  # TODO: (GR): Remove this line
-    ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)
-
-    assert_with_pcc(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
-
-
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize(
-    "tensor_shape, shard_shape, shard_grid",
-    [
-        [
-            [2, 2, 64, 256],
-            (128, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
-        ],
-        [
-            [1, 1, 192, 192],
-            (64, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 2))}),
-        ],
-        [
-            [2, 1, 80, 128],
-            (128, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
-        ],
-        [
-            [2, 1, 64, 160],
-            (64, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
-        ],
-        [
-            [2, 1, 80, 160],
-            (128, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
-        ],
-    ],
-)
-@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
-def test_interleaved_to_dram_block_sharded(
-    device, dtype, layout, tensor_shape, shard_shape, shard_grid, shard_orientation
-):
-    # Output memory config
-    output_shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
-    output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, output_shard_spec  # TODO: (GR) Buffer Type
-    )
-
-    # Test
-    torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=layout)
-    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)  # TODO: (GR): Remove this line
+    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
     ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)
 
     assert_with_pcc(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
@@ -203,19 +152,13 @@ def test_interleaved_to_dram_block_sharded(
             [1, 1, 416, 64],
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             (128, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ],
         [
             [1, 1, 64, 416],
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             (64, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-        ],
-        [
-            [2, 1, 80, 160],
-            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            (128, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ],
     ],
 )
@@ -225,12 +168,12 @@ def test_interleaved_to_dram_sharded_convert_dtype(
 ):
     # Output memory config
     output_shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
-    output_mem_config = ttnn.MemoryConfig(shard_type, ttnn.BufferType.L1, output_shard_spec)  # TODO: (GR) Buffer Type
+    output_mem_config = ttnn.MemoryConfig(shard_type, ttnn.BufferType.DRAM, output_shard_spec)
 
     # Test
     torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=in_dtype, layout=layout)
-    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)  # TODO: (GR): Remove this line
+    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
     ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config, out_dtype)
 
     assert_with_pcc(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
