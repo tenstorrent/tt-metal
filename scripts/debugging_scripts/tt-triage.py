@@ -451,6 +451,7 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
             cs = []
             fw_elf_path = a_kernel_path + f"../../../firmware/{proc_name.lower()}/{proc_name.lower()}.elf"
             fw_elf_path = os.path.realpath(fw_elf_path)
+            kernel_path = ""
 
             if kernel_name:
                 assert kernel is not None, f"Kernel with watcher_kernel_id {watcher_kernel_id} not found."
