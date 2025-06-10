@@ -32,7 +32,8 @@ target_link_libraries(
     PRIVATE
         Tracy::TracyClient
         hw
-        fmt::fmt-header-only
+        fmt::fmt
+        magic_enum::magic_enum
         umd::device
         tt-logger::tt-logger
 )
@@ -60,7 +61,8 @@ target_link_libraries(
     PRIVATE
         Tracy::TracyClient
         hw
-        fmt::fmt-header-only
+        fmt::fmt
+        magic_enum::magic_enum
         umd::device
         tt-logger::tt-logger
 )
