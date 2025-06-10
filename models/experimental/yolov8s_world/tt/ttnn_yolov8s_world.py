@@ -145,7 +145,6 @@ class TtConv:
             conv_config=self.conv_config,
             compute_config=self.compute_config,
             groups=self.groups,
-            # memory_config=ttnn.L1_MEMORY_CONFIG if self.change_shard == True else None,
             return_weights_and_bias=True,
             return_output_dim=True,
         )
@@ -264,10 +263,6 @@ class TtC2f:
         cv1, out_h, out_w = self.cv1(x)
         cv1 = ttnn.sharded_to_interleaved(cv1, ttnn.L1_MEMORY_CONFIG)
 
-        # y = list(
-        #     ttnn.split(cv1, 2, 3, memory_config=ttnn.L1_MEMORY_CONFIG)
-        # )  # use this for 320 resolution, but ttnn.split is not supprted by trace
-
         # split is not supported by trace, hence using this this
         y = []
         y.append(cv1[:, :, :, : cv1.shape[-1] // 2])
@@ -312,7 +307,6 @@ class TtSPPF:
             device,
             parameters["cv2"],
             input_params=input_params[1],
-            # change_shard=True,
             deallocate_activation=True,
             conv_math_fidelity=ttnn.MathFidelity.HiFi2,
         )
@@ -384,7 +378,6 @@ class TtMaxSigmoidAttnBlock:
                 self.parameters["ec"],
                 input_params=None,
                 block_shard=self.block_shard,
-                # change_shard=True,
                 deallocate_activation=self.deallocate_activation,
             )
             if c1 != ec
@@ -397,7 +390,6 @@ class TtMaxSigmoidAttnBlock:
             self.parameters["proj_conv"],
             input_params=input_params,
             block_shard=self.block_shard,
-            # change_shard=True,
             deallocate_activation=self.deallocate_activation,
             is_act_false=True,
         )
@@ -490,7 +482,6 @@ class TtC2fAttn:
             self.device,
             self.parameters["cv2"],
             input_params=input_params[1],
-            # change_shard=True,
             deallocate_activation=self.deallocate_activation,
             conv_math_fidelity=ttnn.MathFidelity.HiFi2,
         )
@@ -513,10 +504,6 @@ class TtC2fAttn:
         """Forward pass through C2f layer."""
         cv1, out_h, out_w = self.cv1(x)
         cv1 = ttnn.sharded_to_interleaved(cv1, ttnn.L1_MEMORY_CONFIG)
-
-        # y = list(
-        #     ttnn.split(cv1, 2, 3, memory_config=ttnn.L1_MEMORY_CONFIG)
-        # )  # use this for 320 resolution, but ttnn.split is not supprted by trace
 
         # split is not supported by trace, hence using this this
         y = []
@@ -677,7 +664,6 @@ class TtImagePoolingAttn:
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
 
-        # q = q.reshape(1, text.shape[1], self.nh, self.hc).repeat(bs, 1, 1, 1)
         q = q.reshape(bs, -1, self.nh, self.hc)
         k = k.reshape(bs, -1, self.nh, self.hc)
         v = v.reshape(bs, -1, self.nh, self.hc)
@@ -748,26 +734,20 @@ class TtContrastiveHead:
 
     def __call__(self, x, w):
         """Forward function of contrastive learning."""
-        # x = ttnn.permute(x, (0, 3, 1, 2))
-
         x = ttnn_custom_normalize(x, dim=-1, device=x.device())
         w = ttnn_custom_normalize(w, dim=-1, device=w.device())
 
         ## Replacement for  x = torch.einsum("bchw,bkc->bkhw", x, w)
         batch, height, width, channel = x.shape
         _, k, _ = w.shape
-        # x = ttnn.permute(x, (0, 2, 3, 1))  # bchw->bhwc
         x = ttnn.reshape(x, (batch, -1, channel))  # bhwc->b(hw)c
         w = ttnn.permute(w, (0, 2, 1))  # bkc->bck
         x = ttnn.matmul(x, w, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.reshape(x, (batch, height, width, k))
-        # x = ttnn.permute(x, (0, 3, 1, 2))
 
         ttnn.deallocate(w)
 
-        return (
-            x * ttnn.exp(self.logit_scale) + self.bias
-        )  # ttnn.permute(x * ttnn.exp(self.logit_scale) + self.bias, (0, 2, 3, 1))
+        return x * ttnn.exp(self.logit_scale) + self.bias
 
 
 class TtWorldDetect:
@@ -786,7 +766,6 @@ class TtWorldDetect:
         self.nl = len(ch)
         self.reg_max = 16
         self.no = nc + self.reg_max * 4
-        # self.stride = ttnn.Tensor([8.0, 16.0, 32.0],device=self.device,layout=ttnn.TILE_LAYOUT,dtype=ttnn.bfloat16)
         self.c2, self.c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], min(nc, 100))
 
         self.cv2 = [
@@ -991,18 +970,11 @@ class TtWorldModel:
                 device,
                 parameters["model"][5],
                 input_params=[3, 2, 1, 256, 128],
-                # deallocate_activation=True,
             ),
             TtC2f(
                 device, parameters["model"][6], n=2, shortcut=True, input_params=c2f_configs["model.6"]["input_params"]
             ),
-            TtConv(
-                device,
-                parameters["model"][7],
-                input_params=[3, 2, 1, 512, 256],
-                block_shard=True
-                # deallocate_activation=True,
-            ),
+            TtConv(device, parameters["model"][7], input_params=[3, 2, 1, 512, 256], block_shard=True),
             TtC2f(
                 device, parameters["model"][8], n=1, shortcut=True, input_params=c2f_configs["model.8"]["input_params"]
             ),
@@ -1042,7 +1014,6 @@ class TtWorldModel:
                 device,
                 parameters["model"][17],
                 input_params=[3, 2, 1, 128, 128],
-                # deallocate_activation=True,
             ),
             ttnn.concat,
             TtC2fAttn(
@@ -1059,7 +1030,6 @@ class TtWorldModel:
                 device,
                 parameters["model"][20],
                 input_params=[3, 2, 1, 256, 256],
-                # deallocate_activation=True,
             ),
             ttnn.concat,
             TtC2fAttn(
@@ -1085,8 +1055,6 @@ class TtWorldModel:
 
     def __call__(self, x, txt_feats=None):  # 4,6,9,12,15,19
         txt_feats = self.txt_feats if txt_feats is None else txt_feats
-        # if len(txt_feats) != len(x) or False: #not invoked
-        #     txt_feats = txt_feats.expand(x.shape[0], -1, -1)
         ori_txt_feats = txt_feats
         y, dt, embeddings = [], [], []  # outputs
         save = [4, 6, 9, 9, 12, 12, 15, 15, 15, 19, 22]
