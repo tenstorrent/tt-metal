@@ -49,7 +49,7 @@ ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_
                 program,
                 tensor_args.matmul.input_tensor,
                 {tensor_args.matmul.weight_tensor},
-                std::nullopt,
+                std::nullopt /*bias*/,
                 {tensor_return_value.at(0)},
                 operation_attributes.matmul.bcast_batch.value(),
                 operation_attributes.matmul.compute_kernel_config.value(),
@@ -57,9 +57,9 @@ ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_
                 operation_attributes.matmul.untilize_out,
                 empty_fused_op_signaler,
                 operation_attributes.matmul.global_cb,
-                std::nullopt,
-                tt::CBIndex::c_6,
-                false)}};
+                std::nullopt /*sub_device_id*/,
+                tt::CBIndex::c_6 /*start cb index*/,
+                false /*limit_cores_via_subdevices*/)}};
 }
 
 void Matmul_RS::Matmul_RS_PF::override_runtime_arguments(
