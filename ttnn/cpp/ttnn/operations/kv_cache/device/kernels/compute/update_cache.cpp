@@ -21,6 +21,7 @@ void MAIN {
     constexpr uint32_t granularity = get_compile_time_arg_val(8);
     constexpr uint32_t u_count = get_compile_time_arg_val(9);
 
+    compute_kernel_hw_startup(in_cb, untilized_in_cb);
     pack_untilize_init<Wt>(in_cb, untilized_in_cb);
 
     for (uint32_t h = 0; h < num_batched_heads; ++h) {
@@ -32,7 +33,7 @@ void MAIN {
 
         reconfig_data_format_srca(in_cb, cache_cb);
         for (uint32_t u = 0; u < u_count; ++u) {
-            pack_untilize_init_short<Wt>(cache_cb, untilized_cache_cb);
+            pack_untilize_init<Wt>(cache_cb, untilized_cache_cb);
 
             for (uint32_t g = 0; g < granularity; ++g) {
                 // Untilize a block from the cache
@@ -62,7 +63,7 @@ void MAIN {
             pack_reconfig_data_format(out_cb, untilized_cache_cb);
         }
         reconfig_data_format_srca(cache_cb, in_cb);
-        pack_untilize_init_short<Wt>(in_cb, untilized_in_cb);
+        pack_untilize_init<Wt>(in_cb, untilized_in_cb);
     }
 }
 }  // namespace NAMESPACE

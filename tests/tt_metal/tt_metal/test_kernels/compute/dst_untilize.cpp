@@ -18,7 +18,7 @@ void MAIN {
 
     unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
     copy_tile_to_dst_init_short(tt::CBIndex::c_0);
-    pack_untilize_dst_init_short<per_core_block_tile_cnt>(tt::CBIndex::c_16, num_rows_per_face, num_faces);
+    pack_untilize_dst_init<per_core_block_tile_cnt>(tt::CBIndex::c_16, num_rows_per_face, num_faces);
 
     for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
         cb_wait_front(tt::CBIndex::c_0, per_core_block_tile_cnt);
