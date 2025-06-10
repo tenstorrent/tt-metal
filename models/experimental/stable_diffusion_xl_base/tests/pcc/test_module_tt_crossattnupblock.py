@@ -11,6 +11,7 @@ from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelO
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize(
@@ -25,7 +26,7 @@ from models.utility_functions import torch_random
             20,
             1280,
             0,
-            0.959,
+            0.965,
         ),
         (
             (1, 1280, 64, 64),
@@ -42,7 +43,7 @@ from models.utility_functions import torch_random
 )
 @pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_crossattnup(
     device,
     input_shape,
