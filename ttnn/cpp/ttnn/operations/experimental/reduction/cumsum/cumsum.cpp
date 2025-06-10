@@ -58,19 +58,8 @@ Tensor CumSumOperation::invoke(
     const Tensor& input_tensor,
     int64_t dim,
     std::optional<ttnn::DataType> dtype,
-<<<<<<< HEAD
-<<<<<<< HEAD
     std::optional<Tensor> optional_output_tensor) {
     const auto& input_shape = input_tensor.logical_shape();
-=======
-    std::optional<Tensor> optional_output_tensor,
-    std::optional<bool> flip,
-    const std::optional<MemoryConfig>& memory_config) {
-=======
-    std::optional<Tensor> optional_output_tensor) {
->>>>>>> b25323cf5f (Cleanup references to flip and mmeory_config parameters: to be re-added later)
-    const auto& input_shape = input_tensor.get_logical_shape();
->>>>>>> 9bfbd61f09 (cumsum: add test for cumsum_backward and forward moreh_cumsum to ttnn.experimental.cumsum)
     int tensor_rank = input_shape.rank();
 
     Tensor adjusted_input_tensor = input_tensor;  // Tensor copy, but simplifies code (temporary solution)
@@ -136,7 +125,7 @@ Tensor CumSumOperation::invoke(
         // and display error if it exceeds 30% of all DRAM
         // Note: This is a 'temporary' limitation: permute-free accumulation on x and y axes is planned
         const Shape tensor_shape = adjusted_input_tensor.logical_shape();
-        const uint64_t old_volume = adjusted_input_tensor.padded_volume();
+        const uint64_t old_volume = adjusted_input_tensor.physical_volume();
 
         ttnn::SmallVector<uint32_t> new_dims(tensor_shape.cbegin(), tensor_shape.cend());
         std::swap(new_dims[0], new_dims[dim]);
@@ -198,7 +187,7 @@ Tensor CumSumOperation::invoke(
 
         if (opt_output.has_value()) {
             auto& out_tensor = optional_output_tensor.value();
-            out_tensor.tensor_attributes->get_storage() = output_tensor.tensor_attributes->get_storage();
+            out_tensor.storage() = output_tensor.storage();
         }
 
         return output_tensor;
