@@ -181,19 +181,12 @@
 <p class="admonition-title">Example</p>
 <div class="doctest highlight-default notranslate">
 <div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">full_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">256</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">num_devices</span> <span class="o">=</span> <span class="mi">8</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dim</span> <span class="o">=</span> <span class="mi">3</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">input_tensors</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">chunk</span><span class="p">(</span><span class="n">full_tensor</span><span class="p">,</span> <span class="n">num_devices</span><span class="p">,</span> <span class="n">dim</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">physical_device_ids</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">get_t3k_physical_device_ids_ring</span><span class="p">()</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">mesh_device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_mesh_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">MeshShape</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">8</span><span class="p">),</span> <span class="n">physical_device_ids</span><span class="o">=</span><span class="n">physical_device_ids</span><span class="p">[:</span><span class="mi">8</span><span class="p">])</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">tt_input_tensors</span> <span class="o">=</span> <span class="p">[]</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">t</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">input_tensors</span><span class="p">):</span>
-<span class="go">        tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], mem_config))</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">input_tensor_mesh</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">aggregate_as_tensor</span><span class="p">(</span><span class="n">tt_input_tensors</span><span class="p">)</span>
-</pre></div>
-</div>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reduce_scatter</span><span class="p">(</span><span class="n">input_tensor_mesh</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">topology</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Topology</span><span class="o">.</span><span class="n">Linear</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">mesh_device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_mesh_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">MeshShape</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">8</span><span class="p">))</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+<span class="go">        full_tensor,</span>
+<span class="go">        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),</span>
+<span class="go">    )</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reduce_scatter</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">topology</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Topology</span><span class="o">.</span><span class="n">Linear</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
