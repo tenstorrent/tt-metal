@@ -12,6 +12,7 @@ def tensor_map():
 
     return tensor_map
 
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",  # NCHW
