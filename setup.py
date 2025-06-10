@@ -18,7 +18,7 @@ from setuptools.command.build_ext import build_ext
 readme = None
 
 # Read README.md file from project root
-readme_path = pathlib.Path(__file__).absolute().parent / "README.md"
+readme_path = Path(__file__).absolute().parent / "README.md"
 readme = readme_path.read_text(encoding="utf-8")
 
 
