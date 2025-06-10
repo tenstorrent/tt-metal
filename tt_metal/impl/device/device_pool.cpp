@@ -331,6 +331,10 @@ void DevicePool::init_fabric(const std::vector<IDevice*>& active_devices) const 
     }
 
     // Sequential initialization of fabric programs
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/23387
+    //       This might be able to be parallelized, but this cannot be fully validated
+    //       dut to lack of validation HW. So currently this is "best effort" as the compilation
+    //       part is the heaviest in this init_fabric.
     for (uint32_t i = 0; i < active_devices.size(); i++) {
         auto fabric_programs = futures[i].get();
         auto& dev = active_devices[i];
