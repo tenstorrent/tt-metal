@@ -126,30 +126,6 @@ tt::stl::hash::hash_t WhereDeviceOperation::compute_program_hash(
         args.false_value_tensor.dtype());
 }
 
-operation::OpPerformanceModel WhereDeviceOperation::create_op_performance_model(
-    const operation_attributes_t& attributes, const tensor_args_t& args, tensor_return_value_t& tensor_return_value) {
-    // GS specific parameters
-    // 80 B/cycle unpacker BW shared
-    // 128 datums per cycle math, but unpacker cant keep up
-    constexpr uint32_t unpacker_byte_per_cycle = 80;
-    uint32_t num_cores = attributes.worker_grid.num_cores();
-
-    uint32_t total_bytes = 0;
-    std::vector<Tensor> input_tensors = {args.condition_tensor};
-    total_bytes += args.condition_tensor.volume() * args.condition_tensor.element_size();
-
-    input_tensors.push_back(args.true_value_tensor);
-    total_bytes += args.true_value_tensor.volume() * args.true_value_tensor.element_size();
-
-    input_tensors.push_back(args.false_value_tensor);
-    total_bytes += args.false_value_tensor.volume() * args.false_value_tensor.element_size();
-
-    uint32_t ideal_eltwise_cycles = total_bytes / unpacker_byte_per_cycle / num_cores;
-
-    operation::OpPerformanceModel result(input_tensors, {tensor_return_value}, ideal_eltwise_cycles);
-    return result;
-}
-
 bool WhereDeviceOperation::skip_launch(
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,

@@ -37,9 +37,6 @@ struct WhereDeviceOperation {
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
-    static tt::tt_metal::operation::OpPerformanceModel create_op_performance_model(
-        const operation_attributes_t& attributes, const tensor_args_t& tensor_args, Tensor& tensor_return_value);
-
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
