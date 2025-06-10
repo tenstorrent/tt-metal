@@ -399,6 +399,7 @@ public:
     inline void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
 
     inline bool get_disable_dma_ops() const { return disable_dma_ops; }
+    inline void set_disable_dma_ops(bool disable) { disable_dma_ops = disable; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

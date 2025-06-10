@@ -33,14 +33,14 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.get_padded_shape();
+    const auto output_grad_shape = output_grad.padded_shape();
 
     const auto n = output_grad_shape[0];
     const auto c = output_grad_shape[1];
     const auto h = output_grad_shape[2];
     const auto w = output_grad_shape[3];
 
-    const auto origin_output_grad_shape = output_grad.get_logical_shape();
+    const auto origin_output_grad_shape = output_grad.logical_shape();
 
     const auto origin_h = origin_output_grad_shape[2];
     const auto origin_w = origin_output_grad_shape[3];
@@ -103,7 +103,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     const uint32_t im4_t = 1;  // x - mean
     const uint32_t im5_t = 1;  // dycopy
 
-    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.get_dtype());
+    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
 
     CreateCircularBuffer(
         program,
