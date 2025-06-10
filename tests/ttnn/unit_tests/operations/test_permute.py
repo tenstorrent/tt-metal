@@ -269,7 +269,8 @@ def test_permute_squeeze(device, dtype):
 @pytest.mark.parametrize("perm", generate_permutations(3))
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+# int32 fails due to possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_permute_3D(device, shape, perm, layout, memory_config, dtype):
     torch.manual_seed(2005)
     torch_tensor = random_torch_tensor(dtype, shape)
@@ -548,7 +549,8 @@ def test_permute_4d_other_permutations(device, shape, perm, dtype):
 
 @pytest.mark.parametrize("shape", [[33, 1, 17, 33, 33]])
 @pytest.mark.parametrize("perm", [[0, 1, 4, 2, 3], [0, 4, 1, 2, 3], [2, 4, 1, 0, 3], [4, 2, 1, 0, 3]])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+# int32 fails due to possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_permute_5d_wyh(device, shape, perm, dtype):
     torch.manual_seed(2005)
     torch_tensor = random_torch_tensor(dtype, shape)
