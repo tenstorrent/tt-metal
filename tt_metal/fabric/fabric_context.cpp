@@ -100,6 +100,10 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
     };
     this->dateline_router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
         this->channel_buffer_size_bytes_, this->topology_, dateline_edm_options);
+
+    this->master_router_chans_.resize(MAX_DEVICES, UNINITIALIZED_MASTER_ROUTER_CHAN);
+    this->num_initialized_routers_.resize(MAX_DEVICES, UNINITIALIZED_ROUTERS);
+
     set_routing_mode(this->topology_, this->fabric_config_);
 }
 
@@ -128,31 +132,37 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
 };
 
 void FabricContext::set_num_fabric_initialized_routers(chip_id_t chip_id, size_t num_routers) {
-    auto it = this->num_initialized_routers_.find(chip_id);
+    TT_FATAL(chip_id < MAX_DEVICES, "Device ID {} exceeds maximum supported devices {}", chip_id, MAX_DEVICES);
     TT_FATAL(
-        it == this->num_initialized_routers_.end(),
-        "Error, tried to set num initialized routers again for the same device");
+        this->num_initialized_routers_[chip_id] == UNINITIALIZED_ROUTERS,
+        "Error, tried to set num initialized routers again for device {}",
+        chip_id);
     this->num_initialized_routers_[chip_id] = num_routers;
 }
 
 uint32_t FabricContext::get_num_fabric_initialized_routers(chip_id_t chip_id) const {
-    auto it = this->num_initialized_routers_.find(chip_id);
+    TT_FATAL(chip_id < MAX_DEVICES, "Device ID {} exceeds maximum supported devices {}", chip_id, MAX_DEVICES);
     TT_FATAL(
-        it != this->num_initialized_routers_.end(), "Error, querying num initialized routers for an unknown device");
-    return it->second;
+        this->num_initialized_routers_[chip_id] != UNINITIALIZED_ROUTERS,
+        "Error, querying num initialized routers for an unknown device {}",
+        chip_id);
+    return this->num_initialized_routers_[chip_id];
 }
 
 void FabricContext::set_fabric_master_router_chan(chip_id_t chip_id, chan_id_t chan_id) {
-    auto it = this->master_router_chans_.find(chip_id);
+    TT_FATAL(chip_id < MAX_DEVICES, "Device ID {} exceeds maximum supported devices {}", chip_id, MAX_DEVICES);
     TT_FATAL(
-        it == this->master_router_chans_.end(), "Error, tried to set master router channel again for the same device");
+        this->master_router_chans_[chip_id] == UNINITIALIZED_MASTER_ROUTER_CHAN,
+        "Error, tried to set master router channel again for the same device");
     this->master_router_chans_[chip_id] = chan_id;
 }
 
 chan_id_t FabricContext::get_fabric_master_router_chan(chip_id_t chip_id) const {
-    auto it = this->master_router_chans_.find(chip_id);
-    TT_FATAL(it != this->master_router_chans_.end(), "Error, querying master router channel for an unknown device");
-    return it->second;
+    TT_FATAL(chip_id < MAX_DEVICES, "Device ID {} exceeds maximum supported devices {}", chip_id, MAX_DEVICES);
+    TT_FATAL(
+        this->master_router_chans_[chip_id] != UNINITIALIZED_MASTER_ROUTER_CHAN,
+        "Error, querying master router channel for an unknown device");
+    return this->master_router_chans_[chip_id];
 }
 
 std::vector<size_t> FabricContext::get_fabric_router_addresses_to_clear() const {

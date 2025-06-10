@@ -10,6 +10,7 @@
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <vector>
+#include <limits>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 
 namespace tt::tt_fabric {
@@ -62,8 +63,14 @@ private:
     size_t channel_buffer_size_bytes_ = 0;
     std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> router_config_ = nullptr;
     std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> dateline_router_config_ = nullptr;
-    std::unordered_map<chip_id_t, chan_id_t> master_router_chans_{};
-    std::unordered_map<chip_id_t, uint32_t> num_initialized_routers_{};
+
+    // Thread-safe arrays replacing unordered_maps for device-specific data
+    // Using vectors with device IDs as indices (device IDs are 0-based consecutive integers)
+    static constexpr size_t MAX_DEVICES = 256;  // Conservative upper bound
+    static constexpr chan_id_t UNINITIALIZED_MASTER_ROUTER_CHAN = std::numeric_limits<chan_id_t>::max();
+    static constexpr uint32_t UNINITIALIZED_ROUTERS = std::numeric_limits<uint32_t>::max();
+    std::vector<chan_id_t> master_router_chans_;
+    std::vector<uint32_t> num_initialized_routers_;
 };
 
 }  // namespace tt::tt_fabric
