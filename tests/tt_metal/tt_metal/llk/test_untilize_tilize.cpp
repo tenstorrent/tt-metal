@@ -458,6 +458,50 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilizeBenchmarkPlaygroundBFP82) {
     unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
 }
 
+TEST_F(DeviceFixture, TensixComputeUnpackTilizeBenchmarkPlaygroundFP163) {
+    unit_tests::compute::tilize::TestConfig test_config = {
+        .short_init = true,
+        .dst_full_sync_en = false,
+        .fp32_dest_acc_en = false,
+        .bfp8_output = false,
+
+        .input_single_tile_size = 16 * 16 * 4 * 2,
+        .output_single_tile_size = 16 * 16 * 4 * 2,
+
+        .num_tiles_r = 1,
+        .num_tiles_c = 3,
+        .num_faces_per_tile = 4,
+        .face_r_dim = 16,
+
+        .untilize_type = std::nullopt,
+        .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+
+        .golden_function = ::unit_tests::compute::gold_standard_tilize};
+    unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+}
+
+TEST_F(DeviceFixture, TensixComputeUnpackTilizeBenchmarkPlaygroundBFP83) {
+    unit_tests::compute::tilize::TestConfig test_config = {
+        .short_init = true,
+        .dst_full_sync_en = false,
+        .fp32_dest_acc_en = false,
+        .bfp8_output = true,
+
+        .input_single_tile_size = 16 * 16 * 4 * 2,
+        .output_single_tile_size = 16 * 16 * 4 + 16 * 4,
+
+        .num_tiles_r = 1,
+        .num_tiles_c = 3,
+        .num_faces_per_tile = 4,
+        .face_r_dim = 16,
+
+        .untilize_type = std::nullopt,
+        .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+
+        .golden_function = ::unit_tests::compute::gold_standard_tilize};
+    unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+}
+
 TEST_F(DeviceFixture, TensixComputeUnpackTilizeBenchmarkPlaygroundFP164) {
     unit_tests::compute::tilize::TestConfig test_config = {
         .short_init = true,
@@ -503,7 +547,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilizeBenchmarkPlaygroundBFP84) {
 }
 
 TEST_F(DeviceFixture, TensixComputeUnpackTilizeBenchmarkFP16) {
-    for (int i = 2; i <= 128; i += 2) {
+    for (int i = 1; i <= 128; i += 1) {
         unit_tests::compute::tilize::TestConfig test_config = {
             .short_init = true,
             .dst_full_sync_en = false,
@@ -527,7 +571,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilizeBenchmarkFP16) {
 }
 
 TEST_F(DeviceFixture, TensixComputeUnpackTilizeBenchmarkBFP8) {
-    for (int i = 2; i <= 128; i += 2) {
+    for (int i = 1; i <= 128; i += 1) {
         unit_tests::compute::tilize::TestConfig test_config = {
             .short_init = true,
             .dst_full_sync_en = false,

@@ -16,10 +16,10 @@ void MAIN {
     constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
     constexpr uint32_t fast = 1;
     // constexpr uint32_t block_count = per_core_block_tile_cnt >= 8 ? 8 : per_core_block_tile_cnt;
-    constexpr uint32_t block_count = per_core_block_tile_cnt % 8 == 0   ? 8
-                                     : per_core_block_tile_cnt % 4 == 0 ? 4
-                                     : per_core_block_tile_cnt % 2 == 0 ? 2
-                                                                        : 1;
+    // constexpr uint32_t block_count = per_core_block_tile_cnt % 8 == 0   ? 8
+    //                                  : per_core_block_tile_cnt % 4 == 0 ? 4
+    //                                  : per_core_block_tile_cnt % 2 == 0 ? 2
+    //                                                                     : 1;
     // constexpr uint32_t block_count = 1;
     constexpr uint32_t loop_factor = 1024;
 
@@ -50,7 +50,7 @@ void MAIN {
     tensix_sync();
     end = read_wall_clock();
 
-    DPRINT << "init time: " << (end - start) / (loop_factor) << " cycles" << ENDL();
+    // DPRINT << "init time: " << (end - start) / (loop_factor) << " cycles" << ENDL();
 
     cb_wait_front(tt::CBIndex::c_0, per_core_block_cnt * per_core_block_tile_cnt);
     cb_reserve_back(tt::CBIndex::c_16, per_core_block_cnt * per_core_block_tile_cnt);
@@ -107,7 +107,7 @@ void MAIN {
                     if constexpr (fast) {
                         fast_tilize_block(
                             tt::CBIndex::c_0,
-                            block_count,
+                            per_core_block_tile_cnt,
                             per_core_block_tile_cnt,
                             tt::CBIndex::c_16,
                             b * per_core_block_tile_cnt,
@@ -145,6 +145,6 @@ void MAIN {
     tensix_sync();
     end = read_wall_clock();
 
-    DPRINT << "uninit time: " << (end - start) / (loop_factor) << " cycles" << ENDL();
+    // DPRINT << "uninit time: " << (end - start) / (loop_factor) << " cycles" << ENDL();
 }
 }  // namespace NAMESPACE

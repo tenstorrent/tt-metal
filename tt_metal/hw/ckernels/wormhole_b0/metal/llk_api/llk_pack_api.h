@@ -301,7 +301,7 @@ inline void llk_pack_fast_tilize_hw_configure_disaggregated(const std::uint32_t 
     llk_pack_fast_tilize_hw_configure<is_fp32_dest_acc_en>(&llk_pack_params);
 }
 
-inline void llk_pack_fast_tilize_init() { _llk_pack_fast_tilize_init_(); }
+inline void llk_pack_fast_tilize_init(const std::uint32_t unit_dim) { _llk_pack_fast_tilize_init_(unit_dim); }
 
 inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
@@ -317,12 +317,13 @@ inline void llk_pack_fast_tilize_block(
     const std::uint32_t tile_index,
     const std::uint32_t output,
     const std::uint32_t output_tile_index,
-    const std::uint32_t block_dim) {
+    const std::uint32_t unit_dim,
+    const std::uint32_t num_units) {
     const std::uint8_t output_id = get_output_id(output);
 
     const std::uint32_t pack_tile_addr = get_output_tile_address<true, false>(output_id, output_tile_index);
 
-    _llk_pack_fast_tilize_block_(tile_index, pack_tile_addr, block_dim);
+    _llk_pack_fast_tilize_block_(tile_index, pack_tile_addr, unit_dim, num_units);
 }
 
 /*************************************************************************

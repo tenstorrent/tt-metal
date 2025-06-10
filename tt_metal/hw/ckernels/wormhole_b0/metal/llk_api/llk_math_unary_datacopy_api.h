@@ -66,8 +66,11 @@ inline void llk_math_fast_eltwise_unary_datacopy_hw_configure_disaggregated(
     _llk_math_hw_configure_(unpack_dst_format[srca_operand_id], unpack_dst_format[srcb_operand_id]);
 }
 
-inline void llk_math_fast_eltwise_unary_datacopy_init() { _llk_math_fast_eltwise_unary_datacopy_init_(); }
+inline void llk_math_fast_eltwise_unary_datacopy_init(const std::uint32_t unit_dim) {
+    _llk_math_fast_eltwise_unary_datacopy_init_(unit_dim);
+}
 
-inline void llk_math_fast_eltwise_unary_datacopy_block(const std::uint32_t dst_index, const std::uint32_t block_dim) {
-    _llk_math_fast_eltwise_unary_datacopy_block_(dst_index, block_dim);
+inline void llk_math_fast_eltwise_unary_datacopy_block(
+    const std::uint32_t dst_index, const std::uint32_t unit_dim, const std::uint32_t num_units) {
+    _llk_math_fast_eltwise_unary_datacopy_block_(dst_index, unit_dim, num_units);
 }

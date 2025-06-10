@@ -246,10 +246,11 @@ inline void llk_unpack_fast_tilize_hw_configure_disaggregated(const std::uint32_
     llk_unpack_fast_tilize_hw_configure<is_fp32_dest_acc_en>(&unpack_tilize_params);
 }
 
-inline void llk_unpack_fast_tilize_init(const std::uint32_t operand, const std::uint32_t full_dim) {
+inline void llk_unpack_fast_tilize_init(
+    const std::uint32_t operand, const std::uint32_t unit_dim, std::uint32_t full_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
-    _llk_unpack_fast_tilize_init_(full_dim);
+    _llk_unpack_fast_tilize_init_(unit_dim, full_dim);
 }
 
 inline void llk_unpack_fast_tilize_uninit() { _llk_unpack_fast_tilize_uninit_(); }
@@ -257,10 +258,11 @@ inline void llk_unpack_fast_tilize_uninit() { _llk_unpack_fast_tilize_uninit_();
 inline void llk_unpack_fast_tilize_block(
     const std::uint32_t operand,
     const std::uint32_t tile_index,
-    const std::uint32_t block_dim,
+    const std::uint32_t unit_dim,
+    const std::uint32_t num_units,
     const std::uint32_t full_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
 
-    _llk_unpack_fast_tilize_block_(base_address, tile_index, block_dim, full_dim);
+    _llk_unpack_fast_tilize_block_(base_address, tile_index, unit_dim, num_units, full_dim);
 }
