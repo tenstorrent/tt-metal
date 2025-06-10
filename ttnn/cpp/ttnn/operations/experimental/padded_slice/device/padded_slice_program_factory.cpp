@@ -514,18 +514,26 @@ get_padded_slice_runtime_args_tile_sharded_output(
 
         // If this core's start location is beyond the output tensor's end, we need to clamp it to the end.
         if (start_index_per_dim[num_dims - 1] >= actual_output_shape[0]) {
-            start_index_per_dim[num_dims - 1] = actual_output_shape[0] - 1;
+            start_index_per_dim[num_dims - 1] = actual_output_shape[0];
             for (uint32_t j = 1; j < num_dims - 1; j++) {
-                start_index_per_dim[j] = actual_output_shape[num_dims - 1 - j];
+                start_index_per_dim[j] = 0;
             }
+            // start_index_per_dim[num_dims - 1] = actual_output_shape[0] - 1;
+            // for (uint32_t j = 1; j < num_dims - 1; j++) {
+            //     start_index_per_dim[j] = actual_output_shape[num_dims - 1 - j];
+            // }
         }
 
         // If this core's end location is beyond the output tensor's end, we need to clamp it to the end.
         if (end_index_per_dim[num_dims - 1] >= actual_output_shape[0]) {
-            end_index_per_dim[num_dims - 1] = actual_output_shape[0] - 1;
+            end_index_per_dim[num_dims - 1] = actual_output_shape[0];
             for (uint32_t j = 1; j < num_dims - 1; j++) {
-                end_index_per_dim[j] = actual_output_shape[num_dims - 1 - j];
+                end_index_per_dim[j] = 0;
             }
+            // end_index_per_dim[num_dims - 1] = actual_output_shape[0] - 1;
+            // for (uint32_t j = 1; j < num_dims - 1; j++) {
+            //     end_index_per_dim[j] = actual_output_shape[num_dims - 1 - j];
+            // }
         }
         std::vector<uint32_t> start_index_in_input_per_dim(num_dims);
         std::vector<uint32_t> end_index_in_input_per_dim(num_dims);

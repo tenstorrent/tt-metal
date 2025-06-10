@@ -1104,7 +1104,7 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
     if input_dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("bfloat8_b is not supported in row major layout")
 
-    orientation = ttnn.ShardOrientation.COL_MAJOR
+    orientation = ttnn.ShardOrientation.ROW_MAJOR
     core_grid = device.compute_with_storage_grid_size()
     if core_grid.x * core_grid.y < cores:
         pytest.skip(

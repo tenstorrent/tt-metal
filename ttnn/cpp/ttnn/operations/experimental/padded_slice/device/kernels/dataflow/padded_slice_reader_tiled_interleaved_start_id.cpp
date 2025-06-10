@@ -52,8 +52,6 @@ void kernel_main() {
             tiles_read++;
             uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0);
             noc_async_read(src_noc_addr, src_buffer_l1_addr, tile_size);
-            noc_async_read_barrier();
-
             src_buffer_l1_addr += tile_size;
             src_stick_id++;
 #ifdef DEBUG
