@@ -45,6 +45,10 @@ test_id_to_name = {
     21: "Conv Act with halo 3x3",
     22: "Conv Act with halo 3x3 Small",
     23: "Conv Halo Gather",
+    60: "All to All Packet Sizes",
+    61: "All to All Directed Ideal",
+    70: "All from All Packet Sizes",
+    71: "All from All Directed Ideal",
 }
 
 # Comments for each test explaining why we get the perf that we do
@@ -226,6 +230,18 @@ test_bounds = {
         23: {
             "riscv_1": {"latency": {"lower": 500, "upper": 1000}, "bandwidth": 10},
         },
+        # 60: { # All to All Packet Sizes NOT DONE
+        # "riscv_0": {"latency": {"lower": #, "upper": #}, "bandwidth": #},
+        # },
+        61: {  # All to All Directed Ideal
+            "riscv_0": {"latency": {"lower": 30000, "upper": 35000}, "bandwidth": 30},
+        },
+        # 70: { # All from All Packet Sizes NOT DONE
+        #    "riscv_0": {"latency": {"lower": #, "upper": #}, "bandwidth": #},
+        # },
+        # 71: { # All from All Directed Ideal NOT DONE
+        #    "riscv_0": {"latency": {"lower": 30000, "upper": 800000}, "bandwidth": 1.3}, # 33093-701498 cycles, 1.4714111800746403 Bytes/cycle
+        # },
     },
     "blackhole": {
         0: {
@@ -314,6 +330,21 @@ test_bounds = {
         23: {
             "riscv_1": {"latency": {"lower": 500, "upper": 1000}, "bandwidth": 20},
         },
+        # 60: { # All to All Packet Sizes NOT DONE
+        #    "riscv_0": {"latency": {"lower": 12000, "upper": 19000}, "bandwidth": 59},
+        # },
+        61: {  # All to All Directed Ideal
+            "riscv_0": {
+                "latency": {"lower": 30000, "upper": 35000},
+                "bandwidth": 30,
+            },  # 33154-33515 cycles, 30.79791138296285 Bytes/cycle
+        },
+        # 70: { # All from All Packet Sizes NOT DONE
+        #    "riscv_0": {"latency": {"lower": #, "upper": #}, "bandwidth": #},
+        # },
+        # 71: { # All from All Directed Ideal NOT DONE
+        #    "riscv_0": {"latency": {"lower": 10000, "upper": 400000}, "bandwidth": 2.7}, # 18481-345478 cycles, 2.9955018843457473 Bytes/cycle
+        # },
     },
 }
 
