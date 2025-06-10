@@ -15,3 +15,6 @@ compile_commands.json
 *.csv
 *.whl
 **/hw_specific/**
+
+# Ignore generated build.h
+tests/helpers/include/build.h
