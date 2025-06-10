@@ -9,10 +9,60 @@
 
 #define ENABLE_DEBUG_PRINT 0
 
-#if ENABLE_DEBUG_PRINT == 1
+#if ENABLE_DEBUG_PRINT == 0
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 #endif
+
+#define ALWI inline __attribute__((always_inline))
+
+// Fill an L1 buffer with the given val
+// WARNING: Use with caution as there's no memory protection. Make sure size is within limits
+template <
+    uint32_t in_nblocks_c,
+    uint32_t in_cb_id,
+    uint32_t window_h,
+    uint32_t window_w,
+    uint32_t in_w_padded,
+    uint32_t in_nbytes_c,
+    uint32_t MAX_ELE_PER_REDUCTION,
+    uint32_t read_bytes,
+    uint32_t max_rows_for_reduction,
+    uint32_t total_elems_to_reduce,
+    uint32_t remaining_elems,
+    uint32_t in_cb_sz,
+    uint32_t bf16_init_value>
+FORCE_INLINE void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
+    for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
+        uint32_t processed_rows = 0;
+        cb_reserve_back(in_cb_id, 1);
+        uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
+        for (uint32_t h = 0; h < window_h; ++h) {
+            for (uint32_t w = 0; w < window_w; w++) {
+                const uint32_t stick_offset = ind + w + h * in_w_padded;
+                const uint32_t read_offset =
+                    in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);
+                noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
+                out_l1_write_addr += read_bytes;
+                processed_rows++;
+                if ((processed_rows % max_rows_for_reduction) == 0) {
+                    noc_async_read_barrier();
+                    cb_push_back(in_cb_id, 1);
+                    cb_reserve_back(in_cb_id, 1);
+                    out_l1_write_addr = get_write_ptr(in_cb_id);
+                    // If next is last chunk, fill whole buffer with the init_value.
+                    if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
+                        fill_with_val(out_l1_write_addr, in_cb_sz, bf16_init_value);
+                    }
+                }
+            }
+        }
+        if (remaining_elems) {
+            noc_async_read_barrier();
+            cb_push_back(in_cb_id, 1);
+        }
+    }
+}
 
 /**
  * Pool 2D (Max pool 2D and Avg pool 2D)
@@ -58,6 +108,7 @@ void kernel_main() {
     constexpr uint32_t config_cb_id = get_compile_time_arg_val(27);
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+    constexpr uint32_t stride_w = get_compile_time_arg_val(28);
 
     uint32_t scalar_index = 0;
     uint32_t scalar_start = 0;
@@ -81,13 +132,14 @@ void kernel_main() {
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
-    volatile tt_l1_ptr uint16_t* reader_indices_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reader_indices_l1_addr);
+    volatile tt_l1_ptr uint32_t* reader_indices_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_l1_addr);
     uint32_t config_l1_addr;
     volatile tt_l1_ptr uint16_t* config_ptr;
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
 
+    uint32_t segments_counter = 1;
     uint32_t counter = reader_id;
     constexpr uint32_t total_elems_to_reduce = window_h * window_w;
     constexpr uint32_t remaining_elems = total_elems_to_reduce % max_rows_for_reduction;
@@ -104,7 +156,22 @@ void kernel_main() {
         scalar_index++;
     }
 
-    while (counter < reader_nindices) {
+    uint16_t num_segments = reader_indices_ptr[0] & 0xffff;
+    bool first_row_value = reader_id == 0;
+
+    uint32_t reader_indices_on_core = 0;
+
+    if (split_reader) {
+        if (reader_id == 0) {
+            reader_indices_on_core = (reader_nindices + 1) / 2;
+        } else {
+            reader_indices_on_core = reader_nindices / 2;
+        }
+    } else {
+        reader_indices_on_core = reader_nindices;
+    }
+
+    while (num_segments--) {
         if constexpr (!one_scalar_per_core) {
             cb_reserve_back(in_scalar_cb_id, 1);
             while ((counter >= scalar_end) && scalar_end != reader_nindices) {
@@ -127,39 +194,55 @@ void kernel_main() {
             cb_push_back(in_scalar_cb_id, 1);
         }
 
-        for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
-            const uint16_t top_left_local_index = reader_indices_ptr[counter];
-            uint32_t processed_rows = 0;
-            cb_reserve_back(in_cb_id, 1);
-            uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
-            for (uint32_t h = 0; h < window_h; ++h) {
-                for (uint32_t w = 0; w < window_w; w++) {
-                    const uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
-                    const uint32_t read_offset =
-                        in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);
-                    noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
-                    out_l1_write_addr += read_bytes;
-                    processed_rows++;
-                    if ((processed_rows % max_rows_for_reduction) == 0) {
-                        noc_async_read_barrier();
-                        cb_push_back(in_cb_id, 1);
-                        cb_reserve_back(in_cb_id, 1);
-                        out_l1_write_addr = get_write_ptr(in_cb_id);
-                        // If next is last chunk, fill whole buffer with the init_value.
-                        if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
-                            fill_with_val(out_l1_write_addr, in_cb_sz, bf16_init_value);
-                        }
-                    }
+        uint32_t start_end_segment = reader_indices_ptr[segments_counter++];
+        uint16_t start = start_end_segment & 0xffff;
+        uint16_t end = start_end_segment >> 16;
+
+        if (!first_row_value) {
+            start += stride_w;
+            first_row_value = true;
+        }
+
+        for (uint16_t ind = start; ind <= end; ind += 2 * stride_w) {
+            reader_indices_on_core--;
+            counter++;
+            read_window_with_top_left_index<
+                in_nblocks_c,
+                in_cb_id,
+                window_h,
+                window_w,
+                in_w_padded,
+                in_nbytes_c,
+                MAX_ELE_PER_REDUCTION,
+                read_bytes,
+                max_rows_for_reduction,
+                total_elems_to_reduce,
+                remaining_elems,
+                in_cb_sz,
+                bf16_init_value>(ind, in_l1_read_base_addr);
+            if (split_reader) {
+                counter++;
+                if (ind == end) {
+                    first_row_value = false;
                 }
             }
-            if (remaining_elems) {
-                noc_async_read_barrier();
-                cb_push_back(in_cb_id, 1);
-            }
         }
-        counter++;
-        if constexpr (split_reader) {
-            counter++;  // interleave the indices
-        }
+    }
+
+    while (reader_indices_on_core--) {
+        read_window_with_top_left_index<
+            in_nblocks_c,
+            in_cb_id,
+            window_h,
+            window_w,
+            in_w_padded,
+            in_nbytes_c,
+            MAX_ELE_PER_REDUCTION,
+            read_bytes,
+            max_rows_for_reduction,
+            total_elems_to_reduce,
+            remaining_elems,
+            in_cb_sz,
+            bf16_init_value>(0, in_l1_read_base_addr);
     }
 }  // kernel_main()
