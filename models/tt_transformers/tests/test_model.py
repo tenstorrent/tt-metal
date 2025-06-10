@@ -16,7 +16,6 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
-# @skip_for_blackhole("Failing on DRAM harvested P100a, see #21419")
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
