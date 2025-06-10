@@ -178,7 +178,7 @@ FORCE_INLINE void recordFabricNocEvent(
     }
 
 // preemptive quick push if transitioning from unlinked state to linked state
-#define QUICK_PUSH_IF_LINKED(cmd_buf, linked)                   \
+#define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)         \
     {                                                           \
         kernel_profiler::quick_push_if_linked(cmd_buf, linked); \
     }
@@ -189,6 +189,6 @@ FORCE_INLINE void recordFabricNocEvent(
 #define RECORD_NOC_EVENT_WITH_ADDR(type, noc_addr, num_bytes, vc)
 #define RECORD_NOC_EVENT_WITH_ID(type, noc_id, num_bytes, vc)
 #define RECORD_NOC_EVENT(type)
-#define QUICK_PUSH_IF_LINKED(cmd_buf, linked)
+#define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
 
 #endif
