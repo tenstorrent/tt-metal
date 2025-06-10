@@ -74,7 +74,7 @@ void call_sfpu_operation(SfpuType operation)
             ckernel::sfpu::_calculate_square_<APPROX_MODE, 32>(32);
             break;
         case SfpuType::celu:
-            ckernel::sfpu::_calculate_activation_<APPROX_MODE, ActivationType::Celu, 10>(10, 1 / 10);
+            ckernel::sfpu::_calculate_activation_<APPROX_MODE, ActivationType::Celu, 32>(10, 1 / 10);
             break;
         default:
             return;
