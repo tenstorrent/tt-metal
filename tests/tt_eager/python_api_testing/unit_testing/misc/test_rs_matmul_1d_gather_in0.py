@@ -503,6 +503,15 @@ def run_multi_core_matmul_1d(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     ccl_semaphore_handle = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    worker_cores_range_set = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+        ]
+    )
+
+    worker_sub_device = ttnn.SubDevice([worker_cores_range_set])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
     signpost("start")
     for _ in range(num_iters):
         output_t = ttnn.experimental.llama_rs_matmul(
@@ -515,6 +524,7 @@ def run_multi_core_matmul_1d(
             1,
             mesh_device,
             num_links,
+            worker_sub_device_id,
             program_config=program_config,
             memory_config_mm=output_sharded_mem_config,
             compute_kernel_config=compute_kernel_config,
