@@ -19,17 +19,17 @@ class Generator:
 
         """
         # favor composition over inheritance: __ is convention for private variables
-        self.__ttt_generator = TTTGenerator([model], [model_args], mesh_device, tokenizer, formatter)
+        self._ttt_generator = TTTGenerator([model], [model_args], mesh_device, tokenizer, formatter)
 
     @property
     def model(self):
         # todo)) change this when implementing data parallelism
-        return self.__ttt_generator.model[0]
+        return self._ttt_generator.model[0]
 
     @property
     def model_args(self):
         # todo)) change this when implementing data parallelism
-        return self.__ttt_generator.model_args[0]
+        return self._ttt_generator.model_args[0]
 
     @property
     def mesh_device(self):
@@ -98,7 +98,7 @@ class Generator:
         argmax_on_device=False,
     ):
         assert argmax_on_device is False, "todo)) the new decode_forward_text expects sampling_params"
-        return self.__ttt_generator.decode_forward_text(
+        return self._ttt_generator.decode_forward_text(
             tokens=tokens,
             start_pos=start_pos,
             page_table=page_table,
@@ -207,4 +207,4 @@ class Generator:
     ## Destructor (used to delete ttnn trace if exists)
 
     def __del__(self):
-        self.__ttt_generator.__del__()
+        self._ttt_generator.__del__()

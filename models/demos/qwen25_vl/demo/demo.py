@@ -145,7 +145,7 @@ def create_tt_model(
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
-            1,  # batch_size -- samples to load from the prompt JSON
+            2,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
@@ -171,7 +171,7 @@ def create_tt_model(
         "batch-1",  # latency
         "batch-4",  # multi-user
         "batch-32",  # 32 users (special because it fills tile size)
-        "ci-only",  # ci_only batch-2 for faster testing coverage in CI pipelines
+        "ci-only-two-users",  # ci_only batch-2 for faster testing coverage in CI pipelines
         "ci-only-repeated-batch",  # ci_only repeated batch for faster testing coverage in CI pipelines
     ],
 )
@@ -185,7 +185,7 @@ def create_tt_model(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 25663488, "num_command_queues": 1, "physical_device_ids": [0]}],
+    [{"trace_region_size": 25663488, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
