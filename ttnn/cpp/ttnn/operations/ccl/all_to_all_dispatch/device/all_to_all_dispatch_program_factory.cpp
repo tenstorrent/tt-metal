@@ -226,7 +226,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     // full mapping buffer
     uint32_t mapping_tensor_cb_id = tt::CBIndex::c_2;
     // client interface
-    uint32_t client_interface_cb_id = tt::CBIndex::c_3;
+    uint32_t packet_header_cb_id = tt::CBIndex::c_3;
     // metadata buffer
     uint32_t send_preparation_buffer_id = tt::CBIndex::c_4;
 
@@ -245,10 +245,14 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             mapping_page_size * mapping_pages, {{mapping_tensor_cb_id, mapping_data_format}})
             .set_page_size(mapping_tensor_cb_id, mapping_page_size);
 
-    tt::tt_metal::CircularBufferConfig client_interface_cb_config =
+    // Allocate space for the client interface
+    static constexpr auto num_packet_headers_storable = 8;
+    static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    tt::tt_metal::CircularBufferConfig packet_header_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
-            .set_page_size(client_interface_cb_id, tt::tt_fabric::CLIENT_INTERFACE_SIZE);
+            num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
+            {{packet_header_cb_id, tt::DataFormat::RawUInt32}})
+            .set_page_size(packet_header_cb_id, packet_header_size_bytes);
 
     uint32_t send_preparation_buffer_size = num_devices * batches_per_device * sizeof(uint16_t);
 
@@ -280,7 +284,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto input_tensor_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_input_tensor_config);
     auto indices_tensor_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_indices_tensor_config);
     auto mapping_tensor_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_mapping_tensor_config);
-    auto client_interface_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, client_interface_cb_config);
+    auto packet_header_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, packet_header_cb_config);
     auto send_preparation_buffer =
         tt::tt_metal::CreateCircularBuffer(program, sender_core, send_preparation_buffer_config);
 
@@ -294,7 +298,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         input_tensor_cb_id,
         indices_tensor_cb_id,
         mapping_tensor_cb_id,
-        client_interface_cb_id,
+        packet_header_cb_id,
         send_preparation_buffer_id,
 
         input_pages,

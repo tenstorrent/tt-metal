@@ -17,7 +17,7 @@ void kernel_main() {
     constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(5);
     constexpr uint32_t indices_tensor_cb_id = get_compile_time_arg_val(6);
     constexpr uint32_t mapping_tensor_cb_id = get_compile_time_arg_val(7);
-    constexpr uint32_t client_interface_cb_id = get_compile_time_arg_val(8);
+    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(8);
     constexpr uint32_t send_preparation_buffer_cb_id = get_compile_time_arg_val(9);
 
     constexpr uint32_t input_pages = get_compile_time_arg_val(10);
@@ -58,7 +58,8 @@ void kernel_main() {
     cb_reserve_back(indices_tensor_cb_id, indices_pages);
     uint32_t l1_write_addr = get_write_ptr(indices_tensor_cb_id);
     for (uint32_t i = 0; i < indices_pages; i++) {
-        noc_async_read_page(i, indices_addr_gen, l1_write_addr) l1_write_addr += indices_page_size;
+        noc_async_read_page(i, indices_addr_gen, l1_write_addr);
+        l1_write_addr += indices_page_size;
     }
     cb_reserve_back(mapping_tensor_cb_id, mapping_pages);
     l1_write_addr = get_write_ptr(mapping_tensor_cb_id);
