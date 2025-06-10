@@ -6,7 +6,7 @@
 
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/operations/kernel_helper_functions/pad_tile.hpp"
+#include "pad_tile.hpp"
 
 void kernel_main() {
     // COMPILE TIME ARGS
