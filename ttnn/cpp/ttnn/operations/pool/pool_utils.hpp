@@ -30,6 +30,7 @@ struct AvgPoolConfig {
     uint32_t pad_h;
     uint32_t pad_w;
     uint32_t out_nhw_per_core;
+    std::optional<int32_t> divisor_override;
 };
 
 uint32_t get_bf16_pool_scalar(

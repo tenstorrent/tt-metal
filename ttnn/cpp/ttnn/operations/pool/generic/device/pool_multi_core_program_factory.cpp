@@ -9,6 +9,7 @@
 #include "tt-metalium/host_buffer.hpp"
 #include "tt-metalium/buffer.hpp"
 #include <cstdint>
+#include <optional>
 #include <vector>
 #include "ttnn/tensor/storage.hpp"
 #include <tt-metalium/hal.hpp>
@@ -30,6 +31,20 @@ struct ScalarInfo {
     uint16_t end;
 };
 
+bool is_pool_op_one_scalar_per_core(
+    const Pool2DType pool_type,
+    bool ceil_mode,
+    uint32_t ceil_h,
+    uint32_t ceil_w,
+    bool count_include_pad,
+    uint32_t pad_h,
+    uint32_t pad_w,
+    std::optional<int32_t> divisor_override) {
+    return pool_type != Pool2DType::AVG_POOL2D || divisor_override.has_value() ||
+           ((ceil_mode == false || (ceil_h == 0 && ceil_w == 0)) &&
+            (count_include_pad == true || (pad_h == 0 && pad_w == 0)));
+}
+
 // This function generates a vector of elements of type ScalarInfo. It is called once per core and generates the
 // adequate scalars for each output element that core should produce. It should be called only for avg pool operation
 // and only if the divisor_override is NOT set and the idea behind it is to generate config tesnor in cases where one
@@ -41,24 +56,51 @@ struct ScalarInfo {
 // scalar value.
 std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
     const AvgPoolConfig& config, uint32_t output_stick_x, uint32_t output_stick_y) {
+    TT_FATAL(
+        !is_pool_op_one_scalar_per_core(
+            Pool2DType::AVG_POOL2D,
+            config.ceil_mode,
+            config.ceil_h,
+            config.ceil_w,
+            config.count_include_pad,
+            config.pad_h,
+            config.pad_w,
+            config.divisor_override),
+        "Avg pool scalars config should be calulated only for ceil_mode == true and "
+        "(ceil_pad_h > 0 || ceil_pad_w > 0) or count_include_pad == false and (pad_h > 0 || pad_w > 0)");
+
     std::vector<ScalarInfo> scalars;
     float value;
     bool first_scalar = true;
     uint32_t last_pool_area = 0;
 
-    if ((config.ceil_mode && (config.ceil_w > 0 || config.ceil_h > 0)) ||
-        (!config.count_include_pad && (config.pad_h > 0 || config.pad_w > 0))) {
-        for (uint32_t i = 0; i < config.out_nhw_per_core; i++) {
-            // Compute starting and ending indices of the pooling window
-            int h_start = output_stick_x * config.stride_h - config.pad_h;
-            int w_start = output_stick_y * config.stride_w - config.pad_w;
-            int h_end = std::min(
-                h_start + static_cast<int>(config.kernel_h),
-                static_cast<int>(config.in_h + config.pad_h + config.ceil_h));
-            int w_end = std::min(
-                w_start + static_cast<int>(config.kernel_w),
-                static_cast<int>(config.in_w + config.pad_w + config.ceil_w));
+    for (uint32_t i = 0; i < config.out_nhw_per_core; i++) {
+        // Compute starting and ending indices of the pooling window
+        int h_start = output_stick_x * config.stride_h - config.pad_h;
+        int w_start = output_stick_y * config.stride_w - config.pad_w;
+        int h_end = std::min(
+            h_start + static_cast<int>(config.kernel_h), static_cast<int>(config.in_h + config.pad_h + config.ceil_h));
+        int w_end = std::min(
+            w_start + static_cast<int>(config.kernel_w), static_cast<int>(config.in_w + config.pad_w + config.ceil_w));
 
+        int pool_area = 0;
+        if (config.count_include_pad) {
+            // Initial pool area
+            pool_area = (h_end - h_start) * (w_end - w_start);
+
+            // Calculate ceil induced padding overflow beyond input dimensions
+            int pad_h_over = std::max(h_end - static_cast<int>(config.in_h) - static_cast<int>(config.pad_h), 0);
+            int pad_w_over = std::max(w_end - static_cast<int>(config.in_w) - static_cast<int>(config.pad_w), 0);
+
+            // Adjust pool area to exclude padded overflow
+            pool_area -= pad_h_over * config.kernel_w;
+            pool_area -= pad_w_over * config.kernel_h;
+
+            // Re-add intersection if both directions overflowed
+            if (pad_h_over > 0 && pad_w_over > 0) {
+                pool_area += pad_h_over * pad_w_over;
+            }
+        } else {
             int valid_h_start = (h_start > 0) ? h_start : 0;
             int valid_w_start = (w_start > 0) ? w_start : 0;
             int valid_h_end = std::min(h_end, static_cast<int>(config.in_h));
@@ -66,54 +108,27 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
 
             int effective_h = valid_h_end - valid_h_start;
             int effective_w = valid_w_end - valid_w_start;
-
-            int pool_area = 0;
-            if (config.count_include_pad) {
-                // Initial pool area
-                pool_area = (h_end - h_start) * (w_end - w_start);
-
-                // Calculate ceil induced padding overflow beyond input dimensions
-                int pad_h_over = std::max(h_end - static_cast<int>(config.in_h) - static_cast<int>(config.pad_h), 0);
-                int pad_w_over = std::max(w_end - static_cast<int>(config.in_w) - static_cast<int>(config.pad_w), 0);
-
-                // Adjust pool area to exclude padded overflow
-                pool_area -= pad_h_over * config.kernel_w;
-                pool_area -= pad_w_over * config.kernel_h;
-
-                // Re-add intersection if both directions overflowed
-                if (pad_h_over > 0 && pad_w_over > 0) {
-                    pool_area += pad_h_over * pad_w_over;
-                }
-
-                // Avoid division by zero
-                pool_area = pool_area > 1 ? pool_area : 1;
-            } else {
-                pool_area = (effective_h > 0 && effective_w > 0) ? effective_h * effective_w : 0;
-            }
-            float value = pool_area > 0 ? 1.f / static_cast<float>(pool_area) : 0.f;
-
-            // Add new scalar if padding config changes
-            if (first_scalar || static_cast<uint32_t>(pool_area) != last_pool_area) {
-                if (!scalars.empty()) {
-                    scalars.back().end = i;
-                }
-                scalars.push_back({i, bfloat16(value).to_packed(), i});
-                first_scalar = false;
-            }
-            last_pool_area = static_cast<uint32_t>(pool_area);
-
-            // Advance output element coordinates
-            output_stick_y = (output_stick_y + 1) % config.out_w;
-            if (output_stick_y == 0) {
-                output_stick_x = (output_stick_x + 1) % config.out_h;
-            }
+            pool_area = (effective_h > 0 && effective_w > 0) ? effective_h * effective_w : 0;
         }
-    } else {
-        TT_FATAL(
-            false,
-            "Avg pool scalars config should be calulated only for ceil_mode == true and "
-            "(ceil_pad_h > 0 || ceil_pad_w > 0) or count_include_pad == false and (pad_h > 0 || pad_w > 0)");
+        float value = pool_area > 0 ? 1.f / static_cast<float>(pool_area) : 0.f;
+
+        // Add new scalar if padding config changes
+        if (first_scalar || static_cast<uint32_t>(pool_area) != last_pool_area) {
+            if (!scalars.empty()) {
+                scalars.back().end = i;
+            }
+            scalars.push_back({i, bfloat16(value).to_packed(), i});
+            first_scalar = false;
+        }
+        last_pool_area = static_cast<uint32_t>(pool_area);
+
+        // Advance output element coordinates
+        output_stick_y = (output_stick_y + 1) % config.out_w;
+        if (output_stick_y == 0) {
+            output_stick_x = (output_stick_x + 1) % config.out_h;
+        }
     }
+
     scalars.back().end = config.out_nhw_per_core;
     return scalars;
 }
@@ -452,9 +467,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t bf16_one_u32 = *reinterpret_cast<const uint32_t*>(&one);
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_h, kernel_size_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
-    bool one_scalar_per_core = pool_type != Pool2DType::AVG_POOL2D || divisor_override.has_value() ||
-                               ((ceil_mode == false || (ceil_pad_h == 0 && ceil_pad_w == 0)) &&
-                                (count_include_pad == true || (pad_h == 0 && pad_w == 0)));
+    bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
+        pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
 
     CBHandle config_cb;
     tt::tt_metal::DeviceStorage scalar_config_storage;
@@ -477,7 +491,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             .count_include_pad = count_include_pad,
             .pad_h = pad_h / 2,  // pad_h is the total padding, so divide by 2 for each side
             .pad_w = pad_w / 2,  // pad_w is the total padding, so divide by 2 for each side
-            .out_nhw_per_core = out_nhw_per_core};
+            .out_nhw_per_core = out_nhw_per_core,
+            .divisor_override = divisor_override};
         config_tensor = create_scalar_config_tensor(
             avg_pool_config, input.memory_config().memory_layout(), in_n, num_shards_c, ncores);
 
