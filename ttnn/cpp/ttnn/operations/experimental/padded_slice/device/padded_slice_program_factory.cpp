@@ -792,12 +792,6 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, std::get<0>(all_runtime_args[i]));
         tt::tt_metal::SetRuntimeArgs(program, untilize_compute_kernel_id, core, std::get<1>(all_runtime_args[i]));
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, std::get<2>(all_runtime_args[i]));
-        // tt::log_info(
-        //     "Core {} Reader {}, Compute {} Writer {}",
-        //     core,
-        //     std::get<0>(all_runtime_args[i]),
-        //     std::get<1>(all_runtime_args[i]),
-        //     std::get<2>(all_runtime_args[i]));
         i++;
     }
 
