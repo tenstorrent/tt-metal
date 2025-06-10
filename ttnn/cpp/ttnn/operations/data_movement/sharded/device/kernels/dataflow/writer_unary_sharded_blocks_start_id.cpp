@@ -11,14 +11,11 @@ void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t block_height_tiles = get_arg_val<uint32_t>(1);
     const uint32_t block_width_tiles = get_arg_val<uint32_t>(2);
-    const uint32_t block_width_padded_num_tiles = get_arg_val<uint32_t>(3);
-    const uint32_t output_width_tiles = get_arg_val<uint32_t>(4);
-    const uint32_t start_id_offset = get_arg_val<uint32_t>(5);
-    const uint32_t start_id_base = get_arg_val<uint32_t>(6);
-
-    // TODO: (GR) Don't think we need these since reader takes care of not passing in the uneven parts
-    // const uint32_t unpadded_block_height_tiles = get_arg_val<uint32_t>(3);
-    // const uint32_t unpadded_block_width_tiles = get_arg_val<uint32_t>(4);
+    const uint32_t padded_offset = get_arg_val<uint32_t>(3);
+    const uint32_t block_width_padded_num_tiles = get_arg_val<uint32_t>(4);
+    const uint32_t output_width_tiles = get_arg_val<uint32_t>(5);
+    const uint32_t start_id_offset = get_arg_val<uint32_t>(6);
+    const uint32_t start_id_base = get_arg_val<uint32_t>(7);
 
     // compile-time args
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
@@ -37,7 +34,7 @@ void kernel_main() {
         get_compile_time_arg_val(7)>;  // pages_per_shard_y
 
     const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(7));
+        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(8));
     experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
 
     uint32_t row_start_tile_id = start_id_base + start_id_offset;
@@ -46,10 +43,12 @@ void kernel_main() {
     for (uint32_t h = 0; h < block_height_tiles; h++) {
         uint32_t tile_id = row_start_tile_id;
         for (uint32_t w = 0; w < block_width_tiles; w++) {
-            noc_async_write_tile(tile_id, s, l1_read_addr);
+            uint64_t dst_noc_addr = get_noc_addr(tile_id, s);
+            noc_async_write(l1_read_addr, dst_noc_addr, tile_bytes);
             tile_id++;
             l1_read_addr += tile_bytes;
         }
+        l1_read_addr += padded_offset;
         row_start_tile_id += output_width_tiles;
     }
     noc_async_write_barrier();

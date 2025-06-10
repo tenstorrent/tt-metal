@@ -11,8 +11,9 @@ void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t block_height = get_arg_val<uint32_t>(1);
     const uint32_t block_width_bytes = get_arg_val<uint32_t>(2);
-    const uint32_t start_id = get_arg_val<uint32_t>(3);
-    const uint32_t output_width_in_pages = get_arg_val<uint32_t>(4);
+    const uint32_t padded_block_width_bytes = get_arg_val<uint32_t>(3);
+    const uint32_t start_id = get_arg_val<uint32_t>(4);
+    const uint32_t output_width_in_pages = get_arg_val<uint32_t>(5);
 
     // compile-time args
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
@@ -27,9 +28,8 @@ void kernel_main() {
         get_compile_time_arg_val(7)>;  // pages_per_shard_y
 
     const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(5));
-    experimental::ShardedAddrGen<tensor_shard_info> s = {
-        .bank_base_address = dst_addr + input_width_offset_bytes, .shard_array = mapping_table};
+        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(6));
+    experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
 
     uint32_t stick_id = start_id;
     cb_wait_front(cb_id_out0, block_height);
@@ -38,7 +38,7 @@ void kernel_main() {
         uint64_t dst_noc_addr = get_noc_addr(stick_id, s);
         noc_async_write(l1_read_addr, dst_noc_addr, block_width_bytes);
         stick_id += output_width_in_pages;
-        l1_read_addr += block_width_bytes;
+        l1_read_addr += padded_block_width_bytes;
     }
     noc_async_write_barrier();
     cb_pop_front(cb_id_out0, block_height);

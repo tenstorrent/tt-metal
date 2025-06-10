@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool dst_is_dram = true; // dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM; TODO: (GR) Put back to normal
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
     if (input.layout() == Layout::TILE) {
@@ -241,8 +241,9 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
                     dst_buffer->address(),
                     shard_height,
                     shard_width,
+                    padded_offset,
                     curr_num_units_per_shard,
-                    num_units_per_row,
+                    num_units_offset,
                     curr_idx_h + curr_idx_w,
                     starting_idx_h};
                 shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
@@ -335,11 +336,13 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             if (dst_is_dram) {
                 uint32_t page_id_within_row = curr_idx_w / input_unit_size;
                 uint32_t output_width_in_pages = tt::div_up(num_units_per_row, input_unit_size);
+                uint32_t start_id = curr_idx_h * output_width_in_pages + page_id_within_row;
                 writer_run_time_args = {
                     dst_buffer->address(),
                     shard_height,
                     shard_width,
-                    curr_idx_h + page_id_within_row,
+                    padded_offset_bytes,
+                    start_id,
                     output_width_in_pages
                 };
                 shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
