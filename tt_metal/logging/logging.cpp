@@ -15,8 +15,8 @@
 
 namespace tt::tt_metal::logging {
 
-constexpr auto file_env_var = "TT_Metal_LOGGER_FILE";
-constexpr auto level_env_var = "TT_Metal_LOGGER_LEVEL";
+constexpr auto file_env_var = "TT_METAL_LOGGER_FILE";
+constexpr auto level_env_var = "TT_METAL_LOGGER_LEVEL";
 constexpr auto log_pattern = "[%Y-%m-%d %H:%M:%S.%e] [%l] [%s:%#] %v";
 
 /**
