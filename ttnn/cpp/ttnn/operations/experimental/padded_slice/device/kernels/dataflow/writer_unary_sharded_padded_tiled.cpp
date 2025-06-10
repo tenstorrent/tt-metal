@@ -11,17 +11,6 @@
 #include "ckernel_defs.h"
 #include "tt-metalium/constants.hpp"
 
-void print_a4(const char* s, volatile tt_l1_ptr uint32_t* ptr) {
-    DPRINT << s << " : " << ptr[0] << " " << ptr[1] << " " << ptr[2] << " " << ptr[3] << ENDL();
-}
-
-uint32_t round_up(uint32_t value, uint32_t multiple) {
-    if (value % multiple != 0) {
-        value += multiple - (value % multiple);
-    }
-    return value;
-}
-
 uint32_t round_down(uint32_t value, uint32_t multiple) {
     if (value % multiple != 0) {
         value -= (value % multiple);
@@ -60,9 +49,6 @@ void kernel_main() {
            << ", tile_size: " << tile_size << ", read_size: " << read_size << "block row size " << block_row_size
            << ENDL();
     DPRINT << "untilized CB ID: " << cb_untilized_id << " Out CB ID: " << cb_out_id << ENDL();
-    print_a4("Output Start in Input Coord", (volatile uint32_t*)output_start_in_input);
-    print_a4("Output Coord", output_coord);
-    print_a4("Output End in Input Coord", (volatile uint32_t*)output_end);
 #endif
 
     const uint32_t output_end_width_in_input = output_end[1] + output_start_in_input[1];
@@ -79,7 +65,6 @@ void kernel_main() {
         }
 
 #ifdef DEBUG
-        print_a4("Output Coord", output_coord);
         DPRINT << "Width Start in Input: " << width_start_in_input
                << ", Width Tile Start in Input: " << width_tile_start_in_input
                << ", Read Start Offset: " << read_start_offset << ", Read Rows Size: " << read_rows_size << ENDL();
@@ -95,7 +80,11 @@ void kernel_main() {
         cb_pop_front(cb_untilized_id, num_tiles_per_read);
         tiles_read += num_tiles_per_read;
 
+        // output_coord keeps track of the current position in the output tensor
+        // Increment the output coordinate for the next read by the size of the current read.
         output_coord[1] += read_rows_size;
+
+        // If output_coord goes beyond output_end, reset it to 0 and increment the next dimension.
         for (uint32_t index = 1; index < num_dims - 1; index++) {
             if (output_coord[index] >= output_end[index]) {
                 output_coord[index] = 0;
