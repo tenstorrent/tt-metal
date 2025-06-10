@@ -1,24 +1,33 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #pragma once
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::operations::ternary {
+
+enum class WhereVariant {
+    TTT,
+    TTS,
+    TST,
+    TSS,
+};
 
 struct WhereDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct operation_attributes_t {
+        WhereVariant where_variant;
         tt::tt_metal::MemoryConfig memory_config;
         DataType input_dtype;
         std::optional<DataType> dtype;
-        const CoreRangeSet worker_grid;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
-        tt::stl::hash::hash_t to_hash() const;
         DataType get_dtype() const;
     };
 
@@ -26,21 +35,15 @@ struct WhereDeviceOperation {
         const Tensor& predicate;
         const Tensor& value_true;
         const Tensor& value_false;
-        // change to this later
-        // const std::variant<Tensor, float> value_true;
-        // const std::variant<Tensor, float> value_false;
-        std::optional<Tensor> output_tensor;
+        std::optional<Tensor> optional_output_tensor;
     };
 
-    struct ProgramFactory {
+    struct WhereProgramFactory {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle reader_kernel_id;
             tt::tt_metal::KernelHandle writer_kernel_id;
             tt::tt_metal::KernelHandle compute_kernel_id;
-            tt::tt_metal::CBHandle cb_predicate;
-            tt::tt_metal::CBHandle cb_value_true;
-            tt::tt_metal::CBHandle cb_value_false;
-            tt::tt_metal::CBHandle cb_output;
+            CoreCoord compute_with_storage_grid_size;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -57,7 +60,7 @@ struct WhereDeviceOperation {
             tensor_return_value_t& output);
     };
 
-    using program_factory_t = std::variant<ProgramFactory>;
+    using program_factory_t = std::variant<WhereProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -75,33 +78,6 @@ struct WhereDeviceOperation {
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<Tensor>& optional_output_tensor);
-
-    // // tensor-tensor-scalar invocation
-    // static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-    //     const Tensor& predicate,
-    //     const Tensor& value_true,
-    //     float value_false,
-    //     const std::optional<const DataType>& output_dtype,
-    //     const std::optional<MemoryConfig>& memory_config,
-    //     const std::optional<Tensor>& optional_output_tensor);
-
-    // // tensor-scalar-tensor invocation
-    // static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-    //     const Tensor& predicate,
-    //     float value_true,
-    //     const Tensor& value_false,
-    //     const std::optional<const DataType>& output_dtype,
-    //     const std::optional<MemoryConfig>& memory_config,
-    //     const std::optional<Tensor>& optional_output_tensor);
-
-    // // tensor-scalar-scalar invocation
-    // static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-    //     const Tensor& predicate,
-    //     float value_true,
-    //     float value_false,
-    //     const std::optional<const DataType>& output_dtype,
-    //     const std::optional<MemoryConfig>& memory_config,
-    //     const std::optional<Tensor>& optional_output_tensor);
 };
 
 }  // namespace ttnn::operations::ternary
