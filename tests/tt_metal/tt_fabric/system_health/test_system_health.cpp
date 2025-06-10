@@ -34,24 +34,36 @@ std::pair<std::uint32_t, std::uint32_t> get_ubb_ids(chip_id_t chip_id) {
     return std::make_pair(0, 0);
 }
 
-bool is_chip_on_edge_of_mesh(chip_id_t physical_chip_id) {
+bool is_chip_on_edge_of_mesh(chip_id_t physical_chip_id, tt::ClusterType cluster_type) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    if (cluster.get_board_type(physical_chip_id) == BoardType::UBB) {
+    if (cluster_type == tt::ClusterType::GALAXY) {
         auto ubb_asic_id = cluster.get_ubb_asic_id(physical_chip_id);
         return (ubb_asic_id >= 2) and (ubb_asic_id <= 5);
+    } else if (cluster_type == tt::ClusterType::T3K) {
+        // MMIO chips are on the edge of the mesh
+        return cluster.get_associated_mmio_device(physical_chip_id) == physical_chip_id;
     } else {
-        log_warning(tt::LogTest, "is_chip_on_edge_of_mesh not implemented for non-UBB chips");
+        log_warning(
+            tt::LogTest,
+            "is_chip_on_edge_of_mesh not implemented for {} cluster type",
+            magic_enum::enum_name(cluster_type));
         return false;
     }
 }
 
-bool is_chip_on_corner_of_mesh(chip_id_t physical_chip_id) {
+bool is_chip_on_corner_of_mesh(chip_id_t physical_chip_id, tt::ClusterType cluster_type) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    if (cluster.get_board_type(physical_chip_id) == BoardType::UBB) {
+    if (cluster_type == tt::ClusterType::GALAXY) {
         auto ubb_asic_id = cluster.get_ubb_asic_id(physical_chip_id);
         return (ubb_asic_id == 1);
+    } else if (cluster_type == tt::ClusterType::T3K) {
+        // Remote chips are on the corner of the mesh
+        return cluster.get_associated_mmio_device(physical_chip_id) != physical_chip_id;
     } else {
-        log_warning(tt::LogTest, "is_chip_on_corner_of_mesh not implemented for non-UBB chips");
+        log_warning(
+            tt::LogTest,
+            "is_chip_on_corner_of_mesh not implemented for {} cluster type",
+            magic_enum::enum_name(cluster_type));
         return false;
     }
 }
@@ -136,6 +148,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
     const auto& eth_connections = cluster.get_ethernet_connections();
     std::uint32_t num_expected_chips = 0;
     std::uint32_t num_connections_per_side = 0;
+    std::uint32_t num_expected_mmio_chips = 0;
 
     auto input_args = ::testing::internal::GetArgvs();
 
@@ -171,19 +184,27 @@ TEST(Cluster, TestMeshFullConnectivity) {
 
     if (cluster_type == tt::ClusterType::T3K) {
         num_expected_chips = 8;
+        num_expected_mmio_chips = 4;
         num_connections_per_side = 2;
     } else if (cluster_type == tt::ClusterType::GALAXY) {
         num_expected_chips = 32;
+        num_expected_mmio_chips = 32;
         num_connections_per_side = 4;
     } else if (cluster_type == tt::ClusterType::P150_X4) {
         num_expected_chips = 4;
+        num_expected_mmio_chips = 4;
         num_connections_per_side = 4;
     } else {
         GTEST_SKIP() << "Mesh check not supported for system type " << magic_enum::enum_name(cluster_type);
     }
 
     EXPECT_EQ(eth_connections.size(), num_expected_chips)
-        << " Expected " << num_expected_chips << " in " << magic_enum::enum_name(cluster_type) << " cluster";
+        << " Expected " << num_expected_chips << " chips in " << magic_enum::enum_name(cluster_type)
+        << " cluster but found " << eth_connections.size();
+    std::uint32_t num_mmio_chips = cluster.number_of_pci_devices();
+    EXPECT_EQ(num_mmio_chips, num_expected_mmio_chips)
+        << " Expected " << num_expected_mmio_chips << " MMIO chips in " << magic_enum::enum_name(cluster_type)
+        << " cluster but found " << num_mmio_chips;
 
     std::uint32_t num_target_connections = 0;
     std::tie(num_target_connections, input_args) =
@@ -204,10 +225,14 @@ TEST(Cluster, TestMeshFullConnectivity) {
     if (not target_system_topology_str.empty()) {
         target_system_topology =
             magic_enum::enum_cast<FabricType>(target_system_topology_str, magic_enum::case_insensitive);
-        if (target_system_topology.has_value()) {
-            bool supported_topology =
-                *target_system_topology == FabricType::TORUS_2D ||
-                (*target_system_topology == FabricType::MESH && cluster_type == tt::ClusterType::GALAXY);
+        // TORUS_2D is the only topology that is supported for all cluster types
+        if (target_system_topology.has_value() && *target_system_topology != FabricType::TORUS_2D) {
+            bool supported_topology = false;
+            switch (cluster_type) {
+                case tt::ClusterType::GALAXY:
+                case tt::ClusterType::T3K: supported_topology = *target_system_topology == FabricType::MESH; break;
+                default: supported_topology = false; break;
+            };
             if (not supported_topology) {
                 log_warning(
                     tt::LogTest,
@@ -232,11 +257,14 @@ TEST(Cluster, TestMeshFullConnectivity) {
         std::map<chip_id_t, uint32_t> num_internal_connections_to_chip;
         std::map<chip_id_t, uint32_t> num_external_connections_to_chip;
         for (const auto& [channel, remote_chip_and_channel] : connections) {
-            tt::umd::CoreCoord logical_active_eth = soc_desc.get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
-            if (cluster.is_ethernet_link_up(chip, logical_active_eth)) {
+            tt::umd::CoreCoord logical_active_eth_umd_coord =
+                soc_desc.get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
+            CoreCoord logical_active_eth_coord =
+                CoreCoord{logical_active_eth_umd_coord.x, logical_active_eth_umd_coord.y};
+            if (cluster.is_ethernet_link_up(chip, logical_active_eth_coord)) {
                 auto remote_chip = std::get<0>(remote_chip_and_channel);
                 num_connections_to_chip[remote_chip]++;
-                if (cluster.is_external_cable(chip, logical_active_eth)) {
+                if (cluster.is_external_cable(chip, logical_active_eth_coord)) {
                     num_external_connections_to_chip[remote_chip]++;
                 } else {
                     num_internal_connections_to_chip[remote_chip]++;
@@ -253,17 +281,23 @@ TEST(Cluster, TestMeshFullConnectivity) {
             if (*target_system_topology == FabricType::TORUS_2D) {
                 static constexpr std::uint32_t num_expected_chip_connections = 4;
                 validate_num_connections(num_connections_to_chip.size(), num_expected_chip_connections);
-            } else if (*target_system_topology == FabricType::MESH) {
+            } else {
+                uint32_t num_chip_connections = 0;
+                if (cluster_type == tt::ClusterType::GALAXY) {
+                    num_chip_connections = num_internal_connections_to_chip.size();
+                } else {
+                    num_chip_connections = num_connections_to_chip.size();
+                }
                 // TODO: This is UBB specific where we only consider internal connections when determining MESH topology
-                if (is_chip_on_corner_of_mesh(chip)) {
+                if (is_chip_on_corner_of_mesh(chip, cluster_type)) {
                     static constexpr std::uint32_t num_expected_chip_connections = 2;
-                    validate_num_connections(num_internal_connections_to_chip.size(), num_expected_chip_connections);
-                } else if (is_chip_on_edge_of_mesh(chip)) {
+                    validate_num_connections(num_chip_connections, num_expected_chip_connections);
+                } else if (is_chip_on_edge_of_mesh(chip, cluster_type)) {
                     static constexpr std::uint32_t num_expected_chip_connections = 3;
-                    validate_num_connections(num_internal_connections_to_chip.size(), num_expected_chip_connections);
+                    validate_num_connections(num_chip_connections, num_expected_chip_connections);
                 } else {
                     static constexpr std::uint32_t num_expected_chip_connections = 4;
-                    validate_num_connections(num_internal_connections_to_chip.size(), num_expected_chip_connections);
+                    validate_num_connections(num_chip_connections, num_expected_chip_connections);
                 }
             }
         }
