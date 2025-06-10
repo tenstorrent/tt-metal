@@ -90,11 +90,12 @@ RUN git clone --branch ${OMPI_TAG} --depth 1 https://github.com/open-mpi/ompi.gi
 COPY tt_metal/sfpi-version.sh /tmp/sfpi-version.sh
 
 # Install SFPI
+ENV SFPI_RPM=sfpi-x86_64_Linux.rpm
 WORKDIR /tmp
 RUN source /tmp/sfpi-version.sh && \
-    wget https://github.com/tenstorrent/sfpi/releases/download/${sfpi_version}/sfpi-aarch64_Linux.rpm && \
-    dnf install ./sfpi-aarch64_Linux.rpm && \
-    rm -rf ./sfpi-aarch64_Linux.rpm
+    wget https://github.com/tenstorrent/sfpi/releases/download/${sfpi_version}/${SFPI_RPM} && \
+    dnf install ./${SFPI_RPM} && \
+    rm -rf ./${SFPI_RPM}
 
 # ENV needed
 ENV PATH=${OMPI_PREFIX}/bin:$PATH
