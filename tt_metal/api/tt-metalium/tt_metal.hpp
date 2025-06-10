@@ -41,7 +41,7 @@ namespace detail {
 bool DispatchStateCheck(bool isFastDispatch);
 
 // Call before CreateDevices to enable fabric, which uses all free ethernet cores
-void InitializeFabricConfig(FabricConfig fabric_config);
+void SetFabricConfig(FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
 
 std::map<chip_id_t, IDevice*> CreateDevices(
     // TODO: delete this in favour of DevicePool

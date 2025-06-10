@@ -315,6 +315,7 @@ void DevicePool::initialize_active_devices() const {
     const auto& active_devices = this->get_all_active_devices();
 
     // Activate fabric (must be before FD)
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         log_info(tt::LogMetal, "Initializing Fabric");
