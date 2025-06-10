@@ -264,7 +264,6 @@ struct SenderWorkerAdapterSpec {
     size_t edm_worker_location_info_addr = 0;  // The EDM's location for `EDMChannelWorkerLocationInfo`
     size_t buffer_size_bytes = 0;
     size_t buffer_index_semaphore_id = 0;  // the semaphore ID on the EDM, not the worker
-    bool persistent_fabric = false;
     eth_chan_directions edm_direction = eth_chan_directions::EAST;
 };
 
@@ -312,7 +311,6 @@ public:
 
         const FabricEriscDatamoverConfig& config,
         eth_chan_directions direction,
-        bool enable_persistent_mode,
         bool build_in_worker_connection_mode = false,
         bool dateline_connection = false);
 
@@ -323,7 +321,6 @@ public:
         chip_id_t local_chip_id,
         chip_id_t peer_chip_id,
         const FabricEriscDatamoverConfig& config,
-        bool enable_persistent_mode,
         bool build_in_worker_connection_mode = false,
         bool dateline_connection = false,
         eth_chan_directions direction = eth_chan_directions::EAST);
@@ -414,7 +411,6 @@ public:
     std::array<bool, FabricEriscDatamoverConfig::num_sender_channels>
         sender_channel_connection_liveness_check_disable_array = {};
 
-    bool enable_persistent_mode = false;
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
     bool enable_first_level_ack = false;

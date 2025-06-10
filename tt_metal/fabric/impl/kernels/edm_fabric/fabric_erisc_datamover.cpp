@@ -1569,9 +1569,7 @@ void kernel_main() {
     ///////////////////////
     // Common runtime args:
     ///////////////////////
-    const size_t local_sender_channel_0_connection_semaphore_addr =
-        persistent_mode ? get_arg_val<uint32_t>(arg_idx++)
-                        : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
+    const size_t local_sender_channel_0_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_1_connection_semaphore_addr =
         is_2d_fabric ? get_arg_val<uint32_t>(arg_idx++)
                      : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
@@ -1631,9 +1629,7 @@ void kernel_main() {
     ////////////////////////
     // Sender runtime args
     ////////////////////////
-    auto sender0_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(
-        persistent_mode ? get_arg_val<uint32_t>(arg_idx++)
-                        : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++)));
+    auto sender0_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
     auto sender1_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(
         is_2d_fabric ? get_arg_val<uint32_t>(arg_idx++)
                      : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++)));
@@ -1644,28 +1640,24 @@ void kernel_main() {
     auto sender4_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
 
     const size_t local_sender_channel_0_connection_buffer_index_addr =
-        persistent_mode ? local_sender_channel_0_connection_buffer_index_id
-                        : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(
-                              get_arg_val<uint32_t>(local_sender_channel_0_connection_buffer_index_id));
-    if constexpr (persistent_mode) {
-        //  initialize the statically allocated "semaphores"
-        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_semaphore_addr) = 0;
-        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 0;
-        *sender0_worker_semaphore_ptr = 0;
-        if constexpr (is_2d_fabric) {
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_1_connection_semaphore_addr) = 0;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_1_connection_buffer_index_id) = 0;
-            *sender1_worker_semaphore_ptr = 0;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_2_connection_semaphore_addr) = 0;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_2_connection_buffer_index_id) = 0;
-            *sender2_worker_semaphore_ptr = 0;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_3_connection_semaphore_addr) = 0;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_3_connection_buffer_index_id) = 0;
-            *sender3_worker_semaphore_ptr = 0;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_4_connection_semaphore_addr) = 0;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_4_connection_buffer_index_id) = 0;
-            *sender4_worker_semaphore_ptr = 0;
-        }
+        local_sender_channel_0_connection_buffer_index_id;
+    //  initialize the statically allocated "semaphores"
+    *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_semaphore_addr) = 0;
+    *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 0;
+    *sender0_worker_semaphore_ptr = 0;
+    if constexpr (is_2d_fabric) {
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_1_connection_semaphore_addr) = 0;
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_1_connection_buffer_index_id) = 0;
+        *sender1_worker_semaphore_ptr = 0;
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_2_connection_semaphore_addr) = 0;
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_2_connection_buffer_index_id) = 0;
+        *sender2_worker_semaphore_ptr = 0;
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_3_connection_semaphore_addr) = 0;
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_3_connection_buffer_index_id) = 0;
+        *sender3_worker_semaphore_ptr = 0;
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_4_connection_semaphore_addr) = 0;
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_4_connection_buffer_index_id) = 0;
+        *sender4_worker_semaphore_ptr = 0;
     }
 
     *edm_status_ptr = tt::tt_fabric::EDMStatus::STARTED;
@@ -2079,18 +2071,16 @@ void kernel_main() {
         port_direction_table,
         local_sender_channel_free_slots_stream_ids_ordered);
 
-    if constexpr (persistent_mode) {
-        // we force these values to a non-zero value so that if we run the fabric back to back,
-        // and we can reliably probe from host that this kernel has initialized properly.
-        if constexpr (is_2d_fabric) {
-            *reinterpret_cast<volatile uint32_t*>(local_sender_connection_live_semaphore_addresses[my_direction]) = 99;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_connection_buffer_index_id[my_direction]) = 99;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_flow_control_semaphores[my_direction]) = 99;
-        } else {
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_semaphore_addr) = 99;
-            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 99;
-            *sender0_worker_semaphore_ptr = 99;
-        }
+    // we force these values to a non-zero value so that if we run the fabric back to back,
+    // and we can reliably probe from host that this kernel has initialized properly.
+    if constexpr (is_2d_fabric) {
+        *reinterpret_cast<volatile uint32_t*>(local_sender_connection_live_semaphore_addresses[my_direction]) = 99;
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_connection_buffer_index_id[my_direction]) = 99;
+        *reinterpret_cast<volatile uint32_t*>(local_sender_flow_control_semaphores[my_direction]) = 99;
+    } else {
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_semaphore_addr) = 99;
+        *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 99;
+        *sender0_worker_semaphore_ptr = 99;
     }
 
     // make sure all the noc transactions are acked before re-init the noc counters
