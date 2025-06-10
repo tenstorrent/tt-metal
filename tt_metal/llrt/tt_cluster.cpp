@@ -1191,7 +1191,7 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
                     continue;
                 }
 
-                if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::IDLE &&
+                if (this->device_eth_routing_info_[chip_id][eth_core] == EthRouterMode::IDLE &&
                     this->device_eth_routing_info_.at(connnected_chip_id).at(connected_core) == EthRouterMode::IDLE) {
                     this->device_eth_routing_info_[chip_id][eth_core] = EthRouterMode::FABRIC_ROUTER;
                     this->device_eth_routing_info_[connnected_chip_id][connected_core] = EthRouterMode::FABRIC_ROUTER;

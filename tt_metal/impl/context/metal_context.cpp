@@ -304,7 +304,7 @@ void MetalContext::set_fabric_config(
         return;
     }
 
-    // if num_routing_planes is not specified, use max avaialble number of routing planes
+    // if num_routing_planes is not specified, use max available number of routing planes
     // ideally the highest value should be the maximum number of eth cores in a direction across all chips
     const auto new_val = std::max(
         this->num_fabric_active_routing_planes_, num_routing_planes.value_or(std::numeric_limits<uint8_t>::max()));
