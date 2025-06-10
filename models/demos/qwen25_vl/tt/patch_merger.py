@@ -61,21 +61,7 @@ class PatchMerger(LightweightModule):
         x = self.norm(x)
 
         # Reshape to merge spatial dimensions
-        # FIXME: work around ttnn.reshape pcc bug (see yieldthought/debug-reshape-pcc-error)
-        x = ttnn.to_torch(x)
-        x = torch.reshape(x, (x.shape[0], x.shape[1], -1, self.mlp_size))
-        x = ttnn.from_torch(
-            x,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                dims=(None, 3) if self.args.is_galaxy else (None, None),
-                mesh_shape=self.args.cluster_shape,
-            ),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-        )
+        x = ttnn.reshape(x, (x.shape[0], x.shape[1], -1, self.mlp_size))
 
         # First linear + GELU
         x = ttnn.linear(

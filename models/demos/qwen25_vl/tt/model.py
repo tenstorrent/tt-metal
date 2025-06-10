@@ -300,7 +300,7 @@ class DropInVisionTransformer(torch.nn.Module):
             # 1. Convert TT output back to torch tensor
             tt_output_torch = ttnn.to_torch(
                 tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1)
-            )  # todo)) figure out why tt_out has a tensor on each device in the mesh
+            )
 
             # deallocate TT output
             ttnn.deallocate(tt_out)
