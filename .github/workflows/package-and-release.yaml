@@ -251,7 +251,7 @@ jobs:
     needs: [build-artifact, test-wheels]
     runs-on: ubuntu-latest
     environment:
-      name: test-pypi
+      name: testpypi
       url: https://test.pypi.org/p/ttnn
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
