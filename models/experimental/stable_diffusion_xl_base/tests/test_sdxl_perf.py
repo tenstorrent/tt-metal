@@ -13,7 +13,7 @@ def test_sdxl_unet_perf_device():
 
     inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
     post_processed_results = run_device_perf(command, subdir="sdxl_unet", num_iterations=3, cols=cols, batch_size=1)
-    expected_perf_cols = {inference_time_key: 547286899}
+    expected_perf_cols = {inference_time_key: 498886445}
     expected_results = check_device_perf(
         post_processed_results, margin=0.015, expected_perf_cols=expected_perf_cols, assert_on_fail=True
     )
