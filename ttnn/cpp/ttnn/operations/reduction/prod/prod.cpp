@@ -109,7 +109,11 @@ Tensor ProdOperation::invoke(
         const bool permute_required = third_last_dim_idx != positive_dim;
 
         ttnn::SmallVector<int64_t> post_permute_dims(input_a.logical_shape().rank());
+        std::iota(post_permute_dims.begin(), post_permute_dims.end(), 0);
         std::swap(post_permute_dims[third_last_dim_idx], post_permute_dims[positive_dim]);
+
+        // Tensor with target reduction dim at third last position
+        ttnn::Tensor permuted =
             permute_required ? ttnn::permute(input_a, post_permute_dims, output_mem_config) : input_a;
 
         // Now squeeze to 4D and do the 4D prod.
@@ -173,9 +177,15 @@ Tensor ProdOperation::invoke(
             const auto& input_shape = input_tensor_4d.logical_shape();
             ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
             ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[2]};
+            Tensor new_unpad_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
             // permute back
             after_permute_dims = {0, 1, 3, 2};
             Tensor res_host = ttnn::permute(new_unpad_tensor, after_permute_dims, output_mem_config);
+            result = ttnn::squeeze_from_4D(res_host, old_rank);
+        }
+        return keepdim ? result : ttnn::squeeze(result, *dim);
+    }
+}
 
 Tensor ProdOperation::invoke(
     const Tensor& input,
