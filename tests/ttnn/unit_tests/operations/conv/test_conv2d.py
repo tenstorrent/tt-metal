@@ -180,7 +180,6 @@ def test_conv_dram(
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
         preprocess_weights_on_device=False,
-        transpose_shards=True,
         run_twice=False,
         fast_compare=True,
         slice_config=ttnn.Conv2dSliceConfig(

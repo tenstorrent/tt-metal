@@ -185,6 +185,7 @@ Tensor Tensor::from_span<float>(
     distributed::MeshDevice* device,
     ttnn::QueueId cq_id,
     float pad_value) {
+    ZoneScoped;
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -235,6 +236,7 @@ Tensor Tensor::from_span(
     distributed::MeshDevice* device,
     ttnn::QueueId cq_id,
     T pad_value) {
+    ZoneScoped;
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -268,6 +270,7 @@ Tensor Tensor::from_vector<float>(
     distributed::MeshDevice* device,
     ttnn::QueueId cq_id,
     float pad_value) {
+    ZoneScoped;
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -286,6 +289,7 @@ Tensor Tensor::from_vector(
     distributed::MeshDevice* device,
     ttnn::QueueId cq_id,
     T pad_value) {
+    ZoneScoped;
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -299,6 +303,7 @@ Tensor Tensor::from_vector(
 
 template <>
 std::vector<float> Tensor::to_vector<float>(ttnn::QueueId cq_id) const {
+    ZoneScoped;
     Tensor cpu_tensor = this->cpu(/*blocking=*/true, cq_id);
     switch (cpu_tensor.dtype()) {
         case DataType::BFLOAT16: {
@@ -337,6 +342,7 @@ std::vector<float> Tensor::to_vector<float>(ttnn::QueueId cq_id) const {
 
 template <typename T>
 std::vector<T> Tensor::to_vector(ttnn::QueueId cq_id) const {
+    ZoneScoped;
     TT_FATAL(
         this->dtype() == convert_to_data_type<T>(),
         "Unsupported data type for to_vector: got {}, expected: {}",
@@ -468,7 +474,7 @@ Tensor Tensor::cpu(bool blocking, QueueId cq_id) const { return tensor_ops::tens
 Tensor Tensor::extract_shard(const CoreCoord& core) const {
     ZoneScoped;
     const auto& buffer_page_mapping = *this->buffer()->get_buffer_page_mapping();
-    auto core_id = buffer_page_mapping.core_to_core_id_.at(core);
+    auto core_id = buffer_page_mapping.core_to_core_id.at(core);
     return this->extract_shard(core_id);
 }
 
@@ -584,6 +590,7 @@ Tensor create_device_tensor(
 
 void memcpy(
     CommandQueue& queue, void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
+    ZoneScoped;
     TT_FATAL(is_device_tensor(src), "memcpy: src tensor must be on device");
 
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -604,6 +611,7 @@ void memcpy(
     const Tensor& src,
     const std::optional<BufferRegion>& region,
     bool blocking) {
+    ZoneScoped;
     TT_FATAL(is_device_tensor(src), "memcpy: src tensor must be on device");
 
     TT_FATAL(queue.device()->num_devices() == 1, "memcpy only supports single device mesh");
@@ -616,6 +624,7 @@ void memcpy(
 }
 
 void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
+    ZoneScoped;
     if (auto mesh_device = src.mesh_device()) {
         memcpy(mesh_device->mesh_command_queue(), dst, src, region, blocking);
     } else {
@@ -624,6 +633,7 @@ void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& reg
 }
 
 void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
+    ZoneScoped;
     TT_FATAL(is_device_tensor(dst), "memcpy: memcpy to non-device tensor is not supported!");
 
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -640,6 +650,7 @@ void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const std::option
 
 void memcpy(
     distributed::MeshCommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
+    ZoneScoped;
     TT_FATAL(is_device_tensor(dst), "memcpy: memcpy to non-device tensor is not supported!");
     TT_FATAL(queue.device()->num_devices() == 1, "memcpy only supports single device mesh");
     std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
@@ -651,6 +662,7 @@ void memcpy(
 }
 
 void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
+    ZoneScoped;
     if (auto mesh_device = dst.mesh_device()) {
         memcpy(mesh_device->mesh_command_queue(), dst, src, region);
     } else {
@@ -659,6 +671,7 @@ void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& reg
 }
 
 void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
+    ZoneScoped;
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
         TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
@@ -680,6 +693,7 @@ void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::opti
 
 void memcpy(
     distributed::MeshCommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
+    ZoneScoped;
     TT_ASSERT(dst.dtype() == src.dtype());
     TT_ASSERT(dst.layout() == src.layout());
 
@@ -695,6 +709,7 @@ void memcpy(
 }
 
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
+    ZoneScoped;
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
         if (auto mesh_device = src.mesh_device()) {
             memcpy(mesh_device->mesh_command_queue(), dst, src, region);
@@ -725,6 +740,7 @@ Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshD
 }
 
 void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id) {
+    ZoneScoped;
     TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Destination tensor must be on device");
     TT_FATAL(
         host_tensor.storage_type() == StorageType::HOST or host_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST,
