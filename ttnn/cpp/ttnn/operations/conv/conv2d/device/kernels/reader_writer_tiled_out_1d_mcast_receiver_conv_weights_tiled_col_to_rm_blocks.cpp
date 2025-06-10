@@ -145,7 +145,7 @@ void kernel_main() {
 
         if constexpr (split_reader) {
             // Increment reader index for the next number of segments (number of segments for other reader)
-            start_reader_idx = reader_idx + (uint32_t)(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
+            start_reader_idx = reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
         }
     }  // out_num_blocks_h
 

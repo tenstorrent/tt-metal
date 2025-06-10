@@ -213,8 +213,8 @@ void kernel_main() {
     bool first_row_value = reader_id == 0;
     uint32_t reader_indices_on_core = 0;
 
-    if (split_reader) {
-        if (reader_id == 0) {
+    if constexpr (split_reader) {
+        if constexpr (reader_id == 0) {
             reader_indices_on_core = (reader_nindices + 1) / 2;
         } else {
             reader_indices_on_core = reader_nindices / 2;
@@ -260,6 +260,7 @@ void kernel_main() {
         }
     }
 
+    // For the case when some core needs to process less indexes - send 0s to compute for the synchronization
     while (reader_indices_on_core--) {
         if constexpr (!one_scalar_per_core) {
             fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, split_reader, TILE_WIDTH>(

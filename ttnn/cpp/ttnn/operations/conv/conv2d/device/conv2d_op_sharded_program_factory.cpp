@@ -944,11 +944,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t act_block_h_datums_last_block =
         (per_core_out_matrix_height_ntiles - (num_blocks_act_h_per_core - 1) * act_block_h_ntiles) * TILE_HEIGHT;
 
-    ttnn::operations::sliding_window::ParallelConfig parallel_config;
-    parallel_config.grid = a.shard_spec().value().grid;
-    parallel_config.shard_scheme = a.memory_config().memory_layout();
-    parallel_config.shard_orientation = a.shard_spec().value().orientation;
-    auto pad_metadata = ttnn::operations::sliding_window::generate_pad_metadata(sliding_window_config);
+    ttnn::operations::sliding_window::ParallelConfig parallel_config{
+        .grid = a.shard_spec().value().grid,
+        .shard_scheme = a.memory_config().memory_layout(),
+        .shard_orientation = a.shard_spec().value().orientation};
     auto op_trace_metadata = ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
     auto shard_boundaries =
         ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
@@ -1428,7 +1427,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     if (enable_split_reader) {
         std::vector<uint32_t> split_reader_args = {
-            true,
+            (uint32_t)(conv_act_c_read_bytes > 0),
             (uint32_t)act_block_num_tiles_split_last / conv_act_c_blocks,
             (uint32_t)conv_act_c_read_bytes,
             (uint32_t)filter_w,                       // weight_size_w
@@ -1790,12 +1789,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool enable_subblock_padding) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    ttnn::operations::sliding_window::ParallelConfig parallel_config;
-    parallel_config.grid = a.shard_spec().value().grid;
-    parallel_config.shard_scheme = a.memory_config().memory_layout();
-    parallel_config.shard_orientation = a.shard_spec().value().orientation;
-
-    if (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
+    if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         return multi_core_optimized_conv_width_sharded_v2_impl(
             program,
             a,
@@ -1810,7 +1804,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             fused_activation,
             parallelization_config,
             block_config,
-            parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
+            a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR,
             output,
             compute_kernel_config.value(),
             enable_act_double_buffer,
@@ -1832,7 +1826,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         fused_activation,
         parallelization_config,
         block_config,
-        parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
+        a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR,
         output,
         compute_kernel_config.value(),
         enable_act_double_buffer,

@@ -152,13 +152,11 @@ void kernel_main() {
         constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
         constexpr uint32_t stride_w_bytes = conv_act_c_read_bytes * dilation_w;
 
-        uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-        uint16_t num_elems = two_reader_indices & 0xffff;
+        uint16_t num_elems = packed_reader_indices_ptr[reader_idx] & 0xffff;
         while (num_elems--) {
             reader_idx++;
-            two_reader_indices = packed_reader_indices_ptr[reader_idx];
-            uint32_t start_ind = two_reader_indices & 0xffff;
-            uint32_t end_ind = two_reader_indices >> 16;
+            uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
+            uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
             for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
                 if constexpr (DILATION_W == 1) {
                     read_channels(

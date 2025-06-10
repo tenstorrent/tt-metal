@@ -4,7 +4,6 @@
 
 #include "dataflow_api.h"
 #include "height_sharded_reader_common.hpp"
-#include "dprint.h"
 
 void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(0);
@@ -94,7 +93,7 @@ void kernel_main() {
         start_reader_idx = reader_idx;
 #ifdef SPLIT_READER
         // Increment reader index for the next number of segments (number of segments for other reader)
-        start_reader_idx += ((uint32_t)(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1);
+        start_reader_idx += (static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1);
 #endif
     }
     noc_async_write_barrier();

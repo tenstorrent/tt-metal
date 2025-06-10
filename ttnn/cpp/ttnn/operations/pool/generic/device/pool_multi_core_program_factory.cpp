@@ -729,7 +729,6 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     auto dilation_w = sliding_window_config.dilation_hw.second;
     auto num_shards_c = sliding_window_config.num_cores_c;
 
-    auto pad_metadata = sliding_window::generate_pad_metadata(sliding_window_config);
     auto op_trace_metadata = sliding_window::generate_op_trace_metadata(sliding_window_config);
     auto shard_boundaries = sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
     auto top_left_indices =
