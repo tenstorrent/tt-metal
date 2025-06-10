@@ -318,18 +318,18 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
 
     std::map<std::string, std::string> reader_defines = {{"DEVICE_ORDER", device_order}};
 
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     const auto dim = operation_attributes.dim;
     uint32_t rank = input_shape.size();
     auto& output_tensor = tensor_return_value;
-    auto& output_shape = output_tensor.get_logical_shape();
-    auto& padded_output_shape = output_tensor.get_padded_shape();
-    const auto& input_tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
-    const auto& output_tile_shape = output_tensor.get_tensor_spec().tile().get_tile_shape();
-    auto input_tensor_width = input_tensor.get_logical_shape()[-1];
-    auto output_tensor_width = output_tensor.get_logical_shape()[-1];
-    auto input_tensor_width_in_tiles = input_tensor.get_logical_shape()[-1] / input_tile_shape[1];
-    auto output_tensor_width_in_tiles = output_tensor.get_logical_shape()[-1] / output_tile_shape[1];
+    auto& output_shape = output_tensor.logical_shape();
+    auto& padded_output_shape = output_tensor.padded_shape();
+    const auto& input_tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    const auto& output_tile_shape = output_tensor.tensor_spec().tile().get_tile_shape();
+    auto input_tensor_width = input_tensor.logical_shape()[-1];
+    auto output_tensor_width = output_tensor.logical_shape()[-1];
+    auto input_tensor_width_in_tiles = input_tensor.logical_shape()[-1] / input_tile_shape[1];
+    auto output_tensor_width_in_tiles = output_tensor.logical_shape()[-1] / output_tile_shape[1];
     auto input_shard_spec = input_tensor.shard_spec().value();
     auto output_shard_spec = output_tensor.shard_spec().value();
     const auto& cross_device_semaphore = operation_attributes.cross_device_semaphore;
@@ -353,7 +353,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
     auto input_tensor_buffer = input_tensor.buffer();
     auto output_tensor_buffer = output_tensor.buffer();
     auto packet_buffer = tensor_args.intermediate_packet_buffer.buffer();
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t input_page_size = tile_size(cb_data_format);
     uint32_t output_page_size = tile_size(cb_data_format);
@@ -373,8 +373,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
     tt::tt_metal::Program program{};
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    size_t packet_size_bytes = input_tensor.get_dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size)
-                                                                              : fabric_max_packet_size;
+    size_t packet_size_bytes =
+        input_tensor.dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size) : fabric_max_packet_size;
     uint32_t num_pages_per_packet = packet_size_bytes / input_page_size;
     auto per_worker_num_tiles = (output_tensor_width_in_tiles + num_links - 1) / num_links;
     if (per_worker_num_tiles < num_pages_per_packet) {  // if num_tiles per worker is smaller than packet size

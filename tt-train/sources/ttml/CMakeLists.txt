@@ -175,6 +175,7 @@ target_link_libraries(
         wandbcpp
         Boost::core
         Boost::container
+        tt-logger
 )
 
 message(STATUS "xtensor_SOURCE_DIR: ${xtensor_SOURCE_DIR}")

@@ -14,7 +14,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
     const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    const auto input_shape = a.get_logical_shape();
+    const auto input_shape = a.logical_shape();
     const auto input_core_grid = a.shard_spec()->grid;
     const auto input_cores = corerange_to_cores(
         input_core_grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
@@ -53,7 +53,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
         return tt::tt_metal::CreateCircularBuffer(program, input_core_grid, config);
     };
 
-    const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     const uint32_t input_tile_size = tt::tt_metal::detail::TileSize(input_format);
 
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
@@ -64,7 +64,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
     const uint32_t cb_in_page_size = input_tile_size;
     const auto cb_in = create_circular_buffer(cb_in_id, cb_in_total_size, cb_in_page_size, input_format, a.buffer());
 
-    const tt::DataFormat output_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    const tt::DataFormat output_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const uint32_t cb_out_id = tt::CBIndex::c_1;
     const uint32_t element_size = tt::datum_size(output_format);
     const uint32_t cb_out_total_size = tt::div_up(C * HW * element_size, input_cores.size());

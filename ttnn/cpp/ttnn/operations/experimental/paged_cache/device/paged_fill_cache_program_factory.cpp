@@ -25,21 +25,21 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
     const uint32_t batch_idx_fallback) {
     Program program{};
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     // input_tensor: [1, num_heads, input_seq_len, head_dim]
     // cache_tensor: [max_num_blocks, 1, block_size, head_dim]
     // page_table_tensor: [b, max_num_blocks_per_seq]
-    const uint32_t num_heads = input_tensor.get_padded_shape()[1];
-    const uint32_t input_seq_len = input_tensor.get_padded_shape()[2];
+    const uint32_t num_heads = input_tensor.padded_shape()[1];
+    const uint32_t input_seq_len = input_tensor.padded_shape()[2];
 
-    const uint32_t max_num_blocks = cache_tensor.get_padded_shape()[0];
-    const uint32_t block_size = cache_tensor.get_padded_shape()[2];
-    const uint32_t head_dim = cache_tensor.get_padded_shape()[3];
+    const uint32_t max_num_blocks = cache_tensor.padded_shape()[0];
+    const uint32_t block_size = cache_tensor.padded_shape()[2];
+    const uint32_t head_dim = cache_tensor.padded_shape()[3];
 
-    const uint32_t batch = page_table_tensor.get_padded_shape()[0];
-    const uint32_t max_num_blocks_per_seq = page_table_tensor.get_padded_shape()[1];
+    const uint32_t batch = page_table_tensor.padded_shape()[0];
+    const uint32_t max_num_blocks_per_seq = page_table_tensor.padded_shape()[1];
 
     const uint32_t input_seq_len_t = input_seq_len / TILE_HEIGHT;
     const uint32_t Wt = head_dim / TILE_WIDTH;
@@ -54,7 +54,7 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
         page_table_stick_size_B % 32 == 0,
         "page table page size in bytes must be a multiple of 32 due to address alignment");
     uint32_t log2_page_table_stick_size_B = std::log2(page_table_stick_size_B);
-    tt::DataFormat page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.get_dtype());
+    tt::DataFormat page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.dtype());
 
     // batch_idx_tensor specific parameters
     bool use_batch_idx_tensor = batch_idx_tensor.has_value();
@@ -66,9 +66,9 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
     if (use_batch_idx_tensor) {
         const auto& tensor = batch_idx_tensor.value();
         batch_idx_buffer_addr = tensor.buffer()->address();
-        batch_idx_data_format = tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());
+        batch_idx_data_format = tt_metal::datatype_to_dataformat_converter(tensor.dtype());
         batch_idx_stick_size_B = tensor.element_size();
-        TT_FATAL(tensor.volume() == 1, "batch_idx_tensor must contain a single element.");
+        TT_FATAL(tensor.physical_volume() == 1, "batch_idx_tensor must contain a single element.");
         batch_idx_is_dram = tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     }
 

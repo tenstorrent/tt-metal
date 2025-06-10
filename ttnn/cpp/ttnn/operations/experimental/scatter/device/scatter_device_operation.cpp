@@ -24,12 +24,12 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor{tensor_args.input_tensor};
     const auto& index_tensor{tensor_args.index_tensor};
     const auto& src_tensor{tensor_args.src_tensor};
-    const auto& input_dtype{input_tensor.get_dtype()};
-    const auto& index_dtype{index_tensor.get_dtype()};
-    const auto& src_dtype{src_tensor.get_dtype()};
-    const auto& input_shape{input_tensor.get_logical_shape()};
-    const auto& index_shape{index_tensor.get_logical_shape()};
-    const auto& src_shape{src_tensor.get_logical_shape()};
+    const auto& input_dtype{input_tensor.dtype()};
+    const auto& index_dtype{index_tensor.dtype()};
+    const auto& src_dtype{src_tensor.dtype()};
+    const auto& input_shape{input_tensor.logical_shape()};
+    const auto& index_shape{index_tensor.logical_shape()};
+    const auto& src_shape{src_tensor.logical_shape()};
     const uint32_t input_rank{input_shape.rank()};
     const uint32_t index_rank{index_shape.rank()};
     const uint32_t src_rank{src_shape.rank()};
@@ -42,9 +42,9 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
 
     if (tensor_args.opt_output.has_value()) {
         const auto& output_tensor{tensor_args.opt_output.value()};
-        const auto& output_shape{output_tensor.get_logical_shape()};
+        const auto& output_shape{output_tensor.logical_shape()};
         const auto& output_rank{output_shape.rank()};
-        const auto& output_dtype{output_tensor.get_dtype()};
+        const auto& output_dtype{output_tensor.dtype()};
 
         TT_FATAL(
             input_shape == output_shape,
@@ -70,7 +70,7 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
             static_cast<int32_t>(output_rank));
 
         TT_FATAL(
-            output_tensor.get_layout() == Layout::TILE,
+            output_tensor.layout() == Layout::TILE,
             "Output tensor doesn't have a tile layout - only tile layout is supported.");
         TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor's buffer is null.");
         TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor must be allocated on a device.");
@@ -101,7 +101,7 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
         "index_dtype is not integer, it is {}.",
         magic_enum::enum_name(index_dtype));
 
-    const int32_t dim{(args.dim < 0) ? (args.dim + input_tensor.get_padded_shape().rank()) : args.dim};
+    const int32_t dim{(args.dim < 0) ? (args.dim + input_tensor.padded_shape().rank()) : args.dim};
 
     for (uint32_t probe_dim = 0; probe_dim < input_shape.rank(); ++probe_dim) {
         if (probe_dim != dim) {
@@ -121,14 +121,13 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!src_tensor.is_sharded(), "Sharded tensors are not supported - src_tensor is sharded.");
 
     TT_FATAL(
-        input_tensor.get_layout() == Layout::TILE,
+        input_tensor.layout() == Layout::TILE,
         "Input tensor doesn't have a tile layout - only tile layout is supported.");
     TT_FATAL(
-        index_tensor.get_layout() == Layout::TILE,
+        index_tensor.layout() == Layout::TILE,
         "Index tensor doesn't have a tile layout - only tile layout is supported.");
     TT_FATAL(
-        src_tensor.get_layout() == Layout::TILE,
-        "Src tensor doesn't have a tile layout - only tile layout is supported.");
+        src_tensor.layout() == Layout::TILE, "Src tensor doesn't have a tile layout - only tile layout is supported.");
 
     TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor's buffer is null.");
     TT_FATAL(index_tensor.buffer() != nullptr, "Index tensor's buffer is null.");
@@ -143,12 +142,12 @@ ScatterDeviceOperation::spec_return_value_t ScatterDeviceOperation::compute_outp
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
     if (tensor_args.opt_output.has_value()) {
-        return tensor_args.opt_output.value().get_tensor_spec();
+        return tensor_args.opt_output.value().tensor_spec();
     }
 
     return TensorSpec{
-        tensor_args.input_tensor.get_logical_shape(),
-        TensorLayout{tensor_args.input_tensor.get_dtype(), PageConfig{Layout::TILE}, args.output_memory_config}};
+        tensor_args.input_tensor.logical_shape(),
+        TensorLayout{tensor_args.input_tensor.dtype(), PageConfig{Layout::TILE}, args.output_memory_config}};
 }
 
 ScatterDeviceOperation::tensor_return_value_t ScatterDeviceOperation::create_output_tensors(
