@@ -111,8 +111,8 @@ TYPED_TEST(VectorConversionTest, Roundtrip) {
         auto input = arange<TypeParam>(0, shape.volume(), 1);
         auto tensor = Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>()));
 
-        EXPECT_THAT(tensor.get_logical_shape(), Eq(shape)) << "for shape: " << shape;
-        EXPECT_THAT(tensor.get_dtype(), Eq(convert_to_data_type<TypeParam>())) << "for shape: " << shape;
+        EXPECT_THAT(tensor.logical_shape(), Eq(shape)) << "for shape: " << shape;
+        EXPECT_THAT(tensor.dtype(), Eq(convert_to_data_type<TypeParam>())) << "for shape: " << shape;
 
         auto output = tensor.template to_vector<TypeParam>();
 
@@ -125,8 +125,8 @@ TYPED_TEST(VectorConversionTest, RoundtripTilizedLayout) {
     auto input = arange<TypeParam>(0, shape.volume(), 1);
     auto tensor = Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>(), Layout::TILE));
 
-    EXPECT_THAT(tensor.get_logical_shape(), ShapeIs(128, 128));
-    EXPECT_THAT(tensor.get_padded_shape(), ShapeIs(128, 128));
+    EXPECT_THAT(tensor.logical_shape(), ShapeIs(128, 128));
+    EXPECT_THAT(tensor.padded_shape(), ShapeIs(128, 128));
 
     auto output = tensor.template to_vector<TypeParam>();
 
@@ -138,8 +138,8 @@ TYPED_TEST(VectorConversionTest, RoundtripTilizedLayoutOddShape) {
     auto input = arange<TypeParam>(0, shape.volume(), 1);
     auto tensor = Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>(), Layout::TILE));
 
-    EXPECT_THAT(tensor.get_logical_shape(), ShapeIs(1, 40, 3, 121));
-    EXPECT_THAT(tensor.get_padded_shape(), ShapeIs(1, 40, 32, 128));
+    EXPECT_THAT(tensor.logical_shape(), ShapeIs(1, 40, 3, 121));
+    EXPECT_THAT(tensor.padded_shape(), ShapeIs(1, 40, 32, 128));
 
     auto output = tensor.template to_vector<TypeParam>();
 
@@ -164,8 +164,8 @@ TYPED_TEST(VectorConversionTest, RoundtripWithShardedLayout) {
                     ShardOrientation::ROW_MAJOR,
                     ShardMode::LOGICAL}}));
 
-    EXPECT_THAT(tensor.get_logical_shape(), ShapeIs(56, 56, 30));
-    EXPECT_THAT(tensor.get_padded_shape(), ShapeIs(56, 64, 32));
+    EXPECT_THAT(tensor.logical_shape(), ShapeIs(56, 56, 30));
+    EXPECT_THAT(tensor.padded_shape(), ShapeIs(56, 64, 32));
 
     auto output = tensor.template to_vector<TypeParam>();
 
@@ -222,16 +222,16 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
         EXPECT_EQ(ctor_count, 1);
         EXPECT_EQ(dtor_count, 0);
         {
-            Tensor copy(tensor.get_storage(), tensor.get_tensor_spec(), tensor.get_distributed_tensor_config());
+            Tensor copy(tensor.storage(), tensor.tensor_spec(), tensor.distributed_tensor_config());
             EXPECT_EQ(ctor_count, 2);
             EXPECT_EQ(dtor_count, 0);
         }
         EXPECT_EQ(ctor_count, 2);
         EXPECT_EQ(dtor_count, 1);
 
-        EXPECT_THAT(tensor.get_logical_shape(), Eq(shape)) << "for shape: " << shape;
-        EXPECT_THAT(tensor.get_dtype(), Eq(convert_to_data_type<TypeParam>())) << "for shape: " << shape;
-        EXPECT_THAT(tensor.get_layout(), Eq(Layout::ROW_MAJOR)) << "for shape: " << shape;
+        EXPECT_THAT(tensor.logical_shape(), Eq(shape)) << "for shape: " << shape;
+        EXPECT_THAT(tensor.dtype(), Eq(convert_to_data_type<TypeParam>())) << "for shape: " << shape;
+        EXPECT_THAT(tensor.layout(), Eq(Layout::ROW_MAJOR)) << "for shape: " << shape;
 
         auto output = tensor.template to_vector<TypeParam>();
 
@@ -254,7 +254,7 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Callbacks) {
     EXPECT_EQ(ctor_count, 1);
     EXPECT_EQ(dtor_count, 0);
     {
-        Tensor copy(tensor.get_storage(), tensor.get_tensor_spec(), tensor.get_distributed_tensor_config());
+        Tensor copy(tensor.storage(), tensor.tensor_spec(), tensor.distributed_tensor_config());
         EXPECT_EQ(ctor_count, 2);
         EXPECT_EQ(dtor_count, 0);
     }
@@ -275,8 +275,8 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, CustomTile) {
 
     // Retain row major layout, but use custom tile.
     // TODO: #18536 - this should be illegal.
-    EXPECT_EQ(tensor.get_tensor_spec().layout(), Layout::ROW_MAJOR);
-    EXPECT_EQ(tensor.get_tensor_spec().tile(), Tile({16, 16}));
+    EXPECT_EQ(tensor.tensor_spec().layout(), Layout::ROW_MAJOR);
+    EXPECT_EQ(tensor.tensor_spec().tile(), Tile({16, 16}));
 }
 
 class BlockFloatVectorConversionTest : public ::testing::TestWithParam<DataType> {};
@@ -294,8 +294,8 @@ TEST_P(BlockFloatVectorConversionTest, Roundtrip) {
 
     auto tensor = Tensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE));
 
-    EXPECT_THAT(tensor.get_logical_shape(), Eq(shape));
-    EXPECT_THAT(tensor.get_dtype(), Eq(GetParam()));
+    EXPECT_THAT(tensor.logical_shape(), Eq(shape));
+    EXPECT_THAT(tensor.dtype(), Eq(GetParam()));
     EXPECT_THAT(tensor.to_vector<float>(), Pointwise(FloatNear(4.0f), input));
 }
 
@@ -305,8 +305,8 @@ TEST_P(BlockFloatVectorConversionTest, RoundtripWithPadding) {
 
     auto tensor = Tensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE));
 
-    EXPECT_THAT(tensor.get_logical_shape(), ShapeIs(14, 47));
-    EXPECT_THAT(tensor.get_padded_shape(), ShapeIs(32, 64));
+    EXPECT_THAT(tensor.logical_shape(), ShapeIs(14, 47));
+    EXPECT_THAT(tensor.padded_shape(), ShapeIs(32, 64));
     EXPECT_THAT(tensor.to_vector<float>(), Pointwise(FloatNear(4.0f), input));
 }
 
@@ -317,8 +317,8 @@ TEST_P(BlockFloatVectorConversionTest, RoundtripWithPaddingAndCustomTile) {
     TensorSpec spec(shape, TensorLayout(GetParam(), PageConfig(Layout::TILE, Tile({16, 16})), MemoryConfig{}));
     auto tensor = Tensor::from_vector(input, spec);
 
-    EXPECT_THAT(tensor.get_logical_shape(), ShapeIs(14, 47));
-    EXPECT_THAT(tensor.get_padded_shape(), ShapeIs(16, 48));
+    EXPECT_THAT(tensor.logical_shape(), ShapeIs(14, 47));
+    EXPECT_THAT(tensor.padded_shape(), ShapeIs(16, 48));
     EXPECT_THAT(tensor.to_vector<float>(), Pointwise(FloatNear(4.0f), input));
 }
 

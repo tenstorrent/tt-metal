@@ -21,26 +21,26 @@ namespace core {
 namespace detail {
 
 inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
-    auto input_dtype = input_tensor.get_dtype();
+    auto input_dtype = input_tensor.dtype();
 
     auto buffer = std::visit(
         tt::stl::overloaded{
             [](const tt::tt_metal::HostStorage& storage) -> tt::tt_metal::HostBuffer { return storage.buffer; },
             [](const auto& storage) -> tt::tt_metal::HostBuffer { TT_THROW("Unsupported storage type."); },
         },
-        input_tensor.get_storage());
+        input_tensor.storage());
 
     auto create_tensor = [&](tt::tt_metal::HostBuffer&& buffer, DataType dtype) -> Tensor {
         return Tensor(
             std::move(buffer),
             TensorSpec(
-                input_tensor.get_logical_shape(),
+                input_tensor.logical_shape(),
                 tt::tt_metal::TensorLayout::fromPaddedShape(
                     dtype,
-                    tt::tt_metal::PageConfig(input_tensor.get_layout()),
+                    tt::tt_metal::PageConfig(input_tensor.layout()),
                     MemoryConfig{},
-                    input_tensor.get_logical_shape(),
-                    input_tensor.get_padded_shape())));
+                    input_tensor.logical_shape(),
+                    input_tensor.padded_shape())));
     };
 
     if (input_dtype == DataType::BFLOAT8_B) {
@@ -141,9 +141,9 @@ Tensor create_tensor_from_span(
 }
 
 inline Tensor convert_to_dtype(const Tensor& input_tensor, const Layout& input_layout, const DataType& dtype) {
-    auto input_dtype = input_tensor.get_dtype();
-    const auto& logical_shape = input_tensor.get_logical_shape();
-    const auto& padded_shape = input_tensor.get_padded_shape();
+    auto input_dtype = input_tensor.dtype();
+    const auto& logical_shape = input_tensor.logical_shape();
+    const auto& padded_shape = input_tensor.padded_shape();
 
     auto convert_dtype =
         [&input_layout, &input_dtype, &dtype, &logical_shape, &padded_shape](const Tensor& input_tensor) {
@@ -183,8 +183,8 @@ inline Tensor convert_to_dtype(const Tensor& input_tensor, const Layout& input_l
 struct ToDtype {
     // TODO: Move to cpp once we merge with tt_eager
     static Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::DataType& dtype) {
-        auto input_layout = input_tensor.get_layout();
-        auto input_dtype = input_tensor.get_dtype();
+        auto input_layout = input_tensor.layout();
+        auto input_dtype = input_tensor.dtype();
 
         if (input_dtype == dtype) {
             return input_tensor;

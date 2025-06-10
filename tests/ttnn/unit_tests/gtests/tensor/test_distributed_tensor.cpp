@@ -391,7 +391,7 @@ TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
     for (const auto& tensor : device_tensors) {
-        EXPECT_EQ(tensor.get_logical_shape(), ttnn::Shape({kOuterDim, 1, 2, kInnerDim}));
+        EXPECT_EQ(tensor.logical_shape(), ttnn::Shape({kOuterDim, 1, 2, kInnerDim}));
     }
 
     // Expect the first dim to be replicated.
@@ -407,7 +407,7 @@ TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
         },
         MeshShape(2, 2, 2));
     Tensor aggregated_tensor = aggregate_tensor(sharded_tensor, *composer);
-    EXPECT_EQ(aggregated_tensor.get_logical_shape(), ttnn::Shape({2 * kOuterDim, kNumRows, kNumCols, kInnerDim}));
+    EXPECT_EQ(aggregated_tensor.logical_shape(), ttnn::Shape({2 * kOuterDim, kNumRows, kNumCols, kInnerDim}));
     EXPECT_THAT(aggregated_tensor.to_vector<float>(), Pointwise(FloatEq(), expected_data));
 }
 

@@ -25,10 +25,10 @@ uint32_t get_upper_dims_compressed(const ttnn::Shape& shape) {
 uint32_t get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& padded_slice_start) {
     // offset for every dim except last 2
     uint32_t start_offset = 0;
-    const auto& shape = tensor.get_padded_shape();
+    const auto& shape = tensor.padded_shape();
 
-    uint32_t num_pages = tensor.volume();
-    if (tensor.get_layout() == Layout::TILE) {
+    uint32_t num_pages = tensor.physical_volume();
+    if (tensor.layout() == Layout::TILE) {
         num_pages /= tt::constants::TILE_HW;
     } else {
         uint32_t page_width = shape[-1];
@@ -48,9 +48,9 @@ uint32_t get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& padded_
 static uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& padded_slice_start) {
     uint32_t start_offset = 0;
 
-    if (tensor.get_padded_shape().rank() >= 2) {
-        const auto& shape = tensor.get_padded_shape();
-        uint32_t num_pages = tensor.volume() / shape[-1];
+    if (tensor.padded_shape().rank() >= 2) {
+        const auto& shape = tensor.padded_shape();
+        uint32_t num_pages = tensor.physical_volume() / shape[-1];
         uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
         start_offset = get_upper_start_offset(tensor, padded_slice_start);
         start_offset += padded_slice_start[-2];
@@ -70,8 +70,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_padded_
 
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.get_logical_shape();
-    auto output_shape = output_tensor.get_logical_shape();
+    auto input_shape = input_tensor.logical_shape();
+    auto output_shape = output_tensor.logical_shape();
     auto output_shard_spec = output_tensor.shard_spec().value();
     auto output_shard_shape = output_shard_spec.shape;
 
@@ -216,7 +216,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_padded_
 
 operation::ProgramWithCallbacks padded_slice_rm_multi_core(
     const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
-    const ttnn::Shape output_shape = output.get_logical_shape();
+    const ttnn::Shape output_shape = output.logical_shape();
     ttnn::Shape actual_output_shape = output_tensor_end;
     for (int i = 0; i < output_shape.rank(); i++) {
         actual_output_shape[i] = output_tensor_end[i] - output_tensor_start[i];
@@ -227,7 +227,7 @@ operation::ProgramWithCallbacks padded_slice_rm_multi_core(
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
 
-    uint32_t num_unpadded_sticks = output.volume() / output.get_padded_shape()[-1];
+    uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -235,7 +235,7 @@ operation::ProgramWithCallbacks padded_slice_rm_multi_core(
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     bool is_output_sharded = output.is_sharded();
 
@@ -264,9 +264,9 @@ operation::ProgramWithCallbacks padded_slice_rm_multi_core(
     bool pad_output_row = false;
 
     TT_FATAL(
-        a.get_logical_shape()[3] % num_cores_channels == 0,
+        a.logical_shape()[3] % num_cores_channels == 0,
         "Input tensor should be divisible by number of cores in channel dimension");
-    uint32_t input_row_size_bytes = a.get_logical_shape()[-1] * a.element_size();
+    uint32_t input_row_size_bytes = a.logical_shape()[-1] * a.element_size();
     input_row_size_bytes = input_row_size_bytes / num_cores_channels;
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
@@ -398,7 +398,7 @@ operation::ProgramWithCallbacks padded_slice_multi_core(
         }
     }
     TT_FATAL(!has_step, "Padded Slice with Stride is not supported yet");
-    TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Input must be in row major format for padded_slice operation");
+    TT_FATAL(a.layout() == Layout::ROW_MAJOR, "Input must be in row major format for padded_slice operation");
     TT_FATAL(
         output.is_sharded(),
         "Output must be sharded for the padded_slice operation. Use slice for non-sharded outputs");

@@ -27,7 +27,6 @@ class ModelOptimisations:
             act_block_h_override=256,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
         self.conv_configs["ABH_128_NO_ADB_HS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -43,7 +42,6 @@ class ModelOptimisations:
             act_block_h_override=128,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
 
         # BLOCK SHARDED
@@ -52,7 +50,7 @@ class ModelOptimisations:
             weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             deallocate_activation=True,
-            reallocate_halo_output=False,
+            reallocate_halo_output=True,
             enable_act_double_buffer=False,
             enable_split_reader=False,
             enable_subblock_padding=False,
@@ -61,7 +59,6 @@ class ModelOptimisations:
             act_block_h_override=32,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
         self.conv_configs["ABH_64_NO_ADB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -77,7 +74,6 @@ class ModelOptimisations:
             act_block_h_override=64,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
         self.conv_configs["ABH_64_NO_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -94,7 +90,6 @@ class ModelOptimisations:
             act_block_h_override=64,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
         self.conv_configs["ABH_64_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -111,7 +106,6 @@ class ModelOptimisations:
             act_block_h_override=64,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
 
         self.conv_configs["ABH_64_NO_ADB_BS_BF16"] = ttnn.Conv2dConfig(
@@ -128,7 +122,6 @@ class ModelOptimisations:
             act_block_h_override=64,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
 
         self.conv_configs["ABH_128_ADB_BS"] = ttnn.Conv2dConfig(
@@ -145,7 +138,6 @@ class ModelOptimisations:
             act_block_h_override=128,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
         self.conv_configs["ABH_128_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -162,7 +154,6 @@ class ModelOptimisations:
             act_block_h_override=128,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
         self.conv_configs["ABH_128_NO_ADB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -178,7 +169,6 @@ class ModelOptimisations:
             act_block_h_override=128,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
         self.conv_configs["ABH_128_NO_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -195,7 +185,6 @@ class ModelOptimisations:
             act_block_h_override=128,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
         self.conv_configs["ABH_128_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -212,7 +201,6 @@ class ModelOptimisations:
             act_block_h_override=128,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
         self.conv_configs["ABH_128_NO_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -229,7 +217,6 @@ class ModelOptimisations:
             act_block_h_override=128,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
         self.conv_configs["ABH_256_NO_ADB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -245,7 +232,6 @@ class ModelOptimisations:
             act_block_h_override=256,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
 
         # WIDTH SHARDED
@@ -264,7 +250,6 @@ class ModelOptimisations:
             act_block_h_override=256,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
         self.conv_configs["ABH_512_NO_ADB_WS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -281,7 +266,6 @@ class ModelOptimisations:
             act_block_h_override=512,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
 
         # DEFAULT CONF
@@ -298,7 +282,6 @@ class ModelOptimisations:
             act_block_h_override=0,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
 
         # DRAM CONF
@@ -315,7 +298,6 @@ class ModelOptimisations:
             act_block_h_override=64,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
         self.conv_configs["ABH_128_NO_ADB_DRAM"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -330,7 +312,6 @@ class ModelOptimisations:
             act_block_h_override=128,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
         self.conv_configs["ABH_512_NO_ADB_DRAM"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -345,7 +326,6 @@ class ModelOptimisations:
             act_block_h_override=512,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
         self.conv_configs["DEFAULT_DRAM"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -360,7 +340,6 @@ class ModelOptimisations:
             act_block_h_override=0,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
         self.conv_configs["ABH_256_NO_ADB_HS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
@@ -376,7 +355,6 @@ class ModelOptimisations:
             act_block_h_override=256,
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
-            transpose_shards=True,
         )
 
     def clear_weight_preprocess(self):
@@ -421,7 +399,7 @@ class ModelOptimisations:
 
             # UP BLOCK 0
             elif ("up_blocks.0.resnets.0.conv1" == conv_path) or ("up_blocks.0.resnets.1.conv1" == conv_path):
-                return self.conv_configs["ABH_256_NO_ADB_WS"]  # Note: ABH should be 512 (OOM)
+                return self.conv_configs["ABH_32_NO_ADB_BS"]
             elif "up_blocks.0.upsamplers.0" == conv_path:
                 return self.conv_configs["ABH_64_NO_ADB_BS"]
             elif ("up_blocks.0.resnets" in conv_path) and ("conv2" in conv_path):
@@ -431,7 +409,7 @@ class ModelOptimisations:
 
             # UP BLOCK 1
             elif "up_blocks.1.resnets.0.conv1" == conv_path:
-                return self.conv_configs["ABH_256_NO_ADB_WS"]
+                return self.conv_configs["ABH_32_NO_ADB_BS"]
             elif "up_blocks.1.resnets.1.conv1" == conv_path:
                 return self.conv_configs["ABH_64_NO_ADB_BS"]
             elif "up_blocks.1.resnets.2.conv1" == conv_path:

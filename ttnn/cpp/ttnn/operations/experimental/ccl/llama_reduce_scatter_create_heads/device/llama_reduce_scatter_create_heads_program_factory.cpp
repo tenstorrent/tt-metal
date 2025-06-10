@@ -337,13 +337,13 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     std::map<std::string, std::string> reader_defines = {{"DEVICE_ORDER", device_order}};
 
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     const auto dim = operation_attributes.dim;
     uint32_t rank = input_shape.size();
     auto& q_output_tensor = tensor_return_value[0];
     auto& k_output_tensor = tensor_return_value[1];
     auto& v_output_tensor = tensor_return_value[2];
-    auto input_tensor_width = input_tensor.get_logical_shape()[-1];
+    auto input_tensor_width = input_tensor.logical_shape()[-1];
     auto input_shard_spec = input_tensor.shard_spec().value();
     auto q_output_shard_spec = q_output_tensor.shard_spec().value();
     auto k_output_shard_spec = k_output_tensor.shard_spec().value();
@@ -403,7 +403,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         v_num_cores);
 
     auto packet_buffer = tensor_args.intermediate_packet_buffer.buffer();
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t input_block_size = input_sticks_per_device * input_shard_width * input_tensor.element_size();
     uint32_t input_page_size = input_shard_width * input_tensor.element_size();
@@ -424,8 +424,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     tt::tt_metal::Program program{};
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    size_t packet_size_bytes = input_tensor.get_dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size)
-                                                                              : fabric_max_packet_size;
+    size_t packet_size_bytes =
+        input_tensor.dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size) : fabric_max_packet_size;
     uint32_t num_blocks_per_packet = packet_size_bytes / input_block_size;
     uint32_t per_worker_num_blocks = (ncores_input + num_links - 1) / num_links;
 

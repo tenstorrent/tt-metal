@@ -468,8 +468,8 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     std::vector<uint32_t> page;
     page.resize(page_size / sizeof(uint32_t));
     for (int host_page_id = 0; host_page_id < total_pages; host_page_id++) {
-        auto dev_page_id = buffer_page_mapping.host_page_to_dev_page_mapping_[host_page_id];
-        auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
+        auto dev_page_id = buffer_page_mapping.host_page_to_dev_page_mapping[host_page_id];
+        auto core = buffer_page_mapping.all_cores[buffer_page_mapping.dev_page_to_core_mapping[dev_page_id]];
         auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
         auto absolute_address = buffer.sharded_page_address(bank_id, dev_page_id);
         auto bank_local_address = buffer.bank_local_page_address(bank_id, dev_page_id);
@@ -534,37 +534,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
 
 void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     ZoneScoped;
-    if (buffer.is_nd_sharded()) {
-        auto device_id = buffer.device()->id();
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        const auto& [banks, bank_mapping_in_bytes] = buffer.get_bank_data_mapping();
-        if (buffer.is_dram()) {
-            for (size_t i = 0; i < banks.size(); i++) {
-                const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
-                auto dram_channel = buffer.device()->dram_channel_from_virtual_core(virtual_core);
-                for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                    cluster.write_dram_vec(
-                        host_buffer.data() + chunk_mapping_in_bytes.src,
-                        chunk_mapping_in_bytes.size,
-                        device_id,
-                        dram_channel,
-                        buffer.address() + chunk_mapping_in_bytes.dst);
-                }
-            }
-        } else {
-            for (size_t i = 0; i < banks.size(); i++) {
-                const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
-                for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                    cluster.write_core(
-                        host_buffer.data() + chunk_mapping_in_bytes.src,
-                        chunk_mapping_in_bytes.size,
-                        tt_cxy_pair(device_id, virtual_core.x, virtual_core.y),
-                        buffer.address() + chunk_mapping_in_bytes.dst);
-                }
-            }
-        }
-    } else if (
-        buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
+    if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
         WriteToDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
@@ -657,9 +627,9 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_orde
 
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     for (int dev_page_id = 0; dev_page_id < total_pages; dev_page_id++) {
-        auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
+        auto core = buffer_page_mapping.all_cores[buffer_page_mapping.dev_page_to_core_mapping[dev_page_id]];
         auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
-        auto host_page_id = buffer_page_mapping.dev_page_to_host_page_mapping_[dev_page_id];
+        auto host_page_id = buffer_page_mapping.dev_page_to_host_page_mapping[dev_page_id];
         if (host_page_id.has_value()) {
             if (!shard_order) {
                 read_pages_to_host_helper(
@@ -673,37 +643,7 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_orde
 
 void ReadFromDevice(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
     ZoneScoped;
-    if (buffer.is_nd_sharded()) {
-        auto device_id = buffer.device()->id();
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        const auto& [banks, bank_mapping_in_bytes] = buffer.get_bank_data_mapping();
-        if (buffer.is_dram()) {
-            for (size_t i = 0; i < banks.size(); i++) {
-                const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
-                auto dram_channel = buffer.device()->dram_channel_from_virtual_core(virtual_core);
-                for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                    cluster.read_dram_vec(
-                        host_buffer + chunk_mapping_in_bytes.src,
-                        chunk_mapping_in_bytes.size,
-                        device_id,
-                        dram_channel,
-                        buffer.address() + chunk_mapping_in_bytes.dst);
-                }
-            }
-        } else {
-            for (size_t i = 0; i < banks.size(); i++) {
-                const auto virtual_core = buffer.device()->virtual_core_from_logical_core(banks[i], buffer.core_type());
-                for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                    cluster.read_core(
-                        host_buffer + chunk_mapping_in_bytes.src,
-                        chunk_mapping_in_bytes.size,
-                        tt_cxy_pair(device_id, virtual_core),
-                        buffer.address() + chunk_mapping_in_bytes.dst);
-                }
-            }
-        }
-    } else if (
-        buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
+    if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
         ReadFromDeviceInterleavedContiguous(buffer, host_buffer);
     } else if (is_sharded(buffer.buffer_layout())) {
@@ -744,15 +684,15 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
 
     std::vector<uint32_t> page_ids;
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
-    for (uint32_t i = 0; i < buffer_page_mapping.dev_page_to_core_mapping_.size(); i++) {
-        if (buffer_page_mapping.dev_page_to_core_mapping_[i] == core_id) {
+    for (uint32_t i = 0; i < buffer_page_mapping.dev_page_to_core_mapping.size(); i++) {
+        if (buffer_page_mapping.dev_page_to_core_mapping[i] == core_id) {
             page_ids.push_back(i);
         }
     }
 
     uint32_t host_page_id = 0;
     for (auto dev_page_id : page_ids) {
-        auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
+        auto core = buffer_page_mapping.all_cores[buffer_page_mapping.dev_page_to_core_mapping[dev_page_id]];
         auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
         read_pages_to_host_helper(device, buffer, host_buffer, buffer.page_size(), host_page_id, dev_page_id, bank_id);
         host_page_id++;
