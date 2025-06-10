@@ -161,9 +161,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
             input_tensor_memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
             output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
             input_tensor_memory_config.shard_spec()->shape[0] == 32 &&
-            input_tensor_memory_config.shard_spec()->shape[1] == 32 && output_mem_config.shard_spec()->shape[0] == 32 &&
-            output_mem_config.shard_spec()->shape[1] == 160 && input_shard_num_cores == 30 &&
-            output_shard_num_cores == 24) {
+            input_tensor_memory_config.shard_spec()->shape[1] == 32 && output_mem_config.shard_spec()->shape[0] == 32) {
             log_trace(
                 tt::LogOp,
                 "Matching conditions for Llama post binary mult+silu, using LLAMA_MINIMAL_SHARDED implementation");

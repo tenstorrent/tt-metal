@@ -19,6 +19,10 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     QKV_CRS,
     FF1_CRS,
 )
+from tests.ttnn.unit_tests.operations.ccl.test_all_gather_replicate import (
+    run_all_gather_replicate_impl,
+    BINARY_MULT_CRS,
+)
 from models.demos.llama3_subdevices.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
@@ -296,4 +300,71 @@ def test_all_reduce_tg_llama(
         trace_mode=trace_mode,
         validate_all=False,
         profiler=profiler,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "input_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set, input_dtype",
+    [
+        ([1, 1, 32, 960], 1, 3, 30, BINARY_MULT_CRS, 24, RING_CRS, ttnn.bfloat8_b),
+    ],
+    ids=[
+        "binary_mult",
+    ],
+)
+@pytest.mark.parametrize(
+    "num_iters",
+    [
+        (NUM_ITERATIONS),
+    ],
+)
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (8, 4),
+    ],
+    indirect=True,
+)
+def test_all_gather_replicate_tg_llama(
+    mesh_device,
+    input_shape,
+    cluster_axis,
+    input_dtype,
+    num_links,
+    input_num_cores,
+    input_core_range_set,
+    output_num_cores,
+    output_core_range_set,
+    num_iters,
+    trace_mode,
+    use_program_cache,
+    function_level_defaults,
+    ensure_devices_tg,
+):
+    run_all_gather_replicate_impl(
+        mesh_device,
+        input_shape,
+        cluster_axis,
+        input_dtype,
+        num_links,
+        input_num_cores,
+        input_core_range_set,
+        output_num_cores,
+        output_core_range_set,
+        num_iters=num_iters,
+        trace_mode=trace_mode,
+        validate_all=False,
     )
