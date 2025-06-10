@@ -3480,7 +3480,6 @@ void Run1DFullMeshFabricPacketSendTest(
 
     auto max_packet_payload_size_bytes = test_specs.packet_payload_size_bytes;
 
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
 
     validate_fabric_packet_send_test_params(params);
