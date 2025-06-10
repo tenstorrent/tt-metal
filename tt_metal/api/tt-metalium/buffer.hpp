@@ -171,7 +171,7 @@ struct BufferRegion {
     BufferRegion(DeviceAddr offset, DeviceAddr size) : offset(offset), size(size) {}
 };
 
-class Buffer final {
+class Buffer final : public std::enable_shared_from_this<Buffer> {
     // Used in public Buffer constructors so they are only callable within Buffer
     // Buffer constructors are public so we can call std::make_shared on Buffer
     struct Private {
@@ -207,6 +207,8 @@ public:
         const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameter = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
+
+    std::shared_ptr<Buffer> view(const BufferRegion& region) const;
 
     Buffer(const Buffer& other) = delete;
     Buffer& operator=(const Buffer& other) = delete;
@@ -285,6 +287,8 @@ public:
         std::optional<bool> bottom_up,
         std::optional<SubDeviceId> sub_device_id,
         bool owns_data,
+        std::shared_ptr<const BufferPageMapping> buffer_page_mapping,
+        std::shared_ptr<const Buffer> parent_buffer,
         Private);
 
 private:
@@ -324,6 +328,8 @@ private:
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
 
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
+
+    std::shared_ptr<const Buffer> parent_buffer_;
 
     size_t unique_id_ = 0;
     static std::atomic<size_t> next_unique_id;

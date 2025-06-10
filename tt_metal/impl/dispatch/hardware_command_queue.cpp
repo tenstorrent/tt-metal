@@ -241,21 +241,22 @@ void HWCommandQueue::enqueue_read_buffer(
     if (is_sharded(buffer_obj.buffer_layout())) {
         // Forward data from each core to the completion queue.
         // Then have the completion queue reader thread copy this data to user space.
+        auto view_buffer = buffer_obj.view(region);
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
-            buffer_obj, this->id_, this->expected_num_workers_completed_, region);
+            *view_buffer, this->id_, this->expected_num_workers_completed_);
         auto cores = buffer_dispatch::get_cores_for_sharded_buffer(
-            dispatch_params.width_split, dispatch_params.buffer_page_mapping, buffer_obj);
+            dispatch_params.width_split, dispatch_params.buffer_page_mapping, *view_buffer);
         for (uint32_t core_id = 0; core_id < buffer_obj.num_cores(); ++core_id) {
             buffer_dispatch::copy_sharded_buffer_from_core_to_completion_queue(
                 core_id,
-                buffer_obj,
+                *view_buffer,
                 dispatch_params,
                 sub_device_ids,
                 cores[core_id],
                 MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type());
             if (dispatch_params.pages_per_txn > 0) {
                 this->issued_completion_q_reads_.push(
-                    buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, buffer_obj));
+                    buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, *view_buffer));
                 this->increment_num_entries_in_completion_q();
             }
         }

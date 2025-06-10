@@ -434,18 +434,19 @@ void FDMeshCommandQueue::read_shard_from_device(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
     if (is_sharded(shard_view->buffer_layout())) {
+        auto view_shard_view = shard_view->view(region_value);
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
-            *shard_view, id_, expected_num_workers_completed_, region_value);
+            *view_shard_view, id_, expected_num_workers_completed_);
         auto cores = buffer_dispatch::get_cores_for_sharded_buffer(
-            dispatch_params.width_split, dispatch_params.buffer_page_mapping, *shard_view);
-        for (uint32_t core_id = 0; core_id < shard_view->num_cores(); ++core_id) {
+            dispatch_params.width_split, dispatch_params.buffer_page_mapping, *view_shard_view);
+        for (uint32_t core_id = 0; core_id < view_shard_view->num_cores(); ++core_id) {
             buffer_dispatch::copy_sharded_buffer_from_core_to_completion_queue(
-                core_id, *shard_view, dispatch_params, sub_device_ids, cores[core_id], this->dispatch_core_type());
+                core_id, *view_shard_view, dispatch_params, sub_device_ids, cores[core_id], this->dispatch_core_type());
             if (dispatch_params.pages_per_txn > 0) {
                 num_txns_per_device[device]++;
                 auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
                 read_descriptor_queue.push(
-                    buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, *shard_view));
+                    buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, *view_shard_view));
             }
         }
     } else {
