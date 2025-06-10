@@ -148,10 +148,11 @@ Tensor CumSumOperation::invoke(
             const uint64_t element_size = adjusted_input_tensor.element_size();
             const uint64_t growth = (new_volume - old_volume) * element_size;
             constexpr uint64_t ONE_MB = (1024 * 1024);
+            constexpr uint64_t EIGHT_KB = (1024 * 4);
             constexpr uint64_t MAX_ALLOWED_GROWTH = 800 * ONE_MB;  // 800 MiB
 
             TT_ASSERT(old_volume > 0, "Can not compute permuted tensor for cumsum operation if input is empty");
-            if (new_volume >= 2 * old_volume) {
+            if (new_volume >= 2 * old_volume && growth >= EIGHT_KB) {
                 log_warning(
                     tt::LogOp,
                     "Intermediate tensor of cumsum exceeds input by a factor of {}, input size = {} MiB, intermediate "
