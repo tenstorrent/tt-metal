@@ -44,11 +44,12 @@ def unsqueeze_all_params_to_4d(params):
     return params
 
 
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "trace_region_size": 15659008, "num_command_queues": 2}], indirect=True
-)
-def test_stable_diffusion_trace_2cq(device, use_program_cache):
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 15659008}], indirect=True)
+def test_stable_diffusion_unet_trace(device, use_program_cache):
     assert is_wormhole_b0() or is_blackhole(), "SD 1.4 runs on Wormhole B0 or Blackhole"
+
+    if is_wormhole_b0():
+        os.environ["SLOW_MATMULS"] = "1"
 
     profiler.clear()
     torch.manual_seed(0)
@@ -113,13 +114,9 @@ def test_stable_diffusion_trace_2cq(device, use_program_cache):
     input_tensor = ttnn.allocate_tensor_on_device(
         ttnn_input.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
     )
-    op_event = ttnn.record_event(device, 0)
 
     # COMPILE
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=1)
-    write_event = ttnn.record_event(device, 1)
-    ttnn.wait_for_event(0, write_event)
+    ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=0)
     output_tensor = ttnn.from_device(
         ttnn_model(
             input_tensor,
@@ -135,10 +132,7 @@ def test_stable_diffusion_trace_2cq(device, use_program_cache):
     )
 
     # CAPTURE
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=1)
-    write_event = ttnn.record_event(device, 1)
-    ttnn.wait_for_event(0, write_event)
+    ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=0)
     output_tensor.deallocate(True)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     output_tensor = ttnn_model(
@@ -157,10 +151,7 @@ def test_stable_diffusion_trace_2cq(device, use_program_cache):
     ttnn.synchronize_device(device)
     profiler.start(f"model_run_for_inference_{0}")
 
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=1)
-    write_event = ttnn.record_event(device, 1)
-    ttnn.wait_for_event(0, write_event)
+    ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=0)
     ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
     host_output_tensor = output_tensor.cpu(blocking=False)
     ttnn.synchronize_device(device)
@@ -184,6 +175,9 @@ def test_stable_diffusion_trace_2cq(device, use_program_cache):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 8192, "trace_region_size": 6348800}], indirect=True)
 def test_stable_diffusion_vae_trace(device, use_program_cache):
+    if is_wormhole_b0():
+        os.environ["SLOW_MATMULS"] = "1"
+
     profiler.clear()
     torch.manual_seed(0)
 
