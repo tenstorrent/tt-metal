@@ -36,10 +36,18 @@ jobs:
           node .github/scripts/sort-issues.js
           node .github/scripts/list-pending-prs.js
 
-      - name: Create index page
+      - name: Organize files for deployment
         run: |
+          # Create reports directory structure
+          mkdir -p reports
+
+          # Move generated reports to reports directory
+          mv sorted-issues.html reports/
+          mv pending-prs.html reports/
+
+          # Create dashboard in reports directory
           TIMESTAMP=$(date '+%B %d, %Y at %H:%M UTC')
-          cat > index.html << EOF
+          cat > reports/index.html << EOF
           <!DOCTYPE html>
           <html>
           <head>
