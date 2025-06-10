@@ -390,7 +390,18 @@ def test_permute_4d_cnwh(device, shape, dtype):
 
 @pytest.mark.parametrize("shape", [[2, 2, 2, 2, 2, 2, 32, 32]])
 @pytest.mark.parametrize("dims", [(5, 4, 3, 2, 1, 0, 7, 6), (5, 4, 3, 2, 1, 0, 6, 7)])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        ttnn.bfloat16,
+        pytest.param(
+            ttnn.int32,
+            marks=pytest.mark.skip(
+                reason="possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"
+            ),
+        ),
+    ],
+)
 def test_permute_8d_swapped(device, shape, dims, dtype):
     torch.manual_seed(2005)
     torch_tensor = random_torch_tensor(dtype, shape)
