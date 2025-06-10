@@ -5,7 +5,7 @@
 import pytest
 from loguru import logger
 import ttnn
-from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0, is_blackhole
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
 import itertools
@@ -539,6 +539,8 @@ def run_multi_core_matmul_1d(
     assert mesh_device.num_program_cache_entries() == 1  # Only 1 op
 
 
+@pytest.mark.skipif(is_grayskull(), reason="Test suite for WH only")
+@pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid, in1_is_dram_interleaved, untilize_out",
