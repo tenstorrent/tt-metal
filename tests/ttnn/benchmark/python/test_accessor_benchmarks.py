@@ -31,7 +31,7 @@ def test_accessors():
     BASE = Path(ENV["TT_METAL_HOME"])
 
     binary_path = Path(BASE / "build" / "test" / "ttnn" / "unit_tests_ttnn_accessor")
-    subprocess.run([binary_path, "--gtest_filter=AccessorTests/AccessorBenchmarks.*"], env=ENV)
+    subprocess.run([binary_path, "--gtest_filter=AccessorTests/AccessorBenchmarks.GetNocAddr/*"], env=ENV)
 
     setup = device_post_proc_config.default_setup()
     setup.timerAnalysis = {

@@ -24,7 +24,7 @@ struct DistributionSpec {
     using ShardShapeT = ShardShape;
     using BankCoordsT = BankCoords;
 
-    // compile time shape/coords arrays with rank known at compile time
+    // std::array if rank/num_banks are static, Span otherwise
     using ShapeBase = typename TensorShape::ShapeBase;
     using PackedCoordsBase = typename BankCoords::PackedCoordsBase;
 
@@ -51,8 +51,20 @@ struct DistributionSpec {
         tensor_shape_(std::forward<TensorShapeArr>(tensor_shape_arr)),
         shard_shape_(std::forward<ShardShapeArr>(shard_shape_arr)),
         bank_coords_(std::forward<BankCoordsArr>(bank_coords_arr)) {
+        static_assert(!(is_static), "Everything is static, this constructor is obsolete!");
+        if constexpr (TensorShape::has_static_rank and ShardShape::has_static_rank) {
+            // If both tensor and shard ranks are static, they should be the same
+            static_assert(TensorShape::rank == ShardShape::rank, "Tensor and shard shapes must have the same rank!");
+            static_assert(
+                std::is_same_v<typename TensorShape::ShapeBase, typename ShardShape::ShapeBase>,
+                "Tensor and shard shapes bases must be the same");
+        }
+
         if constexpr (!has_static_rank) {
             // Rank is not known at compile time, use runtime rank
+            ASSERT(
+                tensor_shape_.rank_rt == shard_shape_.rank_rt,
+                "Tensor and shard shapes must have the same rank at runtime!");
             rank_rt = tensor_shape_.rank_rt;
             // !has_static_rank means ShapeBase is span<uint32_t>
             shard_grid_rt = ShapeBase(shard_grid_rt_buf.value, rank_rt);
@@ -61,14 +73,6 @@ struct DistributionSpec {
         if constexpr (!has_static_num_banks) {
             // Number of banks is not known at compile time, use runtime number of banks
             num_banks_rt = bank_coords_.num_banks_rt;
-        }
-        static_assert(!(is_static), "Everything is static, this constructor is obsolete!");
-        if constexpr (TensorShape::has_static_rank and ShardShape::has_static_rank) {
-            // If both tensor and shard ranks are static, they should be the same
-            static_assert(TensorShape::rank == ShardShape::rank, "Tensor and shard shapes must have the same rank!");
-            static_assert(
-                std::is_same_v<typename TensorShape::ShapeBase, typename ShardShape::ShapeBase>,
-                "Tensor and shard shapes bases must be the same");
         }
         if constexpr (!all_shapes_static) {
             // Tensor shape has bad rank!
@@ -83,6 +87,7 @@ struct DistributionSpec {
         }
     }
 
+    // Getters
     constexpr const uint32_t get_rank() const {
         if constexpr (has_static_rank) {
             return rank_ct;
@@ -345,11 +350,11 @@ struct DistributionSpecWrapper {
 
     // Figure out locations (offsets) of compile-time arguments (if they are compile time)
     constexpr static size_t NEW_CTA_BASE = CTA_BASE + 1;  // +1 for args_config
-    constexpr static uint32_t RankBase = NEW_CTA_BASE;
-    constexpr static uint32_t NumBanksBase = RankBase + (RankStatic ? 1 : 0);
+    constexpr static size_t RankBase = NEW_CTA_BASE;
+    constexpr static size_t NumBanksBase = (RankBase + (RankStatic ? 1 : 0));
 
-    constexpr static uint32_t RANK = RankStatic ? get_compile_time_arg_val(RankBase) : 0;
-    constexpr static size_t NUM_BANKS = NumBanksStatic ? get_compile_time_arg_val(NumBanksBase) : 0;
+    constexpr static uint32_t RANK = get_compile_time_arg_val(RankStatic ? RankBase : CTA_BASE);
+    constexpr static uint32_t NUM_BANKS = get_compile_time_arg_val(NumBanksStatic ? NumBanksBase : CTA_BASE);
 
     constexpr static size_t TensorShapeBase = NumBanksBase + (NumBanksStatic ? 1 : 0);
     static constexpr size_t ShardShapeBase = TensorShapeBase + (TensorShapeStatic ? RANK : 0);
@@ -369,9 +374,9 @@ auto build_dspec_from_args() {
     static constexpr bool TensorShapeCRTA = !DSpec::TensorShapeT::is_static;
     static constexpr bool ShardShapeCRTA = !DSpec::ShardShapeT::is_static;
     static constexpr bool BankCoordsCRTA = !DSpec::BankCoordsT::is_static;
-    static constexpr size_t CRTA_BASE = DSpec::ArgumentsLocation::CRTA_BASE;
     static constexpr bool RankStatic = DSpec::has_static_rank;
     static constexpr bool NumBanksStatic = DSpec::has_static_num_banks;
+    static constexpr size_t CRTA_BASE = DSpec::ArgumentsLocation::CRTA_BASE;
 
     // Rank known at compile time, but shapes and bank coords possibly not
     typename DSpec::ShapeBase tensor_shape_array;

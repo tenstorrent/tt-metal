@@ -67,7 +67,7 @@ using namespace tt::tt_metal;
 
 class AccessorBenchmarks : public GenericMeshDeviceFixture, public ::testing::WithParamInterface<InputBufferParams> {};
 
-TEST_P(AccessorBenchmarks, Generic) {
+TEST_P(AccessorBenchmarks, GetNocAddr) {
     const auto& params = GetParam();
 
     // Create input and output replicated mesh buffers across generic mesh device; tests will only use first device
@@ -176,6 +176,80 @@ TEST_P(AccessorBenchmarks, Generic) {
         log_info(tt::LogTest, "Program launched!");
         Finish(mesh_device_->mesh_command_queue());
         log_info(tt::LogTest, "Program finished!");
+    }
+    tt::tt_metal::detail::DumpDeviceProfileResults(local_device);
+}
+
+TEST_P(AccessorBenchmarks, Constructor) {
+    using tt::tt_metal::sharded_accessor_utils::ArgConfig;
+    using tt::tt_metal::sharded_accessor_utils::ArgsConfig;
+    const auto& params = GetParam();
+
+    // Create input and output replicated mesh buffers across generic mesh device; tests will only use first device
+    const auto input_mesh_buffer = create_replicated_input_mesh_buffer_from_inputs(params, mesh_device_.get());
+
+    // Extract local single-device buffer (ie. shard_view) concepts for testing
+    const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
+    const auto input_shard_view = input_mesh_buffer->get_device_buffer(mesh_coordinate);
+    const auto local_device = input_shard_view->device();
+
+    const auto input_bank_base_address = input_mesh_buffer->address();
+
+    tt::tt_metal::detail::SetDeviceProfilerDir("accessor_consructor_benchmarks/" + params.test_name);
+    tt::tt_metal::detail::FreshProfilerDeviceLog();
+    for (uint8_t i = 0; i < 1 << 5; ++i) {
+        ArgsConfig args_loc_cnf(i);
+        if (args_loc_cnf.test(ArgConfig::RankCRTA) and
+            (!args_loc_cnf.test(ArgConfig::TensorShapeCRTA) or !args_loc_cnf.test(ArgConfig::ShardShapeCRTA))) {
+            // If rank is runtime, tensor and shard shapes must also be runtime
+            continue;
+        }
+        if (args_loc_cnf.test(ArgConfig::NumBanksCRTA) and !args_loc_cnf.test(ArgConfig::BankCoordsCRTA)) {
+            // If number of banks is runtime, bank coordinates must also be runtime
+            continue;
+        }
+        auto args_bitmask = args_loc_cnf.raw();
+
+        std::string crta_config_str = fmt::format("\"SHARDED_ACCESSOR_{:05b}\"", args_bitmask);
+        tt::log_info("Creating single-core benchmarking program with the following args config: {}", crta_config_str);
+        auto program = CreateProgram();
+
+        constexpr CoreCoord grid = {0, 0};
+        const auto data_format = params.data_format;
+        const auto aligned_page_size = input_shard_view->aligned_page_size();
+
+        // Set up sharded accessor compile-time args for reader kernel
+        using tt::tt_metal::sharded_accessor_utils::ArgConfig;
+        const auto& input_buffer_distribution_spec =
+            std::get<BufferDistributionSpec>(input_mesh_buffer->device_local_config().shard_parameters.value());
+        const auto sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
+            *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type(), args_loc_cnf);
+
+        std::map<std::string, std::string> defines{{"ACCESSOR_CONFIG_NAME", crta_config_str}};
+        // Create reader kernel
+        KernelHandle reader_kernel_id = CreateKernel(
+            program,
+            "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_constructor_benchmark.cpp",
+            grid,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = sharded_accessor_args.compile_time_args,
+                .defines = defines});
+
+        // Set up runtime args for reader kernel
+        SetCommonRuntimeArgs(program, reader_kernel_id, sharded_accessor_args.runtime_args);
+
+        // Launch program
+        auto mesh_work_load = tt::tt_metal::distributed::CreateMeshWorkload();
+        AddProgramToMeshWorkload(
+            mesh_work_load, std::move(program), (tt::tt_metal::distributed::MeshCoordinateRange)mesh_coordinate);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_work_load, false);
+
+        // Wait for program to finish
+        tt::log_info("Program launched!");
+        Finish(mesh_device_->mesh_command_queue());
+        tt::log_info("Program finished!");
     }
     tt::tt_metal::detail::DumpDeviceProfileResults(local_device);
 }

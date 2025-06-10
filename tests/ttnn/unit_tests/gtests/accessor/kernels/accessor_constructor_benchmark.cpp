@@ -1,0 +1,21 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+#include "accessor/sharded_accessor.h"
+
+void kernel_main() {
+    constexpr uint32_t base_idx_cta = 0;
+    constexpr uint32_t base_idx_crta = 0;
+
+    constexpr size_t loop_count = 125;
+    for (size_t i = 0; i < loop_count; ++i) {
+        {
+            DeviceZoneScopedN(ACCESSOR_CONFIG_NAME);
+            using dspec = nd_sharding::distribution_spec_t<base_idx_cta, base_idx_crta>;
+            volatile auto sharded_accessor = nd_sharding::ShardedAccessor<dspec>(0, 1024);
+            (void)sharded_accessor;
+        }
+    }
+}
