@@ -342,9 +342,9 @@ using HostDataType = std::variant<
 
 }  // namespace tt::tt_metal
 
-namespace tt::stl::json {
+namespace ttsl::json {
 template <>
-struct from_json_t<tt_metal::ShardSpec> {
-    tt_metal::ShardSpec operator()(const nlohmann::json& json_object) const;
+struct from_json_t<tt::tt_metal::ShardSpec> {
+    tt::tt_metal::ShardSpec operator()(const nlohmann::json& json_object) const;
 };
-}  // namespace tt::stl::json
+}  // namespace ttsl::json

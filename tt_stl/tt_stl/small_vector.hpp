@@ -62,7 +62,7 @@ struct fmt::formatter<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
 };
 
 template <typename T, size_t PREALLOCATED_SIZE>
-struct tt::stl::json::to_json_t<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
+struct ttsl::json::to_json_t<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
     nlohmann::json operator()(const tt::stl::SmallVector<T, PREALLOCATED_SIZE>& vector) const {
         nlohmann::json json_array = nlohmann::json::array();
         for (const auto& element : vector) {
@@ -73,7 +73,7 @@ struct tt::stl::json::to_json_t<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
 };
 
 template <typename T, size_t PREALLOCATED_SIZE>
-struct tt::stl::json::from_json_t<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
+struct ttsl::json::from_json_t<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
     tt::stl::SmallVector<T, PREALLOCATED_SIZE> operator()(const nlohmann::json& json_object) const {
         tt::stl::SmallVector<T, PREALLOCATED_SIZE> vector;
         for (const auto& element : json_object) {
