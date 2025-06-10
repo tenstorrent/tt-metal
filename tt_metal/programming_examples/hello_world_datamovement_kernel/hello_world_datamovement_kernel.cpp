@@ -5,6 +5,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
+
 int main() {
     using namespace tt;
     using namespace tt::tt_metal;
@@ -21,13 +25,13 @@ int main() {
 
     KernelHandle void_dataflow_kernel_noc0_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
+        OVERRIDE_KERNEL_PREFIX "hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     KernelHandle void_dataflow_kernel_noc1_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
+        OVERRIDE_KERNEL_PREFIX "hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
