@@ -102,28 +102,28 @@ WhereDeviceOperation::tensor_return_value_t WhereDeviceOperation::create_output_
 tt::stl::hash::hash_t WhereDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
     TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(args.condition_tensor.get_storage()),
+        std::holds_alternative<DeviceStorage>(args.condition_tensor.storage()),
         "Unexpected type {} for condition_tensor storage",
-        tt::stl::get_active_type_name_in_variant(args.condition_tensor.get_storage()));
+        tt::stl::get_active_type_name_in_variant(args.condition_tensor.storage()));
     TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(args.true_value_tensor.get_storage()),
+        std::holds_alternative<DeviceStorage>(args.true_value_tensor.storage()),
         "Unexpected type {} for true_value_tensor storage",
-        tt::stl::get_active_type_name_in_variant(args.true_value_tensor.get_storage()));
+        tt::stl::get_active_type_name_in_variant(args.true_value_tensor.storage()));
     TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(args.false_value_tensor.get_storage()),
+        std::holds_alternative<DeviceStorage>(args.false_value_tensor.storage()),
         "Unexpected type {} for false_value_tensor storage",
-        tt::stl::get_active_type_name_in_variant(args.false_value_tensor.get_storage()));
+        tt::stl::get_active_type_name_in_variant(args.false_value_tensor.storage()));
 
     auto program_factory = select_program_factory(attributes, args);
     return operation::hash_operation<WhereDeviceOperation>(
         attributes,
         program_factory.index(),
+        args.condition_tensor.memory_config(),
         args.condition_tensor.dtype(),
-        std::get<DeviceStorage>(args.condition_tensor.storage()).memory_config(),
+        args.true_value_tensor.memory_config(),
         args.true_value_tensor.dtype(),
-        std::get<DeviceStorage>(args.true_value_tensor.storage()).memory_config(),
-        args.false_value_tensor.dtype(),
-        std::get<DeviceStorage>(args.false_value_tensor.storage()).memory_config());
+        args.false_value_tensor.memory_config(),
+        args.false_value_tensor.dtype());
 }
 
 operation::OpPerformanceModel WhereDeviceOperation::create_op_performance_model(
