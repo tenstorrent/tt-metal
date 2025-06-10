@@ -200,7 +200,10 @@ MeshDevice::MeshDevice(
     parent_mesh_(std::move(parent_mesh)),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
     dispatch_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())),
-    reader_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())) {}
+    reader_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())) {
+    log_info(tt::LogMetal, "MeshDevice constructor {}", mesh_id_);
+    ZoneScopedN("MeshDevice constructor");
+}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
@@ -240,6 +243,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
+    ZoneScopedN("MeshDevice::create_unit_meshes");
     auto scoped_devices = std::make_shared<ScopedDevices>(
         device_ids, l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config);
     MeshContainer<IDevice*> devices(MeshShape(1, device_ids.size()), scoped_devices->root_devices());
@@ -346,6 +350,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
 }
 
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const MeshShape& submesh_shape) {
+    ZoneScopedN("MeshDevice::create_submeshes");
     // Calculate how many submeshes fit in each dimension.
     tt::stl::SmallVector<uint32_t> steps;
     for (size_t dim = 0; dim < shape().dims(); dim++) {
@@ -483,21 +488,24 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
     view_ = std::move(new_view);
 }
 
+// confirm with Aditya whether the HWCommandQueue API will be completely removed (ex: Finish(),
+// enqueue_read_from_core(), etc)
+
 bool MeshDevice::close() {
+    ZoneScoped;
+    const std::string zone_name = fmt::format("MeshDevice::close {}", this->id());
+    ZoneName(zone_name.c_str(), zone_name.size());
     log_info(tt::LogMetal, "Closing mesh device {}", this->build_id());
-    // if (scoped_devices_) {
-    //     log_info(tt::LogMetal, "root devices size {}", this->scoped_devices_->root_devices().size());
-    //     for (IDevice* device : this->scoped_devices_->root_devices()) {
-    //         TT_FATAL(dynamic_cast<Device*>(device), "Device is not a Device");
-    //     dynamic_cast<Device*>(device)->set_mesh_device(nullptr);
-    //     }
-    // }
-    // this->is_initialized()
-    DumpMeshDeviceProfileResults(*this, ProfilerDumpState::LAST_CLOSE_DEVICE);
-    are_mesh_command_queues_initialized_ = false;
+    if (this->is_initialized() && this->is_parent_mesh()) {
+        DumpMeshDeviceProfileResults(*this, ProfilerDumpState::LAST_CLOSE_DEVICE);
+    }
+    // are_mesh_command_queues_initialized_ = false;
     mesh_command_queues_.clear();
     sub_device_manager_tracker_.reset();
     scoped_devices_.reset();
+    // if (parent_mesh_) {
+    //     log_info(tt::LogMetal, "Resetting parent mesh");
+    // }
     parent_mesh_.reset();
     return true;
 }

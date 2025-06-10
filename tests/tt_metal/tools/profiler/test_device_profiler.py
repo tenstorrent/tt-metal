@@ -84,6 +84,7 @@ def run_device_profiler_test(
 ):
     name = inspect.stack()[1].function
     testCommand = f"build/{PROG_EXMP_DIR}/{name}"
+    print(f"testCommand: {testCommand}")
     if testName:
         testCommand = testName
     clear_profiler_runtime_artifacts()
@@ -292,7 +293,7 @@ def test_dispatch_cores():
 @skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [322, 541, 1400, 2100, 2600],
+        "Ethernet CQ Dispatch": [322, 541, 1400, 2100],
         "Ethernet CQ Prefetch": [600, 2500],
     }
     devicesData = run_device_profiler_test(
@@ -311,6 +312,7 @@ def test_ethernet_dispatch_cores():
                     if count - allowedRange < readCount < count + allowedRange:
                         res = True
                         break
+                print(f"read {readCount} ethernet zones for {ref}")
                 assert (
                     res
                 ), f"Wrong ethernet dispatch zone count, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
@@ -331,6 +333,7 @@ def test_ethernet_dispatch_cores():
                     if count - allowedRange < readCount < count + allowedRange:
                         res = True
                         break
+                print(f"read {readCount} ethernet zones for {ref}")
                 assert (
                     res
                 ), f"Wrong ethernet dispatch zone count, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
