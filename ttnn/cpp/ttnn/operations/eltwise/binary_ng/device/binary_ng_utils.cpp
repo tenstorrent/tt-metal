@@ -322,7 +322,12 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             } else {
                 return {"sub_binary_tile_init();", "sub_binary_tile"};
             }
-        case MUL: return {"mul_binary_tile_init();", "mul_binary_tile"};
+        case MUL:
+            if (dtype == DataType::UINT16) {
+                return {"mul_uint16_tile_init();", "mul_uint16_tile"};
+            } else {
+                return {"mul_binary_tile_init();", "mul_binary_tile"};
+            }
         case DIV: return {"div_binary_tile_init();", "div_binary_tile"};
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
         case RSUB: return {"rsub_binary_tile_init();", "rsub_binary_tile"};
@@ -336,8 +341,18 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             } else {
                 return {"binary_bitwise_tile_init();", "bitwise_and_binary_tile"};
             }
-        case BITWISE_OR: return {"binary_bitwise_tile_init();", "or_binary_tile"};
-        case BITWISE_XOR: return {"binary_bitwise_tile_init();", "xor_binary_tile"};
+        case BITWISE_OR:
+            if (dtype == DataType::UINT16) {
+                return {"binary_bitwise_tile_init();", "bitwise_or_uint16_binary_tile"};
+            } else {
+                return {"binary_bitwise_tile_init();", "bitwise_or_binary_tile"};
+            }
+        case BITWISE_XOR:
+            if (dtype == DataType::UINT16) {
+                return {"binary_bitwise_tile_init();", "bitwise_xor_uint16_binary_tile"};
+            } else {
+                return {"binary_bitwise_tile_init();", "bitwise_xor_binary_tile"};
+            }
         case MAXIMUM:
             if (dtype == DataType::INT32) {
                 return {"binary_max_tile_init();", "binary_max_int32_tile"};
@@ -394,19 +409,19 @@ void add_activation_defines(
         });
 }
 
-std::map<std::string, std::string> make_dataflow_defines(const DataType dtype, const bool is_sfpu_op) {
+std::map<std::string, std::string> make_dataflow_defines(const DataType dtype) {
     std::map<std::string, std::string> defines;
-    if (is_sfpu_op && dtype == DataType::FLOAT32) {
+    if (dtype == DataType::FLOAT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
         defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
-    } else if (is_sfpu_op && dtype == DataType::INT32) {
+    } else if (dtype == DataType::INT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<int32_t>";
         defines["FILL_WITH_VALUE"] = "fill_with_val<1024, int32_t>";
-    } else if (is_sfpu_op && dtype == DataType::UINT32) {
+    } else if (dtype == DataType::UINT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<uint32_t>";

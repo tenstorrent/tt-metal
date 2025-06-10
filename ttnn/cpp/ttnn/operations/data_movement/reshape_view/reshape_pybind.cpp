@@ -12,7 +12,6 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 
-
 namespace ttnn::operations::data_movement {
 
 namespace detail {
@@ -69,7 +68,6 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
 }
 
 }  // namespace detail
-
 
 void py_bind_reshape_view(pybind11::module& module) {
     detail::bind_reshape_view(

@@ -433,3 +433,14 @@ def test_to_layout_wh2(shape, input_layout, output_layout, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(input_a, output_tensor)
+
+
+@pytest.mark.parametrize("shape", [[32, 128], [2, 4, 96, 256], [1, 160, 64]])
+def test_untilize_with_unpad_int32(shape, device):
+    torch.manual_seed(2005)
+    end_shape = [x - 1 for x in shape]
+    input_a = torch.randint(1, 64, shape, dtype=torch.int32)
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32)
+    output_tensor = ttnn.untilize_with_unpadding(input_tensor, end_shape)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(input_a, output_tensor)

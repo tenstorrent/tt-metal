@@ -13,7 +13,7 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     const auto& batch_offset = optional_input_tensors.at(0);
 
     // TODO: Rewrite validation for this decode case
@@ -21,10 +21,10 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
-        input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 ||
-            input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16,
+        input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ||
+            input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
         "Unsupported data format");
-    TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Only tile layout is supported for input tensor");
+    TT_FATAL(input_tensor.layout() == Layout::TILE, "Only tile layout is supported for input tensor");
 
     // input
     const uint32_t num_users_supported = 32;
@@ -43,7 +43,8 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(
             "Current input memory layout is {}. It must be width sharded",
             QKV_memcfg.memory_layout());
         TT_FATAL(
-            input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_padded_shape()[-1],
+            input_tensor.shard_spec().value().shape[0] ==
+                input_tensor.physical_volume() / input_tensor.padded_shape()[-1],
             "Shard shape must be correct");
         TT_FATAL(
             input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
@@ -59,7 +60,7 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(
             !(batch_offset.has_value() ^ this->slice_size.has_value()),
             "Both batch_offset and slice_size must be provided or neither");
         if (batch_offset.has_value() && this->slice_size.has_value()) {
-            TT_FATAL(batch_offset.value().get_logical_shape()[0] == 1, "batch_offset must be unary tensor");
+            TT_FATAL(batch_offset.value().logical_shape()[0] == 1, "batch_offset must be unary tensor");
             num_users = this->slice_size.value();
         }
 
@@ -100,7 +101,7 @@ std::vector<ttnn::TensorSpec> NLPCreateHeadsDecodeDeviceOperation::compute_outpu
     const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
 
     auto batch = input_shape[2];
     if (this->slice_size.has_value()) {
@@ -147,15 +148,15 @@ std::vector<ttnn::TensorSpec> NLPCreateHeadsDecodeDeviceOperation::compute_outpu
         TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
-                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), q_mem_config)),
+                input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), q_mem_config)),
         TensorSpec(
             k_output_shape,
             tt::tt_metal::TensorLayout(
-                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), k_mem_config)),
+                input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), k_mem_config)),
         TensorSpec(
             v_output_shape,
             tt::tt_metal::TensorLayout(
-                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), v_mem_config))};
+                input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), v_mem_config))};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks NLPCreateHeadsDecodeDeviceOperation::create_program(

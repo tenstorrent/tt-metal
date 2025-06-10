@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@ import copy
 
 import pytest
 import torch
-
+import math
 import ttnn
 
 TILE_HEIGHT = 32
@@ -15,6 +15,13 @@ TILE_WIDTH = 32
 
 compute_kernel_options = [False, True]
 compute_kernel_ids = ["fp32_dest_acc_en=False", "fp32_dest_acc_en=True"]
+
+
+def round_up(a, b):
+    """
+    Round up a to the nearest multiple of b
+    """
+    return b * math.ceil(a / b)
 
 
 def get_compute_kernel_options(fp32_dest_acc_en):

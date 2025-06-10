@@ -60,3 +60,25 @@ struct fmt::formatter<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };
+
+template <typename T, size_t PREALLOCATED_SIZE>
+struct tt::stl::json::to_json_t<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
+    nlohmann::json operator()(const tt::stl::SmallVector<T, PREALLOCATED_SIZE>& vector) const {
+        nlohmann::json json_array = nlohmann::json::array();
+        for (const auto& element : vector) {
+            json_array.push_back(to_json(element));
+        }
+        return json_array;
+    }
+};
+
+template <typename T, size_t PREALLOCATED_SIZE>
+struct tt::stl::json::from_json_t<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
+    tt::stl::SmallVector<T, PREALLOCATED_SIZE> operator()(const nlohmann::json& json_object) const {
+        tt::stl::SmallVector<T, PREALLOCATED_SIZE> vector;
+        for (const auto& element : json_object) {
+            vector.push_back(from_json<T>(element));
+        }
+        return vector;
+    }
+};

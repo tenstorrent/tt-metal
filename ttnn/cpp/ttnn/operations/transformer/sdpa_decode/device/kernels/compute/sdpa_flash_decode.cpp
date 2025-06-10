@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
+#include "compute_kernel_api/tilize.h"
 
 #include "cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "compute_common.hpp"
@@ -39,14 +40,12 @@ void MAIN {
     constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(13);
     constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(14);
     constexpr uint32_t out_num_blocks = get_compile_time_arg_val(15);
-    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(16);
-    constexpr uint32_t k_chunk_size = get_compile_time_arg_val(17);
     constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(18);
     constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(19);
     constexpr bool is_causal = get_compile_time_arg_val(20) == 1;
     constexpr bool use_attention_mask = get_compile_time_arg_val(21) == 1;
     constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(22);
-
+    constexpr bool tilize_q = get_compile_time_arg_val(23) == 1;
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * DHt;
 
@@ -58,6 +57,7 @@ void MAIN {
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
     constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
+    constexpr uint32_t cb_q_rm = tt::CBIndex::c_10;
 
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
     constexpr uint32_t cb_out_im = tt::CBIndex::c_25;
@@ -131,8 +131,18 @@ void MAIN {
         num_cores_to_wait = k_num_chunks - 1;
     }
 
-    mm_init(cb_q_in, cb_k_in, cb_out_final);
-    cb_wait_front(cb_q_in, q_chunk_tiles);
+    if constexpr (tilize_q) {
+        tilize_init(cb_q_rm, q_chunk_tiles, cb_q_in);
+        cb_wait_front(cb_q_rm, q_chunk_tiles);
+        cb_reserve_back(cb_q_in, q_chunk_tiles);
+        tilize_block(cb_q_rm, q_chunk_tiles, cb_q_in);
+        cb_push_back(cb_q_in, q_chunk_tiles);
+        mm_init(cb_q_in, cb_k_in, cb_out_final);
+        cb_pop_front(cb_q_rm, q_chunk_tiles);
+    } else {
+        mm_init(cb_q_in, cb_k_in, cb_out_final);
+        cb_wait_front(cb_q_in, q_chunk_tiles);
+    }
 
 #ifdef DYNAMIC_CHUNK_SIZE
     const uint32_t qk_subblock_h_dynamic = 1;

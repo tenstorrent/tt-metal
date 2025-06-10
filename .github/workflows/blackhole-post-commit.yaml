@@ -12,6 +12,10 @@ on:
           description: 'Enable watcher in BH Post commit'
           default: false
           type: boolean
+      enable-ttnn-unit-tests:
+          description: 'Enable ttnn unit tests'
+          default: false
+          type: boolean
   workflow_dispatch:
     inputs:
       runner-label:
@@ -20,6 +24,7 @@ on:
           type: string
           default: 'BH'
       build-type:
+        description: 'Build type for the workflow'
         required: false
         default: Release
         type: choice
@@ -31,6 +36,10 @@ on:
           - TSan
       enable-watcher:
         description: 'Enable watcher in BH Post commit'
+        default: false
+        type: boolean
+      enable-ttnn-unit-tests:
+        description: 'Enable ttnn unit tests'
         default: false
         type: boolean
   schedule:
@@ -48,10 +57,13 @@ permissions:
   pages: write
   id-token: write
   packages: write
+  checks: write
 
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -60,6 +72,8 @@ jobs:
       build-umd-tests: true
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -150,17 +164,55 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-#   profiler-regression:
-#     needs: build-artifact-profiler
-#     uses: ./.github/workflows/run-profiler-regression.yaml
-#     secrets: inherit
+
+  ttnn-unit-tests:
+    needs: build-artifact
+    if: ${{ inputs.enable-ttnn-unit-tests }}
+    secrets: inherit
+    uses: ./.github/workflows/ttnn-post-commit.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+  ttnn-stress-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { runner-label: P100 },
+          { runner-label: P150 },
+        ]
+    with:
+      arch: blackhole
+      runner-label: ${{ matrix.test-group.runner-label }}
+      timeout: 45
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  smoke-tests:
+    needs: build-artifact
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "P100",
+          "P150",
+        ]
+    uses: ./.github/workflows/smoke.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}
 #   build-and-test-wheels:
 #     uses: Check all-post-commit yaml for directions
 #     secrets: inherit
-#   build-docs:
-#     needs: build-artifact
-#     uses: ./.github/workflows/docs-latest-public.yaml
-#     secrets: inherit
+
   # We used to use this for post-commit, but we didn't have enough runners
   # to support the number of developers running this workflow
   # build-and-test-measure-perf:

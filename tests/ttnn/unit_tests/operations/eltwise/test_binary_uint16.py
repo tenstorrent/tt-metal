@@ -6,10 +6,6 @@ import torch
 import pytest
 import ttnn
 
-from models.utility_functions import torch_random
-from functools import partial
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-
 
 @pytest.mark.parametrize(
     "a_shape, b_shape",
@@ -133,7 +129,9 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
         block_sharded_memory_config,
     ],
 )
-def test_binary_add_uint16_sharded(a_shape, b_shape, sharded_config, device):
+@pytest.mark.parametrize("ttnn_fn", ("add", "mul"))
+def test_binary_uint16_sharded(a_shape, b_shape, sharded_config, ttnn_fn, device):
+    ttnn_op = getattr(ttnn, ttnn_fn)
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(0, 100, num_elements, dtype=torch.int32)
     torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(a_shape).nan_to_num(0.0)
@@ -157,10 +155,10 @@ def test_binary_add_uint16_sharded(a_shape, b_shape, sharded_config, device):
         memory_config=sharded_config,
     )
 
-    golden_function = ttnn.get_golden_function(ttnn.add)
+    golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
-    output_tensor_sharded = ttnn.add(input_tensor_a, input_tensor_b, memory_config=sharded_config, use_legacy=False)
+    output_tensor_sharded = ttnn_op(input_tensor_a, input_tensor_b, memory_config=sharded_config, use_legacy=False)
     # Since typecast does not support sharded config, we can convert the sharded tensor to interleaved
     output_tensor = ttnn.to_memory_config(output_tensor_sharded, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
@@ -252,31 +250,6 @@ def test_binary_sub_uint16_edge_cases(device):
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
-height_sharded_memory_config = ttnn.create_sharded_memory_config(
-    [128, 160],
-    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((1, 0), (1, 6)), ttnn.CoreRange((3, 0), (3, 6))}),
-    strategy=ttnn.ShardStrategy.HEIGHT,
-    orientation=ttnn.ShardOrientation.COL_MAJOR,
-    use_height_and_width_as_shard_shape=True,
-)
-
-width_sharded_memory_config = ttnn.create_sharded_memory_config(
-    [2240, 32],
-    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((2, 2), (2, 3)), ttnn.CoreRange((0, 0), (0, 1))}),
-    strategy=ttnn.ShardStrategy.WIDTH,
-    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    use_height_and_width_as_shard_shape=True,
-)
-
-block_sharded_memory_config = ttnn.create_sharded_memory_config(
-    [320, 32],
-    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((1, 0), (4, 6))}),
-    strategy=ttnn.ShardStrategy.BLOCK,
-    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    use_height_and_width_as_shard_shape=True,
-)
-
-
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     ((torch.Size([5, 7, 64, 128]), torch.Size([5, 7, 64, 128])),),
@@ -344,7 +317,15 @@ def test_binary_sub_uint16_sharded(a_shape, b_shape, sharded_config, device):
         (0, 32000, 0, 32000),
     ],
 )
-def test_binary_bitwise_and_uint16(a_shape, b_shape, low_a, high_a, low_b, high_b, device):
+@pytest.mark.parametrize(
+    "bitwise_op",
+    [
+        ttnn.bitwise_and,
+        ttnn.bitwise_or,
+        ttnn.bitwise_xor,
+    ],
+)
+def test_binary_bitwise_op_uint16(a_shape, b_shape, low_a, high_a, low_b, high_b, bitwise_op, device):
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     corner_cases = torch.tensor([0, 1, 65535, 0, 65535, 1], dtype=torch.int32)
@@ -357,7 +338,7 @@ def test_binary_bitwise_and_uint16(a_shape, b_shape, low_a, high_a, low_b, high_
     torch_input_tensor_b = torch.cat([torch_input_tensor_b, corner_cases])
     torch_input_tensor_b = torch_input_tensor_b[-num_elements:].reshape(b_shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.bitwise_and)
+    golden_function = ttnn.get_golden_function(bitwise_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
     input_tensor_a = ttnn.from_torch(
@@ -375,7 +356,7 @@ def test_binary_bitwise_and_uint16(a_shape, b_shape, low_a, high_a, low_b, high_
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    output_tensor = ttnn.bitwise_and(input_tensor_a, input_tensor_b, use_legacy=False)
+    output_tensor = bitwise_op(input_tensor_a, input_tensor_b, use_legacy=False)
     # Since to_torch converts ttnn.uint16 to int16 and then to int32, there will be an output mismatch
     # We can typecast ttnn.uint16 to ttnn.uint32 to avoid this mismatch
     output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
@@ -392,11 +373,19 @@ def test_binary_bitwise_and_uint16(a_shape, b_shape, low_a, high_a, low_b, high_
     "sharded_config",
     [
         height_sharded_memory_config,
-        # width_sharded_memory_config,
-        # block_sharded_memory_config,
+        width_sharded_memory_config,
+        block_sharded_memory_config,
     ],
 )
-def test_bitwise_and_uint16_sharded(a_shape, b_shape, sharded_config, device):
+@pytest.mark.parametrize(
+    "bitwise_op",
+    [
+        ttnn.bitwise_and,
+        ttnn.bitwise_or,
+        ttnn.bitwise_xor,
+    ],
+)
+def test_bitwise_op_uint16_sharded(a_shape, b_shape, sharded_config, bitwise_op, device):
     num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
     torch_input_tensor_a = torch.linspace(0, 100, num_elements, dtype=torch.int32)
     corner_cases = torch.tensor([0, 1, 65535, 0, 65535, 1], dtype=torch.int32)
@@ -424,14 +413,100 @@ def test_bitwise_and_uint16_sharded(a_shape, b_shape, sharded_config, device):
         memory_config=sharded_config,
     )
 
-    golden_function = ttnn.get_golden_function(ttnn.bitwise_and)
+    golden_function = ttnn.get_golden_function(bitwise_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
-    output_tensor_sharded = ttnn.bitwise_and(
-        input_tensor_a, input_tensor_b, memory_config=sharded_config, use_legacy=False
-    )
+    output_tensor_sharded = bitwise_op(input_tensor_a, input_tensor_b, memory_config=sharded_config, use_legacy=False)
     # Since typecast does not support sharded config, we can convert the sharded tensor to interleaved
     output_tensor = ttnn.to_memory_config(output_tensor_sharded, ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    [
+        (torch.Size([1, 2, 32]), torch.Size([1, 2, 32])),
+        (torch.Size([1]), torch.Size([1, 5, 12])),
+        (torch.Size([1, 2, 32, 64, 125]), torch.Size([1, 2, 32, 1, 1])),
+        (torch.Size([]), torch.Size([])),
+        (torch.Size([5]), torch.Size([1])),
+    ],
+)
+@pytest.mark.parametrize(
+    "low_a, high_a, low_b, high_b",
+    [
+        (0, 255, 0, 255),
+        (0, 100, 100, 300),
+        (0, 150, 300, 430),
+        (0, 32, 1000, 2000),
+        (0, 4, 10000, 16000),
+        (0, 2, 16000, 32767),
+        (0, 1, 32767, 65535),
+    ],
+)
+def test_binary_mul_uint16_bcast(a_shape, b_shape, low_a, high_a, low_b, high_b, device):
+    num_elements_a = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
+    if high_a in (32, 4, 2, 1):
+        values_a = torch.arange(low_a, high_a + 1, dtype=torch.int32)
+        torch_input_tensor_a = values_a[torch.randint(0, len(values_a), (num_elements_a,))]
+    else:
+        torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements_a, dtype=torch.int32)
+    torch_input_tensor_a = torch_input_tensor_a[:num_elements_a].reshape(a_shape).nan_to_num(0.0)
+
+    num_elements_b = max(int(torch.prod(torch.tensor(b_shape)).item()), 1)
+    torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements_b, dtype=torch.int32)
+    torch_input_tensor_b = torch_input_tensor_b[:num_elements_b].reshape(b_shape).nan_to_num(0.0)
+
+    golden_function = ttnn.get_golden_function(ttnn.mul)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.mul(input_tensor_a, input_tensor_b, use_legacy=False)
+    output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_binary_mul_uint16_edge_cases(device):
+    torch_input_tensor_a = torch.tensor([0, 1, 0, 32767, 65535, 65535])
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_input_tensor_b = torch.tensor([0, 0, 1, 2, 1, 0])
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.mul)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+    output_tensor = ttnn.mul(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
 

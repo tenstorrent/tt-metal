@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -215,7 +215,7 @@ def test_dispatch_cores():
     RISC_COUNT = 1
     ZONE_COUNT = 37
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch": [250, 1000, 2000],
+        "Tensix CQ Dispatch": [400, 1000, 2000],
         "Tensix CQ Prefetch": [400, 1000, 4000],
         "dispatch_total_cq_cmd_op_time": [103],
         "dispatch_go_send_wait_time": [103],
@@ -286,7 +286,7 @@ def test_dispatch_cores():
 @skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [700, 910, 2100],
+        "Ethernet CQ Dispatch": [322, 541, 1400, 2100],
         "Ethernet CQ Prefetch": [600, 2500],
     }
     devicesData = run_device_profiler_test(
@@ -381,7 +381,7 @@ def test_timestamped_events():
     OP_COUNT = 2
     RISC_COUNT = 5
     ZONE_COUNT = 100
-    WH_ERISC_COUNTS = [0, 1, 5]
+    WH_ERISC_COUNTS = [0, 2, 5]  # N150, N300, T3K
     WH_TENSIX_COUNTS = [72, 64, 56]
     BH_ERISC_COUNTS = [0, 1, 6, 8]
     BH_TENSIX_COUNTS = [130, 120, 110]

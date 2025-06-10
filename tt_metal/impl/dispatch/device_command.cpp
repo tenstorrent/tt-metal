@@ -335,11 +335,11 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_notify_dispatch_s_go_signal_cmd(uint8_t wait, uint16_t index_bitmask) {
-    // Command to have dispatch_master send a notification to dispatch_slave
+    // Command to have dispatch_master send a notification to dispatch_subordinate
     this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd), DispatcherSelect::DISPATCH_MASTER);
     auto initialize_sem_update_cmd = [&](CQDispatchCmd* sem_update_cmd) {
         *sem_update_cmd = {};
-        sem_update_cmd->base.cmd_id = CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL;
+        sem_update_cmd->base.cmd_id = CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL;
         sem_update_cmd->notify_dispatch_s_go_signal.wait = wait;
         sem_update_cmd->notify_dispatch_s_go_signal.index_bitmask = index_bitmask;
     };
@@ -473,7 +473,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_set_go_signal_noc_data(
         DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
     auto data_sizeB = noc_mcast_unicast_data.size() * sizeof(uint32_t);
     uint32_t lengthB = sizeof(CQDispatchCmd) + data_sizeB;
-    if (dispatcher_type == DispatcherSelect::DISPATCH_SLAVE) {
+    if (dispatcher_type == DispatcherSelect::DISPATCH_SUBORDINATE) {
         constexpr uint32_t dispatch_page_size = 1 << DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE;
         TT_FATAL(
             lengthB <= dispatch_page_size,
@@ -500,15 +500,15 @@ void DeviceCommand<hugepage_write>::add_dispatch_set_go_signal_noc_data(
 }
 
 template <bool hugepage_write>
-void DeviceCommand<hugepage_write>::add_dispatch_set_write_offsets(
-    uint32_t write_offset0, uint32_t write_offset1, uint32_t write_offset2) {
-    this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd));
+void DeviceCommand<hugepage_write>::add_dispatch_set_write_offsets(tt::stl::Span<const uint32_t> write_offsets) {
+    TT_ASSERT(write_offsets.size() <= CQ_DISPATCH_MAX_WRITE_OFFSETS);
+    size_t data_sizeB = write_offsets.size() * sizeof(uint32_t);
+    size_t cmd_size = sizeof(CQDispatchCmd) + data_sizeB;
+    this->add_prefetch_relay_inline(true, cmd_size);
     auto initialize_write_offset_cmd = [&](CQDispatchCmd* write_offset_cmd) {
         *write_offset_cmd = {};
         write_offset_cmd->base.cmd_id = CQ_DISPATCH_CMD_SET_WRITE_OFFSET;
-        write_offset_cmd->set_write_offset.offset0 = write_offset0;
-        write_offset_cmd->set_write_offset.offset1 = write_offset1;
-        write_offset_cmd->set_write_offset.offset2 = write_offset2;
+        write_offset_cmd->set_write_offset.offset_count = write_offsets.size();
     };
     CQDispatchCmd* write_offset_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
 
@@ -519,6 +519,8 @@ void DeviceCommand<hugepage_write>::add_dispatch_set_write_offsets(
     } else {
         initialize_write_offset_cmd(write_offset_cmd_dst);
     }
+    uint32_t* write_offsets_dst = this->reserve_space<uint32_t*>(data_sizeB);
+    memcpy(write_offsets_dst, write_offsets.data(), data_sizeB);
     this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
 }
 

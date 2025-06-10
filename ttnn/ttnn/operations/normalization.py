@@ -7,8 +7,14 @@ from typing import Optional, Union
 
 import ttnn
 
-from tt_lib.utils import find_closest_largest_divisor
 import math
+
+
+def find_closest_largest_divisor(num: int, start_divisor: int):
+    divisor = start_divisor
+    while num % divisor != 0:
+        divisor = divisor - 1
+    return divisor
 
 
 def _golden_function(input_tensor: ttnn.Tensor, dim: Optional[int] = None, **_):

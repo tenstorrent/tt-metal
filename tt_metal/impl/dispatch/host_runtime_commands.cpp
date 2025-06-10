@@ -8,7 +8,7 @@
 #include <buffer.hpp>
 #include <event.hpp>
 #include <host_api.hpp>
-#include <logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_metal.hpp>
 #include <chrono>
 #include <fstream>
@@ -82,12 +82,6 @@ void ValidateBufferRegion(
         region.size);
 }
 }  // namespace detail
-
-enum DispatchWriteOffsets {
-    DISPATCH_WRITE_OFFSET_ZERO = 0,
-    DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE = 1,
-    DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE = 2,
-};
 
 inline uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
     return device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
@@ -191,7 +185,7 @@ void EnqueueTerminateCommand::process() {
         // Terminate dispatch_s if enabled
         cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
         HugepageDeviceCommand dispatch_s_command_sequence(cmd_region, cmd_sequence_sizeB);
-        dispatch_s_command_sequence.add_dispatch_terminate(DispatcherSelect::DISPATCH_SLAVE);
+        dispatch_s_command_sequence.add_dispatch_terminate(DispatcherSelect::DISPATCH_SUBORDINATE);
         this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
         this->manager.fetch_queue_reserve_back(this->command_queue_id);
         this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
@@ -347,12 +341,16 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureFinish, cq, sub_device_ids);
     detail::DispatchStateCheck(true);
     cq.finish(sub_device_ids);
-    TT_ASSERT(
-        !(DPrintServerHangDetected()), "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
-    TT_ASSERT(
-        !(tt::watcher_server_killed_due_to_error()),
-        "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
-        tt::watcher_get_log_file_name());
+    // If in testing mode, don't need to check dprint/watcher errors, since the tests will induce/handle them.
+    if (!MetalContext::instance().rtoptions().get_test_mode_enabled()) {
+        TT_FATAL(
+            !(DPrintServerHangDetected()),
+            "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
+        TT_FATAL(
+            !(tt::watcher_server_killed_due_to_error()),
+            "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
+            tt::watcher_get_log_file_name());
+    }
 }
 
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {

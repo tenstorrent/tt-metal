@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
@@ -11,6 +12,8 @@ from llama_models.llama3.api.tokenizer import Tokenizer
 from loguru import logger
 from PIL import Image as PIL_Image
 from pkg_resources import resource_filename
+
+from models.tt_transformers.tt.generator import create_submeshes
 
 IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
 
@@ -74,12 +77,7 @@ def create_multimodal_model(
 def prepare_generator_args(
     num_devices, data_parallel, mesh_device, max_batch_size, max_seq_len, dtype=ttnn.bfloat16, use_paged_kv_cache=False
 ):
-    # Partition the mesh, singular model implemented for TP on 1xN mesh
-    submesh_devices = (
-        mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
-        if isinstance(mesh_device, ttnn.MeshDevice) and data_parallel > 1
-        else [mesh_device]
-    )
+    submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
 
     model_args = []
@@ -103,7 +101,7 @@ def prepare_generator_args(
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -376,7 +374,7 @@ def test_multimodal_demo_text(
         base_model_name = model_args[0].base_model_name
         target_prefill_tok_s = {
             "N300_Llama3.2-11B": 10.8,
-            "T3K_Llama3.2-11B": 7.7,
+            "T3K_Llama3.2-11B": 6.5,
             "T3K_Llama3.2-90B": 3,
         }[f"{tt_device_name}_{base_model_name}"]
 

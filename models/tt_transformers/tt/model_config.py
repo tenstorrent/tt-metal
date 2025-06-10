@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -33,6 +33,10 @@ from models.tt_transformers.tt.load_checkpoints import (
     standardize_hf_keys,
 )
 from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
+
+# file names for performance and accuracy mode override files
+PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
+ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
 
 
 class TensorGroup(Enum):
@@ -315,7 +319,7 @@ def parse_optimizations(string):
     return apply_settings
 
 
-def parse_decoder_json(json_file_path):
+def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.performance):
     """
     Reads a JSON file and returns a DecodersPrecision instance.
     """
@@ -334,18 +338,26 @@ def parse_decoder_json(json_file_path):
             raise ValueError("Invalid JSON format: Missing 'decoders' key")
 
         num_decoders = max(int(decoder_id) for decoder_id in config_data["decoders"].keys()) + 1
-        decoders_precision = DecodersPrecision(num_decoders, "model")
+        placeholder_model_name = "model"
+        decoder_conf = default_optimization(placeholder_model_name)
+        default_tensor_dtype_settings = decoder_conf.tensor_dtype_settings
+        default_op_fidelity_settings = decoder_conf.op_fidelity_settings
+        decoders_precision = DecodersPrecision(num_decoders, placeholder_model_name, decoder_conf)
 
         for decoder_id, settings in config_data["decoders"].items():
             decoder_id = int(decoder_id)
 
-            tensor_precision = {
-                TensorGroup[key]: PrecisionSetting[value] for key, value in settings.get("precision_cfg", {}).items()
-            }
+            tensor_precision = (
+                {TensorGroup[key]: PrecisionSetting[value] for key, value in settings.get("precision_cfg").items()}
+                if "precision_cfg" in settings
+                else default_tensor_dtype_settings
+            )
 
-            op_fidelity = {
-                OpGroup[key]: MathFidelitySetting[value] for key, value in settings.get("fidelity_cfg", {}).items()
-            }
+            op_fidelity = (
+                {OpGroup[key]: MathFidelitySetting[value] for key, value in settings.get("fidelity_cfg").items()}
+                if "fidelity_cfg" in settings
+                else default_op_fidelity_settings
+            )
 
             custom_opt = ModelOptimizations({"TensorPrecision": tensor_precision, "OpFidelity": op_fidelity})
             decoders_precision.set_decoder_conf(decoder_id, custom_opt)
@@ -440,6 +452,10 @@ class ModelArgs:
                 raise ValueError(f"Unsupported number of devices: {self.num_devices} for {self.arch_name}")
 
         logger.info(f"Inferring device name: {self.device_name}")
+        device = mesh_device if mesh_device is not None else None
+        self.cluster_shape = list(mesh_device.shape) if mesh_device is not None else None
+        self.is_galaxy = self.num_devices == 32
+
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
@@ -448,8 +464,6 @@ class ModelArgs:
         self.is_90b = False
         self.from_hf_url = False  # updated below if true
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
-        # TODO the following is parametrized for a vocab size of 128256 (used in LLama3). Should generalize for other models
-        self.max_columns_per_device_lm_head = 128256 // 8 if is_blackhole() else 128256 // 4
         self.dummy_weights = dummy_weights
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods
 
@@ -559,6 +573,7 @@ class ModelArgs:
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
+                "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -576,6 +591,10 @@ class ModelArgs:
         else:
             max_prefill_chunk_size_div1024 = int(max_prefill_chunk_size_div1024)
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
+
+        if self.base_model_name in ["Llama3.1-8B", "Llama3.2-11B", "Mistral-7B"] and self.device_name == "N150":
+            logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
+            self.prefill_len_cutoff = 512
 
         if callable(optimizations):
             self.optimizations = optimizations(self)
@@ -612,9 +631,6 @@ class ModelArgs:
 
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
 
-        device = mesh_device if mesh_device is not None else None
-        self.cluster_shape = list(mesh_device.shape) if mesh_device is not None else None
-        self.is_galaxy = self.num_devices == 32
         if device is not None:  # Avoid issue with test_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
 
@@ -779,8 +795,12 @@ class ModelArgs:
                 per_core_N=math.ceil(n_w2 / (self.tile_size * dram_shard_grid_width)) if mlp_w_dram_sharded else None,
             )
 
-            k_dim = self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim // self.num_devices
-            # n_dim = self.dim // self.cluster_shape[1] if self.is_galaxy else self.dim
+            # Attention output is not necessarily the same dimension as the self.dim, e.g. in Mistral
+            k_dim = (
+                (self.n_heads * self.head_dim) // self.cluster_shape[0]
+                if self.is_galaxy
+                else (self.n_heads * self.head_dim) // self.num_devices
+            )
             n_dim = (
                 self.dim // self.cluster_shape[1]
                 if self.is_galaxy
@@ -820,6 +840,12 @@ class ModelArgs:
                         )
                     lm_head_num_rows = 8
             self.lm_head_core_grid = ttnn.CoreGrid(y=lm_head_num_rows, x=lm_head_cores_per_row)
+            # 128256 comes from original llama 3 vocab size. 128256 / 4 was experimentally the maximum columns that worked per device.
+            # The LM head for that was on 48 cores, so we know 128256 / 4 / 48 = 668 columns per core is close to the L1 limit.
+            # FIXME: Update blackhole figure to be per-core as well.
+            self.max_columns_per_device_lm_head = (
+                128256 // 8 if is_blackhole() else 668 * self.lm_head_core_grid.num_cores
+            )
 
             self.model_config["LM_HEAD_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
@@ -1359,7 +1385,7 @@ class ModelArgs:
         self.full_model_n_layers = self.n_layers
         self.norm_eps = params.get("norm_eps", params.get("rms_norm_eps"))
         self.vocab_size = params["vocab_size"]
-        self.padded_vocab_size = 128 * 1024
+        self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = params.get("head_dim", self.dim // self.n_heads)
         if is_hf:
             self.max_context_len = params.get("max_position_embeddings")
@@ -1425,9 +1451,10 @@ class ModelArgs:
         # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
         # If it is present and is set to false, do not use scaled rope
         # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
-        if "rope_scaling" in params and params.get("use_scaled_rope", True):
-            self.rope_scaling_factor = params.get("factor", None)
-            self.orig_context_len = params.get("original_max_position_embeddings", None)
+        rope_scaling_params = params.get("rope_scaling", None)
+        if rope_scaling_params:
+            self.rope_scaling_factor = rope_scaling_params.get("factor", None)
+            self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", None)
         else:
             self.rope_scaling_factor = None
             self.orig_context_len = None
@@ -2068,7 +2095,10 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            wrapper = HfAttentionWrapper(layer, self.head_dim)
+            use_position_embeddings = layer.__class__.__name__ == "Qwen3Attention"
+            wrapper = HfAttentionWrapper(
+                layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
+            )
             return wrapper
 
     def set_tg_attention_config(self):
@@ -2153,26 +2183,39 @@ class ModelArgs:
 
 
 class HfAttentionWrapper:
-    def __init__(self, attention, head_dim):
+    def __init__(self, attention, head_dim, rotary_emb):
         from transformers import DynamicCache
 
         super().__init__()
         self.attention = attention
         self.past_key_value = DynamicCache()
         self.head_dim = head_dim
+        self.rotary_emb = rotary_emb
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
+
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
-        output, _, self.past_key_value = self.attention(
-            x,
-            past_key_value=self.past_key_value,
-            use_cache=True,
-            position_ids=position_ids,
-            attention_mask=mask,
-        )
+
+        if self.rotary_emb is not None:
+            position_embeddings = self.rotary_emb(x, position_ids)
+            output, _ = self.attention(
+                x,
+                position_embeddings=position_embeddings,
+                past_key_value=self.past_key_value,
+                use_cache=True,
+                attention_mask=mask,
+            )
+        else:
+            output, _, self.past_key_value = self.attention(
+                x,
+                past_key_value=self.past_key_value,
+                use_cache=True,
+                position_ids=position_ids,
+                attention_mask=mask,
+            )
         return output
 
     def __call__(self, *args, **kwargs):
@@ -2303,13 +2346,13 @@ class HfModelWrapper:
 class DecodersPrecision:
     @classmethod
     def accuracy(cls, num_decoders, model_name):
-        inst = cls(num_decoders, model_name, ModelOptimizations.accuracy(model_name))
+        inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.accuracy)
         inst.__name__ = "accuracy"
         return inst
 
     @classmethod
     def performance(cls, num_decoders, model_name):
-        inst = cls(num_decoders, model_name, ModelOptimizations.performance(model_name))
+        inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.performance)
         inst.__name__ = "performance"
         return inst
 
@@ -2346,6 +2389,32 @@ class DecodersPrecision:
         self._full_name = " | ".join(
             f"Decoder {decoder_id}: {conf._full_name}" for decoder_id, conf in self.decoder_optimizations.items()
         )
+
+    @classmethod
+    def _precision_factory(cls, num_decoders, model_name, optimization_level):
+        # use respective configuration for each optimization level
+        decoder_config_filename = None
+        match optimization_level:
+            case ModelOptimizations.accuracy:
+                decoder_config_filename = ACCURACY_DECODER_CONFIG_FILENAME
+            case ModelOptimizations.performance:
+                decoder_config_filename = PERFORMANCE_DECODER_CONFIG_FILENAME
+            case _:
+                raise ValueError(f"optimization_level ({optimization_level}) not implemented")
+
+        # check if decoder config exists, if it exists load it else use optimization_level
+        model_params_dir = Path(__file__).parent.parent
+        decoder_config_path = model_params_dir / "model_params" / model_name / decoder_config_filename
+        inst = None
+        if decoder_config_path.exists():
+            inst = parse_decoder_json(decoder_config_path, default_optimization=optimization_level)
+            logger.info(
+                f"Model {model_name} requires specific TensorPrecision and OpFidelity configuration, using {decoder_config_path}"
+            )
+        else:
+            inst = cls(num_decoders, model_name, optimization_level(model_name))
+
+        return inst
 
 
 def num_to_corerange(x):

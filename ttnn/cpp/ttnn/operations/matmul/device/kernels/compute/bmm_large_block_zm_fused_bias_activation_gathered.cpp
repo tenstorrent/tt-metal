@@ -328,7 +328,9 @@ void MAIN {
                             SFPU_OP_FUNC_ACTIVATION
                         }
 #endif
-
+                        if constexpr (untilize_out) {
+                            pack_untilize_dst_init_short<out_subblock_num_tiles>(mm_out_cb_id);
+                        }
                         tile_regs_commit();
                         // Pack out to output buffer
                         cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
@@ -344,9 +346,16 @@ void MAIN {
 #endif
 
                         uint32_t start_dst_index = 0;
-                        matmul_pack_tile(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
+                        if constexpr (untilize_out) {
+                            pack_untilize_dst<out_subblock_num_tiles>(mm_out_cb_id);
+                        } else {
+                            matmul_pack_tile(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
+                        }
 
                         tile_regs_release();
+                        if constexpr (untilize_out) {
+                            pack_untilize_uninit(mm_out_cb_id);
+                        }
                         cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
 
                     } else if (spill) {

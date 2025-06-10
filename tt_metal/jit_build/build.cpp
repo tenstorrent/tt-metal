@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,7 @@
 #include "impl/context/metal_context.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "jit_build_settings.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
 #include "tt_backend_api_types.hpp"
@@ -52,7 +52,6 @@ namespace tt::tt_metal {
 
 static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
     switch (arch) {
-        case tt::ARCH::GRAYSKULL: return "grayskull"; break;
         case tt::ARCH::WORMHOLE_B0: return "wormhole"; break;
         case tt::ARCH::BLACKHOLE: return "blackhole"; break;
         default: return "invalid"; break;
@@ -159,12 +158,11 @@ void JitBuildEnv::init(
     // Flags
     string common_flags;
     switch (arch) {
-        case ARCH::GRAYSKULL: common_flags = "-mcpu=tt-gs "; break;
         case ARCH::WORMHOLE_B0: common_flags = "-mcpu=tt-wh "; break;
         case ARCH::BLACKHOLE: common_flags = "-mcpu=tt-bh -fno-rvtt-sfpu-replay "; break;
         default: TT_ASSERT(false, "Invalid arch"); break;
     }
-    common_flags += "-std=c++17 -flto -ffast-math ";
+    common_flags += "-std=c++17 -flto=auto -ffast-math ";
 
     if (rtoptions.get_riscv_debug_info_enabled()) {
         common_flags += "-g ";
@@ -181,7 +179,6 @@ void JitBuildEnv::init(
 
     // Defines
     switch (arch) {
-        case ARCH::GRAYSKULL: this->defines_ = "-DARCH_GRAYSKULL "; break;
         case ARCH::WORMHOLE_B0: this->defines_ = "-DARCH_WORMHOLE "; break;
         case ARCH::BLACKHOLE: this->defines_ = "-DARCH_BLACKHOLE "; break;
         default: break;
@@ -243,6 +240,10 @@ void JitBuildEnv::init(
 
     if (rtoptions.get_relaxed_memory_ordering_disabled()) {
         this->defines_ += "-DDISABLE_RELAXED_MEMORY_ORDERING ";
+    }
+
+    if (rtoptions.get_gathering_enabled()) {
+        this->defines_ += "-DENABLE_GATHERING ";
     }
 
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_base_routing_fw_enabled()) {
@@ -651,7 +652,7 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
             break;
         }
         case 1: {
-            this->target_name_ = "slave_idle_erisc";
+            this->target_name_ = "subordinate_idle_erisc";
             this->cflags_ = env_.cflags_ + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
             this->defines_ +=
                 "-DCOMPILE_FOR_IDLE_ERISC=1 "
@@ -659,16 +660,16 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
                 "-DRISC_B0_HW ";
             this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
             if (this->is_fw_) {
-                this->srcs_.push_back("tt_metal/hw/firmware/src/slave_idle_erisc.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/subordinate_idle_erisc.cc");
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
             }
             if (this->is_fw_) {
                 this->lflags_ +=
-                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_slave_ierisc.ld ";
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_subordinate_ierisc.ld ";
             } else {
                 this->lflags_ +=
-                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_slave_ierisc.ld ";
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_subordinate_ierisc.ld ";
             }
             break;
         }
@@ -758,7 +759,8 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string lflags = this->lflags_;
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_build_map_enabled()) {
-        lflags += "-Wl,-Map=" + out_dir + "linker.map ";
+        lflags += "-Wl,-Map=" + out_dir + this->target_name_ + ".map ";
+        lflags += "-save-temps ";
     }
 
     // Append user args

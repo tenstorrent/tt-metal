@@ -1,15 +1,13 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import time
 
 import pytest
-import torch
 from loguru import logger
 
-import ttnn
-from models.demos.ufld_v2.tests.ufld_v2_e2e_performant import UFLDv2Trace2CQ
+from models.demos.ufld_v2.tests.ufld_v2_e2e_performant import UFLDPerformantRunner
 from models.utility_functions import run_for_wormhole_b0
 
 
@@ -27,25 +25,18 @@ def test_run_ufldv2_trace_2cqs_inference(
     batch_size,
     model_location_generator,
 ):
-    ufldv2_trace_2cq = UFLDv2Trace2CQ()
-
-    ufldv2_trace_2cq.initialize_ufldv2_trace_2cqs_inference(device, batch_size, weight_dtype=ttnn.bfloat8_b)
-
-    input_shape = (batch_size, 3, 320, 800)
-    torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-    n, c, h, w = torch_input_tensor.shape
-    torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
-    torch_input_tensor = torch_input_tensor.reshape(1, 1, h * w * n, c)
-    tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-    tt_inputs_host = ttnn.pad(tt_inputs_host, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
-    inference_iter_count = 10
+    performant_runner = UFLDPerformantRunner(
+        device,
+        batch_size,
+    )
+    performant_runner._capture_ufldv2_trace_2cqs()
     inference_time_iter = []
-    for iter in range(0, inference_iter_count):
+    for _ in range(10):
         t0 = time.time()
-        output = ufldv2_trace_2cq.execute_ufldv2_trace_2cqs_inference(tt_inputs_host)
+        _ = performant_runner._execute_ufldv2_trace_2cqs_inference()
         t1 = time.time()
         inference_time_iter.append(t1 - t0)
-    ufldv2_trace_2cq.release_ufldv2_trace_2cqs_inference()
+    performant_runner.release()
     inference_time_avg = round(sum(inference_time_iter) / len(inference_time_iter), 6)
     logger.info(
         f"ttnn_ufldv2_320x800_batch_size_{batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size/inference_time_avg)}"

@@ -165,6 +165,7 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     bool gather_in0;
     CoreRangeSet hop_cores;
     std::size_t num_global_cb_receivers;
+    bool untilize_out;
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {

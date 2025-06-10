@@ -607,7 +607,7 @@ def test_inplace_sub_typecast_b(input_shapes, device):
         "add",
         "sub",
         "mul",
-        "div",
+        "divide",
         "rsub",
         "gt",
         "lt",
@@ -664,7 +664,7 @@ def test_opt_output_scalar(input_shapes, ttnn_fn, scalar, device):
         "add",
         "sub",
         "mul",
-        "div",
+        "divide",
         "rsub",
         "squared_difference",
     ],
@@ -765,7 +765,7 @@ def test_edgecase_dims_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memo
         "add",
         "sub",
         "mul",
-        "div",
+        "divide",
         "rsub",
         "squared_difference",
     ],
@@ -782,7 +782,7 @@ def test_edgecase_dims_eltwise_broadcast_matrix_math(input_shapes, ttnn_fn, memo
     torch_input_tensor_a = torch.randn(a_shape, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn(b_shape, dtype=torch.bfloat16)
 
-    if ttnn_fn == "div":
+    if ttnn_fn == "divide":
         torch_input_tensor_b[torch_input_tensor_b.abs() < 0.001] = 0.001
 
     input_tensor_a = ttnn.from_torch(
@@ -915,5 +915,5 @@ def test_binary_div(
     input_tensor_b = ttnn.from_torch(
         torch_input_b, layout=input_layout, memory_config=memory_config, dtype=input_dtype, device=device
     )
-    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, dtype=output_dtype, use_legacy=False)
+    output_tensor = ttnn.divide(input_tensor_a, input_tensor_b, dtype=output_dtype, use_legacy=False)
     assert_with_pcc(torch_output, ttnn.to_torch(output_tensor), 0.999)

@@ -50,7 +50,7 @@ inline void dprint_tensix_pack_config_in_data_format(const ckernel::packer::pack
     DPRINT << ENDL();
 }
 
-#if defined(ARCH_GRAYSKULL) || defined(ARCH_WORMHOLE)
+#if defined(ARCH_WORMHOLE)
 inline void dprint_tensix_pack_config_reserved_1(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.reserved_1 << ENDL();
 }
@@ -60,7 +60,7 @@ inline void dprint_tensix_pack_config_src_if_sel(const ckernel::packer::pack_con
     DPRINT << "0x" << HEX() << config.src_if_sel << ENDL();
 }
 
-#if defined(ARCH_GRAYSKULL) || defined(ARCH_WORMHOLE)
+#if defined(ARCH_WORMHOLE)
 inline void dprint_tensix_pack_config_pack_per_xy_plane(const ckernel::packer::pack_config_t& config) {
     DPRINT << DEC() << config.pack_per_xy_plane << ENDL();
 }
@@ -70,7 +70,7 @@ inline void dprint_tensix_pack_config_l1_src_addr(const ckernel::packer::pack_co
     DPRINT << "0x" << HEX() << config.l1_src_addr << ENDL();
 }
 
-#if defined(ARCH_GRAYSKULL) || defined(ARCH_WORMHOLE)
+#if defined(ARCH_WORMHOLE)
 inline void dprint_tensix_pack_config_downsample_mask(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.downsample_mask << ENDL();
 }
@@ -140,49 +140,6 @@ inline void dprint_tensix_pack_config_pack_dis_y_pos_start_offset(const ckernel:
     DPRINT << "0x" << HEX() << config.pack_dis_y_pos_start_offset << ENDL();
 }
 #endif
-
-#ifdef ARCH_GRAYSKULL
-
-inline void dprint_tensix_pack_config_helper(const ckernel::packer::pack_config_t& config) {
-    DPRINT << "row_ptr_section_size: ";
-    dprint_tensix_pack_config_row_ptr_section_size(config);
-    DPRINT << "exp_section_size: ";
-    dprint_tensix_pack_config_exp_section_size(config);
-    DPRINT << "l1_dest_addr: ";
-    dprint_tensix_pack_config_l1_dest_addr(config);
-    DPRINT << "uncompress: ";
-    dprint_tensix_pack_config_uncompressed(config);
-    DPRINT << "add_l1_dest_addr_offset: ";
-    dprint_tensix_pack_config_add_l1_dest_addr_offset(config);
-    DPRINT << "reserved_0: ";
-    dprint_tensix_pack_config_reserved_0(config);
-    DPRINT << "out_data_format: ";
-    dprint_tensix_pack_config_out_data_format(config);
-    DPRINT << "in_data_format: ";
-    dprint_tensix_pack_config_in_data_format(config);
-    DPRINT << "reserved_1: ";
-    dprint_tensix_pack_config_reserved_1(config);
-    DPRINT << "src_if_sel: ";
-    dprint_tensix_pack_config_src_if_sel(config);
-    DPRINT << "pack_per_xy_plane: ";
-    dprint_tensix_pack_config_pack_per_xy_plane(config);
-    DPRINT << "l1_src_addr: ";
-    dprint_tensix_pack_config_l1_src_addr(config);
-    DPRINT << "downsample_mask: ";
-    dprint_tensix_pack_config_downsample_mask(config);
-    DPRINT << "downsample_shift_count: ";
-    dprint_tensix_pack_config_downsample_shift_count(config);
-    DPRINT << "read_mode: ";
-    dprint_tensix_pack_config_read_mode(config);
-    DPRINT << "exp_threshold_en: ";
-    dprint_tensix_pack_config_exp_threshold_en(config);
-    DPRINT << "reserved_2: ";
-    dprint_tensix_pack_config_reserved_2(config);
-    DPRINT << "exp_threshold: ";
-    dprint_tensix_pack_config_exp_threshold(config);
-}
-
-#else  // ARCH_WORMHOLE or ARCH_BLACKHOLE
 
 #ifdef ARCH_WORMHOLE
 inline void dprint_tensix_pack_config_helper(const ckernel::packer::pack_config_t& config) {
@@ -387,8 +344,6 @@ inline void dprint_tensix_dest_rd_ctrl() {
          DPRINT << "PCK_DEST_RD_CTRL_Reserved: ";
          dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_reserved(dest);)
 }
-
-#endif  // END OF ELSE
 
 // PACK STRIDES
 #ifdef ARCH_BLACKHOLE

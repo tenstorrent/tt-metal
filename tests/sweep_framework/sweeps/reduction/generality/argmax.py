@@ -10,7 +10,8 @@ import ttnn
 from loguru import logger
 
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -59,43 +60,44 @@ def run_argmax(device, tensor_shape, dim, keepdim, use_multicore) -> list:
 
     ttnn_errored = False
     ttnn_error_msg = ""
+    start_time = start_measuring_time()
     try:
-        ttnn_result = (
+        op_output_tensor = (
             ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, use_multicore=use_multicore)
             if dim is not None
             else ttnn_op(ttnn_tensor, use_multicore=use_multicore)
         )
+        output_tensor = ttnn.to_torch(ttnn.from_device(op_output_tensor))
     except RuntimeError as e:
         ttnn_errored = True
         ttnn_error_msg = str(e)
+    e2e_perf = stop_measuring_time(start_time)
 
     if torch_errored != ttnn_errored:
-        return (
-            False,
-            f"mismatch in errors raised: torch: {torch_errored} ({torch_error_msg}), ttnn: {ttnn_errored} ({ttnn_error_msg})",
-        )
+        return [
+            (
+                False,
+                f"mismatch in errors raised: torch: {torch_errored} ({torch_error_msg}), ttnn: {ttnn_errored} ({ttnn_error_msg})",
+            ),
+            e2e_perf,
+        ]
 
     # Skip the rest of the test if an exception was raised in both
     if torch_errored:
         logger.warning(f"both torch and ttnn raised errors: torch: {torch_error_msg}, ttnn: {ttnn_error_msg}")
-        return (True, "")
-
-    ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
-
-    pcc_result, msg = check_with_pcc(torch_result, ttnn_result, 0.99)
-
-    if not pcc_result:
-        return (False, msg + f"mismatch in pcc: torch: {torch_result}, ttnn: {ttnn_result}")
+        return [(True, ""), e2e_perf]
 
     # Convert torch dtype from uint64 to int32
     # Note: torch does not have uint32
-    torch_result = torch_result.to(torch.int32)
-
+    int32_torch_result = torch_result.to(torch.int32)
     atol = rtol = 0.1
-    return (
-        torch.allclose(torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True),
-        f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}",
-    )
+    allclose = (torch.allclose(int32_torch_result, output_tensor, atol=atol, rtol=rtol, equal_nan=True),)
+    if not allclose:
+        return [(False, f"mismatch in allclose: torch: {int32_torch_result}, ttnn: {output_tensor}"), e2e_perf]
+
+    expected_pcc = 0.99
+    tensors = [ttnn_tensor, op_output_tensor]
+    return get_run_return(torch_result, output_tensor, expected_pcc, tensors, e2e_perf)
 
 
 @pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))
@@ -106,7 +108,7 @@ def test_argmax(
     keepdim,
     use_multicore,
 ):
-    result, error_msg = run_argmax(
+    (result, error_msg), e2e_perf = run_argmax(
         device,
         tensor_shape,
         dim,

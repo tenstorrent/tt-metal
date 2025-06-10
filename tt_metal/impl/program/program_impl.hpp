@@ -12,7 +12,7 @@
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/command_queue.hpp"
 #include "tt-metalium/core_coord.hpp"
-#include "tt-metalium/dev_msgs.h"              // DISPATCH_CLASS_MAX
+#include "dev_msgs.h"                          // DISPATCH_CLASS_MAX
 #include "tt-metalium/hal_types.hpp"           // HalProgrammableCoreType
 #include "tt-metalium/kernel.hpp"              // Kernel
 #include "tt-metalium/kernel_types.hpp"        // KernelHandle
@@ -130,7 +130,8 @@ using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared
 using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
 using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
 
-class ProgramImpl {
+// The internal implementation of the Program class. Program is a view of this class that's usable by API clients.
+class ProgramImpl : public std::enable_shared_from_this<ProgramImpl> {
 public:
     ProgramImpl();
 
@@ -140,7 +141,7 @@ public:
     ProgramImpl(ProgramImpl&& other) = default;
     ProgramImpl& operator=(ProgramImpl&& other) = default;
 
-    ~ProgramImpl() noexcept = default;
+    ~ProgramImpl() noexcept;
 
     void set_runtime_id(uint64_t id);
     uint64_t get_runtime_id() const;
@@ -179,12 +180,14 @@ public:
     }
     void set_cached(uint64_t device_hash) { this->cached_device_hash_ = device_hash; }
     const std::optional<uint64_t>& get_cached() const { return this->cached_device_hash_; }
-    void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status) {
-        this->binaries_on_device_[device_id] = status;
-    }
+    void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
     ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
+    const ProgramConfig& get_program_config(uint32_t programmable_core_type_index) const;
     const std::vector<SubDeviceId>& determine_sub_device_ids(const IDevice* device);
+
+    void generate_trace_dispatch_commands(IDevice* device);
+    std::unordered_map<uint64_t, ProgramCommandSequence>& get_trace_cached_program_command_sequences() noexcept;
 
     // debug/test
     uint32_t get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
@@ -281,6 +284,7 @@ private:
 
     // The rta_updates from one cached command sequence may reference data in another cached command sequence.
     std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
+    std::unordered_map<uint64_t, ProgramCommandSequence> trace_cached_program_command_sequences_;
 
     friend std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program& program, CBHandle id);
     friend void ValidateCircularBufferRegion(const Program& program, const IDevice* device);

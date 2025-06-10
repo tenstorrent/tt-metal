@@ -10,8 +10,16 @@ target_sources(
         erisc_datamover_builder.cpp
         fabric.cpp
         fabric_host_utils.cpp
+        fabric_context.cpp
 )
 
+# These headers are for the device, not host; will require cross compiling to verify.
+set_target_properties(
+    fabric
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 target_sources(
     fabric
     PUBLIC
@@ -51,16 +59,7 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
 )
 
-target_precompile_headers(
-    fabric
-    PRIVATE
-        <functional>
-        <map>
-        <memory>
-        <unordered_map>
-        <variant>
-        <vector>
-)
+target_precompile_headers(fabric REUSE_FROM TT::CommonPCH)
 
 target_compile_options(fabric PRIVATE -Wno-int-to-pointer-cast)
 

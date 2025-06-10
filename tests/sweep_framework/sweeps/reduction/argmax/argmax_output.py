@@ -13,6 +13,7 @@ from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_r
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -104,12 +105,12 @@ def run_argmax(
     )
 
     start_time = start_measuring_time()
-    ttnn.argmax(input_tensor_a, dim=dim, output_tensor=output_tensor)
-    e2e_perf = stop_measuring_time(start_time)
-
+    op_output_tensor = ttnn.argmax(input_tensor_a, dim=dim, output_tensor=output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-
-    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+    e2e_perf = stop_measuring_time(start_time)
+    expected_pcc = 0.999
+    tensors = [input_tensor_a, op_output_tensor]
+    return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)
 
 
 @pytest.mark.parametrize("params", list(permutations(parameters["nightly"])))

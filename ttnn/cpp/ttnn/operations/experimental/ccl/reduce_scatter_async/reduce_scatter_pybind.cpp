@@ -16,7 +16,7 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail {
+namespace {
 
 template <typename ccl_operation_t>
 void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
@@ -100,10 +100,10 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
             py::arg("subdevice_id") = std::nullopt});
 }
 
-}  // namespace detail
+}  // namespace
 
 void py_bind_reduce_scatter_async(pybind11::module& module) {
-    detail::bind_reduce_scatter(
+    bind_reduce_scatter(
         module,
         ttnn::experimental::reduce_scatter_async,
         R"doc(

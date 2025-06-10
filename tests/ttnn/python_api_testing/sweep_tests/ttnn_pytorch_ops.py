@@ -33,12 +33,12 @@ def prelu(x, *args, **kwargs):
 
 def max(x, *args, **kwargs):
     dim = kwargs.pop("dim")
-    return torch.max(x, dim=dim[0], keepdim=True).values
+    return torch.max(x, dim=dim[0]).values
 
 
 def min(x, *args, **kwargs):
     dim = kwargs.pop("dim")
-    return torch.min(x, dim=dim[0], keepdim=True).values
+    return torch.min(x, dim=dim[0]).values
 
 
 def eltwise_max(x, y, *args, **kwargs):

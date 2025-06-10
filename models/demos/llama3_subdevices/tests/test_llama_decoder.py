@@ -22,6 +22,8 @@ from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
+
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -47,7 +49,7 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+    [{"page_block_size": 64, "page_max_num_blocks": 4096}],
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -63,7 +65,7 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 165136000,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,
@@ -202,7 +204,7 @@ def test_llama_decoder_inference(
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rot_mats(current_pos)
+        rot_mats = rope_setup.get_rm_rot_mats(current_pos)
         tt_pf = prefetcher_setup.get_input_tensors()
         ttnn.dram_prefetcher(
             tt_pf,

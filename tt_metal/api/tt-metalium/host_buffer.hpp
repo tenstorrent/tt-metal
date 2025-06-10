@@ -62,9 +62,6 @@ public:
     template <typename T>
     tt::stl::Span<const T> view_as() const&& = delete;
 
-    // Returns true if the data buffer is allocated.
-    bool is_allocated() const;
-
     // Returns true if the data buffer is borrowed.
     bool is_borrowed() const;
 
@@ -74,9 +71,6 @@ public:
     // Returns a pin for the data buffer.
     // The data won't be freed until the pin is destroyed.
     MemoryPin pin() const;
-
-    // Deallocates the data buffer.
-    void deallocate();
 
 private:
     MemoryPin pin_;

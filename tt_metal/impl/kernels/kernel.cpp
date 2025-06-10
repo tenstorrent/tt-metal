@@ -22,9 +22,9 @@
 #include "data_types.hpp"
 #include "hal.hpp"
 #include "jit_build/build.hpp"
-#include "jit_build_options.hpp"
+#include "jit_build/jit_build_options.hpp"
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
@@ -32,6 +32,7 @@
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include <umd/device/types/arch.h>
+#include "kernel_impl.hpp"
 
 namespace tt {
 
@@ -83,7 +84,7 @@ void Kernel::register_kernel_with_watcher() {
     }
 }
 
-void Kernel::register_kernel_elf_paths_with_watcher(IDevice& device) {
+void KernelImpl::register_kernel_elf_paths_with_watcher(IDevice& device) const {
     TT_ASSERT(this->kernel_full_name_.size() > 0, "Kernel full name not set!");
     watcher_register_kernel_elf_paths(this->watcher_kernel_id_, this->file_paths(device));
 }
@@ -125,13 +126,13 @@ CoreType Kernel::get_kernel_core_type() const {
     return CoreType::WORKER;
 }
 
-const std::string& Kernel::get_full_kernel_name() const { return this->kernel_full_name_; }
+const std::string& KernelImpl::get_full_kernel_name() const { return this->kernel_full_name_; }
 
 void Kernel::add_defines(const std::map<std::string, std::string>& defines) {
     this->defines_.insert(defines.begin(), defines.end());
 }
 
-void Kernel::process_defines(const std::function<void(const string &define, const string &value)> callback) const {
+void KernelImpl::process_defines(const std::function<void(const string& define, const string& value)> callback) const {
     for (const auto &[define, value] : this->defines_) {
         callback(define, value);
     }
@@ -139,7 +140,7 @@ void Kernel::process_defines(const std::function<void(const string &define, cons
 
 void DataMovementKernel::process_defines(
     const std::function<void(const string &define, const string &value)> callback) const {
-    Kernel::process_defines(callback);
+    KernelImpl::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
     callback("NOC_MODE", std::to_string(this->config_.noc_mode));
 }
@@ -155,7 +156,7 @@ void ComputeKernel::process_defines(
 
 void EthernetKernel::process_defines(
     const std::function<void(const string &define, const string &value)> callback) const {
-    Kernel::process_defines(callback);
+    KernelImpl::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
     // pass default noc mode as eth does not need it, just for compile to pass
     callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
@@ -179,7 +180,8 @@ std::string_view EthernetKernel::get_compiler_opt_level() const {
 
 std::string_view EthernetKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
-void Kernel::process_compile_time_args(const std::function<void(const std::vector<uint32_t>& values)> callback) const {
+void KernelImpl::process_compile_time_args(
+    const std::function<void(const std::vector<uint32_t>& values)> callback) const {
     callback(this->compile_time_args());
 }
 
@@ -192,7 +194,7 @@ uint8_t ComputeKernel::expected_num_binaries() const {
     return 3;
 }
 
-std::vector<ll_api::memory const*> const& Kernel::binaries(uint32_t build_key) const {
+const std::vector<const ll_api::memory*>& KernelImpl::binaries(uint32_t build_key) const {
     auto iter = binaries_.find(build_key);
     TT_ASSERT(iter != binaries_.end(), "binary not found");
     if (iter->second.size() != expected_num_binaries()) {
@@ -231,11 +233,16 @@ std::string ComputeKernel::config_hash() const {
 }
 
 std::string Kernel::compute_hash() const {
+    size_t hash_value = 0;
+    for (const auto& [define, value] : this->defines_) {
+        tt::utils::hash_combine(hash_value, std::hash<std::string>{}(define + value));
+    }
+
     return fmt::format(
         "{}_{}_{}_{}",
         std::hash<std::string>{}(this->kernel_src_.source_),
         fmt::join(this->compile_time_args_, "_"),
-        tt::utils::DefinesHash{}(this->defines_),
+        hash_value,
         this->config_hash());
 }
 
@@ -274,9 +281,7 @@ void Kernel::validate_runtime_args_size(
     size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord &logical_core) {
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
     auto arch = MetalContext::instance().hal().get_arch();
-    uint32_t idle_eth_max_runtime_args =
-        (arch == tt::ARCH::GRAYSKULL) ? 0
-                                      : MetalContext::instance().hal().get_dev_size(
+    uint32_t idle_eth_max_runtime_args = MetalContext::instance().hal().get_dev_size(
                                             HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) /
                                             sizeof(uint32_t);
     uint32_t max_rt_args = is_idle_eth() ? idle_eth_max_runtime_args : max_runtime_args;
@@ -360,13 +365,13 @@ bool Kernel::is_idle_eth() const {
     return std::holds_alternative<EthernetConfig>(this->config()) && std::get<EthernetConfig>(this->config()).eth_mode == Eth::IDLE;
 }
 
-uint32_t Kernel::get_binary_packed_size(IDevice* device, int index) const {
+uint32_t KernelImpl::get_binary_packed_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
     auto iter = binaries_.find(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
     return iter != this->binaries_.end() ? iter->second[index]->get_packed_size() : 0;
 }
 
-uint32_t Kernel::get_binary_text_size(IDevice* device, int index) const {
+uint32_t KernelImpl::get_binary_text_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
     auto iter = binaries_.find(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
     return iter != this->binaries_.end() ? iter->second[index]->get_text_size() : 0;
@@ -418,7 +423,7 @@ void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_
     jit_build_subset(build_states, this);
 }
 
-void Kernel::set_binaries(uint32_t build_key, std::vector<ll_api::memory const*>&& binaries) {
+void KernelImpl::set_binaries(uint32_t build_key, std::vector<const ll_api::memory*>&& binaries) {
     // Try inserting an empry vector, as that is cheap to construct
     // and avoids an additonal move.
     auto pair = binaries_.insert({build_key, {}});
@@ -452,11 +457,7 @@ void DataMovementKernel::read_binaries(IDevice* device) {
     int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
-    // TODO: from HAL
-    auto load_type =
-        (riscv_id == 1 && (device->arch() == tt::ARCH::GRAYSKULL || device->arch() == tt::ARCH::WORMHOLE_B0))
-            ? ll_api::memory::Loading::CONTIGUOUS
-            : ll_api::memory::Loading::CONTIGUOUS_XIP;
+    auto load_type = MetalContext::instance().hal().get_jit_build_config(tensix_core_type, riscv_id, 0).memory_load;
     ll_api::memory const& binary_mem = llrt::get_risc_binary(
         build_state.get_target_out_path(this->kernel_full_name_),
         load_type);
@@ -500,8 +501,8 @@ void EthernetKernel::read_binaries(IDevice* device) {
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), erisc_core_type, dm_class_idx, erisc_id);
     // TODO: fix when active eth supports relo
-    auto load_type = (this->config_.eth_mode == Eth::IDLE) ?
-        ll_api::memory::Loading::CONTIGUOUS_XIP : ll_api::memory::Loading::DISCRETE;
+    auto load_type =
+        MetalContext::instance().hal().get_jit_build_config(erisc_core_type, dm_class_idx, erisc_id).memory_load;
     ll_api::memory const& binary_mem = llrt::get_risc_binary(
         build_state.get_target_out_path(this->kernel_full_name_),
         load_type);
@@ -561,9 +562,12 @@ void ComputeKernel::read_binaries(IDevice* device) {
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, compute_class_idx, trisc_id);
-        ll_api::memory const& binary_mem = llrt::get_risc_binary(
-            build_state.get_target_out_path(this->kernel_full_name_),
-            ll_api::memory::Loading::CONTIGUOUS_XIP);
+        auto load_type = MetalContext::instance()
+                             .hal()
+                             .get_jit_build_config(tensix_core_type, compute_class_idx, trisc_id)
+                             .memory_load;
+        const ll_api::memory& binary_mem =
+            llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
         binaries.push_back(&binary_mem);
         uint32_t binary_size = binary_mem.get_packed_size();
     }

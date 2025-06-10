@@ -2,6 +2,13 @@ add_library(metalium_firmware INTERFACE)
 add_library(TT::Metalium::Firmware ALIAS metalium_firmware)
 
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
+    # These headers are for the device, not host; will require cross compiling to verify.
+    set_target_properties(
+        metalium_firmware
+        PROPERTIES
+            VERIFY_INTERFACE_HEADER_SETS
+                FALSE
+    )
     target_sources(
         metalium_firmware
         INTERFACE
@@ -22,7 +29,7 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 src/idle_erisck.cc
                 src/ncrisc.cc
                 src/ncrisck.cc
-                src/slave_idle_erisc.cc
+                src/subordinate_idle_erisc.cc
                 src/tdma_xmov.c
                 src/trisc.cc
                 src/trisck.cc

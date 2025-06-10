@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 //
 
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "sharding_utilities.hpp"
 
@@ -245,12 +245,12 @@ NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const 
     // First partial right-aligned row
     int32_t image_row_start_left_width = start_stick % pc.in_w;
     if (to_print) {
-        tt::log_debug("image_row_start_left_width: {}", image_row_start_left_width);
+        log_debug(tt::LogOp, "image_row_start_left_width: {}", image_row_start_left_width);
     }
     int32_t first_partial_right_aligned_row_width =
         image_row_start_left_width > 0 ? pc.in_w - image_row_start_left_width : 0;
     if (to_print) {
-        tt::log_debug("first_partial_right_aligned_row_width: {}", first_partial_right_aligned_row_width);
+        log_debug(tt::LogOp, "first_partial_right_aligned_row_width: {}", first_partial_right_aligned_row_width);
     }
 
     if (first_partial_right_aligned_row_width > nsticks_per_core) {
@@ -268,11 +268,11 @@ NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const 
     // Last partial left-aligned row
     int32_t sticks_after_first_partial_row = nsticks_per_core - first_partial_right_aligned_row_width;
     if (to_print) {
-        tt::log_debug("sticks_after_first_partial_row: {}", sticks_after_first_partial_row);
+        log_debug(tt::LogOp, "sticks_after_first_partial_row: {}", sticks_after_first_partial_row);
     }
     int32_t last_partial_left_aligned_row_width = sticks_after_first_partial_row % pc.in_w;
     if (to_print) {
-        tt::log_debug("last_partial_left_aligned_row_width: {}", last_partial_left_aligned_row_width);
+        log_debug(tt::LogOp, "last_partial_left_aligned_row_width: {}", last_partial_left_aligned_row_width);
     }
 
     // Figure out how to allocate full image rows to first partial image, full images, or last partial image
@@ -313,7 +313,7 @@ NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const 
     int32_t image_rows_after_first_partial_image =
         sticks_after_first_partial_row / pc.in_w - first_partial_image_num_rows;
     if (to_print) {
-        tt::log_debug("image_rows_after_first_partial_image: {}", image_rows_after_first_partial_image);
+        log_debug(tt::LogOp, "image_rows_after_first_partial_image: {}", image_rows_after_first_partial_image);
     }
     int32_t num_full_images = image_rows_after_first_partial_image / pc.in_h;
     int32_t skip_after_full_image = num_full_images > 0 ? pc.pad_h * (pc.in_w + 2 * pc.pad_w) : 0;
@@ -373,7 +373,7 @@ NewShardingConfig get_shard_specs_with_halo(
     start_stick = halo_start_stick < batch_start ? batch_start : halo_start_stick;
     end_stick = halo_end_stick;  // TODO: take care of max, which would be (in_h * in_w * nbatch + halo_nsticks)
 
-    // log_debug(" -- range with halo: [{},{})", start_stick, end_stick);
+    // log_debug(tt::LogOp, " -- range with halo: [{},{})", start_stick, end_stick);
 
     int32_t curr_stick = start_stick;
 
@@ -749,5 +749,31 @@ ShardingConfig get_specs_for_sharding_partition(
         .skip_after_first_partial_image_row = skip_after_first_partial_image_row,
         .skip_after_full_image = skip_after_full_image};
 }
+
+namespace sharded_accessor_utils {
+ShardedAccessorArgs get_sharded_accessor_args(
+    const distributed::MeshDevice& mesh_device,
+    const BufferDistributionSpec& buffer_distribution_spec,
+    const CoreType& bank_type) {
+    const auto& tensor_shape = buffer_distribution_spec.get_tensor_shape_in_pages();
+    const auto& shard_shape = buffer_distribution_spec.get_shard_shape_in_pages();
+    const auto& bank_coords = buffer_distribution_spec.get_cores();
+
+    std::vector<uint32_t> shapes_and_bank_coords;
+    shapes_and_bank_coords.reserve(tensor_shape.size() + shard_shape.size() + bank_coords.size());
+    shapes_and_bank_coords.insert(shapes_and_bank_coords.end(), tensor_shape.cbegin(), tensor_shape.cend());
+    shapes_and_bank_coords.insert(shapes_and_bank_coords.end(), shard_shape.cbegin(), shard_shape.cend());
+
+    // Pack each virtual coordinate as a 32-bit value with 16 bits for x and 16 bits for y
+    for (const auto& bank_coord : bank_coords) {
+        const auto virtual_coord = mesh_device.virtual_core_from_logical_core(bank_coord, bank_type);
+        shapes_and_bank_coords.push_back((virtual_coord.x << 16) | (virtual_coord.y & 0xFFFF));
+    }
+
+    return {
+        .rank = tensor_shape.size(), .num_banks = bank_coords.size(), .shapes_and_bank_coords = shapes_and_bank_coords};
+}
+
+}  // namespace sharded_accessor_utils
 
 }  // namespace tt::tt_metal

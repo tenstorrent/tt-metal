@@ -59,6 +59,9 @@ struct BinaryNgDeviceOperation {
             tt::tt_metal::KernelHandle reader_kernel_id;
             tt::tt_metal::KernelHandle writer_kernel_id;
             tt::tt_metal::KernelHandle compute_kernel_id;
+            tt::tt_metal::CBHandle cb_src_a;
+            tt::tt_metal::CBHandle cb_src_b;
+            tt::tt_metal::CBHandle cb_src_c;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

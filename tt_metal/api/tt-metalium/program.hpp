@@ -132,11 +132,12 @@ public:
     const std::vector<SubDeviceId>& determine_sub_device_ids(const IDevice* device);
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
     uint32_t get_cb_memory_size() const;
-    detail::ProgramImpl& impl() { return *pimpl_; }
-    const detail::ProgramImpl& impl() const { return *pimpl_; }
+    detail::ProgramImpl& impl() { return *internal_; }
+    const detail::ProgramImpl& impl() const { return *internal_; }
 
 private:
-    std::unique_ptr<detail::ProgramImpl> pimpl_;
+    // The internal ProgramImpl may outlive the Program object if it's in-use by a command queue.
+    std::shared_ptr<detail::ProgramImpl> internal_;
 
     friend CBHandle CreateCircularBuffer(
         Program& program,

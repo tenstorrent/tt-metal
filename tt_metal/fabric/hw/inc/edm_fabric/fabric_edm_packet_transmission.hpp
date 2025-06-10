@@ -145,6 +145,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE: {
+            ASSERT(payload_size_bytes > 0);
             // TODO: confirm if we need to adjust dest core count if we span eth or dram cores
             const auto mcast_dest_address = get_noc_multicast_addr(
                 header.command_fields.mcast_write.noc_x_start,
@@ -239,6 +240,10 @@ FORCE_INLINE void update_packet_header_for_next_hop(
     // in packet_header.route_buffer[]
     packet_header->routing_fields.value = cached_routing_fields.value + 1;
 }
+
+FORCE_INLINE void update_packet_header_for_next_hop(
+    volatile tt_l1_ptr tt::tt_fabric::MeshPacketHeader* packet_header,
+    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {}
 
 // This function forwards a packet to the downstream EDM channel for eventual sending
 // to the next chip in the line/ring

@@ -210,12 +210,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     file \
     graphviz \
     jq \
-    pandoc \
     sudo \
     uuid-runtime \
     wget \
-    libtbb-dev \
-    libcapstone-dev \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 

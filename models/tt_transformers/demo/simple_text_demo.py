@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
@@ -21,7 +22,7 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     sample_host,
 )
-from models.tt_transformers.tt.generator import Generator, SamplingParams
+from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
 
 
@@ -117,12 +118,7 @@ def prepare_generator_args(
     page_params,
     paged_attention,
 ):
-    # Partition the mesh, singular model implemented for TP on 1xN mesh
-    submesh_devices = (
-        mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
-        if isinstance(mesh_device, ttnn.MeshDevice) and data_parallel > 1
-        else [mesh_device]
-    )
+    submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
 
     # Hybrid requires a model per submesh
@@ -217,6 +213,20 @@ def prepare_generator_args(
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+            1,  # data_parallel
+        ),
+        (  # Long-context 32k run - Single user, long prompt (may vary based on the model's tokenizer)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            32 * 1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
@@ -355,11 +365,54 @@ def prepare_generator_args(
             True,  # ci_only
             8,  # data_parallel
         ),
+        (  # CI Batch-1 run - Measures the performance of a single user over 200 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            8192,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            16,  # data_parallel
+        ),
+        (  # CI Batch-1 run - Measures the performance of a single user over 200 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            8192,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            32,  # data_parallel
+        ),
+        (  # CI stress test batch-1 run - Runs a short prefill (128) and exhaust the KV cache (128K), by running 50000 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            50000,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+        ),
     ],
     ids=[
         "batch-1",  # latency
         "batch-32",  # throughput
         "long-context-64k",  # 64k context, max_seq_len=128k
+        "long-context-32k",  # 32k context, max_seq_len=32k
         "long-context-16k",  # 16k context, max_seq_len=32k
         "reasoning-1",  # reasoning
         "ci-1",  # CI batch 1
@@ -369,6 +422,9 @@ def prepare_generator_args(
         "DP-4-b32",  # DP 4 throughput
         "ci-b1-DP-4",  # CI DP 4 batch 1
         "ci-b1-DP-8",  # CI DP 8 batch 1
+        "ci-b1-DP-16",  # CI DP 16 batch 1
+        "ci-b1-DP-32",  # CI DP 32 batch 1
+        "ci-stress-1",  # CI Stress test batch-1
     ],
 )
 @pytest.mark.parametrize(
@@ -379,11 +435,11 @@ def prepare_generator_args(
     ],
     ids=["performance", "accuracy"],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 25000000, "num_command_queues": 1}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -437,6 +493,8 @@ def test_demo_text(
     data_parallel = request.config.getoption("--data_parallel") or data_parallel
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
+    if isinstance(page_params, str):  # Required for proper load of a dictionary from the override command
+        page_params = json.loads(page_params)
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
     json_config_file = request.config.getoption("--decoder_config_file")
 
@@ -460,15 +518,16 @@ def test_demo_text(
 
     if is_ci_env:
         llama_dir = os.getenv("LLAMA_DIR", "")
-        is_31_70b = "3.1-70B" in llama_dir
+        is_33_70b = "3.3-70B" in llama_dir
         is_32_1b = "3.2-1B" in llama_dir
         is_31_8b = "3.1-8B" in llama_dir
-        if num_devices == 32 and (data_parallel > 4 or (data_parallel == 4 and not is_31_70b)):
-            pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 on TG")
+
+        tg_enabled = (data_parallel == 4 and is_33_70b) or (data_parallel in [4, 16, 32] and is_31_8b)
+
+        if num_devices == 32 and not tg_enabled:
+            pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 or Llama3 8b DP = 4/16/32, TP = 8/2/1 on TG")
         if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b):
             pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
-        if data_parallel > 1 and batch_size > 1:
-            pytest.skip("CI only runs hybrid with batch 1 per submesh")
 
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
@@ -512,6 +571,13 @@ def test_demo_text(
         page_params=page_params,
         paged_attention=paged_attention,
     )
+
+    for m_args in model_args:
+        if m_args.max_context_len < max_seq_len:
+            pytest.skip(
+                f"Max seq len {max_seq_len} not supported by model {m_args.model_name}. The model's max context len is {m_args.max_context_len}"
+            )
+
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     num_tokens_generated_decode = []
@@ -527,11 +593,7 @@ def test_demo_text(
             decoding_pos,
             prefill_lens,
         ) = preprocess_inputs_prefill(
-            input_prompts,
-            tokenizer,
-            model_args,
-            instruct,
-            max_generated_tokens,
+            input_prompts, tokenizer, model_args, instruct, max_generated_tokens, max_prefill_len=max_seq_len
         )
 
         max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
@@ -561,7 +623,7 @@ def test_demo_text(
         logger.info("Starting prefill warmup...")
         profiler.start(f"compile_prefill", iteration=batch_idx)
         logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt[::batch_size, :],  # Warmup prefill for each device
+            input_tokens_prefill_pt,  # Prefill warmup for all users, in case some users have different seqlens than others
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,

@@ -4,7 +4,7 @@
 
 #include "watcher_server.hpp"
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include <unistd.h>
 #include <algorithm>
 #include <atomic>
@@ -29,7 +29,7 @@
 #include "debug_helpers.hpp"
 #include "hal_types.hpp"
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
@@ -125,7 +125,7 @@ void create_log_file() {
         f,
         "\trmsg(brisc host run message): D/H device/host dispatch; brisc NOC ID; I/G/D init/go/done; | separator; "
         "B/b enable/disable brisc; N/n enable/disable ncrisc; T/t enable/disable TRISC\n");
-    fprintf(f, "\tsmsg(slave run message): I/G/D for NCRISC, TRISC0, TRISC1, TRISC2\n");
+    fprintf(f, "\tsmsg(subordinate run message): I/G/D for NCRISC, TRISC0, TRISC1, TRISC2\n");
     fprintf(f, "\tk_ids:<brisc id>|<ncrisc id>|<trisc id> (ID map to file at end of section)\n");
     fprintf(f, "\n");
     fflush(f);
@@ -284,7 +284,7 @@ void watcher_init(chip_id_t device_id) {
 
     // Initialize stack usage data to unset
     for (int idx = 0; idx < DebugNumUniqueRiscs; idx++) {
-        data->stack_usage.max_usage[idx] = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
+        data->stack_usage.cpu[idx].min_free = 0;
     }
 
     // Initialize debug ring buffer to a known init val, we'll check against this to see if any

@@ -1,6 +1,8 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#pragma once
 
 #include "gtest/gtest.h"
 #include <tt-metalium/device_pool.hpp>
@@ -19,14 +21,19 @@ class ControlPlaneFixture : public ::testing::Test {
        void SetUp() override {
            auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
            if (not slow_dispatch) {
-               tt::log_info(
+               log_info(
                    tt::LogTest,
                    "Control plane test suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
                GTEST_SKIP();
            }
+           tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
+               tt::tt_metal::FabricConfig::FABRIC_2D);
        }
 
-       void TearDown() override {}
+       void TearDown() override {
+           tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
+               tt::tt_metal::FabricConfig::DISABLED);
+       }
 };
 
 class BaseFabricFixture : public ::testing::Test {
@@ -40,9 +47,9 @@ public:
     void SetUpDevices(tt_metal::FabricConfig fabric_config) {
         slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch_) {
-            tt::log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
+            log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
         } else {
-            tt::log_info(tt::LogTest, "Running fabric api tests with fast dispatch");
+            log_info(tt::LogTest, "Running fabric api tests with fast dispatch");
         }
         // Set up all available devices
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -88,12 +95,46 @@ class Fabric1DFixture : public BaseFabricFixture {
     void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_1D); }
 };
 
-class Fabric2DPullFixture : public BaseFabricFixture {
+class Fabric2DFixture : public BaseFabricFixture {
     void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D); }
 };
 
-class Fabric2DPushFixture : public BaseFabricFixture {
-    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D_PUSH); }
+class Fabric2DDynamicFixture : public BaseFabricFixture {
+    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC); }
+};
+
+class CustomMeshGraphFabric2DDynamicFixture : public BaseFabricFixture {
+public:
+    void SetUp(
+        const std::string& mesh_graph_desc_file,
+        const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+        tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(
+            mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
+        this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC);
+    }
+
+private:
+    void SetUp() override {}
+
+    void TearDown() override {
+        BaseFabricFixture::TearDown();
+        tt::tt_metal::MetalContext::instance().set_default_control_plane_mesh_graph();
+    }
+};
+
+class T3kCustomMeshGraphFabric2DDynamicFixture
+    : public CustomMeshGraphFabric2DDynamicFixture,
+      public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<eth_coord_t>>>> {
+    void SetUp() override {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::ClusterType::T3K) {
+            GTEST_SKIP();
+        }
+    }
+};
+
+struct McastRoutingInfo {
+    RoutingDirection mcast_dir;
+    uint32_t num_mcast_hops;
 };
 
 void RunTestUnicastRaw(
@@ -102,23 +143,17 @@ void RunTestUnicastRaw(
 void RunTestUnicastConnAPI(
     BaseFabricFixture* fixture, uint32_t num_hops = 1, RoutingDirection direction = RoutingDirection::E);
 
-void RunTestMCastConnAPI(BaseFabricFixture* fixture);
+void RunTestUnicastConnAPIRandom(BaseFabricFixture* fixture);
 
-bool find_device_with_neighbor_in_multi_direction(
+void RunTestMCastConnAPI(
     BaseFabricFixture* fixture,
-    std::pair<mesh_id_t, chip_id_t>& src_mesh_chip_id,
-    std::unordered_map<RoutingDirection, std::vector<std::pair<mesh_id_t, chip_id_t>>>& dst_mesh_chip_ids_by_dir,
-    chip_id_t& src_physical_device_id,
-    std::unordered_map<RoutingDirection, std::vector<chip_id_t>>& dst_physical_device_ids_by_dir,
-    const std::unordered_map<RoutingDirection, uint32_t>& mcast_hops);
+    RoutingDirection fwd_dir = RoutingDirection::W,
+    uint32_t fwd_hops = 1,
+    RoutingDirection bwd_dir = RoutingDirection::E,
+    uint32_t bwd_hops = 1);
 
-bool find_device_with_neighbor_in_direction(
-    BaseFabricFixture* fixture,
-    std::pair<mesh_id_t, chip_id_t>& src_mesh_chip_id,
-    std::pair<mesh_id_t, chip_id_t>& dst_mesh_chip_id,
-    chip_id_t& src_physical_device_id,
-    chip_id_t& dst_physical_device_id,
-    RoutingDirection direction);
+void RunTestLineMcast(
+    BaseFabricFixture* fixture, RoutingDirection unicast_dir, const std::vector<McastRoutingInfo>& mcast_routing_info);
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

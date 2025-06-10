@@ -7,7 +7,7 @@
 #include <buffer_types.hpp>
 #include <core_coord.hpp>
 #include <device.hpp>
-#include <global_circular_buffer_impl.hpp>
+#include <global_circular_buffer.hpp>
 #include <host_api.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>

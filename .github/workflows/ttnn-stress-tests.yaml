@@ -19,6 +19,7 @@ on:
           - P150
           - config-tg
           - config-t3000
+          - topology-6u
       timeout:
         required: false
         type: number
@@ -27,6 +28,8 @@ on:
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       build-wheel: true

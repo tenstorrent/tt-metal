@@ -21,11 +21,9 @@ void write_buffer(
             tt::tt_metal::memcpy(cq, device_tensors[i], src.at(i).get(), region);
         }
     } else {
-        for (const auto worker : dst.get_workers()) {
-            auto src_for_device = (src.size() == 1) ? src.at(0) : src.at(worker->id());
-            auto shard = tt::tt_metal::get_shard_for_device(dst, worker);
-            tt::tt_metal::memcpy(worker->command_queue(*cq_id), shard, src_for_device.get(), region);
-        }
+        auto* dst_device = dst.device();
+        auto src_for_device = (src.size() == 1) ? src.at(0) : src.at(dst_device->id());
+        tt::tt_metal::memcpy(dst_device->command_queue(*cq_id), dst, src_for_device.get(), region);
     }
 }
 
@@ -44,11 +42,9 @@ void read_buffer(
             tt::tt_metal::memcpy(cq, dst.at(i).get(), device_tensors[i], region);
         }
     } else {
-        for (const auto worker : src.get_workers()) {
-            auto dst_for_device = (dst.size() == 1) ? dst.at(0) : dst.at(worker->id());
-            const auto& shard = tt::tt_metal::get_shard_for_device(src, worker);
-            tt::tt_metal::memcpy(worker->command_queue(*cq_id), dst_for_device.get(), shard, region, blocking);
-        }
+        auto* src_device = src.device();
+        auto dst_for_device = (dst.size() == 1) ? dst.at(0) : dst.at(src_device->id());
+        tt::tt_metal::memcpy(src_device->command_queue(*cq_id), dst_for_device.get(), src, region, blocking);
     }
 }
 

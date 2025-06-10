@@ -32,8 +32,7 @@ struct ExecuteFusedRMSNorm {
         const std::optional<const ttnn::Tensor>& residual_input_tensor = std::nullopt,
         float epsilon = 1e-12,
         const std::optional<const ttnn::Tensor>& weight = std::nullopt,
-        const std::optional<const ttnn::Tensor>& stats = std::nullopt,
-        bool is_pre = true);
+        const std::optional<const ttnn::Tensor>& stats = std::nullopt);
 };
 
 }  // namespace operations::fused::normalization

@@ -7,22 +7,7 @@
 #include <climits>
 
 inline __attribute__((always_inline)) unsigned int mulsi3(unsigned int a, unsigned int b) {
-    unsigned int r = 0;
-
-#ifdef ARCH_GRAYSKULL
-    while (a) {
-        if (a & 1) {
-            r += b;
-        }
-        a >>= 1;
-        b <<= 1;
-    }
-#else
-    // Wormhole b0 has native multipliers
-    r = a * b;
-#endif
-
-    return r;
+    return a * b;
 }
 
 inline __attribute__((always_inline)) uint32_t fast_udiv_7(uint32_t n) {

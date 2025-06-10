@@ -21,6 +21,12 @@ on:
     branches:
       - main # Builds on main will populate the shared ccache to speed up builds on branches
 
+permissions:
+  contents: write
+  pull-requests: write
+  checks: write
+  packages: write
+
 jobs:
   static-checks:
     # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
@@ -61,6 +67,8 @@ jobs:
         }}
     needs: find-changes
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       build-type: Release
@@ -87,10 +95,12 @@ jobs:
         }}
     needs: find-changes
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       build-type: TSan
-      version: 22.04
+      version: 24.04
       skip-tt-train: false
       publish-artifact: false
 
@@ -122,6 +132,8 @@ jobs:
         }}
     needs: find-changes
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       build-type: ASan

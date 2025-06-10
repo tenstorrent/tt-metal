@@ -87,11 +87,11 @@ def test_div_fp32(device):
     #            1.500000000000000]])
     # tt out in torch TorchTensor([[ 0.500150859355927, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,                nan,  0.000000000000000,                inf,
     #            1.499999880790710]])
-    golden_fn = ttnn.get_golden_function(ttnn.div)
+    golden_fn = ttnn.get_golden_function(ttnn.divide)
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_div = ttnn.div(x_tt, y_tt, use_legacy=False)
+    z_tt_div = ttnn.divide(x_tt, y_tt, use_legacy=False)
     tt_out = ttnn.to_torch(z_tt_div)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
@@ -138,11 +138,11 @@ def test_div_bf16(device):
     #         dtype=torch.bfloat16)
     # tt out in torch TorchTensor([[ 0.500000000000000, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,  0.000000000000000,  0.000000000000000,  1.500000000000000]],
     #         dtype=torch.bfloat16)
-    golden_fn = ttnn.get_golden_function(ttnn.div)
+    golden_fn = ttnn.get_golden_function(ttnn.divide)
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_div = ttnn.div(x_tt, y_tt, use_legacy=False)  # bf16 runs FPU
+    z_tt_div = ttnn.divide(x_tt, y_tt, use_legacy=False)  # bf16 runs FPU
     tt_out = ttnn.to_torch(z_tt_div)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
@@ -378,7 +378,7 @@ def test_bitwise_right_shift(device):
         ttnn.add,
         ttnn.rsub,
         ttnn.mul,
-        ttnn.div,
+        ttnn.divide,
     ],
 )
 def test_ng_scalar_fp32(device, ttnn_function):

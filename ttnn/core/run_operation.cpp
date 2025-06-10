@@ -25,14 +25,13 @@ namespace detail {
 
 IDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) {
     for (auto& input_tensor : input_tensors) {
-        if (std::holds_alternative<DeviceStorage>(input_tensor.tensor_attributes->get_storage())) {
-            return input_tensor.workers.at(0);
+        if (input_tensor.storage_type() == StorageType::DEVICE) {
+            return input_tensor.device_storage().get_device();
         }
     }
     for (auto& optional_input_tensor : optional_input_tensors) {
-        if (optional_input_tensor.has_value() and
-            std::holds_alternative<DeviceStorage>(optional_input_tensor.value().tensor_attributes->get_storage())) {
-            return optional_input_tensor.value().workers.at(0);
+        if (optional_input_tensor.has_value() and optional_input_tensor->storage_type() == StorageType::DEVICE) {
+            return optional_input_tensor->device_storage().get_device();
         }
     }
     auto device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
@@ -175,7 +174,7 @@ Tensors run_with_autoformat(
     Tensors formatted_input_tensors;
     formatted_input_tensors.reserve(input_tensors.size());
     for (auto& input_tensor : input_tensors) {
-        auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_padded_shape());
+        auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.padded_shape());
         auto pad_input = not AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape);
         if (pad_input) {
             formatted_input_tensors.push_back(
@@ -190,7 +189,7 @@ Tensors run_with_autoformat(
     for (auto& optional_input_tensor : optional_input_tensors) {
         if (optional_input_tensor.has_value()) {
             auto& input_tensor = optional_input_tensor.value();
-            auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_padded_shape());
+            auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.padded_shape());
             auto pad_input = not AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape);
             if (pad_input) {
                 formatted_optional_input_tensors.push_back(
@@ -215,7 +214,7 @@ Tensors run_with_autoformat(
         std::move(output_specs),
         [&](size_t idx) {
             auto tensor = output_tensors[idx];
-            return TensorLayout(tensor.get_dtype(), Layout::TILE, tensor.memory_config());
+            return TensorLayout(tensor.dtype(), Layout::TILE, tensor.memory_config());
         },
         /*use_tensor_layout_from_tensor_spec=*/true);
 
@@ -288,7 +287,7 @@ Tensors run_with_autoformat(
         std::move(output_specs),
         [&](size_t idx) {
             auto tensor = output_tensors[idx];
-            return TensorLayout(tensor.get_dtype(), output_layouts[idx], tensor.memory_config());
+            return TensorLayout(tensor.dtype(), output_layouts[idx], tensor.memory_config());
         },
         /*use_tensor_layout_from_tensor_spec=*/false);
 

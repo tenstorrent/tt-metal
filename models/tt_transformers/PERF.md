@@ -8,7 +8,9 @@ Also note that all the performance metrics below were taken for a maximum genera
 
 ## Performance
 
-This configuration uses bfp4 MLP and bfp8 attention weights for all models except Qwen-2.5-7B, which uses bfp8 MLP and bfp16 attention weights.
+This configuration uses bfp4 MLP and bfp8 attention weights for all models except:
+* Qwen-2.5-7B, which uses bfp8 MLP and bfp16 attention weights in all decoder layers
+* Llama-3.1-8B which uses bfp8 MLP in only the 32nd decoder layer and bfp4 MLP elsewhere
 
 | Model             | Device      | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |-------------------|-------------|-----------|-----------|---------------|-----------|
@@ -33,8 +35,9 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Llama3.1-70B      | TG          | 95        | 100       | 12.7          |           |
 | Llama3.1-70B      | TG   (DP=4) |           |           | 14.8          | 189       |
 | Llama3.2-90B      | T3K         | 87        | 99        | 6             | 5535      |
-| Qwen2.5-7B        | N300        | 86        | 97        | 31.0          | 89        |
+| Qwen2.5-7B        | N300        | 84        | 96        | 24.6          | 92        |
 | Qwen2.5-72B       | T3K         | 99        | 100       | 15.2          | 225       |
+| Qwen3-32B         | T3K         | 89        | 97        | 22.9          | 123       |
 | Phi3.5-mini       | N150        |           |           | 43.2          | 98        |
 | Phi3.5-mini       | N300        |           |           | 57.8          | 62        |
 | Phi3.5-mini       | T3K         |           |           | 48.8          | 51        |
@@ -67,9 +70,10 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 | Llama3.2-11B      | TG          | 94        | 100       | 29.5          |           |
 | Llama3.1-70B      | T3K         | 95        | 100       | 16.5          | 168       |
 | Llama3.1-70B      | TG          | 95        | 100       | 12.7          |           |
-| Llama3.2-90B      | T3K         | 97        | 100       | 6             | 5600      |
-| Qwen2.5-7B        | N300        | 86        | 97        | 31.3          | 86        |
+| Llama3.2-90B      | T3K         | 96        | 100       | 6             | 5600      |
+| Qwen2.5-7B        | N300        | 84        | 96        | 24.6          | 92        |
 | Qwen2.5-72B       | T3K         | 99        | 100       | 15.1          | 216       |
+| Qwen3-32B         | T3K         | 95        | 100       | 19.6          | 119       |
 | Phi3.5-mini       | N150        |           |           | 38.8          | 92        |
 | Phi3.5-mini       | N300        |           |           | 53.9          | 63        |
 | Phi3.5-mini       | T3K         |           |           | 48.6          | 53        |

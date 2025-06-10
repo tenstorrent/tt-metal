@@ -39,7 +39,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
@@ -345,7 +345,11 @@ tt_metal::Program create_program_mcast_in0_in1(
             (std::uint32_t)top_left_core_physical.y);  // in1_mcast_sender_noc_y
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in3_mcast_sender_semaphore_id);
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in3_mcast_receiver_semaphore_id);
+    } else {
+        in1_receiver_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
+    // no fusion
+    in1_receiver_writer_compile_time_args.push_back(0);
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
@@ -1109,7 +1113,7 @@ int main(int argc, char** argv) {
         Finish(device->command_queue());
         auto end = std::chrono::high_resolution_clock::now();
         duration = end - start;
-        tt_metal::DumpDeviceProfileResults(device, program);
+        tt_metal::detail::DumpDeviceProfileResults(device);
 
         uint64_t num_of_matmul_ops =
             (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);

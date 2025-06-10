@@ -12,7 +12,7 @@
 #include <cstddef>
 
 #include "assert.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "shape_base.hpp"
@@ -57,7 +57,7 @@ chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) 
 }
 
 uint32_t SystemMesh::Impl::get_physical_mesh_id(const MeshCoordinate& coord) const {
-    return physical_coordinates_.at(coord).mesh_id();
+    return *physical_coordinates_.at(coord).mesh_id();
 }
 
 MeshCoordinate SystemMesh::Impl::get_global_device_coordinate(int physical_device_id) const {

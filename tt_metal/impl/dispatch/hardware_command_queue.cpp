@@ -9,7 +9,7 @@
 // Because we are a Friend of Program, accessing Program::get_program_transfer_info() and Program::get_kernels_buffer()
 // MUST REMOVE
 #include <tt-metalium/program.hpp>
-#include <trace_buffer.hpp>
+#include "trace/trace_buffer.hpp"
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -30,7 +30,7 @@
 #include "dprint_server.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "program/program_device_map.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
@@ -38,7 +38,7 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include <umd/device/tt_xy_pair.h>
-#include "work_executor.hpp"
+#include "data_collection.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -55,6 +55,20 @@ Buffer& get_buffer_object(const std::variant<std::reference_wrapper<Buffer>, std
             [](const std::shared_ptr<Buffer>& b) -> Buffer& { return *b; },
             [](const std::reference_wrapper<Buffer>& b) -> Buffer& { return b.get(); }},
         buffer);
+}
+
+// Binds a device worker/reader thread to a CPU core, determined using round-robin.
+void set_device_thread_affinity(std::thread& thread_, int cpu_core_for_worker) {
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(cpu_core_for_worker, &cpuset);
+    int rc = pthread_setaffinity_np(thread_.native_handle(), sizeof(cpu_set_t), &cpuset);
+    if (rc) {
+        log_warning(
+            tt::LogMetal,
+            "Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: {}",
+            rc);
+    }
 }
 
 }  // namespace
@@ -225,7 +239,6 @@ void HWCommandQueue::enqueue_read_buffer(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
     if (buffer_obj.is_nd_sharded()) {
-        TT_FATAL(buffer_obj.is_l1(), "Buffer with BufferDistributionSpec must be L1 for enqueue_read_buffer!");
         const auto& [banks, bank_mapping_in_bytes] = buffer_obj.get_bank_data_mapping();
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core =
@@ -310,7 +323,6 @@ void HWCommandQueue::enqueue_write_buffer(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
     if (buffer_obj.is_nd_sharded()) {
-        TT_FATAL(buffer_obj.is_l1(), "Buffer with BufferDistributionSpec must be L1 for enqueue_write_buffer!");
         const auto& [banks, bank_mapping_in_bytes] = buffer_obj.get_bank_data_mapping();
         for (size_t i = 0; i < banks.size(); i++) {
             const auto virtual_core =
@@ -355,6 +367,8 @@ void HWCommandQueue::enqueue_read_from_core(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_enqueue_read_from_core");
 
+    address = device_dispatch::add_bank_offset_to_address(this->device_, virtual_core, address);
+
     device_dispatch::validate_core_read_write_bounds(this->device_, virtual_core, address, size_bytes);
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
@@ -389,6 +403,8 @@ void HWCommandQueue::enqueue_write_to_core(
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_enqueue_write_to_core");
+
+    address = device_dispatch::add_bank_offset_to_address(this->device_, virtual_core, address);
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
@@ -433,6 +449,11 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     program.generate_dispatch_commands(device_);
     program.set_last_used_command_queue_for_testing(this);
 
+    if (this->manager_.get_bypass_mode()) {
+        this->trace_nodes_.push_back(program_dispatch::create_trace_node(program.impl(), device_));
+        return;
+    }
+
 #ifdef DEBUG
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager_.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
@@ -450,29 +471,14 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     auto sub_device_index = *sub_device_id;
 
     // Snapshot of expected workers from previous programs, used for dispatch_wait cmd generation.
-    uint32_t expected_workers_completed = this->manager_.get_bypass_mode()
-                                              ? this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores
-                                              : this->expected_num_workers_completed_[sub_device_index];
-    if (this->manager_.get_bypass_mode()) {
-        if (program.runs_on_noc_multicast_only_cores()) {
-            this->trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_multicast++;
-            this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores +=
-                device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-        }
-        if (program.runs_on_noc_unicast_only_cores()) {
-            this->trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_unicast++;
-            this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores +=
-                device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
-        }
-    } else {
-        if (program.runs_on_noc_multicast_only_cores()) {
-            this->expected_num_workers_completed_[sub_device_index] +=
-                device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-        }
-        if (program.runs_on_noc_unicast_only_cores()) {
-            this->expected_num_workers_completed_[sub_device_index] +=
-                device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
-        }
+    uint32_t expected_workers_completed = this->expected_num_workers_completed_[sub_device_index];
+    if (program.runs_on_noc_multicast_only_cores()) {
+        this->expected_num_workers_completed_[sub_device_index] +=
+            device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+    }
+    if (program.runs_on_noc_unicast_only_cores()) {
+        this->expected_num_workers_completed_[sub_device_index] +=
+            device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
     }
 
     auto& worker_launch_message_buffer_state = (*this->worker_launch_message_buffer_state_)[*sub_device_id];
@@ -663,7 +669,7 @@ void HWCommandQueue::read_completion_queue() {
 
 void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_finish");
-    tt::log_debug(tt::LogDispatch, "Finish for command queue {}", this->id_);
+    log_debug(tt::LogDispatch, "Finish for command queue {}", this->id_);
     std::shared_ptr<Event> event = std::make_shared<Event>();
     this->enqueue_record_event(event, sub_device_ids);
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled()) {
@@ -707,9 +713,108 @@ void HWCommandQueue::record_begin(const uint32_t tid, const std::shared_ptr<Trac
     this->manager_.set_bypass_mode(true, true);  // start trace capture
 }
 
+// Allocate space for program binaries and other data in the worker config ring buffer.
+void HWCommandQueue::allocate_trace_programs() {
+    const auto& hal = MetalContext::instance().hal();
+    uint32_t expected_workers_completed = 0;
+    for (auto& node : this->trace_nodes_) {
+        auto& program = *node.program;
+        auto sub_device_id = node.sub_device_id;
+        auto sub_device_index = *sub_device_id;
+        uint32_t num_workers = 0;
+        if (program.runs_on_noc_multicast_only_cores()) {
+            num_workers += device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+        }
+        if (program.runs_on_noc_unicast_only_cores()) {
+            num_workers += device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+        }
+        program_dispatch::ProgramDispatchMetadata dispatch_metadata;
+        // Reserve space for this program in the kernel config ring buffer
+        program_dispatch::reserve_space_in_kernel_config_buffer(
+            this->config_buffer_mgr_[sub_device_index],
+            program.get_program_config_sizes(),
+            program.get_program_binary_status(device_->id()),
+            num_workers,
+            expected_workers_completed,
+            dispatch_metadata);
+        uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        ProgramConfig& program_config = program.get_program_config(index);
+
+        node.dispatch_metadata.binary_kernel_config_addrs = dispatch_metadata.kernel_config_addrs;
+        node.dispatch_metadata.nonbinary_kernel_config_addrs = dispatch_metadata.kernel_config_addrs;
+        node.dispatch_metadata.sync_count = dispatch_metadata.sync_count;
+        node.dispatch_metadata.stall_first = dispatch_metadata.stall_first;
+        node.dispatch_metadata.stall_before_program = dispatch_metadata.stall_before_program;
+
+        // Allocate non-binaries before binaries for tensix. Non-tensix doesn't use a ringbuffer for binaries, so its
+        // addresses don't need adjustment.
+        node.dispatch_metadata.binary_kernel_config_addrs[index].addr += program_config.kernel_text_offset;
+
+        expected_workers_completed += num_workers;
+    }
+}
+
 void HWCommandQueue::record_end() {
+    allocate_trace_programs();
+    for (auto& node : this->trace_nodes_) {
+        auto sub_device_id = node.sub_device_id;
+        auto& program = *node.program;
+
+        // Snapshot of expected workers from previous programs, used for dispatch_wait cmd generation.
+        uint32_t expected_workers_completed = this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores;
+        // Compute the total number of workers this program uses
+        uint32_t num_workers = 0;
+        if (program.runs_on_noc_multicast_only_cores()) {
+            this->trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_multicast++;
+            num_workers += device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+        }
+        if (program.runs_on_noc_unicast_only_cores()) {
+            this->trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_unicast++;
+            num_workers += device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+        }
+        this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores += num_workers;
+
+        RecordProgramRun(program.get_id());
+
+        // Access the program dispatch-command cache
+        uint64_t command_hash = *device_->get_active_sub_device_manager_id();
+        auto& cached_program_command_sequence = program.get_trace_cached_program_command_sequences().at(command_hash);
+        auto& worker_launch_message_buffer_state = (*this->worker_launch_message_buffer_state_)[*sub_device_id];
+        // Update the generated dispatch commands based on the state of the CQ and the ring buffer
+        program_dispatch::update_traced_program_dispatch_commands(
+            node,
+            cached_program_command_sequence,
+            worker_launch_message_buffer_state.get_mcast_wptr(),
+            worker_launch_message_buffer_state.get_unicast_wptr(),
+            expected_workers_completed,
+            this->virtual_enqueue_program_dispatch_core_,
+            MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type(),
+            sub_device_id,
+            program.get_program_binary_status(device_->id()));
+        // Issue dispatch commands for this program
+        program_dispatch::write_program_command_sequence(
+            cached_program_command_sequence,
+            this->manager_,
+            this->id_,
+            MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type(),
+            node.dispatch_metadata.stall_first,
+            node.dispatch_metadata.stall_before_program,
+            node.dispatch_metadata.send_binary);
+
+        // Update wptrs for tensix and eth launch message in the device class
+        if (program.runs_on_noc_multicast_only_cores()) {
+            worker_launch_message_buffer_state.inc_mcast_wptr(1);
+        }
+        if (program.runs_on_noc_unicast_only_cores()) {
+            worker_launch_message_buffer_state.inc_unicast_wptr(1);
+        }
+    }
+
+    this->trace_nodes_.clear();
+
     auto& trace_data = this->trace_ctx_->data;
     trace_data = std::move(this->manager_.get_bypass_data());
+
     // Add trace end command to terminate the trace buffer
     DeviceCommand command_sequence(MetalContext::instance().hal().get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
@@ -743,7 +848,7 @@ void HWCommandQueue::record_end() {
 void HWCommandQueue::terminate() {
     ZoneScopedN("HWCommandQueue_terminate");
     TT_FATAL(!this->manager_.get_bypass_mode(), "Terminate cannot be used with tracing");
-    tt::log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
+    log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
     auto command = EnqueueTerminateCommand(this->id_, this->device_, this->manager_);
     this->enqueue_command(command, false, {});
 }

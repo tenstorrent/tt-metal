@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -24,7 +24,6 @@
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 #include <tt-metalium/mesh_device.hpp>
@@ -234,16 +233,16 @@ Correctness run_output_check(CONTAINER_T const& inputs, CONTAINER_T output_buffe
         if (output_buffer[i] != inputs[i]) {
             if (debug_mode) {
                 if (pass) {
-                    log_error("Output mismatch");
+                    log_error(tt::LogTest, "Output mismatch");
                 }
-                log_error("[{}]: expected {} got {}", i, inputs[i], output_buffer[i]);
+                log_error(tt::LogTest, "[{}]: expected {} got {}", i, inputs[i], output_buffer[i]);
                 num_printed_mismatches++;
             }
             pass = false;
         }
     }
     if (num_printed_mismatches > 0) {
-        log_error("... (remaining mismatches omitted)");
+        log_error(tt::LogTest, "... (remaining mismatches omitted)");
     }
 
     log_info(tt::LogTest, "Output check: {}", pass ? "PASS" : "FAIL");
@@ -307,7 +306,7 @@ void run_programs(std::vector<Program>& programs, const std::vector<IDevice*>& d
             tt::tt_metal::detail::CompileProgram(devices.at(i), programs.at(i));
         }
     } catch (std::exception& e) {
-        log_error("Failed compile: {}", e.what());
+        log_error(tt::LogTest, "Failed compile: {}", e.what());
         throw e;
     }
 
@@ -872,7 +871,7 @@ bool RunLocalTestWithMultiInputReaders(
     auto second_cb_index = tt::CB::c_in1;
 
     auto output_tensor_dest_device = devices.at(output_tensor_dest_device_index);
-    TT_ASSERT(input_tensor0.get_logical_shape()[-2] != 1);
+    TT_ASSERT(input_tensor0.logical_shape()[-2] != 1);
 
     bool is_fabric_mcast = std::holds_alternative<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args);
 
@@ -1166,7 +1165,7 @@ void persistent_fabric_teardown_sequence(
     std::optional<SubdeviceInfo>& subdevice_managers,
     ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
     tt::tt_fabric::TerminationSignal termination_mode = tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE) {
-    log_info("Tearing down fabric");
+    log_info(tt::LogTest, "Tearing down fabric");
 
     // Wait for workers to finish
     auto d0_worker_subdevice = devices[0]->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];
@@ -1193,7 +1192,11 @@ void setup_test_with_persistent_fabric(
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     size_t switch_interval = 0,
     bool loopback_on_last_device = false,
-    bool is_galaxy = false) {
+    bool is_galaxy = false,
+    bool en_dateline_sender_extra_buffer = false,
+    bool en_dateline_receiver_extra_buffer = false,
+    bool en_dateline_upstream_sender_extra_buffer = false,
+    bool en_dateline_upstream_receiver_extra_buffer = false) {
     if (enable_persistent_fabric) {
         log_info(tt::LogTest, "Enabling persistent fabric");
         fabric_programs = std::vector<Program>(devices.size());
@@ -1208,7 +1211,17 @@ void setup_test_with_persistent_fabric(
     }
 
     line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
-        devices, fabric_program_ptrs, enable_persistent_fabric, num_links.value_or(1), false, topology, is_galaxy);
+        devices,
+        fabric_program_ptrs,
+        enable_persistent_fabric,
+        num_links.value_or(1),
+        false,
+        topology,
+        is_galaxy,
+        en_dateline_sender_extra_buffer,
+        en_dateline_receiver_extra_buffer,
+        en_dateline_upstream_sender_extra_buffer,
+        en_dateline_upstream_receiver_extra_buffer);
     line_fabric->set_firmware_context_switch_interval(switch_interval);
     if (loopback_on_last_device) {
         for (auto& edm_builder : line_fabric->edm_builders_backward_direction.at(devices.back()->id())) {
@@ -1248,11 +1261,11 @@ int TestLineFabricEntrypoint(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
-        log_info("This test can only be run on T3000 devices");
+        log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return 0;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        log_info(tt::LogTest, "Test must be run on WH");
         return 0;
     }
 
@@ -1300,7 +1313,7 @@ int TestLineFabricEntrypoint(
                 enable_persistent_fabric);
 
         } catch (std::exception& e) {
-            log_error("Caught exception: {}", e.what());
+            log_error(tt::LogTest, "Caught exception: {}", e.what());
             test_fixture.TearDown();
             return false;
         }
@@ -1334,11 +1347,11 @@ int TestLoopbackEntrypoint(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
-        log_info("This test can only be run on T3000 devices");
+        log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return 0;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        log_info(tt::LogTest, "Test must be run on WH");
         return 0;
     }
 
@@ -1404,9 +1417,19 @@ int TestLoopbackEntrypoint(
     // Create the loopback connection on the second device
     chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
     auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
-        fabric_sender_program, sender_device, chip_0_edm_builder, eth_sender_core, NOC::NOC_0);
+        fabric_sender_program,
+        sender_device,
+        chip_0_edm_builder,
+        eth_sender_core,
+        DataMovementProcessor::RISCV_0,
+        NOC::NOC_0);
     auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
-        fabric_receiver_program, receiver_device, chip_1_edm_builder, eth_receiver_core, NOC::NOC_0);
+        fabric_receiver_program,
+        receiver_device,
+        chip_1_edm_builder,
+        eth_receiver_core,
+        DataMovementProcessor::RISCV_0,
+        NOC::NOC_0);
 
     if (enable_persistent_fabric) {
         tt::tt_metal::detail::CompileProgram(sender_device, fabric_sender_program);
@@ -1433,7 +1456,7 @@ int TestLoopbackEntrypoint(
             subdevice_managers,
             enable_persistent_fabric);
     } catch (std::exception& e) {
-        log_error("Caught exception: {}", e.what());
+        log_error(tt::LogTest, "Caught exception: {}", e.what());
         test_fixture.TearDown();
         return -1;
     }
@@ -1459,7 +1482,7 @@ int TestLoopbackEntrypoint(
                 subdevice_managers,
                 enable_persistent_fabric);
         } catch (std::exception& e) {
-            log_error("Caught exception: {}", e.what());
+            log_error(tt::LogTest, "Caught exception: {}", e.what());
             test_fixture.TearDown();
             return -1;
         }
@@ -1511,11 +1534,11 @@ inline bool TestMultiInputReaderKernel(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
-        log_info("This test can only be run on T3000 devices");
+        log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return true;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        log_info(tt::LogTest, "Test must be run on WH");
         return true;
     }
     Fabric1DFixture test_fixture;
@@ -1718,10 +1741,10 @@ void RunFabricMcastFullTensorPropagateTest(
         ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to_layout(layout);
     Tensor output_tensor1 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
     Tensor output_tensor0 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
-    ASSERT_EQ(input_tensor0.get_logical_shape(), tensor_shape);
-    ASSERT_EQ(input_tensor1.get_logical_shape(), tensor_shape);
-    ASSERT_EQ(output_tensor0.get_logical_shape(), tensor_shape);
-    ASSERT_EQ(output_tensor1.get_logical_shape(), tensor_shape);
+    ASSERT_EQ(input_tensor0.logical_shape(), tensor_shape);
+    ASSERT_EQ(input_tensor1.logical_shape(), tensor_shape);
+    ASSERT_EQ(output_tensor0.logical_shape(), tensor_shape);
+    ASSERT_EQ(output_tensor1.logical_shape(), tensor_shape);
 
     size_t page_size = tile_size(DataFormat::RawUInt32);
 
@@ -1788,11 +1811,11 @@ bool RunPipelinedWorkersTest(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
-        log_info("This test can only be run on T3000 devices");
+        log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return true;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        log_info(tt::LogTest, "Test must be run on WH");
         return true;
     }
 
@@ -1850,7 +1873,7 @@ bool RunPipelinedWorkersTest(
     TT_FATAL(mem_configs.size() == num_tensors, "Must have a memory config for each tensor");
     for (size_t i = 0; i < num_tensors; i++) {
         device_tensors.push_back(host_tensors[i].to_device(device, mem_configs[i]));
-        log_info("Tensor[{}] allocated starting at address {}", i, device_tensors[i].buffer()->address());
+        log_info(tt::LogTest, "Tensor[{}] allocated starting at address {}", i, device_tensors[i].buffer()->address());
     }
     TT_ASSERT(device_tensors.size() == num_tensors);
     TT_ASSERT(device_tensors.size() == host_tensors.size());
@@ -2090,11 +2113,11 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     constexpr size_t test_expected_num_devices = 4;
     if (tt::tt_metal::GetNumAvailableDevices() < test_expected_num_devices) {
-        log_info("This test can only be run on T3000 devices");
+        log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        log_info(tt::LogTest, "Test must be run on WH");
         return;
     }
     // Initialize MeshDevice with 1D Fabric
@@ -2142,7 +2165,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     auto output_tensor = ttnn::operations::experimental::ccl::all_gather_async(
         input_mesh_tensor,
         dim,
-        multi_device_global_semaphore,
+        {multi_device_global_semaphore},
         num_links,
         operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         ttnn::ccl::Topology::Linear,
@@ -2161,11 +2184,11 @@ void run_ring_all_gather_with_persistent_fabric(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     constexpr size_t test_expected_num_devices = 8;
     if (tt::tt_metal::GetNumAvailableDevices() < test_expected_num_devices) {
-        log_info("This test can only be run on T3000 devices");
+        log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        log_info(tt::LogTest, "Test must be run on WH");
         return;
     }
     // Initialize MeshDevice with 1D Fabric
@@ -2212,7 +2235,7 @@ void run_ring_all_gather_with_persistent_fabric(
     auto output_tensor = ttnn::operations::experimental::ccl::all_gather_async(
         input_mesh_tensor,
         dim,
-        multi_device_global_semaphore,
+        {multi_device_global_semaphore},
         num_links,
         operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         topology,
@@ -2464,11 +2487,11 @@ void Run1DFabricPacketSendTest(
     bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
     bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
     if (num_devices < 4) {
-        log_info("This test can only be run on T3000 devices");
+        log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        log_info(tt::LogTest, "Test must be run on WH");
         return;
     }
 
@@ -2498,6 +2521,35 @@ void Run1DFabricPacketSendTest(
         case FabricTestMode::RingAsLinear: topology = ttnn::ccl::Topology::Ring; break;
     }
 
+    bool en_dateline_sender_extra_buffer = false;
+    bool en_dateline_receiver_extra_buffer = false;
+    bool en_dateline_upstream_sender_extra_buffer = false;
+    bool en_dateline_upstream_receiver_extra_buffer = false;
+    if (fabric_mode == FabricTestMode::HalfRing) {
+        // HalfRing test is more optimal with extra recv buffer on upstream edm.
+        en_dateline_sender_extra_buffer = true;
+        en_dateline_receiver_extra_buffer = true;
+        en_dateline_upstream_sender_extra_buffer = false;
+        en_dateline_upstream_receiver_extra_buffer = true;
+    } else if (fabric_mode == FabricTestMode::FullRing) {
+        // FullRing is more optimal with extra buffer on both send/recv channels.
+        en_dateline_sender_extra_buffer = false;
+        en_dateline_receiver_extra_buffer = true;
+        en_dateline_upstream_sender_extra_buffer = true;
+        en_dateline_upstream_receiver_extra_buffer = false;
+    } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
+        // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
+        en_dateline_sender_extra_buffer = true;
+        en_dateline_receiver_extra_buffer = true;
+        en_dateline_upstream_sender_extra_buffer = false;
+        en_dateline_upstream_receiver_extra_buffer = false;
+    } else if (fabric_mode == FabricTestMode::RingAsLinear) {
+        en_dateline_sender_extra_buffer = true;
+        en_dateline_receiver_extra_buffer = true;
+        en_dateline_upstream_sender_extra_buffer = true;
+        en_dateline_upstream_receiver_extra_buffer = true;
+    }
+
     auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
 
     // static constexpr size_t source_l1_buffer_address = 1000000;
@@ -2512,10 +2564,10 @@ void Run1DFabricPacketSendTest(
     size_t dest_buffer_size = max_packet_payload_size_bytes * 4;
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
 
-    log_info("Device open and fabric init");
+    log_info(tt::LogTest, "Device open and fabric init");
     // MeshFabric1DLineDeviceInitFixture test_fixture;
     FABRIC_DEVICE_FIXTURE test_fixture;
-    log_info("\tDone");
+    log_info(tt::LogTest, "\tDone");
     auto view = *(test_fixture.view_);
 
     auto fabrics_under_test_devices =
@@ -2543,7 +2595,11 @@ void Run1DFabricPacketSendTest(
             topology,
             fabric_context_switch_interval,
             false,
-            is_6u_galaxy);
+            is_6u_galaxy,
+            en_dateline_sender_extra_buffer,
+            en_dateline_receiver_extra_buffer,
+            en_dateline_upstream_sender_extra_buffer,
+            en_dateline_upstream_receiver_extra_buffer);
         packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     } else {
         // TODO: get packet header size from control plane after it adds APIs to present this information
@@ -2781,6 +2837,16 @@ void Run1DFabricPacketSendTest(
 
             std::vector<uint32_t> worker_ct_args = {params.line_sync, params.line_sync};
 
+            TT_FATAL(
+                std::any_of(
+                    worker_cores_vec.begin(),
+                    worker_cores_vec.end(),
+                    [&sync_core_coord](const CoreCoord& core) {
+                        return core.x == sync_core_coord.x && core.y == sync_core_coord.y;
+                    }),
+                "Atleast one worker core must be mapped onto sync core: x={}, y={}",
+                sync_core_coord.x,
+                sync_core_coord.y);
             auto worker_kernel_id = tt_metal::CreateKernel(
                 program,
                 "tests/ttnn/unit_tests/gtests/ccl/kernels/edm_fabric_writer.cpp",

@@ -15,8 +15,6 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-// FIXME: ARCH_NAME specific
-#include "dev_mem_map.h"
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/dispatch_core_common.hpp>
@@ -38,7 +36,11 @@ uint64_t get_alloc_limit(const tt::tt_metal::IDevice* device) {
                                                   ? storage_core_bank_size.value()
                                                   : (soc_desc.worker_l1_size - l1_unreserved_base);
     uint32_t storage_core_unreserved_base =
-        ((MEM_MAILBOX_BASE + allocator_alignment - 1) / allocator_alignment) * allocator_alignment;
+        ((tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+              tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::MAILBOX) +
+          allocator_alignment - 1) /
+         allocator_alignment) *
+        allocator_alignment;
     uint64_t alloc_limit = interleaved_l1_bank_size - storage_core_unreserved_base;
     return alloc_limit;
 }

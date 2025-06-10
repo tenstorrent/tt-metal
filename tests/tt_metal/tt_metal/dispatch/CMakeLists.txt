@@ -5,7 +5,6 @@ TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_smoke)
 target_sources(
     unit_tests_dispatch_smoke
     PRIVATE
-        dispatch_buffer/test_sub_device.cpp
         dispatch_device/test_enqueue_read_write_core.cpp
         dispatch_event/test_EnqueueWaitForEvent.cpp
         dispatch_event/test_events.cpp
@@ -32,6 +31,7 @@ TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_basic)
 target_sources(
     unit_tests_dispatch_basic
     PRIVATE
+        dispatch_buffer/test_sub_device.cpp
         dispatch_program/test_dispatch.cpp
         dispatch_program/test_global_circular_buffers.cpp
         dispatch_program/test_program_reuse.cpp

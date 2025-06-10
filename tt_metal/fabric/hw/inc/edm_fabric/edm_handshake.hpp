@@ -17,7 +17,7 @@ namespace datamover {
  * to our core.
  *
  * The handshaking process is split into two parts for the sender/master and two parts for the
- * the slave. The handshake is broken into 2 parts so that the master can initiate the handshake
+ * the subordinate. The handshake is broken into 2 parts so that the master can initiate the handshake
  * as early as possible so the message can be "in flight" over the ethernet link while other EDM
  * initialization is taking place.
  *
@@ -25,7 +25,7 @@ namespace datamover {
  * channels are initialized. Otherwise we have a race between channel initialization on the receiver side
  * and real payload data (and signals) using those channels.
  *
- * Note that the master and slave concepts here only apply in the context of handshaking and initialization
+ * Note that the master and subordinate concepts here only apply in the context of handshaking and initialization
  * of the EDM. They do not apply during the main EDM execution loop.
  *
  * The basic protocol for the handshake is to use the reserved space at erisc_info[0] where the master writes
@@ -37,7 +37,7 @@ namespace handshake {
 static constexpr uint32_t A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH = 1000000000;
 
 /*
- * Initialize base datastructures and values which are common to master and slave EDM cores.
+ * Initialize base datastructures and values which are common to master and subordinate EDM cores.
  * The main memory region initialized here is the channel ack region offset 16B from the
  * base handshake address.
  *
@@ -76,7 +76,7 @@ FORCE_INLINE void sender_side_start(
 }
 
 /*
- * As the designated master EDM core, wait for the acknowledgement from the slave EDM core
+ * As the designated master EDM core, wait for the acknowledgement from the subordinate EDM core
  */
 FORCE_INLINE void sender_side_finish(
     std::uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
@@ -88,14 +88,14 @@ FORCE_INLINE void receiver_side_start(std::uint32_t handshake_register_address) 
 }
 
 /*
- * Return: true if slave EDM handshake core is able to complete the handshake with
+ * Return: true if subordinate EDM handshake core is able to complete the handshake with
  * an ack.
  */
 FORCE_INLINE bool receiver_side_can_finish() { return eth_bytes_are_available_on_channel(0); }
 
 /*
- * As the designated slave EDM core, send the acknowledgement to the master EDM core.
- * The slave EDM core shall only acknowledge after receiving the initial handshake packet
+ * As the designated subordinate EDM core, send the acknowledgement to the master EDM core.
+ * The subordinate EDM core shall only acknowledge after receiving the initial handshake packet
  * from the master EDM core.
  */
 FORCE_INLINE void receiver_side_finish(

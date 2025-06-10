@@ -47,7 +47,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
@@ -318,6 +318,7 @@ int main(int argc, char** argv) {
 
 #if !defined(TRACY_ENABLE)
             log_error(
+                tt::LogTest,
                 "In the slow dispatch mode, device profiler is used to measure the "
                 "profiler option using ./build_metal.sh --enable-profiler");
 
@@ -618,7 +619,7 @@ int main(int argc, char** argv) {
                 EnqueueProgram(device->command_queue(), program, false);
                 Finish(device->command_queue());
                 log_debug(LogTest, "EnqueProgram done");
-                tt_metal::DumpDeviceProfileResults(device, program);
+                tt_metal::detail::DumpDeviceProfileResults(device);
 
                 if (single_core) {
                     uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(device, program);
@@ -703,10 +704,10 @@ int main(int argc, char** argv) {
         pass &= tt_metal::CloseDevice(device);
 
         // for csv
-        log_info("CSV_MICROBENCHMARK:title:test_compute_mm");
-        log_info("CSV_INPUT:M:{}:N:{}:K:{}:fast-dispatch:{}", M, N, K, fast_dispatch_mode);
-        log_info("CSV_OUTPUT:RMax(TFLOPS):{:.2f}", avg_rmax_tflops);
-        log_info("CSV_RESULT:pass:{}", pass);
+        log_info(tt::LogTest, "CSV_MICROBENCHMARK:title:test_compute_mm");
+        log_info(tt::LogTest, "CSV_INPUT:M:{}:N:{}:K:{}:fast-dispatch:{}", M, N, K, fast_dispatch_mode);
+        log_info(tt::LogTest, "CSV_OUTPUT:RMax(TFLOPS):{:.2f}", avg_rmax_tflops);
+        log_info(tt::LogTest, "CSV_RESULT:pass:{}", pass);
 
     } catch (const std::exception& e) {
         pass = false;
@@ -920,10 +921,10 @@ tt_metal::Program create_program_single_core(
     uint32_t interm_cb_dtype) {
     tt_metal::Program program{};
 
-    log_debug("cb_data_format: {} ", cb_data_format);
-    log_debug("math_fidelity: {} ", math_fidelity);
-    log_debug("single_tile_size: {} ", single_tile_size);
-    log_debug("fp32_dest_acc_en: {} ", fp32_dest_acc_en);
+    log_debug(tt::LogTest, "cb_data_format: {} ", cb_data_format);
+    log_debug(tt::LogTest, "math_fidelity: {} ", math_fidelity);
+    log_debug(tt::LogTest, "single_tile_size: {} ", single_tile_size);
+    log_debug(tt::LogTest, "fp32_dest_acc_en: {} ", fp32_dest_acc_en);
 
     uint32_t num_buffer = 1;  // No double buffer
     uint32_t in0_block_tiles = Mt * Kt;
@@ -974,20 +975,20 @@ tt_metal::Program create_program_single_core(
         num_blocks,
     };
 
-    log_debug("in0_cb_addr: {}", (*in0_cb_addr).address());
-    log_debug("in1_cb_addr: {}", (*in1_cb_addr).address());
-    log_debug("out_cb_addr: {}", (*out_cb_addr).address());
-    log_debug("cb_data_format: {}", cb_data_format);
-    log_debug("single_tile_size: {}", single_tile_size);
+    log_debug(tt::LogTest, "in0_cb_addr: {}", (*in0_cb_addr).address());
+    log_debug(tt::LogTest, "in1_cb_addr: {}", (*in1_cb_addr).address());
+    log_debug(tt::LogTest, "out_cb_addr: {}", (*out_cb_addr).address());
+    log_debug(tt::LogTest, "cb_data_format: {}", cb_data_format);
+    log_debug(tt::LogTest, "single_tile_size: {}", single_tile_size);
     if (matmul_block) {
-        log_debug("matmul_block");
+        log_debug(tt::LogTest, "matmul_block");
     } else {
-        log_debug("matmul_tiles");
+        log_debug(tt::LogTest, "matmul_tiles");
     }
     if (packer_l1) {
-        log_debug("packer_l1");
+        log_debug(tt::LogTest, "packer_l1");
     } else {
-        log_debug("no packer_l1");
+        log_debug(tt::LogTest, "no packer_l1");
     }
 
     CoreRange all_cores(
@@ -1051,11 +1052,12 @@ tt_metal::Program create_program_single_core(
         auto cb_out = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_out_config);
     }
 
-    log_debug("in0_CB_size: {}", in0_CB_tiles * single_tile_size);
-    log_debug("in1_CB_size: {}", in1_CB_tiles * single_tile_size);
-    log_debug("interm_CB_size: {}", out_CB_tiles * 4096);
-    log_debug("out_CB_size: {}", out_CB_size);
+    log_debug(tt::LogTest, "in0_CB_size: {}", in0_CB_tiles * single_tile_size);
+    log_debug(tt::LogTest, "in1_CB_size: {}", in1_CB_tiles * single_tile_size);
+    log_debug(tt::LogTest, "interm_CB_size: {}", out_CB_tiles * 4096);
+    log_debug(tt::LogTest, "out_CB_size: {}", out_CB_size);
     log_debug(
+        tt::LogTest,
         "total_CB_size: {}",
         in0_CB_tiles * single_tile_size + in1_CB_tiles * single_tile_size + out_CB_tiles * 4096 + out_CB_size);
 
@@ -1669,8 +1671,8 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
         {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
         {Mt, Nt});
 
-    log_debug("size_bytes: {}", size_bytes);
-    log_debug("page_size_bytes: {}", page_size_bytes);
+    log_debug(tt::LogTest, "size_bytes: {}", size_bytes);
+    log_debug(tt::LogTest, "page_size_bytes: {}", page_size_bytes);
 
     auto input_buffer = CreateBuffer(tt::tt_metal::ShardedBufferConfig{
         .device = device,
@@ -1695,8 +1697,8 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb_fp8(
         {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
         {Mt, Nt});
 
-    log_debug("size_bytes: {}", size_bytes);
-    log_debug("page_size_bytes: {}", page_size_bytes);
+    log_debug(tt::LogTest, "size_bytes: {}", size_bytes);
+    log_debug(tt::LogTest, "page_size_bytes: {}", page_size_bytes);
 
     auto input_buffer = CreateBuffer(tt::tt_metal::ShardedBufferConfig{
         .device = device,

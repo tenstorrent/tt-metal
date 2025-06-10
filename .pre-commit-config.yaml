@@ -50,3 +50,10 @@ repos:
       entry: python3 scripts/validate_metalium_api.py tt_metal/api
       language: system
       pass_filenames: false
+- repo: local
+  hooks:
+    - id: check-torch-imports-in-ttnn
+      name: Verify that there is no global torch import in ttnn
+      entry: python3 scripts/validate_no_global_torch_imports.py
+      language: system
+      pass_filenames: false

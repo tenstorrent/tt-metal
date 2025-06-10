@@ -537,6 +537,18 @@ struct LowLatencyMeshPacketHeader : public PacketHeaderBase<LowLatencyMeshPacket
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
 };
 
+struct MeshPacketHeader : public PacketHeaderBase<MeshPacketHeader> {
+    uint16_t dst_start_chip_id;
+    uint16_t dst_start_mesh_id;
+    uint16_t mcast_params[4];
+    uint8_t is_mcast_active;
+    void to_chip_unicast_impl(uint8_t distance_in_hops) {}
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
+
+    void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
+};
+
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
 static_assert(sizeof(PacketHeader) == 32, "sizeof(PacketHeader) is not equal to 32B");
 // Host code still hardcoded to sizeof(PacketHeader) so we need to keep this check
@@ -551,15 +563,18 @@ static_assert(sizeof(LowLatencyMeshPacketHeader) == 64, "sizeof(LowLatencyPacket
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
 #else
-#if ((ROUTING_MODE & ROUTING_MODE_DYNAMIC)) == ROUTING_MODE_DYNAMIC
-static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
-#elif (                                                              \
+
+#if (                                                                \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
-#if ((ROUTING_MODE & ROUTING_MODE_LOW_LATENCY)) != 0
+// Dynamic Routing with 1D Fabric is not supported
+#if ((ROUTING_MODE & ROUTING_MODE_DYNAMIC)) == ROUTING_MODE_DYNAMIC
+static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
 
+#elif ((ROUTING_MODE & ROUTING_MODE_LOW_LATENCY)) != 0
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
+
 #else
 #define PACKET_HEADER_TYPE tt::tt_fabric::PacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::RoutingFields
@@ -573,6 +588,10 @@ static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
 #else  // ROUTING_MODE_PUSH as default
 #if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyMeshPacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
+#elif ((ROUTING_MODE & ROUTING_MODE_DYNAMIC)) == ROUTING_MODE_DYNAMIC
+#define DYNAMIC_ROUTING_ENABLED 1
+#define PACKET_HEADER_TYPE tt::tt_fabric::MeshPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
 #else
 #define PACKET_HEADER_TYPE packet_header_t

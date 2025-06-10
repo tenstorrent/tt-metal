@@ -103,7 +103,7 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
         program, requestor_kernel, master_core_set, {physical_subordinate_core.x, physical_subordinate_core.y});
 
     // Assign unique id
-    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Input
@@ -125,10 +125,10 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
         packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
 
     if (!pcc) {
-        log_error("PCC Check failed");
-        log_info("Golden vector");
+        log_error(tt::LogTest, "PCC Check failed");
+        log_info(tt::LogTest, "Golden vector");
         print_vector<uint32_t>(packed_golden);
-        log_info("Output vector");
+        log_info(tt::LogTest, "Output vector");
         print_vector<uint32_t>(packed_output);
     }
 
@@ -139,20 +139,21 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
 /* ========== Test case for one from one data movement; Test id = 5 ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
     // Parameters
-    uint32_t max_transactions = 64;
+    uint32_t max_transactions = 256;
     uint32_t max_transaction_size_pages = 64;
-    uint32_t page_size_bytes = 32;  // =Flit size: 32 bytes for WH, 64 for BH
-    if (arch_ == tt::ARCH::BLACKHOLE) {
-        page_size_bytes *= 2;
-    }
+    uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
 
     // Cores
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {1, 1};
 
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
              transaction_size_pages *= 2) {
+            if (num_of_transactions * transaction_size_pages * page_size_bytes >= 1024 * 1024) {
+                continue;
+            }
+
             // Test config
             unit_tests::dm::core_to_core::OneFromOneConfig test_config = {
                 .test_id = 5,
@@ -169,6 +170,57 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
                 EXPECT_TRUE(run_dm(devices_.at(id), test_config));
             }
         }
+    }
+}
+
+/* ========== Test case for one from one data movement; Test id = 51 ========== */
+TEST_F(DeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
+    uint32_t test_id = 51;  // Arbitrary test ID
+
+    // Parameters
+    /*
+        L1 Capacity: 1.5 MB (I think, might be wrong)
+        - Max transaction size
+            = 4 * 32 pages
+            = 128 pages * 32 (or 64) bytes/page
+            = 4096 bytes for WH; 8192 bytes for BH
+        - Max total transaction size
+            = 128 transactions * 4096 bytes
+            = 524,288 Bytes
+            < 1.25 MB ~= L1 buffer capacity (.25 MB is allocated for the kernel code and other overheads)
+    */
+    uint32_t page_size_bytes, num_of_transactions;
+    uint32_t transaction_size_pages = 4 * 32;
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        page_size_bytes = 64;  // (=flit size): 64 bytes for BH
+        num_of_transactions = 64;
+    } else {
+        page_size_bytes = 32;  // (=flit size): 32 bytes for WH
+        num_of_transactions = 128;
+    }
+
+    // Cores
+    /*
+        Any two cores that are next to each other on the torus
+         - May be worth considering the performance of this test with different pairs of adjacent cores
+    */
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {0, 1};
+
+    // Test Config
+    unit_tests::dm::core_to_core::OneFromOneConfig test_config = {
+        .test_id = test_id,
+        .master_core_coord = master_core_coord,
+        .subordinate_core_coord = subordinate_core_coord,
+        .num_of_transactions = num_of_transactions,
+        .transaction_size_pages = transaction_size_pages,
+        .page_size_bytes = page_size_bytes,
+        .l1_data_format = DataFormat::Float16_b,
+    };
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
     }
 }
 

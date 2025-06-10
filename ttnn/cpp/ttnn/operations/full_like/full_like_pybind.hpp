@@ -6,8 +6,7 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn::operations::full_like {
+namespace py = pybind11;
 void bind_full_like_operation(py::module& module);
 }  // namespace ttnn::operations::full_like

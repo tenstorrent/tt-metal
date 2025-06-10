@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -32,6 +32,105 @@ test_id_to_name = {
     12: "One to All Multicast Linked 2x2 Packet Sizes",
     13: "One to All Multicast Linked 5x5 Packet Sizes",
     14: "One to All Multicast Linked 11x10 Packet Sizes",
+    15: "One from All Packet Sizes",
+    16: "Loopback Packet Sizes",
+    30: "One from All Directed Ideal",
+    50: "One to One Directed Ideal",
+    51: "One from One Directed Ideal",
+    52: "One to All Directed Ideal",
+    17: "Reshard Hardcoded Small",
+    18: "Reshard Hardcoded Medium",
+    19: "Reshard Hardcoded Many Cores",
+    20: "Reshard Hardcoded 2 Cores to Many Cores",
+    21: "Conv Act with halo 3x3",
+    22: "Conv Act with halo 3x3 Small",
+    23: "Conv Halo Gather",
+}
+
+# Comments for each test explaining why we get the perf that we do
+test_id_to_comment = {
+    0: "Dram read bandwidth saturates at about 37 B/cycle, according to HW experiments. \n\
+        DRAM write bandwidth should saturate at 64 B/cycle, instead of 35 B/c. \n\
+        There may be some configuration problem with the dram controller/phy or this may \n\
+        be the physical limit of the dram.",
+    1: "This test appears to be broken. The graph is showing numbers that dont make sense.",
+    2: "This test appears to be broken. The graph is showing numbers that dont make sense.",
+    3: "This test shows the ideal read and write bandwidth when transfering multiple 8KB packets. \n\
+        The read bandwidth is what is expected, however write bandwidth is expected to be 64 \n\
+        B/cycle rather than 35 B/cycle. There may be some configuration problem with the dram \n\
+        controller/phy or this may be the physical limit of the dram.",
+    4: "Bandwidth in steady state, with > 2KB packet sizes, is close to theoretical max. \n\
+        Under 2KB, the bandwidth is limitted by either the RISC latency or by the NOC sending from L1 latency.",
+    5: "Bandwidth in steady state, with > 2KB packet sizes, is close to theoretical max. \n\
+        Under 2KB, the bandwidth is limitted by the RISC latency.",
+    6: "This test sends to a small grid. The bandwidth characteristics are similar to the \n\
+        one to one test. Note that it may appear that multicast has lower bandwidth, however \n\
+        multicast sends less data and has much lower latency, so it is prefered to use multicast.",
+    7: "This test sends to a medium grid. The bandwidth characteristics are similar to the one \n\
+        to one test. As the grid size increases, the number of transactions needed to saturate \n\
+        NOC decreases because the NOC needs to send num cores more packets. Note that it may \n\
+        appear that multicast has lower bandwidth, however multicast sends less data and \n\
+        has much lower latency, so it is prefered to use multicast.",
+    8: "This test sends to a large grid. The bandwidth characteristics are similar to the one to \n\
+        one test. As the grid size increases, the number of transactions needed to saturate NOC \n\
+        decreases because the NOC needs to send num cores more packets. Note that it may appear \n\
+        that multicast has lower bandwidth, however multicast sends less data and has much \n\
+        lower latency, so it is prefered to use multicast.",
+    9: "This test sends to a small grid using unlinked multicast. Bandwidth degrades due to path \n\
+        reserve being done after every transaction.",
+    10: "This test sends to a medium grid using unlinked multicast. Bandwidth degrades due to path \n\
+        reserve being done after every transaction. As the grid size increases, the number of write \n\
+        acks increases which degrades bandwidth.",
+    11: "This test sends to a large grid using unlinked multicast. Bandwidth degrades due to path \n\
+        reserve being done after every transaction. As the grid size increases, the number of write \n\
+        acks increases which degrades bandwidth.",
+    12: "This test sends to a small grid using linked multicast. Linked causes path reserve to be \n\
+        done only once for all transactions, as such performance approaches theoretical.",
+    13: "This test sends to a medium grid using linked multicast. Linked causes path reserve to be \n\
+        done only once for all transactions, as such performance approaches theoretical. As the grid \n\
+        size increases, the number of write acks increases which degrades bandwidth. Posted \n\
+        multicasts do not have this issue, however it is not safe to use posted multicast \n\
+        due to a hardware bug.",
+    14: "This test sends to a large grid using linked multicast. Linked causes path reserve to be \n\
+        done only once for all transactions, as such performance approaches theoretical. As the \n\
+        grid size increases, the number of write acks increases which degrades bandwidth. Posted \n\
+        multicasts do not have this issue, however it is not safe to use posted multicast \n\
+        due to a hardware bug.",
+    15: "At small packet sizes, the bandwidth is limited by the RISC latency. As the packet size \n\
+        increases, the bandwidth approaches 64 B/cycle. Similar to the one from one test.",
+    16: "Loopback will have similar characteristics to the one to one test, however it uses two \n\
+        ports to send and receive data, as such it is more likely to cause contention.",
+    17: "This is a 2 reader reshard. It seems to be getting expected perf based on number of transactions \n\
+        and transactions size. Reshard perf is dictated based on the number of transactions and the \n\
+        transaction size. A small number of transactions will result in small perf due to large \n\
+        round trip latency. It is suggested to use a large number of transactions, with large transaction \n\
+        size to get the best performance.",
+    18: "This is a 2 reader reshard. It seems to be getting expected perf based on number of transactions \n\
+        and transactions size. Reshard perf is dictated based on the number of transactions and the \n\
+        transaction size. A small number of transactions will result in small perf due to large \n\
+        round trip latency. It is suggested to use a large number of transactions, with large transaction \n\
+        size to get the best performance.",
+    19: "This is a 8 reader reshard. It seems to be getting expected perf based on number of transactions \n\
+        and transactions size. Reshard perf is dictated based on the number of transactions and the \n\
+        transaction size. A small number of transactions will result in small perf due to large \n\
+        round trip latency. It is suggested to use a large number of transactions, with large transaction \n\
+        size to get the best performance.",
+    20: "This is a 2 core to 8 reader reshard. It seems to be getting expected perf based on number of \n\
+        transactions and transactions size. Reshard perf is dictated based on the number of transactions \n\
+        and the transaction size. A small number of transactions will result in small perf due to large \n\
+        round trip latency. It is suggested to use a large number of transactions, with large transaction \n\
+        size to get the best performance.",
+    21: "Convolution has a large number of transactions and a small transaction size. The performance is \n\
+        similar to what it would be for a similarly configured one from one. Convolution may benefit from \n\
+        having multiple cores doing different parts of the convolution at the same time. This would \n\
+        result in a larger effective bandwidth.",
+    22: "Convolution has a large number of transactions and a small transaction size. The performance is \n\
+        similar to what it would be for a similarly configured one from one. Convolution may benefit from \n\
+        having multiple cores doing different parts of the convolution at the same time. This would \n\
+        result in a larger effective bandwidth.",
+    23: "The performance of this test is similar to how other tests perform based on the number of \n\
+        transactions and the transaction size, but with extra degradation due to needing to read \n\
+        parameters from L1.",
 }
 
 # Correspondng test bounds for each arch, test id, riscv core
@@ -40,64 +139,102 @@ test_id_to_name = {
 test_bounds = {
     "wormhole_b0": {
         0: {
-            "riscv_1": {"latency": {"lower": 500, "upper": 42000}, "bandwidth": 0.12},
-            "riscv_0": {"latency": {"lower": 400, "upper": 28000}, "bandwidth": 0.15},
+            "riscv_1": {"latency": {"lower": 300, "upper": 24000}, "bandwidth": 0.08},
+            "riscv_0": {"latency": {"lower": 300, "upper": 25000}, "bandwidth": 0.07},
         },
         1: {
-            "riscv_1": {"latency": {"lower": 400, "upper": 700}, "bandwidth": 0.19},
-            "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.29},
+            "riscv_1": {"latency": {"lower": 23000, "upper": 24000}, "bandwidth": 21},
+            "riscv_0": {"latency": {"lower": 24000, "upper": 25000}, "bandwidth": 21},
         },
         2: {
-            "riscv_1": {"latency": {"lower": 500, "upper": 600}, "bandwidth": 0.24},
-            "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.30},
+            "riscv_1": {"latency": {"lower": 300, "upper": 600}, "bandwidth": 0.08},
+            "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.08},
         },
         3: {
             "riscv_1": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 22},
             "riscv_0": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 21},
         },
         4: {
-            "riscv_1": {"latency": {"lower": 4000, "upper": 12000}, "bandwidth": 0.007},
-            "riscv_0": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
+            "riscv_0": {"latency": {"lower": 200, "upper": 18000}, "bandwidth": 0.1},
         },
         5: {
-            "riscv_1": {"latency": {"lower": 200, "upper": 5000}, "bandwidth": 0.1},
+            "riscv_1": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.1},
         },
         6: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.4},
+            "riscv_0": {"latency": {"lower": 400, "upper": 70000}, "bandwidth": 0.3},
         },
         7: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 1.0},
+            "riscv_0": {"latency": {"lower": 800, "upper": 300000}, "bandwidth": 0.6},
         },
         8: {
-            "riscv_0": {"latency": {"lower": 2000, "upper": 2000000}, "bandwidth": 1.0},
+            "riscv_0": {"latency": {"lower": 1900, "upper": 900000}, "bandwidth": 0.8},
         },
         9: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 300000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 300, "upper": 30000}, "bandwidth": 0.09},
         },
         10: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 400, "upper": 60000}, "bandwidth": 0.07},
         },
         11: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 200000}, "bandwidth": 0.04},
+            "riscv_0": {"latency": {"lower": 500, "upper": 90000}, "bandwidth": 0.04},
         },
         12: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 200, "upper": 20000}, "bandwidth": 0.09},
         },
         13: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 400, "upper": 30000}, "bandwidth": 0.07},
         },
         14: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 100000}, "bandwidth": 0.04},
+            "riscv_0": {"latency": {"lower": 500, "upper": 40000}, "bandwidth": 0.04},
+        },
+        15: {
+            "riscv_1": {"latency": {"lower": 700, "upper": 85000}, "bandwidth": 0.71},
+        },
+        16: {
+            "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
+        },
+        30: {
+            "riscv_1": {"latency": {"lower": 20000, "upper": 23500}, "bandwidth": 28},
+        },
+        50: {  # One to One Directed Ideal
+            "riscv_0": {"latency": {"lower": 28000, "upper": 36000}, "bandwidth": 29},  # 33832
+        },
+        51: {  # One from One Directed Ideal
+            "riscv_1": {"latency": {"lower": 15000, "upper": 20000}, "bandwidth": 28},  # 18596, 28.2
+        },
+        52: {  # One to All Directed Ideal
+            "riscv_0": {"latency": {"lower": 24000, "upper": 28000}, "bandwidth": 19},  # 26966, 19.4
+        },
+        17: {
+            "riscv_1": {"latency": {"lower": 50, "upper": 700}, "bandwidth": 3},
+        },
+        18: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 3000}, "bandwidth": 15},
+        },
+        19: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 3000}, "bandwidth": 10},
+        },
+        20: {
+            "riscv_1": {"latency": {"lower": 100, "upper": 1000}, "bandwidth": 3},
+        },
+        21: {
+            "riscv_1": {"latency": {"lower": 150000, "upper": 300000}, "bandwidth": 3},
+        },
+        22: {
+            "riscv_1": {"latency": {"lower": 1000000, "upper": 1100000}, "bandwidth": 0.3},
+        },
+        23: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 1000}, "bandwidth": 10},
         },
     },
     "blackhole": {
         0: {
-            "riscv_1": {"latency": {"lower": 500, "upper": 42000}, "bandwidth": 0.12},
-            "riscv_0": {"latency": {"lower": 400, "upper": 28000}, "bandwidth": 0.15},
+            "riscv_1": {"latency": {"lower": 400, "upper": 17000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 300, "upper": 16000}, "bandwidth": 0.15},
         },
         1: {
-            "riscv_1": {"latency": {"lower": 300, "upper": 700}, "bandwidth": 0.17},
-            "riscv_0": {"latency": {"lower": 200, "upper": 500}, "bandwidth": 0.23},
+            "riscv_1": {"latency": {"lower": 20000, "upper": 33000}, "bandwidth": 32},
+            "riscv_0": {"latency": {"lower": 20000, "upper": 33000}, "bandwidth": 33},
         },
         2: {
             "riscv_1": {"latency": {"lower": 400, "upper": 600}, "bandwidth": 0.13},
@@ -108,38 +245,74 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 34},
         },
         4: {
-            "riscv_1": {"latency": {"lower": 4000, "upper": 12000}, "bandwidth": 0.007},
-            "riscv_0": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
+            "riscv_0": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.17},
         },
         5: {
-            "riscv_1": {"latency": {"lower": 300, "upper": 4700}, "bandwidth": 0.17},
+            "riscv_1": {"latency": {"lower": 300, "upper": 9200}, "bandwidth": 0.17},
         },
         6: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.4},
+            "riscv_0": {"latency": {"lower": 400, "upper": 70000}, "bandwidth": 0.5},
         },
         7: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 300000}, "bandwidth": 1.0},
+            "riscv_0": {"latency": {"lower": 900, "upper": 275000}, "bandwidth": 1.00},
         },
         8: {
-            "riscv_0": {"latency": {"lower": 2000, "upper": 2000000}, "bandwidth": 1.0},
+            "riscv_0": {"latency": {"lower": 3800, "upper": 1700000}, "bandwidth": 1.65},
         },
         9: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 300, "upper": 30000}, "bandwidth": 0.16},
         },
         10: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 70000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 500, "upper": 70000}, "bandwidth": 0.12},
         },
         11: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 200000}, "bandwidth": 0.04},
+            "riscv_0": {"latency": {"lower": 700, "upper": 115000}, "bandwidth": 0.08},
         },
         12: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 300, "upper": 20000}, "bandwidth": 0.16},
         },
         13: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 30000}, "bandwidth": 0.1},
+            "riscv_0": {"latency": {"lower": 500, "upper": 24000}, "bandwidth": 0.12},
         },
         14: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 100000}, "bandwidth": 0.04},
+            "riscv_0": {"latency": {"lower": 700, "upper": 46000}, "bandwidth": 0.08},
+        },
+        15: {
+            "riscv_1": {"latency": {"lower": 800, "upper": 87000}, "bandwidth": 1.19},
+        },
+        16: {
+            "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
+        },
+        30: {"riscv_1": {"latency": {"lower": 10000, "upper": 11500}, "bandwidth": 57}},
+        50: {  # One to One Directed Ideal
+            "riscv_0": {"latency": {"lower": 12000, "upper": 19000}, "bandwidth": 59},  # 17000
+        },
+        51: {  # One from One Directed Ideal
+            "riscv_1": {"latency": {"lower": 5000, "upper": 10000}, "bandwidth": 59},  # 8730, 60.1
+        },
+        52: {  # One to All Directed Ideal
+            "riscv_0": {"latency": {"lower": 10000, "upper": 17000}, "bandwidth": 30},  # 15322, 34.2
+        },
+        17: {
+            "riscv_1": {"latency": {"lower": 50, "upper": 700}, "bandwidth": 7},
+        },
+        18: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 3000}, "bandwidth": 30},
+        },
+        19: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 3000}, "bandwidth": 25},
+        },
+        20: {
+            "riscv_1": {"latency": {"lower": 100, "upper": 1000}, "bandwidth": 7},
+        },
+        21: {
+            "riscv_1": {"latency": {"lower": 150000, "upper": 300000}, "bandwidth": 6},
+        },
+        22: {
+            "riscv_1": {"latency": {"lower": 1000000, "upper": 1100000}, "bandwidth": 0.6},
+        },
+        23: {
+            "riscv_1": {"latency": {"lower": 500, "upper": 1000}, "bandwidth": 20},
         },
     },
 }
@@ -167,7 +340,7 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
 
     # Plot results
     if plot:
-        plot_dm_stats(dm_stats)
+        plot_dm_stats(dm_stats, arch=arch)
 
     # Export results to csv
     if report:
@@ -294,7 +467,7 @@ def performance_check(dm_stats, arch="blackhole", verbose=False):
                 results_bounds[test_id] = {
                     riscv: {"latency": {"lower": float("inf"), "upper": 0}, "bandwidth": float("inf")}
                 }
-            else:
+            elif riscv not in results_bounds[test_id].keys():
                 results_bounds[test_id][riscv] = {
                     "latency": {"lower": float("inf"), "upper": 0},
                     "bandwidth": float("inf"),
@@ -360,9 +533,6 @@ def performance_check(dm_stats, arch="blackhole", verbose=False):
 
 def print_stats(dm_stats):
     # Print stats per runtime host id
-    for i in range(len(dm_stats["riscv_1"]["analysis"]["series"])):
-        run_host_id = dm_stats["riscv_1"]["analysis"]["series"][i]["duration_type"][0]["run_host_id"]
-
     for riscv1_run, riscv0_run in itertools.zip_longest(
         dm_stats["riscv_1"]["analysis"]["series"], dm_stats["riscv_0"]["analysis"]["series"], fillvalue=None
     ):
@@ -382,7 +552,7 @@ def print_stats(dm_stats):
         logger.info("")
 
 
-def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png"):
+def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
     # Extract data for plotting
     riscv_1_series = dm_stats["riscv_1"]["analysis"]["series"]
     riscv_0_series = dm_stats["riscv_0"]["analysis"]["series"]
@@ -396,6 +566,9 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png"):
 
     test_ids = sorted(test_ids)  # Sort for consistent ordering
 
+    # Set noc_width based on architecture
+    noc_width = 32 if arch == "wormhole_b0" else 64
+
     # Create the main figure
     fig = plt.figure(layout="constrained", figsize=(18, 6 * len(test_ids)))
 
@@ -407,10 +580,11 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png"):
     for idx, (subfig, test_id) in enumerate(zip(subfigs, test_ids)):
         # Add a title for the current Test id
         test_name = test_id_to_name.get(test_id, f"Test ID {test_id}")
-        subfig.suptitle(test_name, fontsize=16, weight="bold")
+        subsubfig = subfig.subfigures(2, 1, height_ratios=[100, 1])
+        subsubfig[0].suptitle(test_name, fontsize=16, weight="bold")
 
         # Create subplots within the subfigure
-        axes = subfig.subplots(1, 3)
+        axes = subsubfig[0].subplots(1, 2)
 
         # Filter data for the current Test id
         riscv_1_filtered = [
@@ -428,56 +602,98 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png"):
         riscv_1_durations = [entry["duration_cycles"] for entry in riscv_1_filtered]
         riscv_0_durations = [entry["duration_cycles"] for entry in riscv_0_filtered]
 
-        riscv_1_bandwidths = []
-        riscv_0_bandwidths = []
         riscv_1_data_sizes = []
         riscv_0_data_sizes = []
+        riscv_1_bandwidths = []
+        riscv_0_bandwidths = []
+        riscv_1_transactions = []
+        riscv_0_transactions = []
 
         for entry in riscv_1_filtered:
             runtime_host_id = entry["duration_type"][0]["run_host_id"]
             attributes = dm_stats["riscv_1"]["attributes"][runtime_host_id]
             transaction_size = attributes["Transaction size in bytes"]
-            bandwidth = attributes["Number of transactions"] * transaction_size / entry["duration_cycles"]
-            riscv_1_bandwidths.append(bandwidth)
+            num_transactions = attributes["Number of transactions"]
+            bandwidth = num_transactions * transaction_size / entry["duration_cycles"]
             riscv_1_data_sizes.append(transaction_size)
+            riscv_1_bandwidths.append(bandwidth)
+            riscv_1_transactions.append(num_transactions)
 
         for entry in riscv_0_filtered:
             runtime_host_id = entry["duration_type"][0]["run_host_id"]
             attributes = dm_stats["riscv_0"]["attributes"][runtime_host_id]
             transaction_size = attributes["Transaction size in bytes"]
-            bandwidth = attributes["Number of transactions"] * transaction_size / entry["duration_cycles"]
-            riscv_0_bandwidths.append(bandwidth)
+            num_transactions = attributes["Number of transactions"]
+            bandwidth = num_transactions * transaction_size / entry["duration_cycles"]
             riscv_0_data_sizes.append(transaction_size)
+            riscv_0_bandwidths.append(bandwidth)
+            riscv_0_transactions.append(num_transactions)
 
         # Plot durations
         ax = axes[0]
-        ax.plot(riscv_1_durations, label="RISCV 1 Duration (cycles)", marker="o")
-        ax.plot(riscv_0_durations, label="RISCV 0 Duration (cycles)", marker="o")
+        lines = []
+        labels = []
+        if riscv_1_durations:
+            (line1,) = ax.plot(riscv_1_durations, label="RISCV 1 Duration (cycles)", marker="o")
+            lines.append(line1)
+            labels.append("RISCV 1 Duration (cycles)")
+        if riscv_0_durations:
+            (line0,) = ax.plot(riscv_0_durations, label="RISCV 0 Duration (cycles)", marker="o")
+            lines.append(line0)
+            labels.append("RISCV 0 Duration (cycles)")
         ax.set_xlabel("Index")
         ax.set_ylabel("Duration (cycles)")
         ax.set_title("Kernel Durations")
-        ax.legend()
-        ax.grid()
-
-        # Plot bandwidth
-        ax = axes[1]
-        ax.plot(riscv_1_bandwidths, label="RISCV 1 Bandwidth (bytes/cycle)", marker="o")
-        ax.plot(riscv_0_bandwidths, label="RISCV 0 Bandwidth (bytes/cycle)", marker="o")
-        ax.set_xlabel("Index")
-        ax.set_ylabel("Bandwidth (bytes/cycle)")
-        ax.set_title("Bandwidth Comparison")
-        ax.legend()
+        if lines:
+            ax.legend(lines, labels)
         ax.grid()
 
         # Plot size of data transferred vs bandwidth
-        ax = axes[2]
-        ax.scatter(riscv_1_data_sizes, riscv_1_bandwidths, label="RISCV 1", marker="o")
-        ax.scatter(riscv_0_data_sizes, riscv_0_bandwidths, label="RISCV 0", marker="o")
+        ax = axes[1]
+        unique_transactions = sorted(set(riscv_1_transactions + riscv_0_transactions))  # Ensure ascending order
+        for num_transactions in unique_transactions:
+            # Group and plot RISCV 1 data
+            riscv_1_grouped = [
+                (size, bw)
+                for size, bw, trans in zip(riscv_1_data_sizes, riscv_1_bandwidths, riscv_1_transactions)
+                if trans == num_transactions
+            ]
+            if riscv_1_grouped:
+                sizes, bws = zip(*riscv_1_grouped)
+                ax.plot(sizes, bws, label=f"RISCV 1 (Transactions={num_transactions})", marker="o")
+
+            # Group and plot RISCV 0 data
+            riscv_0_grouped = [
+                (size, bw)
+                for size, bw, trans in zip(riscv_0_data_sizes, riscv_0_bandwidths, riscv_0_transactions)
+                if trans == num_transactions
+            ]
+            if riscv_0_grouped:
+                sizes, bws = zip(*riscv_0_grouped)
+                ax.plot(sizes, bws, label=f"RISCV 0 (Transactions={num_transactions})", marker="o")
+
+        # Add theoretical max bandwidth curve
+        transaction_sizes = sorted(set(riscv_1_data_sizes + riscv_0_data_sizes))
+        max_bandwidths = [noc_width * ((size / noc_width) / ((size / noc_width) + 1)) for size in transaction_sizes]
+        ax.plot(transaction_sizes, max_bandwidths, label="Theoretical Max BW", linestyle="--", color="black")
+
         ax.set_xlabel("Transaction Size (bytes)")
         ax.set_ylabel("Bandwidth (bytes/cycle)")
         ax.set_title("Data Size vs Bandwidth")
         ax.legend()
         ax.grid()
+
+        # Add a comment section below the plots
+        txtObj = subsubfig[1].text(
+            0.5,
+            0,
+            f"Comments: {test_id_to_comment.get(test_id, 'No comment available, test has not been analyzed')}",
+            ha="center",
+            fontsize=10,
+            style="italic",
+            wrap=True,
+        )
+        txtObj._get_wrap_line_width = lambda: 0.9 * subsubfig[1].bbox.width
 
     # Save the combined plot
     plt.savefig(output_file)

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -15,18 +15,19 @@ class TtCrossAttnUpBlock2D(nn.Module):
         device,
         state_dict,
         module_path,
+        model_config,
         query_dim,
         num_attn_heads,
         out_dim,
         has_upsample=False,
         transformer_weights_dtype=ttnn.bfloat16,
-        conv_weights_dtype=ttnn.bfloat16,
     ):
         super().__init__()
 
         num_layers = 3
         self.attentions = []
         self.resnets = []
+        self.device = device
 
         for i in range(num_layers):
             self.attentions.append(
@@ -44,20 +45,17 @@ class TtCrossAttnUpBlock2D(nn.Module):
         for i in range(num_layers):
             self.resnets.append(
                 TtResnetBlock2D(
-                    device, state_dict, f"{module_path}.resnets.{i}", True, conv_weights_dtype=conv_weights_dtype
+                    device,
+                    state_dict,
+                    f"{module_path}.resnets.{i}",
+                    model_config=model_config,
+                    conv_shortcut=True,
                 )
             )
 
         self.upsamplers = (
             TtUpsample2D(
-                device,
-                state_dict,
-                f"{module_path}.upsamplers.0",
-                (1, 1),
-                (1, 1),
-                (1, 1),
-                1,
-                conv_weights_dtype=conv_weights_dtype,
+                device, state_dict, f"{module_path}.upsamplers.0", (1, 1), (1, 1), (1, 1), 1, model_config=model_config
             )
             if has_upsample
             else None
@@ -87,6 +85,8 @@ class TtCrossAttnUpBlock2D(nn.Module):
             hidden_states = attn.forward(
                 hidden_states, [B, C, H, W], encoder_hidden_states=encoder_hidden_states, attention_mask=attention_mask
             )
+
+        ttnn.DumpDeviceProfiler(self.device)
 
         if self.upsamplers is not None:
             hidden_states = ttnn.reshape(hidden_states, [B, H, W, C])

@@ -13,7 +13,7 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 #include "cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 #include "debug/dprint.h"
-#include "cpp/ttnn/tensor/enum_types.hpp"
+#include "api/ttnn/tensor/enum_types.hpp"
 #include <cstdint>
 
 using ttnn::ccl::coord_t;

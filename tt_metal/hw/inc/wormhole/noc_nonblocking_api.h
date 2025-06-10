@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 #include "noc_parameters.h"
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 #include "noc_overlay_parameters.h"
 
 #if defined(COMPILE_FOR_BRISC)

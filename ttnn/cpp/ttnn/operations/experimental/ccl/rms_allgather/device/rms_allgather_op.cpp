@@ -20,19 +20,20 @@ tt::tt_metal::operation::Hash RMSAllGather::compute_program_hash(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
-    auto input_shape = input_tensors[0].get_padded_shape();
-    auto input_memory_layout = input_tensors[0].get_layout();
-    auto input_dtype = input_tensors[0].get_dtype();
+    auto input_shape = input_tensors[0].padded_shape();
+    auto input_memory_layout = input_tensors[0].layout();
+    auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
     return tt::tt_metal::operation::hash_operation<RMSAllGather>(
         this->eps,
         this->dtype,
-        this->is_pre,
         this->num_links,
         this->ring_size,
         this->output_mem_config,
         this->topology,
         this->cluster_axis,
+        optional_input_tensors.at(0).has_value(),
+        optional_input_tensors.at(1).has_value(),
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -45,8 +46,9 @@ void RMSAllGather::validate(
     TT_FATAL(
         input_tensors.size() == 1 and optional_input_tensors.size() <= 4, "Must have between 1 to 4 input tensors");
     auto& a = input_tensors.at(0);
-    uint32_t input_width = a.get_tensor_spec().tile().get_tile_shape()[1];
-    uint32_t input_height = a.get_tensor_spec().tile().get_tile_shape()[0];
+    TT_FATAL(a.padded_shape().rank() == 4, "Input shape must be rank 4");
+    uint32_t input_width = a.tensor_spec().tile().get_tile_shape()[1];
+    uint32_t input_height = a.tensor_spec().tile().get_tile_shape()[0];
     const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
     const auto& stats = optional_input_tensors.at(2);
@@ -56,58 +58,44 @@ void RMSAllGather::validate(
     TT_FATAL(
         a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
         "Minimal version requires row major sharding orientation");
-    TT_FATAL(a.get_layout() == Layout::TILE, "Error");
+    TT_FATAL(a.layout() == Layout::TILE, "Error");
     TT_FATAL(
-        a.get_dtype() == DataType::FLOAT32 or a.get_dtype() == DataType::BFLOAT16 or
-            a.get_dtype() == DataType::BFLOAT8_B,
-        "Error");
+        a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B, "Error");
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to frmsnorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
 
     if (b.has_value()) {
-        TT_FATAL(b.value().get_layout() == Layout::TILE, "layout is not tile!");
-        TT_FATAL(a.get_padded_shape() == b.value().get_padded_shape(), "shape is not same!");
+        TT_FATAL(b.value().layout() == Layout::TILE, "layout is not tile!");
+        TT_FATAL(a.padded_shape() == b.value().padded_shape(), "shape is not same!");
         TT_FATAL(b.value().buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == b.value().device(), "device is not same!");
     }
-    if (!this->is_pre) {
-        TT_FATAL(
-            gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR,
-            "Post all gather requires a weight which is row major");
-        TT_FATAL(stats.has_value(), "Post all gather layernorm requires stats");
-        TT_FATAL(stats.value().is_sharded(), "Stats must be sharded");
-        TT_FATAL(stats.value().get_layout() == Layout::TILE, "Only tile layout is supported for stats");
-        TT_FATAL(stats.value().get_dtype() == DataType::BFLOAT16, "Only bfloat16 is supported for stats");
-        TT_FATAL(stats.value().storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
-        TT_FATAL(stats.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-        TT_FATAL(
-            stats.value().get_padded_shape()[-1] % input_width == 0,
-            "Stats is expected to have E(x) for each device stacked in the last dimension");
-    }
+    TT_FATAL(
+        gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR,
+        "RMS all gather requires a weight which is row major");
 
     if (gamma.has_value()) {
-        if (gamma.value().get_layout() == Layout::TILE) {
+        if (gamma.value().layout() == Layout::TILE) {
             TT_FATAL(
-                a.get_padded_shape()[-1] == gamma.value().get_padded_shape()[-1],
+                a.padded_shape()[-1] == gamma.value().padded_shape()[-1],
                 "{} != {}",
-                a.get_padded_shape()[-1],
-                gamma.value().get_padded_shape()[-1]);
+                a.padded_shape()[-1],
+                gamma.value().padded_shape()[-1]);
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Error");
-            TT_FATAL(gamma.value().get_padded_shape()[-2] == input_height, "Error");
+            TT_FATAL(gamma.value().padded_shape()[-2] == input_height, "Error");
         } else {
-            TT_FATAL(gamma.value().get_layout() == Layout::ROW_MAJOR, "Error");
+            TT_FATAL(gamma.value().layout() == Layout::ROW_MAJOR, "Error");
             TT_FATAL(
-                (gamma.value().get_padded_shape()[-1] == input_width &&
-                 gamma.value().volume() / input_width == a.get_padded_shape()[-1] / input_width),
+                (gamma.value().padded_shape()[-1] == input_width &&
+                 gamma.value().physical_volume() / input_width == a.padded_shape()[-1] / input_width),
                 "Error");
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Error");
             TT_FATAL(
-                gamma.value().get_dtype() == DataType::FLOAT32 or gamma.value().get_dtype() == DataType::BFLOAT16,
-                "Error");
+                gamma.value().dtype() == DataType::FLOAT32 or gamma.value().dtype() == DataType::BFLOAT16, "Error");
         }
     }
 
@@ -127,11 +115,10 @@ void RMSAllGather::validate(
         }
     }
 
-    TT_FATAL(a.get_padded_shape()[-2] == input_height, "Only activations with batch size = 32 are supported");
+    TT_FATAL(a.padded_shape()[-2] == input_height, "Only activations with batch size = 32 are supported");
     if (b.has_value()) {
         TT_FATAL(
-            b.value().get_padded_shape()[-2] == input_height,
-            "Only residual tensors with batch size = 32 are supported");
+            b.value().padded_shape()[-2] == input_height, "Only residual tensors with batch size = 32 are supported");
     }
     std::visit(
         [&](const auto& program_config) {
@@ -151,8 +138,8 @@ void RMSAllGather::validate(
                 TT_FATAL(a.memory_config().memory_layout() == this->output_mem_config.memory_layout(), "Error");
 
                 // tensor shape
-                const auto shape = a.get_padded_shape();
-                uint32_t M = a.volume() / shape[-1];
+                const auto shape = a.padded_shape();
+                uint32_t M = a.physical_volume() / shape[-1];
                 uint32_t K = shape[-1];
 
                 uint32_t Mt = M / input_height;
@@ -196,13 +183,8 @@ void RMSAllGather::validate(
 
 std::vector<TensorSpec> RMSAllGather::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto output_shape = input_tensor.get_logical_shape();
-    auto output_padded_shape = input_tensor.get_padded_shape();
-
-    // WARNING!!!!! This line is ONLY true when only doing pre-allgather only
-    if (this->is_pre) {
-        output_shape[3] = input_tensor.get_tensor_spec().tile().get_tile_shape()[1] * this->ring_size;
-    }
+    auto output_shape = input_tensor.logical_shape();
+    auto output_padded_shape = input_tensor.padded_shape();
 
     return std::visit(
         [&](const auto& program_config) -> std::vector<TensorSpec> {
@@ -210,24 +192,13 @@ std::vector<TensorSpec> RMSAllGather::compute_output_specs(const std::vector<Ten
             if constexpr (std::is_same_v<
                               ProgramConfigType,
                               ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig>) {
-                if (this->is_pre) {
-                    auto shard_spec = input_tensor.shard_spec().value();
-                    shard_spec.shape[1] = output_shape[3];
-                    CoreCoord grid_start_core = shard_spec.grid.bounding_box().start_coord;
-                    CoreRangeSet output_grid({CoreRange(grid_start_core, grid_start_core)});
-                    shard_spec.grid = output_grid;
-                    auto mem_config = this->output_mem_config.with_shard_spec(shard_spec);
-                    return {TensorSpec(
-                        output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config))};
-                } else {
-                    auto output_shard_spec = this->output_mem_config.shard_spec().value();
-                    auto input_shard_spec = input_tensor.shard_spec().value();
-                    if (output_shard_spec != input_shard_spec) {
-                        output_padded_shape[3] = output_shard_spec.shape[1] * output_shard_spec.num_cores();
-                    }
+                auto output_shard_spec = this->output_mem_config.shard_spec().value();
+                auto input_shard_spec = input_tensor.shard_spec().value();
+                if (output_shard_spec != input_shard_spec) {
+                    output_padded_shape[3] = output_shard_spec.shape[1] * output_shard_spec.num_cores();
                 }
                 if (program_config.inplace) {
-                    return {input_tensor.get_tensor_spec()};
+                    return {input_tensor.tensor_spec()};
                 }
 
                 auto mem_config = this->output_mem_config;
@@ -238,7 +209,7 @@ std::vector<TensorSpec> RMSAllGather::compute_output_specs(const std::vector<Ten
                 return {ttnn::TensorSpec(
                     output_shape,
                     TensorLayout::fromPaddedShape(
-                        this->dtype.value_or(input_tensor.get_dtype()),
+                        this->dtype.value_or(input_tensor.dtype()),
                         PageConfig(Layout::TILE),
                         mem_config,
                         output_shape,
@@ -246,8 +217,7 @@ std::vector<TensorSpec> RMSAllGather::compute_output_specs(const std::vector<Ten
             }
             TT_FATAL(false, "Tensor Spec does not match");
             return {TensorSpec(
-                output_shape,
-                TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), this->output_mem_config))};
+                output_shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), this->output_mem_config))};
         },
         this->program_config);
 }
@@ -258,7 +228,7 @@ std::vector<Tensor> RMSAllGather::create_output_tensors(const std::vector<Tensor
             if constexpr (std::is_same_v<
                               ProgramConfigType,
                               ttnn::operations::normalization::LayerNormShardedMultiCoreProgramConfig>) {
-                if ((!this->is_pre) && program_config.inplace) {
+                if (program_config.inplace) {
                     return {input_tensors.at(0)};
                 }
             }
@@ -326,41 +296,27 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program_at(
                 uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;
                 uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
-                if (this->is_pre) {
-                    return frmsnorm_pre_multi_core_sharded(
-                        a,
-                        b,
-                        output_tensor,
-                        this->eps,
-                        program_config.compute_with_storage_grid_size,
-                        program_config.subblock_w,
-                        program_config.block_w,
-                        this->compute_kernel_config,
-                        // New Parameters
-                        target_device,
-                        forward_device,
-                        backward_device,
-                        this->num_links,
-                        this->ring_size,
-                        device_index,
-                        this->topology,
-                        this->semaphore,
-                        this->sub_device_id);
-                } else {
-                    return frmsnorm_post_multi_core_sharded(
-                        a,
-                        gamma,
-                        stats,
-                        output_tensor,
-                        this->eps,
-                        program_config.compute_with_storage_grid_size,
-                        program_config.subblock_w,
-                        program_config.block_w,
-                        this->compute_kernel_config,
-                        this->semaphore,
-                        this->ring_size,
-                        this->num_links);
-                }
+                return frmsnorm_multi_core_sharded(
+                    a,
+                    b,
+                    gamma,
+                    stats,
+                    output_tensor,
+                    this->eps,
+                    program_config.compute_with_storage_grid_size,
+                    program_config.subblock_w,
+                    program_config.block_w,
+                    this->compute_kernel_config,
+                    // New Parameters
+                    target_device,
+                    forward_device,
+                    backward_device,
+                    this->num_links,
+                    this->ring_size,
+                    device_index,
+                    this->topology,
+                    this->semaphore,
+                    this->sub_device_id);
             } else {
                 TT_FATAL(false, "Program Config does not match");
 
@@ -369,9 +325,11 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program_at(
                 uint32_t num_cores_y = 1;
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
 
-                return frmsnorm_pre_multi_core_sharded(
+                return frmsnorm_multi_core_sharded(
                     a,
                     b,
+                    gamma,
+                    stats,
                     output_tensor,
                     this->eps,
                     grid_size,

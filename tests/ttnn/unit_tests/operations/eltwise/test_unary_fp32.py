@@ -6,11 +6,9 @@ import torch
 import ttnn
 
 import pytest
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -30,7 +28,6 @@ def test_neg_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -50,7 +47,6 @@ def test_sin_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -70,7 +66,6 @@ def test_cos_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -90,7 +85,6 @@ def test_tan_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -126,98 +120,84 @@ def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_exp(device, h, w):
     run_unary_test(device, h, w, ttnn.exp, pcc=0.9998)
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_tanh(device, h, w):
     run_unary_test(device, h, w, ttnn.tanh, pcc=0.993)
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_gelu(device, h, w):
     run_unary_test(device, h, w, ttnn.gelu, pcc=0.9996)
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_rsqrt(device, h, w):
     run_unary_test(device, h, w, ttnn.rsqrt)
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_silu(device, h, w):
     run_unary_test(device, h, w, ttnn.silu)
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_log(device, h, w):
     run_unary_test(device, h, w, ttnn.log)
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_asin(device, h, w):
     run_unary_test(device, h, w, ttnn.asin, pcc=0.998)
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_acos(device, h, w):
     run_unary_test(device, h, w, ttnn.acos, pcc=0.998)
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_atan(device, h, w):
     run_unary_test(device, h, w, ttnn.atan)
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_sinh(device, h, w):
     run_unary_test(device, h, w, ttnn.sinh)
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_asinh(device, h, w):
     run_unary_test(device, h, w, ttnn.asinh, pcc=0.9997)
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_cosh(device, h, w):
     run_unary_test(device, h, w, ttnn.cosh, pcc=0.999)
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_acosh(device, h, w):
     run_unary_test(device, h, w, ttnn.acosh)
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_atanh(device, h, w):

@@ -58,9 +58,11 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/demux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/eth_router.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/eth_tunneler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/fabric_router_vc.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/relay_mux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/util/dispatch_settings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_server.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_logging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_device_reader.cpp
@@ -125,8 +127,7 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/debug
         ${CMAKE_CURRENT_SOURCE_DIR}/profiler
         ${PROJECT_SOURCE_DIR}/tt_metal/include
-    PRIVATE
-        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
 )
+target_include_directories(impl SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast)

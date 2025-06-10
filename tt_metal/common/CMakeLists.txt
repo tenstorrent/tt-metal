@@ -39,8 +39,10 @@ target_link_libraries(
         umd::device
         simde::simde
     PRIVATE
+        Metalium::Metal::Hardware
         Tracy::TracyClient
         TT::Metalium::HostDevCommon
         yaml-cpp::yaml-cpp
         Boost::asio
+        tt-logger::tt-logger
 )

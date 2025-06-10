@@ -14,7 +14,7 @@ namespace ttnn::operations::expand {
 
 ttnn::SmallVector<uint32_t> create_repetition_vector(const Tensor& tensor, std::span<const int32_t> shape) {
     ttnn::SmallVector<uint32_t> expansion_vector(shape.size());
-    auto tensor_shape = tensor.get_logical_shape();
+    auto tensor_shape = tensor.logical_shape();
     const auto source_rank = tensor_shape.rank();
     const auto new_rank = shape.size();
     TT_FATAL(source_rank <= new_rank, "Only size 1 dimensions can be expanded in the output shape");
