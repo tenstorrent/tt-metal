@@ -180,7 +180,7 @@ def run(
 
     # on blackhole, we use the original vae decoder until #20760 is fixed
     if use_host_decoder:
-        return ttnn_latents
+        return latents
 
     ttnn_output = ttnn.permute(latents, [0, 2, 3, 1])
     ttnn_output = tt_vae.decode(ttnn_output)
