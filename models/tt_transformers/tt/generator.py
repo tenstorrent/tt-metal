@@ -603,13 +603,14 @@ class Generator:
         """
         Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
-        batch_per_dp = unpadded_batch // self.data_parallel
         logits = []
         for i in range(self.data_parallel):
-            logits_i = self.model[i].process_output_decode(tt_out[i], B=batch_per_dp, S=1, is_tokens=is_tokens)
+            logits_i = self.model[i].process_output_decode(
+                tt_out[i], B=self.model_args[i].max_batch_size, S=1, is_tokens=is_tokens
+            )
             logits.append(logits_i)
         logits = torch.cat(logits, 0)
-        return logits
+        return logits[:unpadded_batch]
 
     def _decode_forward_no_trace(
         self,
