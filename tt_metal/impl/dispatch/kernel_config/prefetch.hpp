@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,6 +13,7 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
+#include "dispatch/kernel_config/relay_mux.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -48,11 +49,12 @@ struct prefetch_static_config_t {
     std::optional<uint32_t> dispatch_s_buffer_size;
     std::optional<uint32_t> dispatch_s_cb_log_page_size;
 
+    std::optional<uint32_t> fabric_header_rb_base;
+    std::optional<uint32_t> fabric_header_rb_entries;
+    std::optional<uint32_t> my_fabric_sync_status_addr;
+
     std::optional<bool> is_d_variant;
     std::optional<bool> is_h_variant;
-
-    // Populated if fabric is being used to talk to downstream
-    std::optional<uint32_t> client_interface_addr;
 };
 
 struct prefetch_dependent_config_t {
@@ -69,13 +71,9 @@ struct prefetch_dependent_config_t {
 
     std::optional<uint32_t> downstream_dispatch_s_cb_sem_id;
 
-    // Populated if fabric is being used to talk to downstream
-    std::optional<uint32_t> fabric_router_noc_xy;
-    std::optional<uint32_t> upstream_mesh_id;
-    std::optional<uint32_t> upstream_dev_id;
-    std::optional<uint32_t> downstream_mesh_id;
-    std::optional<uint32_t> downstream_dev_id;
-    std::optional<uint32_t> outbound_eth_chan;
+    std::optional<uint32_t> num_hops;
+
+    tt::tt_metal::relay_mux_client_config fabric_mux_client_config;
 };
 
 class PrefetchKernel : public FDKernel {
@@ -106,22 +104,21 @@ public:
         }
         this->kernel_type_ = FDKernelType::DISPATCH;
     }
+
     void CreateKernel() override;
+
     void GenerateStaticConfigs() override;
+
     void GenerateDependentConfigs() override;
+
     void ConfigureCore() override;
-    void UpdateArgsForFabric(
-        const CoreCoord& fabric_router,
-        uint32_t outbound_eth_chan,
-        tt::tt_fabric::MeshId src_mesh_id,
-        chip_id_t src_chip_id,
-        tt::tt_fabric::MeshId dst_mesh_id,
-        chip_id_t dst_chip_id) override;
+
     const prefetch_static_config_t& GetStaticConfig() { return static_config_; }
 
 private:
     prefetch_static_config_t static_config_;
     prefetch_dependent_config_t dependent_config_;
+    FDKernelEdmConnectionAttributes edm_connection_attributes_;
 };
 
 }  // namespace tt_metal

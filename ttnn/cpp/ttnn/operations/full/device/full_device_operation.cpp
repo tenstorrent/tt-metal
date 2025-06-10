@@ -77,8 +77,8 @@ std::tuple<FullOperation::operation_attributes_t, FullOperation::tensor_args_t> 
         operation_attributes_t{
             std::move(shape),
             std::move(fill_value),
-            dtype.value_or(any.get_dtype()),
-            layout.value_or(any.get_layout()),
+            dtype.value_or(any.dtype()),
+            layout.value_or(any.layout()),
             memory_config.value_or(any.memory_config()),
         },
         tensor_args_t{
