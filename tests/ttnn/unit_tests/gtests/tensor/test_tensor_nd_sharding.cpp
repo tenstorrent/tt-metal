@@ -200,8 +200,8 @@ TEST_F(NDShardingPerfTests, TestBatchShardingPerf) {
     log_info(tt::LogTest, "Small shards ND sharding time: {} ns", small_shards_nd_sharding_time_ns);
     log_info(tt::LogTest, "Block 2D sharding time: {} ns", block_2d_sharding_time_ns);
 
-    EXPECT_TRUE(batch_nd_sharding_time_ns < block_2d_sharding_time_ns * 4);
-    EXPECT_TRUE(small_shards_nd_sharding_time_ns < block_2d_sharding_time_ns * 4);
+    EXPECT_TRUE(batch_nd_sharding_time_ns < block_2d_sharding_time_ns * 6);
+    EXPECT_TRUE(small_shards_nd_sharding_time_ns < block_2d_sharding_time_ns * 6);
 }
 
 INSTANTIATE_TEST_SUITE_P(

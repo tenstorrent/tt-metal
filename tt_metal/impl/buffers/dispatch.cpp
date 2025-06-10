@@ -583,8 +583,8 @@ std::pair<uint32_t, uint32_t> calculate_pages_to_process_in_shard(
     const std::vector<uint32_t> core_host_pages = buffer_page_mapping->core_host_page_indices[core_id];
     TT_ASSERT(std::is_sorted(core_host_pages.begin(), core_host_pages.end()));
 
-    auto is_host_page_within_region = [&](const std::optional<uint32_t> host_page) {
-        return *host_page >= starting_host_page_idx && *host_page < ending_host_page_idx;
+    auto is_host_page_within_region = [&](const uint32_t host_page) {
+        return host_page >= starting_host_page_idx && host_page < ending_host_page_idx;
     };
 
     auto core_start_host_page_it =
