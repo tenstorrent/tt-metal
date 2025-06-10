@@ -241,6 +241,62 @@ bool run_dm(IDevice* device, const AllFromAllConfig& test_config) {
     return pcc;
 }
 
+void packet_sizes_test(
+    tt::ARCH arch_,
+    std::vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_case_id,
+    CoreCoord mst_start_coord,
+    CoreCoord sub_start_coord,
+    CoreCoord mst_grid_size,
+    CoreCoord sub_grid_size) {
+    NOC noc_id = NOC::NOC_0;
+
+    auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+
+    /* Running the Test */
+
+    uint32_t max_transactions_per_subordinate = 256;
+    uint32_t max_reservable_pages_per_transaction = 4096;
+
+    for (uint32_t num_of_transactions_per_subordinate = 1;
+         num_of_transactions_per_subordinate <= max_transactions_per_subordinate;
+         num_of_transactions_per_subordinate *= 4) {
+        for (uint32_t pages_reservable_per_transaction = 1;
+             pages_reservable_per_transaction <= max_reservable_pages_per_transaction;
+             pages_reservable_per_transaction *= 2) {
+            // Check if the total data size is within the limits
+            if (num_of_transactions_per_subordinate * pages_reservable_per_transaction > max_reservable_pages) {
+                continue;
+            }
+
+            // Test config
+            unit_tests::dm::all_from_all::AllFromAllConfig test_config = {
+
+                .test_id = unit_tests::dm::all_from_all::START_ID + test_case_id,
+
+                .mst_logical_start_coord = mst_start_coord,
+                .sub_logical_start_coord = sub_start_coord,
+                .mst_grid_size = mst_grid_size,
+                .sub_grid_size = sub_grid_size,
+
+                .num_of_transactions_per_subordinate = num_of_transactions_per_subordinate,
+                .pages_reservable_per_transaction = pages_reservable_per_transaction,
+                .bytes_per_page = bytes_per_page,
+
+                .l1_data_format = DataFormat::Float16_b,
+                .noc_id = noc_id,
+            };
+
+            // Run
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            }
+        }
+    }
+}
+
 void directed_ideal_test(
     tt::ARCH arch_,
     std::vector<IDevice*>& devices_,
@@ -291,76 +347,30 @@ void directed_ideal_test(
 /  ============================================================= */
 
 /*
+IDEAS:
+    - Implement a for loop that shuffles through several coordinates to test grids of
+        different locations
+    - Implement a for loop that shuffles through several grid sizes to test grids of
+        different sizes
+*/
+
+/* ======== PACKET SIZES ======== */
+
+TEST_F(DeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
+    uint32_t test_case_id = 1;
+
+    /* Parameters */
+
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord sub_start_coord = {0, 0};
 
     CoreCoord mst_grid_size = {
         devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
     CoreCoord sub_grid_size = {
         devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
 
-    */
-
-/* ======== PACKET SIZE ======== */
-
-/* ======== 2x2 to 2x2 ======== */
-
-TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From2x2PacketSize) {
-    uint32_t test_case_id = 1;
-
-    /* Parameters */
-
-    // IDEA: Implement a for loop that shuffles through several of each of these coordinates to test grids of
-    // different locations
-    CoreCoord mst_start_coord = {0, 0};
-    CoreCoord sub_start_coord = {2, 2};
-
-    CoreCoord mst_grid_size = {2, 2};
-    CoreCoord sub_grid_size = {2, 2};
-
-    NOC noc_id = NOC::NOC_0;
-
-    auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
-
-    /* Running the Test */
-
-    uint32_t max_transactions_per_subordinate = 256;
-    uint32_t max_reservable_pages_per_transaction = 4096;
-
-    for (uint32_t num_of_transactions_per_subordinate = 1;
-         num_of_transactions_per_subordinate <= max_transactions_per_subordinate;
-         num_of_transactions_per_subordinate *= 4) {
-        for (uint32_t pages_reservable_per_transaction = 1;
-             pages_reservable_per_transaction <= max_reservable_pages_per_transaction;
-             pages_reservable_per_transaction *= 2) {
-            // Check if the total data size is within the limits
-            if (num_of_transactions_per_subordinate * pages_reservable_per_transaction > max_reservable_pages) {
-                continue;
-            }
-
-            // Test config
-            unit_tests::dm::all_from_all::AllFromAllConfig test_config = {
-
-                .test_id = unit_tests::dm::all_from_all::START_ID + test_case_id,
-
-                .mst_logical_start_coord = mst_start_coord,
-                .sub_logical_start_coord = sub_start_coord,
-                .mst_grid_size = mst_grid_size,
-                .sub_grid_size = sub_grid_size,
-
-                .num_of_transactions_per_subordinate = num_of_transactions_per_subordinate,
-                .pages_reservable_per_transaction = pages_reservable_per_transaction,
-                .bytes_per_page = bytes_per_page,
-
-                .l1_data_format = DataFormat::Float16_b,
-                .noc_id = noc_id,
-            };
-
-            // Run
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-            }
-        }
-    }
+    tt::tt_metal::unit_tests::dm::all_from_all::packet_sizes_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
 }
 
 /* ======== DIRECTED IDEAL ======== */
@@ -445,7 +455,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedIdeal) {
         arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
 }
 
-/* ======== 11x10 from 11x10 ======== */
+/* ======== All from All ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
     uint32_t test_case_id = 6;
 
