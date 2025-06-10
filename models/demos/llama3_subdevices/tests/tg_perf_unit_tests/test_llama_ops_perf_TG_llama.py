@@ -26,7 +26,7 @@ def test_llama_tg_ops_perf_device(op_name, expected_kernel_duration_us, perf_mar
     batch = 32
     test = "llama-distributed-ln"
     subdir = "llama-unit-tests"
-    num_iterations = 1
+    num_iterations = 3
 
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()

@@ -157,7 +157,6 @@ def run_elt_binary_mul_with_sub_devices(
         memory_config=out_mem_config,
     )
     tt_out = ttnn.to_torch(out_t, mesh_composer=mesh_composer)
-    tt_out = tt_out[:, :1, :, :dim]
     torch_silu = torch.nn.SiLU()
     passing, output = comp_pcc(tt_out, torch.mul(torch_silu(in0_ref), in1_ref), pcc)
     logger.info(output)
