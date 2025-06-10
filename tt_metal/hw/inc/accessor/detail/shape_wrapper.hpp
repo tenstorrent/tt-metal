@@ -111,5 +111,26 @@ struct ShapeWrapperDynamicRank {
     }
 };
 
+template <bool RankCTA, bool ShapeStatic, size_t StartIdx, uint32_t Rank>
+struct ShapeWrapperTypeSelector;
+
+template <size_t StartIdx, uint32_t Rank>
+struct ShapeWrapperTypeSelector<true, true, StartIdx, Rank> {
+    // Both rank and dims are known at compile time -- we can construct a static wrapper
+    using type = struct_cta_sequence_wrapper_t<ShapeWrapperStaticDimsStaticRank, StartIdx, Rank>;
+};
+
+template <size_t StartIdx, uint32_t Rank>
+struct ShapeWrapperTypeSelector<true, false, StartIdx, Rank> {
+    // Rank is known at compile time, but dims are not
+    using type = ShapeWrapperDynamicDimsStaticRank<Rank>;
+};
+
+template <bool ShapeStatic, size_t StartIdx, uint32_t Rank>
+struct ShapeWrapperTypeSelector<false, ShapeStatic, StartIdx, Rank> {
+    // Rank is not known at compile time, doesn't matter if dims are known or not, use poorly dynamic wrapper
+    using type = ShapeWrapperDynamicRank;
+};
+
 }  // namespace detail
 }  // namespace nd_sharding

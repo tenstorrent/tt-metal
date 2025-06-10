@@ -9,7 +9,7 @@
 #include <variant>
 #include "helpers.hpp"
 #include "shape_wrapper.hpp"
-#include "bank_coords.hpp"
+#include "bank_coords_wrapper.hpp"
 #include <hostdevcommon/flags.hpp>
 
 namespace nd_sharding {
@@ -232,67 +232,6 @@ struct DistributionSpec {
     TensorShape tensor_shape_;  // Tensor shape
     ShardShape shard_shape_;    // Shard shape
     BankCoords bank_coords_;    // Bank coordinates
-
-    static constexpr uint32_t fetch_rank() {
-        if constexpr (has_static_rank) {
-            return rank_ct;
-        } else {
-            uint32_t rank_crta_offset = ArgsLoc::CRTA_OFFSET;
-            return get_common_arg_val<uint32_t>(rank_crta_offset);
-        }
-    }
-
-    static constexpr uint32_t fetch_num_banks() {
-        if constexpr (has_static_num_banks) {
-            return num_banks_ct;
-        } else {
-            uint32_t num_banks_crta_offset = ArgsLoc::CRTA_OFFSET + ArgsLoc::RankCRTA;
-            return get_common_arg_val<uint32_t>(num_banks_crta_offset);
-        }
-    }
-};
-
-// TODO: Should we merge ShapeWrapperTypeSelector and BankCoordsWrapperTypeSelector into one?
-template <bool RankCTA, bool ShapeCTA, size_t CTA_BASE, uint32_t Rank>
-struct ShapeWrapperTypeSelector;
-
-template <size_t CTA_BASE, uint32_t Rank>
-struct ShapeWrapperTypeSelector<true, true, CTA_BASE, Rank> {
-    // Both rank and dims are known at compile time -- we can construct a static wrapper
-    using type = struct_cta_sequence_wrapper_t<ShapeWrapperStaticDimsStaticRank, CTA_BASE, Rank>;
-};
-
-template <size_t CTA_BASE, uint32_t Rank>
-struct ShapeWrapperTypeSelector<true, false, CTA_BASE, Rank> {
-    // Rank is known at compile time, but dims are not
-    using type = ShapeWrapperDynamicDimsStaticRank<Rank>;
-};
-
-template <bool ShapeCTA, size_t CTA_BASE, uint32_t Rank>
-struct ShapeWrapperTypeSelector<false, ShapeCTA, CTA_BASE, Rank> {
-    // Rank is not known at compile time, doesn't matter if dims are known or not, use poorly dynamic wrapper
-    using type = ShapeWrapperDynamicRank;
-};
-
-template <bool NumBanksCTA, bool BankCoordsCTA, size_t CTA_BASE, uint32_t NumBanks>
-struct BankCoordsWrapperTypeSelector;
-
-template <size_t CTA_BASE, uint32_t NumBanks>
-struct BankCoordsWrapperTypeSelector<true, true, CTA_BASE, NumBanks> {
-    // Both num_banks and coords are known at compile time -- we can construct a static wrapper
-    using type = struct_cta_sequence_wrapper_t<BankCoordWrapperStaticNBanksStaticCoords, CTA_BASE, NumBanks>;
-};
-
-template <size_t CTA_BASE, uint32_t NumBanks>
-struct BankCoordsWrapperTypeSelector<true, false, CTA_BASE, NumBanks> {
-    // Num_banks is known at compile time, but coords are not
-    using type = BankCoordWrapperDynamicStaticNBanksDynamicCoords<NumBanks>;
-};
-
-template <bool BankCoordsCTA, size_t CTA_BASE, uint32_t NumBanks>
-struct BankCoordsWrapperTypeSelector<false, BankCoordsCTA, CTA_BASE, NumBanks> {
-    // Num_banks is not known at compile time, doesn't matter if coords are known or not, use poorly dynamic wrapper
-    using type = BankCoordWrapperDynamicsNBanks;
 };
 
 namespace {
@@ -346,18 +285,52 @@ struct ArgsLocation {
     // Calculate offsets for compile-time arguments
     static constexpr uint32_t ArgsConfigCTAOFfset = CTA_OFFSET;
     static constexpr uint32_t RankCTAOffset = ArgsConfigCTAOFfset + 1;
-    static constexpr uint32_t NumBanksCTAOffset = RankCTAOffset + (RankCRTA ? 0 : 1);
+    static constexpr uint32_t NumBanksStaticOffset = RankCTAOffset + (RankCRTA ? 0 : 1);
 
     static constexpr uint32_t RankCT = RankCRTA ? 0 : get_compile_time_arg_val(RankCRTA ? CTA_OFFSET : RankCTAOffset);
     static constexpr uint32_t NumBanksCT =
-        NumBanksCRTA ? 0 : get_compile_time_arg_val(NumBanksCRTA ? CTA_OFFSET : NumBanksCTAOffset);
+        NumBanksCRTA ? 0 : get_compile_time_arg_val(NumBanksCRTA ? CTA_OFFSET : NumBanksStaticOffset);
 
-    static constexpr uint32_t TensorShapeCTAOffset = NumBanksCTAOffset + (NumBanksCRTA ? 0 : 1);
-    static constexpr uint32_t ShardShapeCTAOffset = TensorShapeCTAOffset + (TensorShapeCRTA ? 0 : RankCT);
-    static constexpr uint32_t BankCoordsCTAOffset = ShardShapeCTAOffset + (ShardShapeCRTA ? 0 : RankCT);
+    static constexpr uint32_t TensorShapeStaticOffset = NumBanksStaticOffset + (NumBanksCRTA ? 0 : 1);
+    static constexpr uint32_t ShardShapeStaticOffset = TensorShapeStaticOffset + (TensorShapeCRTA ? 0 : RankCT);
+    static constexpr uint32_t BankCoordsStaticOffset = ShardShapeStaticOffset + (ShardShapeCRTA ? 0 : RankCT);
 
     static constexpr uint32_t NumArgsCT =
-        BankCoordsCTAOffset + (BankCoordsCRTA ? 0 : NumBanksCT) - CTA_OFFSET;  // Number of compile-time arguments
+        BankCoordsStaticOffset + (BankCoordsCRTA ? 0 : NumBanksCT) - CTA_OFFSET;  // Number of compile-time arguments
+
+    // Functions to calculate offsets for common runtime arguments
+    static constexpr uint32_t rank_crta_offset() { return CRTA_OFFSET; }
+    static constexpr uint32_t num_banks_crta_offset() { return CRTA_OFFSET + RankCRTA; }
+
+    static constexpr uint32_t fetch_rank() {
+        if constexpr (RankStatic) {
+            return RankCT;
+        } else {
+            return get_common_arg_val<uint32_t>(rank_crta_offset());
+        }
+    }
+
+    static constexpr uint32_t fetch_num_banks() {
+        if constexpr (NumBanksStatic) {
+            return NumBanksCT;
+        } else {
+            return get_common_arg_val<uint32_t>(num_banks_crta_offset());
+        }
+    }
+
+    static constexpr uint32_t tensor_shape_crta_offset() { return num_banks_crta_offset() + NumBanksCRTA; }
+
+    static constexpr uint32_t shard_shape_crta_offset() {
+        return tensor_shape_crta_offset() + (TensorShapeCRTA ? fetch_rank() : 0);
+    }
+
+    static constexpr uint32_t bank_coords_crta_offset() {
+        return shard_shape_crta_offset() + (ShardShapeCRTA ? fetch_rank() : 0);
+    }
+
+    static constexpr uint32_t num_args_crta() {
+        return bank_coords_crta_offset() + (BankCoordsCRTA ? fetch_num_banks() : 0) - CRTA_OFFSET;
+    }
 };
 
 // Helper to properly build a DistributionSpec type from compile-time arguments
@@ -369,17 +342,17 @@ struct DistributionSpecWrapper {
     using TensorShapeType = typename ShapeWrapperTypeSelector<
         ArgsLoc::RankStatic,
         ArgsLoc::TensorShapeStatic,
-        ArgsLoc::TensorShapeCTAOffset,
+        ArgsLoc::TensorShapeStaticOffset,
         ArgsLoc::RankCT>::type;
     using ShardShapeType = typename ShapeWrapperTypeSelector<
         ArgsLoc::RankStatic,
         ArgsLoc::ShardShapeStatic,
-        ArgsLoc::ShardShapeCTAOffset,
+        ArgsLoc::ShardShapeStaticOffset,
         ArgsLoc::RankCT>::type;
     using BankCoordsType = typename BankCoordsWrapperTypeSelector<
         ArgsLoc::NumBanksStatic,
         ArgsLoc::BankCoordsStatic,
-        ArgsLoc::BankCoordsCTAOffset,
+        ArgsLoc::BankCoordsStaticOffset,
         ArgsLoc::NumBanksCT>::type;
 
     using dspec = DistributionSpec<TensorShapeType, ShardShapeType, BankCoordsType, ArgsLoc>;
@@ -387,34 +360,30 @@ struct DistributionSpecWrapper {
 
 template <typename DSpec>
 auto build_dspec_from_args() {
-    static constexpr bool TensorShapeCRTA = DSpec::ArgsLoc::TensorShapeCRTA;
-    static constexpr bool ShardShapeCRTA = DSpec::ArgsLoc::ShardShapeCRTA;
-    static constexpr bool BankCoordsCRTA = DSpec::ArgsLoc::BankCoordsCRTA;
-    static constexpr size_t CRTA_OFFSET = DSpec::ArgsLoc::CRTA_OFFSET;
-    static constexpr bool RankStatic = DSpec::ArgsLoc::RankStatic;
-    static constexpr bool NumBanksStatic = DSpec::ArgsLoc::NumBanksStatic;
+    using Loc = typename DSpec::ArgsLoc;
+    static constexpr bool TensorShapeCRTA = Loc::TensorShapeCRTA;
+    static constexpr bool ShardShapeCRTA = Loc::ShardShapeCRTA;
+    static constexpr bool BankCoordsCRTA = Loc::BankCoordsCRTA;
+    static constexpr size_t CRTA_OFFSET = Loc::CRTA_OFFSET;
+    static constexpr bool RankStatic = Loc::RankStatic;
+    static constexpr bool NumBanksStatic = Loc::NumBanksStatic;
+
+    auto rank = Loc::fetch_rank();
+    auto num_banks = Loc::fetch_num_banks();
 
     // DSpec::ShapeBase == std::array<uint32_t, RANK> if RankStatic is true, otherwise it is Span<uint32_t>
     typename DSpec::ShapeBase tensor_shape_array;
     typename DSpec::ShapeBase shard_shape_array;
     typename DSpec::PackedCoordsBase bank_coord_array;
 
-    // Calculate CRTA offsets that can be calculated at compile time
-    static constexpr uint32_t rank_crta_offset = DSpec::ArgsLoc::CRTA_OFFSET;
-    static constexpr size_t num_banks_crta_offset = DSpec::ArgsLoc::CRTA_OFFSET + (!RankStatic ? 1 : 0);
-    static constexpr size_t tensor_shape_crta_offset = num_banks_crta_offset + (!NumBanksStatic ? 1 : 0);
-
-    auto rank = DSpec::fetch_rank();
-    auto num_banks = DSpec::fetch_num_banks();
-
     if constexpr (RankStatic) {
         // In such case shape base is std::array<uint32_t, RANK>
         if constexpr (TensorShapeCRTA) {
-            tensor_shape_array = array_crta_sequence_wrapper<tensor_shape_crta_offset, DSpec::rank_ct>();
+            tensor_shape_array = array_crta_sequence_wrapper<Loc::tensor_shape_crta_offset(), DSpec::rank_ct>();
         }
         if constexpr (ShardShapeCRTA) {
             shard_shape_array = array_crta_sequence_wrapper<
-                tensor_shape_crta_offset + DSpec::rank_ct * TensorShapeCRTA,
+                Loc::tensor_shape_crta_offset() + DSpec::rank_ct * TensorShapeCRTA,
                 DSpec::rank_ct>();
         }
     } else {
@@ -422,27 +391,23 @@ auto build_dspec_from_args() {
         static_assert(TensorShapeCRTA, "Tensor shape must be CRTA if rank is not known at compile time!");
         static_assert(ShardShapeCRTA, "Shard shape must be CRTA if rank is not known at compile time!");
 
-        size_t shard_shape_crta_offset = tensor_shape_crta_offset + (TensorShapeCRTA ? rank : 0);
-
         if constexpr (TensorShapeCRTA) {
             // TODO: (C)RTA are contiguous in memory? verify that
-            auto* tensor_shape_ptr = (uint32_t*)(get_common_arg_addr(tensor_shape_crta_offset));
+            auto* tensor_shape_ptr = (uint32_t*)(get_common_arg_addr(Loc::tensor_shape_crta_offset()));
             tensor_shape_array = typename DSpec::ShapeBase(tensor_shape_ptr, rank);
         }
         if constexpr (ShardShapeCRTA) {
-            auto* shard_shape_ptr = (uint32_t*)(get_common_arg_addr(shard_shape_crta_offset));
+            auto* shard_shape_ptr = (uint32_t*)(get_common_arg_addr(Loc::shard_shape_crta_offset()));
             shard_shape_array = typename DSpec::ShapeBase(shard_shape_ptr, rank);
         }
     }
 
-    size_t bank_coords_crta_offset =
-        tensor_shape_crta_offset + (TensorShapeCRTA ? rank : 0) + (ShardShapeCRTA ? rank : 0);
     if constexpr (NumBanksStatic) {
         // In such case packed coords base is std::array<uint32_t, NUM_BANKS>
         if constexpr (BankCoordsCRTA) {
             for (size_t i = 0; i < num_banks; ++i) {
                 bank_coord_array[i] =
-                    get_common_arg_val<uint32_t>(bank_coords_crta_offset + i);  // Get packed coords from CRTA
+                    get_common_arg_val<uint32_t>(Loc::bank_coords_crta_offset() + i);  // Get packed coords from CRTA
             }
         }
     } else {
@@ -450,7 +415,7 @@ auto build_dspec_from_args() {
         // TODO: figure out how to handle case of CRTA num_banks and CTA bank coords
         static_assert(BankCoordsCRTA, "Bank coords must be RTA if rank is not known at compile time!");
         if constexpr (BankCoordsCRTA) {
-            auto* bank_coords_ptr = (uint32_t*)(get_common_arg_addr(bank_coords_crta_offset));
+            auto* bank_coords_ptr = (uint32_t*)(get_common_arg_addr(Loc::bank_coords_crta_offset()));
             bank_coord_array = typename DSpec::PackedCoordsBase(bank_coords_ptr, num_banks);
         }
     }

@@ -22,19 +22,10 @@ constexpr size_t compile_time_args_skip() {
     return DSpec::ArgsLoc::NumArgsCT;
 }
 
-template <typename DSpec, std::enable_if_t<DSpec::has_static_rank && DSpec::has_static_num_banks, int> = 0>
+template <typename DSpec>
 constexpr size_t runtime_args_skip() {
-    // should be evaluated at compile time if rank and num_banks are static
-    return !DSpec::has_static_rank + !DSpec::has_static_num_banks + (DSpec::rank_ct * !DSpec::TensorShape::is_static) +
-           (DSpec::rank_ct * !DSpec::ShardShape::is_static) + (DSpec::num_banks_ct * !DSpec::BankCoords::is_static);
-}
-
-template <typename DSpec, std::enable_if_t<!DSpec::has_static_rank || !DSpec::has_static_num_banks, int> = 0>
-size_t runtime_args_skip() {
-    return !DSpec::has_static_rank + !DSpec::has_static_num_banks +
-           (DSpec::fetch_rank() * !DSpec::TensorShape::is_static) +
-           (DSpec::fetch_rank() * !DSpec::ShardShape::is_static) +
-           (DSpec::fetch_num_banks() * !DSpec::BankCoords::is_static);
+    // Note: can be evaluated at compile time only if rank and num_banks are static
+    return DSpec::ArgsLoc::num_args_crta();
 }
 
 template <typename DSpec, size_t PageSize = detail::UNKNOWN>
