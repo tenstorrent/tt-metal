@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,19 +8,18 @@ import torch
 import pytest
 import cv2
 from loguru import logger
+import torch.nn.functional as F
 from datetime import datetime
 
 import ttnn
 from models.experimental.yolov8s_world.reference import yolov8s_world
-from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world import TtYOLOWorld
 from models.utility_functions import disable_persistent_kernel_cache
 from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
-    create_custom_preprocessor,
     attempt_load,
-    move_to_device,
 )
-from ttnn.model_preprocessing import preprocess_model_parameters
+
 from models.experimental.yolov8s_world.demo.demo_utils import LoadImages, preprocess, postprocess, load_coco_class_names
+from models.experimental.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
 
 
 def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
@@ -57,7 +56,9 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
     logger.info(f"Predictions saved to {output_path}")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
 @pytest.mark.parametrize(
     "source",
     [
@@ -80,7 +81,7 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
     ],
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_demo(device, source, model_type, res, use_pretrained_weight):
+def test_demo(device, source, model_type, res, use_pretrained_weight, use_program_cache):
     disable_persistent_kernel_cache()
 
     if model_type == "torch_model":
@@ -91,43 +92,15 @@ def test_demo(device, source, model_type, res, use_pretrained_weight):
 
         logger.info("Inferencing using Torch Model")
     else:
-        if use_pretrained_weight:
-            weights_torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
-            torch_model = yolov8s_world.YOLOWorld(model_torch=weights_torch_model)
-
-            state_dict = weights_torch_model.state_dict()
-            ds_state_dict = {k: v for k, v in state_dict.items()}
-            new_state_dict = {}
-            for (name1, parameter1), (name2, parameter2) in zip(
-                torch_model.state_dict().items(), ds_state_dict.items()
-            ):
-                new_state_dict[name1] = parameter2
-
-            torch_model.load_state_dict(new_state_dict)
-            torch_model = torch_model.model
-        else:
-            torch_model = yolov8s_world.YOLOWorld()
-            state_dict = torch_model.state_dict()
-            torch_model = torch_model.model
-        parameters = preprocess_model_parameters(
-            initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device)
+        yolov8s_world_trace_2cq = YOLOv8sWorldPerformantRunner(
+            device,
+            1,  # batch_size
+            ttnn.bfloat16,  # act_dtype
+            ttnn.bfloat8_b,  # weight_dtype
+            resolution=(640, 640),
+            model_location_generator=None,
         )
-
-        for i in [12, 15, 19, 22]:
-            parameters["model"][i]["attn"]["gl"]["weight"] = ttnn.to_device(
-                parameters["model"][i]["attn"]["gl"]["weight"], device=device
-            )
-            parameters["model"][i]["attn"]["gl"]["bias"] = ttnn.to_device(
-                parameters["model"][i]["attn"]["gl"]["bias"], device=device
-            )
-            parameters["model"][i]["attn"]["bias"] = ttnn.to_device(
-                parameters["model"][i]["attn"]["bias"], device=device
-            )
-
-        parameters["model"][16] = move_to_device(parameters["model"][16], device)
-
-        parameters["model"][23]["cv4"] = move_to_device(parameters["model"][23]["cv4"], device)
-        model = TtYOLOWorld(device=device, parameters=parameters)
+        yolov8s_world_trace_2cq._capture_yolov8s_world_trace_2cqs()
         logger.info("Inferencing using ttnn Model")
 
     save_dir = "models/experimental/yolov8s_world/demo/runs"
@@ -144,17 +117,18 @@ def test_demo(device, source, model_type, res, use_pretrained_weight):
 
         im = preprocess(im0s, res=res)
 
-        ttnn_im = im.permute((0, 2, 3, 1))
-        ttnn_im = ttnn.from_torch(ttnn_im, dtype=ttnn.bfloat16)
+        ttnn_im = im.permute(0, 2, 3, 1)
+        ttnn_im = F.pad(ttnn_im, (0, 29), mode="constant", value=0)
+        ttnn_im = ttnn.from_torch(ttnn_im, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         if model_type == "torch_model":
             preds = model(im)
         else:
-            preds = model(x=ttnn_im)
+            preds = yolov8s_world_trace_2cq.run(im)
             preds[0] = ttnn.to_torch(preds[0], dtype=torch.float32)
 
         results = postprocess(preds, im, im0s, batch, names)[0]
 
         save_yolo_predictions_by_model(results, save_dir, source, model_type)
-
+    yolov8s_world_trace_2cq.release()
     logger.info("Inference done")

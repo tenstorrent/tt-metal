@@ -40,7 +40,7 @@ def load_torch_model(use_pretrained_weight=True):
         torch_model.load_state_dict(new_state_dict)
     else:
         torch_model = yolov8s_world.YOLOWorld()
-
+    torch_model.eval()
     torch_model = torch_model.model
 
     return torch_model
