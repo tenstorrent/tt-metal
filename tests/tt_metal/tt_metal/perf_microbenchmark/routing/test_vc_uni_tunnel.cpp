@@ -193,18 +193,9 @@ int main(int argc, char **argv) {
         int device_id_l = test_device_id;
 
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id_l);
-        auto const& device_active_eth_cores = device->get_active_ethernet_cores();
+        auto eth_core_l = get_active_ethernet_core(device);
 
-        if (device_active_eth_cores.size() == 0) {
-            log_info(LogTest,
-                "Device {} does not have enough active cores. Need 1 active ethernet core for this test.",
-                device_id_l);
-            tt_metal::CloseDevice(device);
-            throw std::runtime_error("Test cannot run on specified device.");
-        }
-
-        auto eth_core_iter = device_active_eth_cores.begin();
-        auto [device_id_r, eth_receiver_core] = device->get_connected_ethernet_core(*eth_core_iter);
+        auto [device_id_r, eth_receiver_core] = device->get_connected_ethernet_core(eth_core_l);
 
         tt_metal::IDevice* device_r = tt_metal::CreateDevice(device_id_r);
 
