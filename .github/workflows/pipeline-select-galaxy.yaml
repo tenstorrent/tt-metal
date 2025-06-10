@@ -10,6 +10,7 @@ on:
         options:
           - all
           - llama3_70b
+        default: "all"
       trigger_type:
         description: "Select the type of trigger for the pipeline."
         required: true
@@ -20,6 +21,7 @@ on:
           - op-pr
           - nightly
           - hw-self-test
+        default: "manual"
       build-type:
         required: false
         type: choice
@@ -30,17 +32,11 @@ on:
           - ASan
           - TSan
         default: "Release"
-      topology:
-        required: false
-        type: choice
-        options:
-          - config-tg
-          - topology-6u
-        default: "config-tg"
-      extra-tag:
+      extra-tag: # set in-service and topology-6u by default
+        description: "Extra tag to add to the build. Can specify topology 'topology-6u' or 'config-tg'."
         required: true
         type: string
-        default: "in-service"
+        default: "in-service,config-tg"
       tg-quick:
         required: false
         type: boolean
@@ -59,11 +55,6 @@ on:
         default: false
       tg-model-perf:
         description: "tg-model-perf (Requires tracy build)"
-        required: false
-        type: boolean
-        default: false
-      tg-nightly:
-        description: "tg-nightly (Warning: Long running test! Do not choose this unless there is a specific need. Requires tracy build)"
         required: false
         type: boolean
         default: false
@@ -93,8 +84,9 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-4u: ${{ inputs.topology == 'config-tg' }}
-      topology-6u: ${{ inputs.topology == 'topology-6u' }}
+      topology-4u: ${{ contains(inputs.extra-tag, 'config-tg') }}
+      topology-6u: ${{ contains(inputs.extra-tag, 'topology-6u') }}
+
   tg-unit-tests:
     if: ${{ inputs.tg-unit }}
     needs: build-artifact
@@ -105,7 +97,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ inputs.topology }}
+      topology: ${{ contains(inputs.extra-tag, 'topology-6u') && 'topology-6u' || 'config-tg' }}
   tg-frequent-tests:
     if: ${{ inputs.tg-frequent }}
     needs: build-artifact
@@ -116,7 +108,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ inputs.topology }}
+      topology: ${{ contains(inputs.extra-tag, 'topology-6u') && 'topology-6u' || 'config-tg' }}
   tg-demo-tests:
     if: ${{ inputs.tg-demo }}
     needs: build-artifact
@@ -127,7 +119,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ inputs.topology }}
+      topology: ${{ contains(inputs.extra-tag, 'topology-6u') && 'topology-6u' || 'config-tg' }}
   tg-model-perf-tests:
     if: ${{ inputs.tg-model-perf }}
     needs: build-artifact
@@ -138,18 +130,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ inputs.topology }}
-  tg-nightly-tests:
-    needs: build-artifact
-    if: ${{ inputs.tg-nightly }}
-    secrets: inherit
-    uses: ./.github/workflows/tg-nightly-tests-impl.yaml
-    with:
-      extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ inputs.topology }}
+      topology: ${{ contains(inputs.extra-tag, 'topology-6u') && 'topology-6u' || 'config-tg' }}
   tg-stress-test:
     needs: build-artifact
     if: ${{ inputs.tg-stress }}
@@ -160,5 +141,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-4u: ${{ inputs.topology == 'config-tg' }}
-      topology-6u: ${{ inputs.topology == 'topology-6u' }}
+      topology-4u: ${{ contains(inputs.extra-tag, 'config-tg') }}
+      topology-6u: ${{ contains(inputs.extra-tag, 'topology-6u') }}
