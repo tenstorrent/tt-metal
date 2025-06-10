@@ -22,7 +22,6 @@ void kernel_main() {
 
     // single-tile ublocks
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const DataFormat data_format = get_dataformat(cb_id_out);
 
     using tensor_shard_info = ShardedInfo<
         get_compile_time_arg_val(1),   // Memory layout

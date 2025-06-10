@@ -235,13 +235,14 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
 
             // Writer run-time args
+            uint32_t pad_offset = (num_units_per_shard_width - shard_width) * output_unit_size;
             std::vector<uint32_t> writer_run_time_args;
             if (dst_is_dram) {
                 writer_run_time_args = {
                     dst_buffer->address(),
                     shard_height,
                     shard_width,
-                    padded_offset,
+                    pad_offset,
                     curr_num_units_per_shard,
                     num_units_offset,
                     curr_idx_h + curr_idx_w,

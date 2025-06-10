@@ -186,3 +186,51 @@ def test_interleaved_to_dram_block_sharded(
     ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)
 
     assert_with_pcc(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+
+
+@pytest.mark.parametrize(
+    "in_dtype, out_dtype",
+    [
+        [ttnn.bfloat16, ttnn.float32],
+        [ttnn.float32, ttnn.bfloat16],
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "tensor_shape, shard_type, shard_shape, shard_grid",
+    [
+        [
+            [1, 1, 416, 64],
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (128, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+        ],
+        [
+            [1, 1, 64, 416],
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (64, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+        ],
+        [
+            [2, 1, 80, 160],
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (128, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ],
+    ],
+)
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_interleaved_to_dram_sharded_convert_dtype(
+    device, in_dtype, out_dtype, layout, tensor_shape, shard_type, shard_shape, shard_grid, shard_orientation
+):
+    # Output memory config
+    output_shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
+    output_mem_config = ttnn.MemoryConfig(shard_type, ttnn.BufferType.L1, output_shard_spec)  # TODO (GR): Buffer Type
+
+    # Test
+    torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=in_dtype, layout=layout)
+    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)  # TODO: (GR): Remove this line
+    ttnn_output_tensor = ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config, out_dtype)
+
+    assert_with_pcc(torch_input_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
