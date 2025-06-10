@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from itertools import accumulate
 
 import torch
 from llama_models.llama3.api.datatypes import InterleavedTextMedia, StopReason
@@ -57,24 +58,21 @@ class Generator:
 
     # Note: This function is called by vLLM
     def prefill_forward_text(self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None):
-        batch, batch_seq_len = tokens.shape
+        batch_size, batch_seq_len = tokens.shape
+        batch_size_per_model = self._get_batch_size_per_model(batch_size)
 
         # Each model expected to run the same model, safe to use 1st vocab size
-        output_logits = torch.zeros(batch, 1, self.model_args[0].vocab_size)
-        prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
-
-        data_parallel = min(batch, self.data_parallel)
-        batch_per_device = batch // data_parallel
+        output_logits = torch.zeros(batch_size, 1, self.model_args[0].vocab_size)
+        prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch_size)
 
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
-            page_table = torch.chunk(page_table, self.data_parallel, 0)
+            page_table = torch.split(page_table, batch_size_per_model)
 
         out_list = []
-        for group_user_id in range(batch_per_device):
-            for model_id in range(data_parallel):
-                user_id = group_user_id + model_id * batch_per_device
-
+        user_id = 0
+        for model_id in range(self.data_parallel):
+            for group_user_id in range(batch_size_per_model[model_id]):
                 logger.info(f"Prefilling User {user_id + 1}")
                 seq_len = int(prompt_lens[user_id])
                 last_token_idx = seq_len - 1
@@ -97,20 +95,23 @@ class Generator:
                     model_id=model_id,
                 )
                 out_list.append(logits)
+                user_id += 1
 
         # We gather data back to how at the end of prefill
-        for idx, out in enumerate(out_list):
-            model_id = idx % self.data_parallel
-            group_user_id = idx // self.data_parallel
-            user_id = group_user_id + model_id * batch_per_device
+        user_id = 0
+        for model_id in range(self.data_parallel):
+            for group_user_id in range(batch_size_per_model[model_id]):
+                out = out_list[user_id]
 
-            seq_len = int(prompt_lens[user_id])
-            last_token_idx = seq_len - 1
+                seq_len = int(prompt_lens[user_id])
+                last_token_idx = seq_len - 1
 
-            # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[user_id] = self.model[model_id].process_output_prefill(
-                out, last_token_idx=(last_token_idx % 32)
-            )
+                # Since we give unpadded_seq_len, only the tile containing the last token is returned
+                output_logits[user_id] = self.model[model_id].process_output_prefill(
+                    out, last_token_idx=(last_token_idx % 32)
+                )
+
+                user_id += 1
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
@@ -482,27 +483,26 @@ class Generator:
         """
         Batched version of _prefill_forward_single_user for vision model.
         """
-        batch, batch_seq_len = tokens.shape
-        output_logits = torch.zeros(batch, 1, self.model_args[0].vocab_size)
+        batch_size, batch_seq_len = tokens.shape
+        batch_size_per_model = self._get_batch_size_per_model(batch_size)
 
-        data_parallel = min(batch, self.data_parallel)
-        batch_per_device = batch // data_parallel
+        output_logits = torch.zeros(batch_size, 1, self.model_args[0].vocab_size)
 
-        out_list = [[] for _ in range(data_parallel)]
-        output_xattn_masks = [None for _ in range(batch)]
-        output_full_text_row_masked_out_masks = [None for _ in range(batch)]
+        out_list = [[] for _ in range(self.data_parallel)]
+        output_xattn_masks = [None for _ in range(batch_size)]
+        output_full_text_row_masked_out_masks = [None for _ in range(batch_size)]
 
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
-            page_table = torch.chunk(page_table, self.data_parallel, 0)  # cross_page_table
+            page_table = torch.split(page_table, batch_size_per_model)
+
         if cross_page_table is not None:
             assert isinstance(cross_page_table, torch.Tensor), "cross_page_table mush be torch.Tensor"
-            cross_page_table = torch.chunk(cross_page_table, self.data_parallel, 0)
+            cross_page_table = torch.split(cross_page_table, batch_size_per_model)
 
-        for group_user_id in range(batch_per_device):
-            for model_id in range(data_parallel):
-                user_id = group_user_id + model_id * batch_per_device
-
+        user_id = 0
+        for model_id in range(self.data_parallel):
+            for group_user_id in range(batch_size_per_model[model_id]):
                 logger.info(f"Prefilling User {user_id + 1}")
                 seq_len = int(prompt_lens[user_id])
                 user_page_table = page_table[model_id] if page_table is not None else None
@@ -533,14 +533,18 @@ class Generator:
                 output_xattn_masks[user_id] = cross_attention_masks
                 output_full_text_row_masked_out_masks[user_id] = full_text_row_masked_out_mask
 
+                user_id += 1
+
         # We gather prefill output at the end of prefill to reduce unnecessary device sync
-        for group_user_id in range(batch_per_device):
-            for model_id in range(data_parallel):
-                user_id = group_user_id + model_id * batch_per_device
+        user_id = 0
+        for model_id in range(self.data_parallel):
+            for group_user_id in range(batch_size_per_model[model_id]):
                 last_token_idx = prompt_lens[user_id] - 1
                 output_logits[user_id] = self.model[model_id].process_output_prefill(
                     out_list[model_id][group_user_id], 1, last_token_idx=(last_token_idx % 32)
                 )
+
+                user_id += 1
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
 
@@ -560,22 +564,23 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
     ):
-        B = tokens.shape[0]
-        data_parallel = min(B, self.data_parallel)
-        batch_per_device = B // data_parallel
-        tokens = torch.chunk(tokens, self.data_parallel, 0)
-        start_pos = torch.chunk(start_pos, self.data_parallel, 0)
+        batch_size = tokens.shape[0]
+        batch_size_per_model = self._get_batch_size_per_model(batch_size)
+
+        tokens = torch.split(tokens, batch_size_per_model)
+        start_pos = torch.split(start_pos, batch_size_per_model)
+
         cross_attention_masks = [
-            cross_attention_masks[i * batch_per_device : (i + 1) * batch_per_device] for i in range(data_parallel)
+            cross_attention_masks[i:j]
+            for i, j in zip([0] + list(accumulate(batch_size_per_model))[:-1], accumulate(batch_size_per_model))
         ]
         full_text_row_masked_out_mask = [
-            full_text_row_masked_out_mask[i * batch_per_device : (i + 1) * batch_per_device]
-            for i in range(data_parallel)
+            full_text_row_masked_out_mask[i:j]
+            for i, j in zip([0] + list(accumulate(batch_size_per_model))[:-1], accumulate(batch_size_per_model))
         ]
-        page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
-        cross_page_table = (
-            torch.chunk(cross_page_table, self.data_parallel, 0) if cross_page_table is not None else None
-        )
+
+        page_table = torch.split(page_table, batch_size_per_model) if page_table is not None else None
+        cross_page_table = torch.split(cross_page_table, batch_size_per_model) if cross_page_table is not None else None
 
         decode_kwargs = {
             "position_id": start_pos,
@@ -593,7 +598,7 @@ class Generator:
             tt_logits = self._decode_forward_no_trace(**decode_kwargs)
 
         if read_from_device:
-            to_host = self.read_decode_output(tt_logits, B)
+            to_host = self.read_decode_output(tt_logits, batch_size)
             return to_host
         else:
             return tt_logits
@@ -1164,6 +1169,15 @@ class Generator:
         block_size = get_block_size(kv_cache)
         num_blocks = num_blocks_in_seq(prefill_len, block_size)
         return page_table[:, :num_blocks]
+
+    def _get_batch_size_per_model(self, batch_size):
+        """
+        Returns a list of batch sizes for each model in the data parallel group.
+        """
+        max_batch_sizes = [0] + [self.model_args[i].max_batch_size for i in range(self.data_parallel)]
+        acc_batch_sizes = list(accumulate(max_batch_sizes))
+
+        return [max(0, min(batch_size - acc_batch_sizes[i], max_batch_sizes[i + 1])) for i in range(self.data_parallel)]
 
     ## Destructor
 
