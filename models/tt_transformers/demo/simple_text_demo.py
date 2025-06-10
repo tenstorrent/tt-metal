@@ -93,7 +93,59 @@ def load_inputs(user_input, batch, instruct):
     return in_prompt
 
 
-def create_tt_page_table(global_batch_size, data_parallel, paged_attention_config: PagedAttentionConfig):
+def create_tt_model(
+    mesh_device,
+    instruct,
+    max_batch_size,
+    optimizations,
+    max_seq_len,
+    page_params,
+    dtype=ttnn.bfloat8_b,
+    use_paged_kv_cache=False,
+    state_dict=None,
+):
+    from models.tt_transformers.tt.model import Transformer
+    from models.tt_transformers.tt.model_config import ModelArgs
+
+    tt_model_args = ModelArgs(
+        mesh_device,
+        instruct=instruct,
+        max_batch_size=max_batch_size,
+        optimizations=optimizations,
+        max_seq_len=max_seq_len,
+    )
+
+    tt_model_args.n_layers = 1
+
+    # Avoid loading state_dict for every DP model
+    if not state_dict:
+        state_dict = tt_model_args.load_state_dict()
+
+    paged_attention_config = None
+    tt_kv_cache = None
+
+    if use_paged_kv_cache:
+        paged_attention_config = PagedAttentionConfig(
+            block_size=page_params["page_block_size"],
+            max_num_blocks=page_params["page_max_num_blocks_per_dp"],
+        )
+
+    model = Transformer(
+        args=tt_model_args,
+        mesh_device=mesh_device,
+        dtype=dtype,
+        state_dict=state_dict,
+        weight_cache_path=tt_model_args.weight_cache_path(dtype),
+        paged_attention_config=paged_attention_config,
+    )
+
+    if use_paged_kv_cache:
+        tt_kv_cache = [l.attention.layer_past for l in model.layers]
+
+    return tt_model_args, model, tt_kv_cache, state_dict
+
+
+def create_tt_page_table(global_batch_size, data_parallel, page_params, use_paged_kv_cache):
     page_table = None
 
     if paged_attention_config:
