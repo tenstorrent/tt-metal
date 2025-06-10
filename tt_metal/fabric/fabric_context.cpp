@@ -153,7 +153,8 @@ void FabricContext::set_fabric_master_router_chan(chip_id_t chip_id, chan_id_t c
     TT_FATAL(chip_id < MAX_DEVICES, "Device ID {} exceeds maximum supported devices {}", chip_id, MAX_DEVICES);
     TT_FATAL(
         this->master_router_chans_[chip_id] == UNINITIALIZED_MASTER_ROUTER_CHAN,
-        "Error, tried to set master router channel again for the same device");
+        "Error, tried to set master router channel again for the same device {}",
+        chip_id);
     this->master_router_chans_[chip_id] = chan_id;
 }
 
@@ -161,7 +162,8 @@ chan_id_t FabricContext::get_fabric_master_router_chan(chip_id_t chip_id) const 
     TT_FATAL(chip_id < MAX_DEVICES, "Device ID {} exceeds maximum supported devices {}", chip_id, MAX_DEVICES);
     TT_FATAL(
         this->master_router_chans_[chip_id] != UNINITIALIZED_MASTER_ROUTER_CHAN,
-        "Error, querying master router channel for an unknown device");
+        "Error, querying master router channel for an unknown device {}",
+        chip_id);
     return this->master_router_chans_[chip_id];
 }
 
