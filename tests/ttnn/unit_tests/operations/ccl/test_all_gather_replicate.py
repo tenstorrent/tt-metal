@@ -18,7 +18,6 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
 from models.demos.llama3_subdevices.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
-from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
 
@@ -28,9 +27,7 @@ SUB_DEVICE_CRS = ttnn.CoreRangeSet(
         ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
     ]
 )
-
 QKV_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 10, SUB_DEVICE_CRS, row_wise=True)
-
 RING_CRS = ttnn.CoreRangeSet(
     [
         ttnn.CoreRange(
@@ -40,17 +37,13 @@ RING_CRS = ttnn.CoreRangeSet(
         for x, y in PREFETCHER_NOC1_GRID
     ]
 )
-
 FF1_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 28, SUB_DEVICE_CRS, row_wise=True)
-
 FF1_CRS_RS_OUT = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 30, SUB_DEVICE_CRS, row_wise=True)
-
 NORM_CRS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 7))])
-
 LM_HEAD_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 32, SUB_DEVICE_CRS, row_wise=True)
 
 
-def run_all_reduce_impl(
+def run_all_gather_replicate_impl(
     mesh_device,
     output_shape,
     cluster_axis,
@@ -60,18 +53,11 @@ def run_all_reduce_impl(
     input_core_range_set,
     output_num_cores,
     output_core_range_set,
-    output_dtype=None,
-    loopback_size=1,
     num_iters=1,
-    warmup_iters=0,
     trace_mode=False,
     validate_all=True,
-    profiler=BenchmarkProfiler(),
 ):
     cluster_shape = (8, 4)
-
-    if output_dtype is None:
-        output_dtype = input_dtype
 
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
@@ -82,10 +68,10 @@ def run_all_reduce_impl(
 
     linear = True
     if linear:
-        all_reduce_topology = ttnn.Topology.Linear
+        all_gather_replicate_topology = ttnn.Topology.Linear
         wrap_mesh = False
     else:
-        all_reduce_topology = ttnn.Topology.Ring
+        all_gather_replicate_topology = ttnn.Topology.Ring
         wrap_mesh = False
 
     worker_sub_device = ttnn.SubDevice([SUB_DEVICE_CRS])
@@ -166,17 +152,10 @@ def run_all_reduce_impl(
 
         tt_intermediate_tensors.append(tt_intermediate_tensor)
 
-    # All-Reduce Golden
-    # Inputs reduce sequentially for 10 iters
+    # All Gather Replicate Golden
     output_tensor_goldens_list = []
     for i in range(num_iters):
-        if i % loopback_size == 0:
-            ar_input_tensor = input_tensor
-
-        output_tensor_goldens_list.append(torch.sum(ar_input_tensor, dim=cluster_axis))
-        ar_input_tensor = torch.concat(
-            [output_tensor_goldens_list[-1].unsqueeze(cluster_axis)] * cluster_shape[cluster_axis], dim=cluster_axis
-        )
+        output_tensor_goldens_list.append(torch.sum(input_tensor, dim=cluster_axis))
 
     ##################################
     ##### Run the op
@@ -185,18 +164,14 @@ def run_all_reduce_impl(
     def run_op(n_iters, store_all_results=True):
         outs = []
         for i in range(n_iters):
-            if i % loopback_size == 0:
-                tt_input = tt_input_tensor
-
             out = ttnn.experimental.all_reduce_async(
-                tt_input,
+                tt_input_tensor,
                 tt_intermediate_tensors[i % num_buffers],
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
                 multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
                 memory_config=output_mem_config,
-                dtype=output_dtype,
-                topology=all_reduce_topology,
+                topology=all_gather_replicate_topology,
                 num_links=num_links,
                 subdevice_id=worker_sub_device_id,
             )
@@ -204,10 +179,6 @@ def run_all_reduce_impl(
                 ttnn.synchronize_device(mesh_device)
             if store_all_results:
                 outs.append(out)
-
-            # Loop back the output to the input
-            if loopback_size != 1:
-                tt_input = ttnn.reshard(out, input_mem_config)
 
         if store_all_results:
             return outs
@@ -220,41 +191,16 @@ def run_all_reduce_impl(
         tt_outs = run_op(num_iters, store_all_results=validate_all)
 
         ##### Capture Trace #####
-        logger.info("Capturing trace")
-        if warmup_iters > 0:
-            trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            tt_outs = run_op(warmup_iters, store_all_results=validate_all)
-            ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
-            ttnn.synchronize_device(mesh_device)
-
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         tt_outs = run_op(num_iters, store_all_results=validate_all)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-        ttnn.synchronize_device(mesh_device)
 
         ##### Run Trace #####
         logger.info("Starting Trace perf test...")
-        profiler.start("all-reduce-async-trace-warmup")
-        if warmup_iters > 0:
-            ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
-            ttnn.release_trace(mesh_device, trace_id_warmup)
-            ttnn.synchronize_device(mesh_device)
-        profiler.end("all-reduce-async-trace-warmup")
-
         signpost("start")
-        profiler.start("all-reduce-async-trace")
         ttnn.execute_trace(mesh_device, trace_id, blocking=False)
         ttnn.release_trace(mesh_device, trace_id)
-        ttnn.synchronize_device(mesh_device)
-        profiler.end("all-reduce-async-trace")
         signpost("stop")
-        time_taken = profiler.get_duration("all-reduce-async-trace") - profiler.get_duration(
-            "all-reduce-async-trace-warmup"
-        )
-        effective_iter = num_iters - warmup_iters
-        logger.info(f"Time taken e2e: {time_taken} s")
-        logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
-        logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
 
     else:
         signpost("start")
@@ -268,12 +214,11 @@ def run_all_reduce_impl(
         for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
             # get_device_tensors returns row major, so we need to select the correct golden tensor
             if cluster_axis == 0:
-                output_tensor_ = output_tensor[i % cluster_shape[not (cluster_axis)]].unsqueeze(0).unsqueeze(0)
+                output_tensor_ = output_tensor[i % cluster_shape[not (cluster_axis)]]
             else:
-                output_tensor_ = output_tensor[i // cluster_shape[cluster_axis]].unsqueeze(0).unsqueeze(0)
+                output_tensor_ = output_tensor[i // cluster_shape[cluster_axis]]
 
             tt_output_tensor = t.cpu().to_torch()
-            # logger.info(f"Checking for device {t.device().id()}")
 
             if input_dtype == ttnn.bfloat16:
                 eq, output = comp_pcc(tt_output_tensor, output_tensor_)
@@ -292,10 +237,8 @@ def run_all_reduce_impl(
         output_tensor = output_tensor_goldens_list[-1]
         validate(tt_out_tensor, output_tensor)
 
-    reshard_op_cnt = 1 if loopback_size > 1 else 0
     assert (
-        mesh_device.num_program_cache_entries() == 1 + reshard_op_cnt
-        or mesh_device.num_program_cache_entries() == num_iters + reshard_op_cnt
+        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
     ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
 
     mesh_device.reset_sub_device_stall_group()
@@ -307,27 +250,18 @@ def run_all_reduce_impl(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
     [
         ([1, 1, 32, 2048], 0, 4, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
-        ([1, 1, 32, 1280], 1, 3, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 3, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
-        ([1, 1, 32, 2048], 0, 3, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
-        ([1, 1, 32, 16 * 1024], 1, 3, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS),  # LM Head all reduce
-        ([1, 1, 32, 1280], 1, 1, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 1, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
-        ([1, 1, 32, 2048], 0, 1, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
-        ([1, 1, 32, 16 * 1024], 1, 1, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS),  # LM Head all reduce
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttnn.bfloat16,
         ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
-    "num_iters, warmup_iters",
+    "num_iters",
     [
-        (1000, 100),
+        (10),
     ],
 )
 @pytest.mark.parametrize("trace_mode", [True])
@@ -349,7 +283,7 @@ def run_all_reduce_impl(
     ],
     indirect=True,
 )
-def test_all_reduce(
+def test_all_gather_replicate(
     mesh_device,
     output_shape,
     cluster_axis,
@@ -360,7 +294,6 @@ def test_all_reduce(
     output_num_cores,
     output_core_range_set,
     num_iters,
-    warmup_iters,
     trace_mode,
     use_program_cache,
     function_level_defaults,
@@ -370,9 +303,7 @@ def test_all_reduce(
     if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
-    profiler = BenchmarkProfiler()
-
-    run_all_reduce_impl(
+    run_all_gather_replicate_impl(
         mesh_device,
         output_shape,
         cluster_axis,
@@ -383,94 +314,6 @@ def test_all_reduce(
         output_num_cores,
         output_core_range_set,
         num_iters=num_iters,
-        warmup_iters=warmup_iters,
-        trace_mode=trace_mode,
-        validate_all=False,
-        profiler=profiler,
-    )
-
-    time_taken = profiler.get_duration("all-reduce-async-trace") - profiler.get_duration(
-        "all-reduce-async-trace-warmup"
-    )
-    effective_iter = num_iters - warmup_iters
-    latency_us = time_taken / effective_iter * 1e6
-    logger.info(f"Time taken: {time_taken} s")
-    logger.info(f"Time per iter: {latency_us} us")
-
-
-@skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.timeout(600)
-@pytest.mark.parametrize(
-    "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
-    [
-        ([1, 1, 32, 1280], 1, 1, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 1, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
-        ([1, 1, 32, 2048], 0, 1, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
-    ],
-)
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat8_b,
-    ],
-)
-@pytest.mark.parametrize(
-    "num_iters, warmup_iters",
-    [
-        (100, 10),
-    ],
-)
-@pytest.mark.parametrize("trace_mode", [True])
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "trace_region_size": 23887872,
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        (8, 4),
-    ],
-    indirect=True,
-)
-def test_all_reduce_loopback(
-    mesh_device,
-    output_shape,
-    cluster_axis,
-    input_dtype,
-    num_links,
-    input_num_cores,
-    input_core_range_set,
-    output_num_cores,
-    output_core_range_set,
-    num_iters,
-    warmup_iters,
-    trace_mode,
-    use_program_cache,
-    function_level_defaults,
-):
-    if mesh_device.get_num_devices() != 32:
-        pytest.skip("Not TG!")
-
-    run_all_reduce_impl(
-        mesh_device,
-        output_shape,
-        cluster_axis,
-        input_dtype,
-        num_links,
-        input_num_cores,
-        input_core_range_set,
-        output_num_cores,
-        output_core_range_set,
-        loopback_size=4,
-        num_iters=num_iters,
-        warmup_iters=warmup_iters,
         trace_mode=trace_mode,
         validate_all=False,
     )
