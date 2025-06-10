@@ -9,14 +9,7 @@ import pytest
 
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 
-SHAPE_LIST = [
-    (32, 32),
-    (64, 64),
-    (256, 256),
-    (512, 512),
-    (1024, 1024),
-    (2048, 2048),
-]
+SHAPE_LIST = [(dim, dim) for dim in [2**i for i in range(5, 15)]]
 
 
 def is_ttnn_float_type(tt_dtype) -> bool:
@@ -72,6 +65,7 @@ def test_benchmark_experimental_where(benchmark, device, shape):
 
     def where_op():
         ttnn.experimental.where(condition, true_values, false_values)
+        ttnn.synchronize_device(device)
 
     benchmark.pedantic(where_op, iterations=10, rounds=3, warmup_rounds=1)
 
@@ -88,5 +82,6 @@ def test_benchmark_where(benchmark, device, shape):
 
     def where_op():
         ttnn.where(condition, true_values, false_values)
+        ttnn.synchronize_device(device)
 
     benchmark.pedantic(where_op, iterations=10, rounds=3, warmup_rounds=1)
