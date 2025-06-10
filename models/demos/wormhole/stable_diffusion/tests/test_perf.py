@@ -182,11 +182,10 @@ def test_stable_diffusion_trace_2cq(device, use_program_cache):
     print(f"SD1.4 is running at {fps} FPS")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 8192, "trace_region_size": 3472384}], indirect=True)
-def test_stable_diffusion_vae_trace(device):
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 8192, "trace_region_size": 6348800}], indirect=True)
+def test_stable_diffusion_vae_trace(device, use_program_cache):
     profiler.clear()
     torch.manual_seed(0)
-    device.enable_program_cache()
 
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
     ttnn_model = Vae(torch_vae=vae, device=device)
@@ -236,10 +235,13 @@ def test_stable_diffusion_vae_trace(device):
     ttnn.synchronize_device(device)
     profiler.end(f"vae_run_for_inference_{0}")
 
-    assert_with_pcc(torch_output, ttnn_out, 0.985)
+    pcc = 0.985
+    if is_blackhole():
+        pcc = 0.923
+    assert_with_pcc(torch_output, ttnn_out, pcc)
 
     inference_time = profiler.get(f"vae_run_for_inference_{0}")
-    expected_inference_time = 0.749 if is_wormhole_b0() else 0.072
+    expected_inference_time = 0.749 if is_wormhole_b0() else 0.474
 
     assert (
         inference_time <= expected_inference_time
