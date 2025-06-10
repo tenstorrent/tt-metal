@@ -17,8 +17,8 @@ void AllToAllAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "AllToAllAsync: Input tensor size must be 1, but is {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
-    const auto& layout = input_tensor.get_layout();
-    const auto& dtype = input_tensor.get_dtype();
+    const auto& layout = input_tensor.layout();
+    const auto& dtype = input_tensor.dtype();
     const auto& page_size = input_tensor.buffer()->page_size();
     TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "AllToAllAsync currently requires aligned pages");
 
@@ -48,12 +48,12 @@ void AllToAllAsync::validate_with_output_tensors(
         this->in_dim != this->out_dim,
         "AllToAllAsync: in_dim and out_dim must be different, but are both {}",
         this->in_dim);
-    TT_FATAL(input_tensor.get_padded_shape().size() == 4, "AllToAllAsync: input tensor must have 4 dimensions");
+    TT_FATAL(input_tensor.padded_shape().size() == 4, "AllToAllAsync: input tensor must have 4 dimensions");
 
     TT_FATAL(
-        input_tensor.get_padded_shape()[this->out_dim] % this->ring_size == 0,
+        input_tensor.padded_shape()[this->out_dim] % this->ring_size == 0,
         "AllToAllAsync: input tensor dimension {} must be divisible by ring_size {}",
-        input_tensor.get_padded_shape()[this->out_dim],
+        input_tensor.padded_shape()[this->out_dim],
         this->ring_size);
 
     // Output tensor validation
@@ -77,16 +77,16 @@ void AllToAllAsync::validate_with_output_tensors(
             output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Unsupported output memory layout {}.",
             output_tensor.memory_config().memory_layout());
-        TT_FATAL(output_tensor.get_dtype() == dtype, "Output tensor dtype must match input tensor dtype");
+        TT_FATAL(output_tensor.dtype() == dtype, "Output tensor dtype must match input tensor dtype");
         TT_FATAL(
             output_tensor.memory_config() == this->output_mem_config,
             "Output tensor memory config must match specified output_mem_config");
 
         // For AllToAll, the shape of the *local* tensor shard should typically be the same.
         // Global logical shape also remains the same.
-        auto output_shape = output_tensor.get_padded_shape();
+        auto output_shape = output_tensor.padded_shape();
         TT_FATAL(output_shape.size() == 4, "AllToAllAsync: output tensor must have 4 dimensions");
-        auto input_shape = input_tensor.get_padded_shape();
+        auto input_shape = input_tensor.padded_shape();
         input_shape[this->in_dim] *= this->ring_size;
         input_shape[this->out_dim] /= this->ring_size;
         TT_FATAL(
@@ -101,11 +101,11 @@ void AllToAllAsync::validate_with_output_tensors(
 
 std::vector<ttnn::TensorSpec> AllToAllAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.get_padded_shape();
+    auto shape = input_tensor.padded_shape();
     shape[this->in_dim] *= this->ring_size;
     shape[this->out_dim] /= this->ring_size;
     auto tensor_spec = TensorSpec(
-        shape, TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config));
+        shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config));
     return {tensor_spec, tensor_spec};
 }
 
@@ -121,7 +121,7 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllToAllAsync::create_mesh_wo
 
 tt::tt_metal::operation::ProgramWithCallbacks AllToAllAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    tt::log_debug(tt::LogOp, "DEBUG: create_program_at is called");
+    log_debug(tt::LogOp, "DEBUG: create_program_at is called");
     auto mesh_device = input_tensors[0].mesh_device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
 
@@ -185,9 +185,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllToAllAsync::create_program_at(
 
 tt::tt_metal::operation::Hash AllToAllAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto input_shape = input_tensor.get_padded_shape();
+    auto input_shape = input_tensor.padded_shape();
     auto input_memory_layout = input_tensor.layout();
-    auto input_dtype = input_tensor.get_dtype();
+    auto input_dtype = input_tensor.dtype();
     auto input_memory_config = input_tensor.memory_config();
 
     return tt::tt_metal::operation::hash_operation<AllToAllAsync>(
@@ -241,7 +241,7 @@ Tensor all_to_all_async(
         persistent_intermediate_buffer, persistent_output_buffer};
 
     // Normalizing dims here before passing to the struct/op implementation
-    int32_t rank = input_tensor.get_logical_shape().rank();
+    int32_t rank = input_tensor.logical_shape().rank();
     int32_t norm_in_dim = (in_dim < 0) ? rank + in_dim : in_dim;
     int32_t norm_out_dim = (out_dim < 0) ? rank + out_dim : out_dim;
 

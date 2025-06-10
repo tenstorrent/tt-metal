@@ -147,9 +147,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     }
     auto sender_worker_cores = corerange_to_cores(sender_worker_core_range, num_links, true);
     // Tensor Info
-    const uint32_t logical_dim_2 = input_tensor.get_logical_shape()[2];
+    const uint32_t logical_dim_2 = input_tensor.logical_shape()[2];
     const auto input_tensor_num_pages =
-        input_tensor.get_logical_shape()[0] * input_tensor.get_logical_shape()[1] * logical_dim_2;
+        input_tensor.logical_shape()[0] * input_tensor.logical_shape()[1] * logical_dim_2;
     const auto input_tensor_cores = input_tensor.memory_config().shard_spec()->grid;
     const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec()->shape;
     const auto input_tensor_shard_num_pages = logical_dim_2;
@@ -157,26 +157,26 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const auto output_interm_tensor_cores = temp_tensor.memory_config().shard_spec()->grid;
     const auto output_interm_tensor_shard_shape = temp_tensor.memory_config().shard_spec()->shape;
     const auto output_interm_tensor_shard_num_pages = logical_dim_2;
-    const auto row_size = input_tensor.get_padded_shape()[-1] / 2 * output_tensor.element_size();
+    const auto row_size = input_tensor.padded_shape()[-1] / 2 * output_tensor.element_size();
 
-    tt::log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
-    tt::log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
-    tt::log_debug(tt::LogOp, "input_tensor_shard_shape: {}", input_tensor_shard_shape);
-    tt::log_debug(tt::LogOp, "input_tensor_shard_num_pages: {}", input_tensor_shard_num_pages);
+    log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
+    log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
+    log_debug(tt::LogOp, "input_tensor_shard_shape: {}", input_tensor_shard_shape);
+    log_debug(tt::LogOp, "input_tensor_shard_num_pages: {}", input_tensor_shard_num_pages);
 
     // concat info
-    const auto& input_concat_shape = temp_tensor.get_padded_shape();
+    const auto& input_concat_shape = temp_tensor.padded_shape();
     const uint32_t head_dim = input_concat_shape[-1];
     const uint32_t batch = input_concat_shape[1];
     uint32_t single_tile_size =
-        tt::tt_metal::detail::TileSize(tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype()));
+        tt::tt_metal::detail::TileSize(tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()));
 
-    auto tile_shape = temp_tensor.get_tensor_spec().tile().get_tile_shape();
+    auto tile_shape = temp_tensor.tensor_spec().tile().get_tile_shape();
     auto tile_h = tile_shape[0];
     auto tile_w = tile_shape[1];
     auto tile_hw = tile_h * tile_w;
 
-    auto face_shape = temp_tensor.get_tensor_spec().tile().get_face_shape();
+    auto face_shape = temp_tensor.tensor_spec().tile().get_face_shape();
     auto face_h = face_shape[0];
     auto face_w = face_shape[1];
     auto face_hw = face_h * face_w;
@@ -204,7 +204,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         input_tensor_num_pages / num_links +
         1;  // We are dealing with small shapes, so assuming all pages for a worker can be fit into the CB
     uint32_t src0_cb_index = tt::CB::c_in0;
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
@@ -223,14 +223,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
 
     uint32_t q_output_cb_index = tt::CBIndex::c_16;
     tt::tt_metal::CircularBufferConfig cb_q_output_config =
-        tt::tt_metal::CircularBufferConfig(output_tensor.get_padded_shape()[-2] * row_size, {{q_output_cb_index, df}})
+        tt::tt_metal::CircularBufferConfig(output_tensor.padded_shape()[-2] * row_size, {{q_output_cb_index, df}})
             .set_page_size(q_output_cb_index, single_tile_size)
             .set_globally_allocated_address(*output_tensor.buffer());
     auto cb_q_output = tt::tt_metal::CreateCircularBuffer(program, q_cores, cb_q_output_config);
 
     uint32_t pre_tilize_cb_index = tt::CBIndex::c_17;
     tt::tt_metal::CircularBufferConfig cb_pre_tilize_config =
-        tt::tt_metal::CircularBufferConfig(output_tensor.get_padded_shape()[-2] * row_size, {{pre_tilize_cb_index, df}})
+        tt::tt_metal::CircularBufferConfig(output_tensor.padded_shape()[-2] * row_size, {{pre_tilize_cb_index, df}})
             .set_page_size(pre_tilize_cb_index, single_tile_size);
     auto cb_pre_tilize = tt::tt_metal::CreateCircularBuffer(program, q_cores, cb_pre_tilize_config);
 
@@ -435,15 +435,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             output_tensor_cores_y.push_back(this_core.y);
         }
 
-        tt::log_debug(tt::LogOp, "input_tile_id_start: {}", input_tile_id_start);
-        tt::log_debug(tt::LogOp, "input_tile_id_end: {}", input_tile_id_end);
-        tt::log_debug(tt::LogOp, "worker_num_tiles_to_read: {}", worker_num_tiles_to_read);
-        tt::log_debug(tt::LogOp, "input_first_core_tile_start_offset: {}", input_first_core_tile_start_offset);
-        tt::log_debug(tt::LogOp, "output_first_core_tile_start_offset: {}", output_first_core_tile_start_offset);
-        tt::log_debug(tt::LogOp, "input_tensor_cores_x: {}", input_tensor_cores_x);
-        tt::log_debug(tt::LogOp, "input_tensor_cores_y: {}", input_tensor_cores_y);
-        tt::log_debug(tt::LogOp, "output_tensor_cores_x: {}", output_tensor_cores_x);
-        tt::log_debug(tt::LogOp, "output_tensor_cores_y: {}", output_tensor_cores_y);
+        log_debug(tt::LogOp, "input_tile_id_start: {}", input_tile_id_start);
+        log_debug(tt::LogOp, "input_tile_id_end: {}", input_tile_id_end);
+        log_debug(tt::LogOp, "worker_num_tiles_to_read: {}", worker_num_tiles_to_read);
+        log_debug(tt::LogOp, "input_first_core_tile_start_offset: {}", input_first_core_tile_start_offset);
+        log_debug(tt::LogOp, "output_first_core_tile_start_offset: {}", output_first_core_tile_start_offset);
+        log_debug(tt::LogOp, "input_tensor_cores_x: {}", input_tensor_cores_x);
+        log_debug(tt::LogOp, "input_tensor_cores_y: {}", input_tensor_cores_y);
+        log_debug(tt::LogOp, "output_tensor_cores_x: {}", output_tensor_cores_x);
+        log_debug(tt::LogOp, "output_tensor_cores_y: {}", output_tensor_cores_y);
 
         if (link == 0) {
             // drain sync core is the first worker core

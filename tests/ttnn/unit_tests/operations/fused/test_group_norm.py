@@ -411,14 +411,16 @@ def generate_sdxl_test_inputs():
     inputs = []
 
     # 1024x1024 resoultion
-    inputs.append((2, 1280, 64, 64))
-    inputs.append((2, 1280, 32, 32))
-    inputs.append((2, 1920, 32, 32))
-    inputs.append((2, 2560, 32, 32))
-    inputs.append((2, 320, 64, 64))
-    inputs.append((2, 640, 32, 32))
-    inputs.append((2, 640, 64, 64))
-    inputs.append((2, 960, 64, 64))
+    inputs.append((1, 1280, 64, 64))
+    inputs.append((1, 1280, 32, 32))
+    inputs.append((1, 1920, 64, 64))
+    inputs.append((1, 1920, 32, 32))
+    inputs.append((1, 2560, 32, 32))
+    inputs.append((1, 320, 128, 128))
+    inputs.append((1, 320, 64, 64))
+    inputs.append((1, 640, 64, 64))
+    inputs.append((1, 640, 32, 32))
+    inputs.append((1, 960, 64, 64))
 
     return inputs
 
@@ -463,7 +465,7 @@ def test_sdxl_base_group_norm(device, input_shape, use_program_cache):
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
     shard_shape = N * H * W // grid_size.x, C // grid_size.y
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     sharded_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )

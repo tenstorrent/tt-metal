@@ -60,11 +60,11 @@ public:
         return instance.get();
     }
 
-private:
-    DeviceGetter() = default;
-
     DeviceGetter(const DeviceGetter&) = delete;
     DeviceGetter& operator=(const DeviceGetter&) = delete;
+
+private:
+    DeviceGetter() = default;
 };
 
 // Wrapper to abstract const-eval logic out of runtime funcs to keep them

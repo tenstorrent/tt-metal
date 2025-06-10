@@ -90,8 +90,16 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
 
     this->router_config_ =
         std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(this->channel_buffer_size_bytes_, this->topology_);
+    // disable upstream buffering optimization for now for device init.
+    auto dateline_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
+        .edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline,
+        .enable_dateline_sender_extra_buffer_slots = false,
+        .enable_dateline_receiver_extra_buffer_slots = true,
+        .enable_dateline_upstream_sender_extra_buffer_slots = false,
+        .enable_dateline_upstream_receiver_extra_buffer_slots = false,
+    };
     this->dateline_router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
-        this->channel_buffer_size_bytes_, this->topology_, true);
+        this->channel_buffer_size_bytes_, this->topology_, dateline_edm_options);
     set_routing_mode(this->topology_, this->fabric_config_);
 }
 

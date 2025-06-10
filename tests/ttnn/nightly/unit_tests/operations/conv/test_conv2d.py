@@ -78,7 +78,7 @@ def run_conv(
     config_override,
     dilation_h=1,
     dilation_w=1,
-    transpose_shards=True,  # https://github.com/tenstorrent/tt-metal/issues/17897
+    transpose_shards=False,
     fp32_accum=False,
     packer_l1_acc=False,
     input_layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -754,7 +754,6 @@ def test_conv_dram(
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
         preprocess_weights_on_device=False,
-        transpose_shards=True,
         run_twice=False,
         fast_compare=True,
         slice_config=ttnn.Conv2dSliceConfig(
@@ -3009,23 +3008,30 @@ def test_block_sharding_relu_act_block_h(
 
 # fmt: off
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, auto_shard, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, input_dtype, input_layout, groups, kernel, stride, padding, dilation, auto_shard, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, enable_act_double_buffer",
     (
-        # model strawberry
-        (1, 10,   64, 1024, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (4, 4), (2, 2), (1, 1), (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 64,   64, 512,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (4, 4), (2, 2), (1, 1), (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 64,   64, 256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (4, 4), (2, 2), (1, 1), (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 64,   64, 128,   16, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (4, 4), (2, 2), (1, 1), (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1,  2,    1, 1024, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
+        # # model strawberry
+        (1, 10,   64, 1024, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (4, 4), (2, 2), [1, 1, 1, 1], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
+        (1, 64,   64, 512,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (4, 4), (2, 2), [1, 1, 1, 1], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
+        (1, 64,   64, 256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (4, 4), (2, 2), [1, 1, 1, 1], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
+        (1, 64,   64, 128,   16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (4, 4), (2, 2), [1, 1, 1, 1], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
+        (1,  2,    1, 1024, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (1, 1), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
 
-        # model kiwi
-        (1,  4,   32, 288, 288, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (5, 5), (1, 1), (0, 0), (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 32,   48, 284, 284, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (0, 0), (2, 2), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 48,   56, 280, 280, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (0, 0), (4, 4), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 56,   64, 272, 272, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (0, 0), (8, 8), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 64,  128, 256, 256, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (2, 2), (1, 1), (0, 0), (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 128, 256, 255, 255, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 256,   1, 255, 255, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
+        # # model kiwi
+        (1,  4,   32, 288, 288, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (5, 5), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
+        (1, 32,   48, 284, 284, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (3, 3), (1, 1), [0, 0, 0, 0], (2, 2), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
+        (1, 48,   56, 280, 280, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (3, 3), (1, 1), [0, 0, 0, 0], (4, 4), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
+        (1, 56,   64, 272, 272, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (3, 3), (1, 1), [0, 0, 0, 0], (8, 8), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
+        (1, 64,  128, 256, 256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (2, 2), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
+        (1, 128, 256, 255, 255, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (1, 1), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
+        (1, 256,   1, 255, 255, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, 1, (1, 1), (1, 1), [0, 0, 0, 0], (1, 1), True, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, False),
+
+        # model kiwi new convs
+        ( 1,  4,    32, 1024,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (5, 5), (1, 1), [2, 2, 2, 2], (1, 1), True, 32 * 16, 1, True, ttnn.MathFidelity.LoFi, False, False, True, True),
+        ( 4,  32,   48,  512,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 32 * 16, 1, True, ttnn.MathFidelity.LoFi, False, False, True, True),
+        (16,  48,   56,  256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 32 * 16, 1, True, ttnn.MathFidelity.LoFi, False, False, True, True),
+        (64,  56,   64,  128,   16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 32 * 16, 1, True, ttnn.MathFidelity.LoFi, False, False, True, True),
+        ( 1,  64,  128,  1024, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (2, 2), (1, 1), [1, 0, 1, 0], (1, 1), True, 32 * 16, 1, True, ttnn.MathFidelity.LoFi, False, False, True, True),
     ),
 )
  #fmt: on
@@ -3053,7 +3059,10 @@ def test_conv2d_model_fruit(
     math_fidelity,
     fp32_accum,
     packer_l1_acc,
-    enable_split_reader
+    enable_split_reader,
+    enable_act_double_buffer,
+    input_dtype,
+    input_layout,
 ):
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
@@ -3074,7 +3083,7 @@ def test_conv2d_model_fruit(
         filter_width=kernel[1],
         stride_h=stride[0],
         stride_w=stride[1],
-        padding=padding,
+        padding=(padding[0], padding[1], padding[2], padding[3]),
         config_override=config_override,
         dilation_h=dilation[0],
         dilation_w=dilation[1],
@@ -3091,7 +3100,11 @@ def test_conv2d_model_fruit(
         weight_mesh_mapper=None,
         output_mesh_composer=None,
         enable_split_reader=enable_split_reader,
-        input_layout= ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else None,
+        input_layout= input_layout,
+        activation="relu",
+        enable_act_double_buffer=enable_act_double_buffer,
+        preprocess_weights_on_device=False,
+        input_dtype = input_dtype,
     )
 
 
@@ -3107,7 +3120,7 @@ def test_conv2d_model_fruit(
         (1, 1280, 1280, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 64,   1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, False, False),
         (1, 1280, 640, 64, 64,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 64,   1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, False, False),
         (1, 1920, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), WS, 512,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
-        (1, 1920, 640, 64, 64,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), WS, 256,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
+        (1, 1920, 640, 64, 64,  ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 32,   1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, False, False),
         (1, 2560, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), WS, 256,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
         (1, 320, 640, 64, 64,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),
         (1, 320, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128,  1, True, ttnn.MathFidelity.HiFi2, True, False, False, 1, 1, True, True),

@@ -22,10 +22,10 @@ ttnn::Tensor ExecuteRMSNorm::invoke(
     const std::optional<const LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
-    auto rank = input_tensor.get_logical_shape().size();
+    auto rank = input_tensor.logical_shape().size();
 
     // For 0V tensors
-    if (input_tensor.get_logical_volume() == 0) [[unlikely]] {
+    if (input_tensor.logical_volume() == 0) [[unlikely]] {
         return ttnn::clone(input_tensor, /*dtype=*/std::nullopt, output_memory_config, compute_kernel_config);
     }
 

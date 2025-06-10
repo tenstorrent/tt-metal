@@ -45,7 +45,7 @@ struct FileCloser {
     void operator()(FILE* file) const {
         if (file) {
             if (fclose(file) != 0) {
-                log_warning("Failed to close file");
+                log_warning(tt::LogAlways, "Failed to close file");
             }
         }
     }
@@ -288,7 +288,7 @@ void dump_tensor(
     safe_fwrite(&SENTINEL_VALUE, sizeof(SENTINEL_VALUE), 1, output_file);
     safe_fwrite(&VERSION_ID, sizeof(VERSION_ID), 1, output_file);
 
-    dump_tensor_spec(tensor.get_tensor_spec(), output_file);
+    dump_tensor_spec(tensor.tensor_spec(), output_file);
 
     auto storage_type = tensor.storage_type();
     safe_fwrite(&storage_type, sizeof(storage_type), 1, output_file);
@@ -301,18 +301,18 @@ void dump_tensor(
 
     std::visit(
         tt::stl::overloaded{
-            [output_file, dtype = tensor.get_dtype()](const HostStorage& storage) {
+            [output_file, dtype = tensor.dtype()](const HostStorage& storage) {
                 dump_host_storage(output_file, storage, dtype);
             },
-            [output_file, dtype = tensor.get_dtype()](const DeviceStorage& storage) {
+            [output_file, dtype = tensor.dtype()](const DeviceStorage& storage) {
                 TT_THROW("Device storage isn't supported");
             },
-            [output_file, &strategy, &tensor_spec = tensor.get_tensor_spec()](const MultiDeviceHostStorage& storage) {
+            [output_file, &strategy, &tensor_spec = tensor.tensor_spec()](const MultiDeviceHostStorage& storage) {
                 auto distribute_config = get_distributed_tensor_config(strategy);
                 dump_multi_device_host_storage(output_file, storage, distribute_config, tensor_spec);
             },
         },
-        tensor_to_dump.get_storage());
+        tensor_to_dump.storage());
 }
 
 void dump_memory_config(FILE* output_file, const MemoryConfig& memory_config) {
@@ -392,7 +392,7 @@ void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) 
                     safe_fwrite(buffer_view.data(), buffer_view.size(), 1, output_file);
                 }
             }},
-        cpu_tensor.get_storage());
+        cpu_tensor.storage());
 }
 
 Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) {
