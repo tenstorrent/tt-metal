@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -385,7 +385,7 @@ inline bool DeviceData::validate_one_core(
     } else if (core_type == CoreType::PCIE) {
         core_string = "PCIE";
     } else {
-        tt::log_fatal("Logical core: {} physical core {} core type {}", logical_core, phys_core, core_type);
+        log_fatal(tt::LogTest, "Logical core: {} physical core {} core type {}", logical_core, phys_core, core_type);
         TT_ASSERT(false, "Core type not found");
     }
 
@@ -1180,11 +1180,11 @@ inline void gen_dispatcher_set_write_offset_cmd(
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_SET_WRITE_OFFSET;
-    cmd.set_write_offset.offset0 = wo0;
-    cmd.set_write_offset.offset1 = wo1;
-    cmd.set_write_offset.offset2 = wo2;
-    uint32_t payload_length = 0;
-    add_dispatcher_cmd(cmds, cmd, payload_length);
+    cmd.set_write_offset.offset_count = 3;
+    add_bare_dispatcher_cmd(cmds, cmd);
+    cmds.push_back(wo0);
+    cmds.push_back(wo1);
+    cmds.push_back(wo2);
 }
 
 inline void gen_dispatcher_terminate_cmd(std::vector<uint32_t>& cmds) {

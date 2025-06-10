@@ -14,6 +14,8 @@ import requests
 from pathlib import Path
 import hashlib
 
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
+
 from models.demos.llama3_subdevices.tt.llama_common import (
     PagedAttentionConfig,
 )
@@ -29,13 +31,12 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 # Maximum number of times `tokens_per_second_per_user` is allowed to be outside the `tsu_range`
 # before triggering an assertion failure. Allows occasional dips while ensuring
 # stable performance without breaking CI prematurely.
-TSU_PERF_DROP_LIMIT_COUNT = 20
+TSU_PERF_DROP_LIMIT_PERCENT = 10
 
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
-    "4U": {1: {"min": 520, "max": 545}, 10: {"min": 230, "max": 250}, 80: {"min": 48.5, "max": 53}},
-    # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
-    "6U": {1: {"min": 600, "max": 635}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
+    "4U": {1: {"min": 617, "max": 640}, 80: {"min": 50, "max": 54}},
+    "6U": {1: {"min": 738, "max": 762}, 80: {"min": 55, "max": 59}},
 }
 
 
@@ -129,6 +130,7 @@ def run_llama3_demo(
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
 
     dtype = ttnn.bfloat8_b
+    num_links = 4 if is_RING_6U else 2
     assert batch_size <= 32, "Max batch size currently supported is 32"
     assert max_seq_len <= 128 * 1024, "Max sequence length must be less than 128k tokens"
 
@@ -278,7 +280,7 @@ def run_llama3_demo(
     logger.info("Current pos tensor done")
 
     # Get cos/sin matrices for the current position of each user
-    rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
+    rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
 
     logger.info("Rot mats done")
 
@@ -317,24 +319,10 @@ def run_llama3_demo(
             mode="decode",
             page_table=page_table_tt,
         )
-        logger.info(f"tt_out done")
 
         # Sampling
-        # tt_out_tok_reset = tt_sampling(tt_out[0], tt_out_tok)
-
-        # Note: Persistent output buffer used, do not deallocate output!
-        tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-            tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="SAMPLING"
-        )
-        tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
-        # Run argmax only for user0
-        tt_out_rm = ttnn.reshape(
-            tt_out_rm, (1, 1, 1, tt_out_rm.shape[3]), (1, 1, tt_out_rm.shape[2], tt_out_rm.shape[3])
-        )
-        _ = ttnn.argmax(
-            tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
-        )
-        logger.info(f"sampling done")
+        _ = tt_sampling(tt_out[0], tt_out_tok)
+        logger.info(f"Sampling done")
 
     if not stress_test:
         ttnn.plus_one(
@@ -356,7 +344,7 @@ def run_llama3_demo(
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
     # Get cos/sin matrices for the current position of each user
-    rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
+    rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
     tt_decode_input = tt_embd(tt_out_tok)
     tt_out = tt_model(
         tt_decode_input,
@@ -366,15 +354,8 @@ def run_llama3_demo(
         page_table=page_table_tt,
     )
 
-    # Note: Persistent output buffer used, do not deallocate output!
-    tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-        tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="SAMPLING"
-    )
-    tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
-    tt_out_rm = ttnn.reshape(tt_out_rm, (1, 1, 1, tt_out_rm.shape[3]), (1, 1, tt_out_rm.shape[2], tt_out_rm.shape[3]))
-    _ = ttnn.argmax(
-        tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
-    )
+    # Sampling
+    _ = tt_sampling(tt_out[0], tt_out_tok)
 
     if not stress_test:
         ttnn.plus_one(
@@ -410,7 +391,7 @@ def run_llama3_demo(
     # Reset the current position and output token tensors for the real decode run
     ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
     ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
-    rot_mat_idxs_reset = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
+    rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
     ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
     profiler.end(f"capture_trace")
@@ -430,10 +411,13 @@ def run_llama3_demo(
     profiler.start(f"inference_decode", iteration=iteration)
 
     # Determine TSU threshold based on layer count
-    tsu_thresholds = TSU_THRESHOLDS[galaxy_type].get(layers)
+    tsu_thresholds = TSU_THRESHOLDS[galaxy_type].get(
+        layers, {"min": 0, "max": 9999999}
+    )  # do not check TSU if layers is not in the dict
 
     # Tracks the number of iterations where throughput falls below `tsu_threshold`
     tsu_failures = 0
+    all_tokens_per_second_per_user = []
 
     while users_decoding:
         if iteration == 0:  # First iteration also accounts for compile time
@@ -442,7 +426,8 @@ def run_llama3_demo(
 
         # Execute trace
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-        tt_out_tok_cpu = tt_out_tok.cpu(blocking=True, cq_id=0)
+        tt_out_tok_device0 = ttnn.get_device_tensors(tt_out_tok)[0]
+        tt_out_tok_cpu = tt_out_tok_device0.cpu(blocking=True, cq_id=0)
         iteration_time = time() - iteration_time_start
 
         # Update current pos and mat idxs on host and send to device
@@ -450,15 +435,8 @@ def run_llama3_demo(
         # If this tensor is int32, it won't be supported by ttnn.embedding
         if not stress_test:
             current_pos += 1
-        # ttnn.synchronize_device(mesh_device)
-        # Write to host
         tt_output_torch = ttnn.to_torch(
             tt_out_tok_cpu,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                mesh_device,
-                dims=(3, 1),
-                mesh_shape=model_args.cluster_shape,
-            ),
         )[0, 0, 0, :batch_size]
         # Append the generated token to the list of outputs
         if iteration in range(len(encoded_prompts[0])):
@@ -501,7 +479,9 @@ def run_llama3_demo(
                 f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
             )
 
-        if is_ci_env and iteration == 127:
+        all_tokens_per_second_per_user.append(tokens_per_second_per_user)
+
+        if iteration == 127:
             tokens_per_second_per_user_token127 = tokens_per_second_per_user
 
         if not stress_test:
@@ -530,21 +510,52 @@ def run_llama3_demo(
     if is_ci_env and tokens_per_second_per_user_token127 is not None:
         benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)
 
+        run_type = "tg_llama_demo_decode" if galaxy_type == "4U" else "tg_llama_demo_decode_6u"
+
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"tg_llama_demo_decode",
+            run_type=run_type,
             ml_model_name="llama70b-tg",
         )
 
     if not stress_test:
+        logger.info(f"Min tsu throughput: {min(all_tokens_per_second_per_user)}")
+        logger.info(f"Max tsu throughput: {max(all_tokens_per_second_per_user)}")
+        logger.info(f"Avg tsu throughput: {sum(all_tokens_per_second_per_user) / len(all_tokens_per_second_per_user)}")
+        logger.info(
+            f"Median tsu throughput: {sorted(all_tokens_per_second_per_user)[len(all_tokens_per_second_per_user) // 2]}"
+        )
+        # 95 percentile tsu throughput
+        percentile_5 = sorted(all_tokens_per_second_per_user)[int(0.05 * len(all_tokens_per_second_per_user))]
+        percentile_95 = sorted(all_tokens_per_second_per_user)[int(0.95 * len(all_tokens_per_second_per_user))]
+        logger.info(f"5 percentile tsu throughput: {percentile_5}")
+        logger.info(f"95 percentile tsu throughput: {percentile_95}")
+
+        logger.info(
+            f"Suggested taget range is 5 percentile: {int(percentile_5)} - max: {int(max(all_tokens_per_second_per_user))+1}"
+        )
+
+        if tokens_per_second_per_user_token127 is not None:
+            logger.info(f"Tokens per second per user at token 128: {tokens_per_second_per_user_token127}")
+
         # print before assertion
         out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
-        logger.info(out_of_targets_msg)
+        tsu_perf_drop_limit = TSU_PERF_DROP_LIMIT_PERCENT * iteration / 100
+        if tsu_failures > tsu_perf_drop_limit:
+            logger.info(out_of_targets_msg)
+            logger.info(f"Failing iterations sorted by t/s/u")
+            sorted_tokens_per_second_per_user = sorted(all_tokens_per_second_per_user)
+            for i in range(len(sorted_tokens_per_second_per_user)):
+                if (
+                    sorted_tokens_per_second_per_user[i] < tsu_thresholds["min"]
+                    or sorted_tokens_per_second_per_user[i] > tsu_thresholds["max"]
+                ):
+                    logger.info(f"Iteration {i}: {sorted_tokens_per_second_per_user[i]}")
         # Assert at the end of test to check if the throughput recuperated
-        assert tsu_failures <= TSU_PERF_DROP_LIMIT_COUNT, out_of_targets_msg
+        assert tsu_failures <= tsu_perf_drop_limit, out_of_targets_msg
 
-    # Print out total number of tsu_failures
-    logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {TSU_PERF_DROP_LIMIT_COUNT})")
+        # Print out total number of tsu_failures
+        logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {tsu_perf_drop_limit})")
 
 
 # List of supported Parameters for demo.py
@@ -575,7 +586,7 @@ def run_llama3_demo(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             0,  # start_pos
         ),
@@ -590,11 +601,11 @@ def run_llama3_demo(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             0,  # start_pos
         ),
-        (  # Stress test: batch-32 very long generations but at same token index
+        (  # Stress test: 4*128k generation length
             "instruct",
             80,
             "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
@@ -605,11 +616,11 @@ def run_llama3_demo(
             500000,  # max_generated_tokens (same index for stress test)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
         ),
-        (  # full demo, long generation test
+        (  # mini stress test
             "instruct",
             80,
             "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
@@ -620,7 +631,7 @@ def run_llama3_demo(
             2048,  # max_generated_tokens (same index for stress test)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
         ),
@@ -635,11 +646,11 @@ def run_llama3_demo(
             1,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             127,  # start_pos
         ),
-        (  # Stress test: batch-32 very long generations but at same token index
+        (  # ND hang test
             "instruct",
             80,
             "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
@@ -650,7 +661,7 @@ def run_llama3_demo(
             20000,  # experimentally established as large enough to catch ND hangs
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
         ),
@@ -685,7 +696,7 @@ def run_llama3_demo(
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,

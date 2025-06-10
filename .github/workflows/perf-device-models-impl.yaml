@@ -25,7 +25,7 @@ jobs:
       fail-fast: false
       matrix:
         test-info: [
-          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal", timeout: 75},
+          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal", timeout: 120},
         ]
     name: "${{ matrix.test-info.name }} device perf"
     runs-on: ${{ matrix.test-info.runs-on }}
@@ -70,6 +70,7 @@ jobs:
           pytest models/demos/squeezebert/tests -m models_device_performance_bare_metal
           pytest models/demos/roberta/tests/ -m models_device_performance_bare_metal
           WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/resnet50/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/sentence_bert/tests -m models_device_performance_bare_metal
           WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_unet/tests/test_unet_perf.py -m models_device_performance_bare_metal
           WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/mamba/tests -m models_device_performance_bare_metal
           WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/metal_BERT_large_11/tests -m models_device_performance_bare_metal
@@ -86,6 +87,8 @@ jobs:
           WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/segformer/tests/perf -m models_device_performance_bare_metal
           WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov10/tests -m models_device_performance_bare_metal
           WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/ufld_v2/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/vit/demo/test_vit_device_perf.py -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
           python3 models/perf/merge_device_perf_results.py
 
       - name: Check device perf report exists

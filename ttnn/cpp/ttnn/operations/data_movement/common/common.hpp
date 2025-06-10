@@ -22,8 +22,6 @@ ttnn::Shape unsqueeze_shape_to_3D(const ttnn::Shape& shape);
 ttnn::Shape unsqueeze_shape_to_4D(const ttnn::Shape& shape);
 
 ttnn::Shape unsqueeze_shape_to_nd(const ttnn::Shape& shape, const uint32_t n);
-ttnn::Shape unsqueeze_shape_to_3D(const ttnn::Shape& shape);
-ttnn::Shape unsqueeze_shape_to_4D(const ttnn::Shape& shape);
 
 ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n);
 
@@ -180,13 +178,6 @@ ttnn::Shape compute_padded_shape(
     const ttnn::Shape& logical_shape,
     const uint32_t tile_height = tt::constants::TILE_HEIGHT,
     const uint32_t tile_width = tt::constants::TILE_WIDTH);
-
-ttnn::Tensor pad_to_tile_vol(
-    QueueId queue_id,
-    const ttnn::Tensor& tensor,
-    const float value,
-    const bool use_multicore,
-    const std::optional<MemoryConfig>& memory_config);
 
 enum class ShardStrategy { BLOCK, HEIGHT, WIDTH };
 

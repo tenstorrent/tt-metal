@@ -28,7 +28,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -66,7 +66,7 @@ bool l1_ping(
             tt_metal::detail::ReadFromDeviceL1(device, dest_core, l1_byte_address, byte_size, dest_core_data);
             pass &= (dest_core_data == inputs);
             if (not pass) {
-                log_error("Mismatch at Core: ={}", dest_core.str());
+                log_error(tt::LogTest, "Mismatch at Core: ={}", dest_core.str());
             }
         }
     }

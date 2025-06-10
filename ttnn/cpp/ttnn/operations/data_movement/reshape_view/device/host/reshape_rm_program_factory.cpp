@@ -35,7 +35,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
     const Tensor& input, const Tensor& output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // get datum size
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const uint32_t data_size = input.element_size();
     tt::tt_metal::IDevice* device = input.device();
     // Multi device pre-computation
@@ -44,12 +44,12 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
-    auto input_log_shape = input.get_logical_shape();
-    auto output_log_shape = output.get_logical_shape();
-    tt::log_debug("row major reshape");
-    tt::log_debug("input shape: {}", input_log_shape);
-    tt::log_debug("output shape: {}", output_log_shape);
-    tt::log_debug("data size: {}", data_size);
+    auto input_log_shape = input.logical_shape();
+    auto output_log_shape = output.logical_shape();
+    log_debug(tt::LogOp, "row major reshape");
+    log_debug(tt::LogOp, "input shape: {}", input_log_shape);
+    log_debug(tt::LogOp, "output shape: {}", output_log_shape);
+    log_debug(tt::LogOp, "data size: {}", data_size);
     uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
     uint32_t dest_page_size_bytes = output_log_shape[-1] * data_size;
     uint32_t source_read_size_bytes = ((source_page_size_bytes - 1) & MASK_64) + 128;
@@ -160,8 +160,8 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
         uint32_t num_cores_x = compute_with_storage_grid_size.x;
         uint32_t num_cores_y = compute_with_storage_grid_size.y;
         uint32_t num_cores_total = num_cores_x * num_cores_y;
-        auto input_log_shape = input.get_logical_shape();
-        auto output_log_shape = output.get_logical_shape();
+        auto input_log_shape = input.logical_shape();
+        auto output_log_shape = output.logical_shape();
         uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
         uint32_t dest_page_size_bytes = output_log_shape[-1] * data_size;
         uint32_t source_read_size_bytes = ((source_page_size_bytes - 1) & MASK_64) + 128;

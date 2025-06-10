@@ -131,7 +131,14 @@ class TtUNet2DConditionModel(nn.Module):
             self.tt_conv1_weights,
             self.tt_conv1_bias,
             self.conv1_params,
-        ) = prepare_conv_params(device, conv_weights_in, conv_bias_in, model_config.conv_w_dtype)
+        ) = prepare_conv_params(
+            device,
+            conv_weights_in,
+            conv_bias_in,
+            self.conv1_config.weights_dtype,
+            fp32_dest_acc_en=(self.conv1_config.weights_dtype == ttnn.bfloat8_b)
+            and (self.conv1_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        )
 
         self.conv2_config = model_config.get_conv_config(conv_path="conv_out")
         (
@@ -139,7 +146,14 @@ class TtUNet2DConditionModel(nn.Module):
             self.tt_conv2_weights,
             self.tt_conv2_bias,
             self.conv2_params,
-        ) = prepare_conv_params(device, conv_weights_out, conv_bias_out, model_config.conv_w_dtype)
+        ) = prepare_conv_params(
+            device,
+            conv_weights_out,
+            conv_bias_out,
+            self.conv2_config.weights_dtype,
+            fp32_dest_acc_en=(self.conv2_config.weights_dtype == ttnn.bfloat8_b)
+            and (self.conv2_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        )
 
         self.norm_core_grid = ttnn.CoreGrid(y=8, x=8)
         self.norm_groups = 32
@@ -198,6 +212,8 @@ class TtUNet2DConditionModel(nn.Module):
         residuals = (sample,)
 
         temb = ttnn.typecast(temb, dtype=ttnn.bfloat16)
+
+        ttnn.DumpDeviceProfiler(self.device)
         for i, down_block in enumerate(self.down_blocks):
             if i == 0:
                 sample, [C, H, W], block_residuals = down_block.forward(sample, [B, C, H, W], temb=temb)
@@ -207,10 +223,12 @@ class TtUNet2DConditionModel(nn.Module):
                 )
 
             residuals += block_residuals
+        ttnn.DumpDeviceProfiler(self.device)
 
         sample, [C, H, W] = self.mid_block.forward(
             sample, [B, C, H, W], temb=temb, encoder_hidden_states=encoder_hidden_states
         )
+        ttnn.DumpDeviceProfiler(self.device)
 
         encoder_hidden_states = ttnn.to_memory_config(encoder_hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         for i, up_block in enumerate(self.up_blocks):
@@ -232,6 +250,8 @@ class TtUNet2DConditionModel(nn.Module):
                     temb=temb,
                     encoder_hidden_states=encoder_hidden_states,
                 )
+
+        ttnn.DumpDeviceProfiler(self.device)
 
         sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
 

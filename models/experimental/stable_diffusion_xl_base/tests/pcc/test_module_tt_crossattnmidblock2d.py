@@ -11,6 +11,7 @@ from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelO
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize(
@@ -21,7 +22,7 @@ from models.utility_functions import torch_random
 )
 @pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_crossattnmid(
     device,
     input_shape,
@@ -100,5 +101,5 @@ def test_crossattnmid(
     del unet, tt_crosattn
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.976)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.988)
     logger.info(f"PCC is: {pcc_message}")

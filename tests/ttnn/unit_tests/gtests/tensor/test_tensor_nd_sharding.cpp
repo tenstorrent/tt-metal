@@ -5,7 +5,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-
 #include "ttnn_test_fixtures.hpp"
 
 namespace {
@@ -90,10 +89,10 @@ TEST_P(LegacyToNdShardingTests, LegacyToNdSharding) {
     if (nd_shard_spec.has_value()) {
         ASSERT_EQ(nd_shard_spec->shard_shape, params.shard_shape_nd.value());
         if (params.grid_size.has_value()) {
-            ASSERT_EQ(nd_shard_spec->cores.ranges().size(), 1);
-            ASSERT_EQ(nd_shard_spec->cores.ranges()[0].grid_size(), params.grid_size.value());
+            ASSERT_EQ(nd_shard_spec->grid.ranges().size(), 1);
+            ASSERT_EQ(nd_shard_spec->grid.ranges()[0].grid_size(), params.grid_size.value());
         } else {
-            ASSERT_EQ(nd_shard_spec->cores, cores);
+            ASSERT_EQ(nd_shard_spec->grid, cores);
         }
     }
 }
@@ -150,6 +149,61 @@ TEST_P(NdShardingOpCompatTests, TestAdd) {
     }
 }
 
+class NDShardingPerfTests : public ttnn::TTNNFixtureWithDevice {};
+
+TEST_F(NDShardingPerfTests, TestBatchShardingPerf) {
+    CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6}));
+
+    Shape tensor_shape{16, 1024, 1024};
+    Shape shard_shape_nd_batch{16, 160, 160};
+    Shape shard_shape_nd_small{1, 64, 64};
+    Shape2D shard_shape_2d{2368, 160};
+
+    size_t volume = tensor_shape.volume();
+    std::vector<uint16_t> data(volume);
+    for (size_t i = 0; i < volume; i++) {
+        data[i] = static_cast<uint16_t>(i);
+    }
+
+    auto measure_to_device_time_ns = [&](const TensorSpec& tensor_spec) -> double {
+        auto tensor = Tensor::from_vector(data, tensor_spec);
+
+        auto start = std::chrono::high_resolution_clock::now();
+        auto device_tensor = tensor.to_device(device_, tensor_spec.memory_config());
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
+        return duration.count();
+    };
+
+    double batch_nd_sharding_time_ns = [&]() {
+        MemoryConfig memory_config{BufferType::L1, NdShardSpec{shard_shape_nd_batch, cores}};
+        TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
+        TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        return measure_to_device_time_ns(tensor_spec);
+    }();
+
+    double small_shards_nd_sharding_time_ns = [&]() {
+        MemoryConfig memory_config{BufferType::L1, NdShardSpec{shard_shape_nd_small, cores}};
+        TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
+        TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        return measure_to_device_time_ns(tensor_spec);
+    }();
+
+    double block_2d_sharding_time_ns = [&]() {
+        MemoryConfig memory_config{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, ShardSpec{cores, shard_shape_2d}};
+        TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
+        TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        return measure_to_device_time_ns(tensor_spec);
+    }();
+
+    log_info(tt::LogTest, "Batch ND sharding time: {} ns", batch_nd_sharding_time_ns);
+    log_info(tt::LogTest, "Small shards ND sharding time: {} ns", small_shards_nd_sharding_time_ns);
+    log_info(tt::LogTest, "Block 2D sharding time: {} ns", block_2d_sharding_time_ns);
+
+    EXPECT_TRUE(batch_nd_sharding_time_ns < block_2d_sharding_time_ns * 6);
+    EXPECT_TRUE(small_shards_nd_sharding_time_ns < block_2d_sharding_time_ns * 6);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     TensorShardingTests,
     NDShardingTests,
@@ -201,6 +255,41 @@ INSTANTIATE_TEST_SUITE_P(
                 .layout = Layout::TILE,
             },
             NDShardingParams{
+                .shape = Shape({3 * 32 + 5, 4 * 32, 5 * 32}),
+                .shard_shape = Shape({32, 4 * 32, 5 * 32}),
+                .layout = Layout::TILE,
+            },
+            NDShardingParams{
+                .shape = Shape({3 * 32, 4 * 32 + 5, 5 * 32}),
+                .shard_shape = Shape({3 * 32, 32, 5 * 32}),
+                .layout = Layout::TILE,
+            },
+            NDShardingParams{
+                .shape = Shape({3 * 32, 4 * 32, 5 * 32 + 5}),
+                .shard_shape = Shape({3 * 32, 4 * 32, 32}),
+                .layout = Layout::TILE,
+            },
+            NDShardingParams{
+                .shape = Shape({3 * 32, 4 * 32 + 5, 5 * 32 + 5}),
+                .shard_shape = Shape({3 * 32, 32, 32}),
+                .layout = Layout::TILE,
+            },
+            NDShardingParams{
+                .shape = Shape({3 * 32 + 5, 4 * 32, 5 * 32 + 5}),
+                .shard_shape = Shape({32, 4 * 32, 32}),
+                .layout = Layout::TILE,
+            },
+            NDShardingParams{
+                .shape = Shape({3 * 32 + 5, 4 * 32 + 5, 5 * 32}),
+                .shard_shape = Shape({32, 32, 5 * 32}),
+                .layout = Layout::TILE,
+            },
+            NDShardingParams{
+                .shape = Shape({3 * 32 + 5, 4 * 32 + 5, 5 * 32 + 5}),
+                .shard_shape = Shape({32, 32, 32}),
+                .layout = Layout::TILE,
+            },
+            NDShardingParams{
                 .shape = Shape({30, 40, 50}),
                 .shard_shape = Shape({30, 40, 50}),
                 .layout = Layout::ROW_MAJOR,
@@ -238,6 +327,51 @@ INSTANTIATE_TEST_SUITE_P(
             NDShardingParams{
                 .shape = Shape({30, 40, 50}),
                 .shard_shape = Shape({10, 10, 10}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({3, 4, 5}),
+                .shard_shape = Shape({1, 1, 1}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({35, 40, 50}),
+                .shard_shape = Shape({10, 40, 50}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({30, 45, 50}),
+                .shard_shape = Shape({30, 10, 50}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({30, 40, 55}),
+                .shard_shape = Shape({30, 40, 10}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({35, 45, 50}),
+                .shard_shape = Shape({10, 10, 50}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({35, 40, 55}),
+                .shard_shape = Shape({10, 40, 10}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({30, 45, 55}),
+                .shard_shape = Shape({30, 10, 10}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({35, 45, 55}),
+                .shard_shape = Shape({10, 10, 10}),
+                .layout = Layout::ROW_MAJOR,
+            },
+            NDShardingParams{
+                .shape = Shape({3, 5, 7}),
+                .shard_shape = Shape({2, 2, 2}),
                 .layout = Layout::ROW_MAJOR,
             }),
         ::testing::Values(BufferType::L1, BufferType::DRAM),

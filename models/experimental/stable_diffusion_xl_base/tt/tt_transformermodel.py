@@ -16,7 +16,15 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 
 class TtTransformer2DModel(nn.Module):
     def __init__(
-        self, device, state_dict, module_path, query_dim, num_attn_heads, out_dim, weights_dtype=ttnn.bfloat16
+        self,
+        device,
+        state_dict,
+        module_path,
+        model_config,
+        query_dim,
+        num_attn_heads,
+        out_dim,
+        weights_dtype=ttnn.bfloat16,
     ):
         super().__init__()
 
@@ -37,6 +45,7 @@ class TtTransformer2DModel(nn.Module):
                     device,
                     state_dict,
                     f"{module_path}.transformer_blocks.{i}",
+                    model_config,
                     query_dim,
                     num_attn_heads,
                     out_dim,

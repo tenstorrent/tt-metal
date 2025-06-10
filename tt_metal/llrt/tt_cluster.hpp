@@ -113,7 +113,7 @@ public:
 
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
-    std::unordered_map<chip_id_t, uint64_t> get_unique_chip_ids() const {
+    const std::unordered_map<chip_id_t, uint64_t>& get_unique_chip_ids() const {
         return this->cluster_desc_->get_chip_unique_ids();
     }
     std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
@@ -135,6 +135,10 @@ public:
 
     uint32_t get_harvesting_mask(chip_id_t chip) const {
         return this->driver_->get_soc_descriptor(chip).harvesting_masks.tensix_harvesting_mask;
+    }
+
+    uint16_t get_bus_id(chip_id_t chip) const {
+        return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
     }
 
     //! device driver and misc apis
@@ -298,15 +302,8 @@ public:
         return this->tunnels_from_mmio_device.at(mmio_chip_id);
     }
 
-    tt::tt_fabric::ControlPlane* get_control_plane();
-
-    void set_custom_control_plane_mesh_graph(
-        const std::string& mesh_graph_desc_file,
-        const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
-
-    void set_default_control_plane_mesh_graph();
-
-    void initialize_fabric_config(tt_metal::FabricConfig fabric_config);
+    // Configures ethernet cores for fabric routers depending on whether fabric is enabled
+    void configure_ethernet_cores_for_fabric_routers(tt_metal::FabricConfig fabric_config);
 
     // Returns whether we are running on Galaxy.
     bool is_galaxy_cluster() const;
@@ -315,8 +312,6 @@ public:
     BoardType get_board_type(chip_id_t chip_id) const;
 
     ClusterType get_cluster_type() const;
-
-    tt_metal::FabricConfig get_fabric_config() const;
 
     bool is_base_routing_fw_enabled() const;
 
@@ -335,6 +330,12 @@ public:
     std::unordered_map<int, int> get_worker_logical_to_virtual_y(chip_id_t chip_id) const;
 
     const std::unordered_map<CoreCoord, int32_t>& get_virtual_routing_to_profiler_flat_id(chip_id_t chip_id) const;
+
+    std::uint32_t get_ubb_asic_id(chip_id_t physical_chip_id) const;
+
+    // TODO: move to separate system descriptor class
+    // return enum for connection type, Internal, QSFP, Other, Unknown
+    bool is_external_cable(chip_id_t physical_chip_id, CoreCoord eth_core) const;
 
 private:
     void detect_arch_and_target();
@@ -360,11 +361,11 @@ private:
     // This should be removed when we handle retraining or dropped links in control plane properly
     void disable_ethernet_cores_with_retrain();
 
-    // Initialize control plane, which has mapping of physical device id to MeshGraph config
-    void initialize_control_plane();
 
     // Set tunnels from mmio
     void set_tunnels_from_mmio_device();
+
+    bool supports_dma_operations(chip_id_t chip_id, uint32_t sz_in_bytes) const;
 
     ARCH arch_;
     TargetDevice target_type_;
@@ -399,10 +400,6 @@ private:
 
     // Releases all reserved ethernet cores for fabric routers
     void release_ethernet_cores_for_fabric_routers();
-
-    tt_metal::FabricConfig fabric_config_ = tt_metal::FabricConfig::DISABLED;
-
-    std::unique_ptr<tt::tt_fabric::GlobalControlPlane> global_control_plane_;
 
     // Tunnels setup in cluster
     std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> tunnels_from_mmio_device = {};

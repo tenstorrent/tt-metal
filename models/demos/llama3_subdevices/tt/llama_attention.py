@@ -6,6 +6,9 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+import os
+
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 
 class TtLlamaAttention(LightweightModule):
@@ -269,7 +272,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         ttnn.deallocate(x)
@@ -279,26 +282,19 @@ class TtLlamaAttention(LightweightModule):
         # Reshape and rotary embeddings
         ###
         (
-            xqkv_reduced,
             q_heads_pre_rot_1BQD,
             k_heads_pre_rot_1BKD,
             v_heads_1BKD,
-        ) = self.tt_ccl.line_all_reduce_create_heads(
+        ) = self.tt_ccl.llama_rs_create_heads(
             xqkv_fused_sharded,
             cluster_axis=1,
-            num_links=3,
-            num_heads=self.n_local_heads,
-            memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"],
-            num_kv_heads=self.n_local_kv_heads,
+            num_links=4 if is_RING_6U else 3,
+            dim=3,
             qkv_memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
-            batch_offset=self.batch_offset_tt_tensor,
-            slice_size=8,
-            dtype=ttnn.bfloat16,
         )
 
         # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)
-        ttnn.deallocate(xqkv_reduced)
         # Q, K Rotary Embeddings
         q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
             q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
@@ -383,7 +379,7 @@ class TtLlamaAttention(LightweightModule):
             attn_output_1G4D_sharded_rm,
             dim=1,
             cluster_axis=1,
-            num_links=3,
+            num_links=4 if is_RING_6U else 3,
             memory_config=self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"],
             num_heads=self.n_local_heads,
         )
@@ -404,7 +400,10 @@ class TtLlamaAttention(LightweightModule):
         # print("done matmul")
 
         dense_out_reduced = self.tt_ccl.line_all_reduce(
-            dense_out_ttnn, cluster_axis=0, num_links=3, memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"]
+            dense_out_ttnn,
+            cluster_axis=0,
+            num_links=4 if is_RING_6U else 3,
+            memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
         ttnn.deallocate(dense_out_ttnn)
 
@@ -432,7 +431,7 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
 
-        xqkv_fused = ttnn.linear(
+        xqkv = ttnn.linear(
             x_11SH,
             self.wqkv,
             dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
@@ -441,18 +440,19 @@ class TtLlamaAttention(LightweightModule):
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
 
+        ttnn.deallocate(x_11SH)
+
         xqkv_fused = self.tt_ccl.line_all_reduce(
-            xqkv_fused,
+            xqkv,
             cluster_axis=1,
             num_links=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="QKV",
         )
+        ttnn.deallocate(xqkv)
 
         if seq_len > 2048:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
-
-        # ttnn.deallocate(x_11SH)
 
         # split qkv into heads
         (
@@ -474,7 +474,9 @@ class TtLlamaAttention(LightweightModule):
         ###
 
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+            q_heads_1QSD_pre_rot_bf8 = q_heads_1QSD_pre_rot
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
+            ttnn.deallocate(q_heads_1QSD_pre_rot_bf8)
 
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
@@ -486,7 +488,9 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(q_heads_1QSD_pre_rot)
 
         if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+            k_heads_1KSD_pre_rot_bf8 = k_heads_1KSD_pre_rot
             k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
+            ttnn.deallocate(k_heads_1KSD_pre_rot_bf8)
 
         k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
             k_heads_1KSD_pre_rot,
@@ -664,6 +668,6 @@ class TtLlamaAttention(LightweightModule):
         # Get every 4th tensor starting from user_id // 8
         single_column_tensors = tensors[user_id // self.batch_size_per_device_group :: 4]
         # Create multi-device tensor
-        multi_device_tensor = ttnn.aggregate_as_tensor(single_column_tensors)
+        multi_device_tensor = ttnn.combine_device_tensors(single_column_tensors)
 
         return multi_device_tensor

@@ -2,6 +2,7 @@ add_library(ttnn_op_experimental_transformer ${LIB_TYPE})
 add_library(TT::NN::Ops::Experimental::Transformer ALIAS ttnn_op_experimental_transformer)
 
 target_precompile_headers(ttnn_op_experimental_transformer REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_transformer)
 
 target_sources(
     ttnn_op_experimental_transformer

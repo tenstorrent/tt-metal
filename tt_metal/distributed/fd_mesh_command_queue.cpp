@@ -36,6 +36,7 @@
 #include "dispatch/system_memory_manager.hpp"
 #include "trace/trace_buffer.hpp"
 #include "tt_metal/common/thread_pool.hpp"
+#include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
@@ -405,34 +406,15 @@ void FDMeshCommandQueue::write_shard_to_device(
     const auto shard_view = buffer.get_device_buffer(device_coord);
     const auto region_value = region.value_or(BufferRegion(0, shard_view->size()));
 
-    if (shard_view->is_nd_sharded()) {
-        const auto& [banks, bank_mapping_in_bytes] = shard_view->get_bank_data_mapping();
-        for (size_t i = 0; i < banks.size(); i++) {
-            const auto virtual_core =
-                shard_view->device()->virtual_core_from_logical_core(banks[i], shard_view->core_type());
-            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                enqueue_write_shard_to_core(
-                    DeviceMemoryAddress{
-                        .device_coord = device_coord,
-                        .virtual_core_coord = virtual_core,
-                        .address = shard_view->address() + chunk_mapping_in_bytes.dst},
-                    (char*)src + chunk_mapping_in_bytes.src,
-                    chunk_mapping_in_bytes.size,
-                    /*blocking=*/false,
-                    sub_device_ids);
-            }
-        }
-    } else {
-        sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
-        buffer_dispatch::write_to_device_buffer(
-            src,
-            *shard_view,
-            region_value,
-            id_,
-            expected_num_workers_completed_,
-            this->dispatch_core_type(),
-            sub_device_ids);
-    }
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+    buffer_dispatch::write_to_device_buffer(
+        src,
+        *shard_view,
+        region_value,
+        id_,
+        expected_num_workers_completed_,
+        this->dispatch_core_type(),
+        sub_device_ids);
 }
 
 void FDMeshCommandQueue::read_shard_from_device(
@@ -451,24 +433,7 @@ void FDMeshCommandQueue::read_shard_from_device(
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
-    if (shard_view->is_nd_sharded()) {
-        const auto& [banks, bank_mapping_in_bytes] = shard_view->get_bank_data_mapping();
-        for (size_t i = 0; i < banks.size(); i++) {
-            const auto virtual_core =
-                shard_view->device()->virtual_core_from_logical_core(banks[i], shard_view->core_type());
-            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                enqueue_read_shard_from_core(
-                    DeviceMemoryAddress{
-                        .device_coord = device_coord,
-                        .virtual_core_coord = virtual_core,
-                        .address = shard_view->address() + chunk_mapping_in_bytes.dst},
-                    (char*)dst + chunk_mapping_in_bytes.src,
-                    chunk_mapping_in_bytes.size,
-                    /*blocking=*/false,
-                    sub_device_ids);
-            }
-        }
-    } else if (is_sharded(shard_view->buffer_layout())) {
+    if (is_sharded(shard_view->buffer_layout())) {
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
             *shard_view, id_, expected_num_workers_completed_, region_value);
         auto cores = buffer_dispatch::get_cores_for_sharded_buffer(
@@ -919,7 +884,7 @@ SystemMemoryManager& FDMeshCommandQueue::reference_sysmem_manager() {
 void FDMeshCommandQueue::update_launch_messages_for_device_profiler(
     ProgramCommandSequence& program_cmd_seq, uint32_t program_runtime_id, IDevice* device) {
 #if defined(TRACY_ENABLE)
-    for (auto& launch_msg : program_cmd_seq.launch_messages) {
+    for (auto& [is_multicast, original_launch_msg, launch_msg] : program_cmd_seq.launch_messages) {
         launch_msg->kernel_config.host_assigned_id =
             tt_metal::detail::EncodePerDeviceProgramID(program_runtime_id, device->id());
     }

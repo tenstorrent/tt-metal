@@ -64,8 +64,9 @@ class TtResnetBlock2D(nn.Module):
             conv_bias_3 = state_dict[f"{module_path}.conv_shortcut.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
         if split_in > 1:
-            self.norm_1_blocks = 16
-            self.norm_core_grid_1 = ttnn.CoreGrid(y=4 if split_in == 2 else 2, x=1)
+            self.norm_1_blocks = 6 if "up_blocks.2.resnets.0" in module_path else 3
+            core_x = core_y = 2 if "up_blocks.2.resnets.0" in module_path else 4
+            self.norm_core_grid_1 = ttnn.CoreGrid(y=core_y, x=core_x)
             self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
                 device, norm_weights_1, norm_bias_1, self.norm_core_grid_1.y
             )
@@ -100,9 +101,11 @@ class TtResnetBlock2D(nn.Module):
                 device,
                 conv_weights_1,
                 conv_bias_1,
-                model_config.conv_w_dtype,
+                self.conv1_config.weights_dtype,
                 split_in,
                 split_out,
+                fp32_dest_acc_en=(self.conv1_config.weights_dtype == ttnn.bfloat8_b)
+                and (self.conv1_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
             )
         else:
             (
@@ -114,7 +117,9 @@ class TtResnetBlock2D(nn.Module):
                 device,
                 conv_weights_1,
                 conv_bias_1,
-                model_config.conv_w_dtype,
+                self.conv1_config.weights_dtype,
+                fp32_dest_acc_en=(self.conv1_config.weights_dtype == ttnn.bfloat8_b)
+                and (self.conv1_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
             )
 
         self.conv2_config = model_config.get_conv_config(conv_path=f"{module_path}.conv2")
@@ -127,7 +132,9 @@ class TtResnetBlock2D(nn.Module):
             device,
             conv_weights_2,
             conv_bias_2,
-            model_config.conv_w_dtype,
+            self.conv2_config.weights_dtype,
+            fp32_dest_acc_en=(self.conv2_config.weights_dtype == ttnn.bfloat8_b)
+            and (self.conv2_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         )
 
         if conv_shortcut:
@@ -158,6 +165,11 @@ class TtResnetBlock2D(nn.Module):
             else None
         )
 
+        mm_path = f"{module_path}.linear"
+        self.linear_program_config = model_config.get_matmul_config(matmul_path=f"{module_path}.linear")
+        assert self.linear_program_config is not None, "linear_program_config should not be None"
+        self.default_compute_config = model_config.get_mm_compute_config(mm_path)
+
     def forward(self, input_tensor, temb, input_shape):
         B, C, H, W = input_shape
         hidden_states = input_tensor
@@ -181,7 +193,7 @@ class TtResnetBlock2D(nn.Module):
             grid_coord = ttnn.CoreCoord(self.norm_core_grid_1.x - 1, self.norm_core_grid_1.y - 1)
             shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
             shard_shape = B * H * W // self.norm_core_grid_1.x, C // self.norm_core_grid_1.y
-            shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+            shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
             sharded_mem_config = ttnn.MemoryConfig(
                 ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
             )
@@ -246,11 +258,15 @@ class TtResnetBlock2D(nn.Module):
             C = self.conv1_params["output_channels"]
 
         temb = ttnn.silu(temb)
+
         temb = ttnn.linear(
             temb,
             self.tt_time_emb_weights,
             bias=self.tt_time_emb_bias,
+            program_config=self.linear_program_config,
+            compute_kernel_config=self.default_compute_config,
         )
+
         temb = ttnn.unsqueeze_to_4D(temb)
         temb = ttnn.repeat(temb, (1, 1, H * W, 1))
 
@@ -261,7 +277,7 @@ class TtResnetBlock2D(nn.Module):
         grid_coord = ttnn.CoreCoord(self.norm_core_grid_2.x - 1, self.norm_core_grid_2.y - 1)
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
         shard_shape = B * H * W // self.norm_core_grid_2.x, C // self.norm_core_grid_2.y
-        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         sharded_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )

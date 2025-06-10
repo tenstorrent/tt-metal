@@ -22,7 +22,7 @@ namespace ttnn::operations::experimental::ccl {
 
 namespace detail {
 
-std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index) {
+std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index, tt::tt_fabric::Topology topology) {
     ttnn::SmallVector<uint32_t> device_order;
     device_order.reserve(ring_size - 1);
     // Add all indices except ring_index
@@ -32,11 +32,34 @@ std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index) {
         }
     }
 
-    // Sort based on absolute difference from ring_index in descending order
-    std::sort(device_order.begin(), device_order.end(), [ring_index](uint32_t a, uint32_t b) {
-        return std::abs(static_cast<int>(a) - static_cast<int>(ring_index)) >
-               std::abs(static_cast<int>(b) - static_cast<int>(ring_index));
-    });
+    if (topology == tt::tt_fabric::Topology::Linear) {
+        // Sort based on absolute difference from ring_index in descending order
+        std::sort(device_order.begin(), device_order.end(), [ring_index](uint32_t a, uint32_t b) {
+            return std::abs(static_cast<int>(a) - static_cast<int>(ring_index)) >
+                   std::abs(static_cast<int>(b) - static_cast<int>(ring_index));
+        });
+    } else if (topology == tt::tt_fabric::Topology::Ring) {
+        // Sort based on ring distance
+        // 0 -> 1 -> 2 -> ... -> ring_size - 1 -> 0
+        std::sort(device_order.begin(), device_order.end(), [ring_index, ring_size](uint32_t a, uint32_t b) {
+            // Calculate shortest distance for 'a' from 'ring_index' in a ring of 'ring_size'
+            // Cast to int for std::abs to work as expected with unsigned differences.
+            // This is safe as ring_index and device IDs (a, b) are expected to be much smaller than INT_MAX.
+            uint32_t diff_a = std::abs(static_cast<int>(a) - static_cast<int>(ring_index));
+            uint32_t dist_a = std::min(diff_a, ring_size - diff_a);
+
+            // Calculate shortest distance for 'b' from 'ring_index'
+            uint32_t diff_b = std::abs(static_cast<int>(b) - static_cast<int>(ring_index));
+            uint32_t dist_b = std::min(diff_b, ring_size - diff_b);
+
+            if (dist_a != dist_b) {
+                return dist_a > dist_b;
+            }
+            // Tie-breaking: if distances are equal, sort by the device ID itself.
+            // This ensures a stable and predictable order for devices at the same distance.
+            return a < b;
+        });
+    }
 
     // Convert to string format
     std::string result = "{";
@@ -161,18 +184,6 @@ std::vector<std::vector<ReadRequest>> distribute_work_evenly(
     return schedule;
 }
 
-uint32_t find_atomic_inc_core(std::vector<std::vector<ReadRequest>> schedule) {
-    uint32_t atomic_inc_core = 0;
-    uint32_t min_packets = schedule[0].size();
-    for (uint32_t i = 1; i < schedule.size(); ++i) {
-        if (schedule[i].size() < min_packets) {
-            min_packets = schedule[i].size();
-            atomic_inc_core = i;
-        }
-    }
-    return atomic_inc_core;
-}
-
 std::vector<ReadRequest> flatten_schedule(const std::vector<std::vector<ReadRequest>>& schedule) {
     // create a flattened schedule
     std::vector<ReadRequest> schedule_flattened;
@@ -276,6 +287,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
     const uint32_t ring_size = operation_attributes.ring_devices;
     const uint32_t num_devices = ring_size;
 
+    auto topology = operation_attributes.topology;
+
     uint32_t ring_index = 0;  // Initialize device index
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
@@ -283,35 +296,40 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
     std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
                                         ? mesh_view.get_devices_on_column(mesh_coordinate[1])
                                         : mesh_view.get_devices_on_row(mesh_coordinate[0]);
+
     for (uint32_t i = 0; i < ring_size; ++i) {
         if (devices.at(i) == target_device) {
             ring_index = i;
             if (i != 0) {
                 backward_device = devices.at(i - 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices.at(ring_size - 1);
             }
             if (i != ring_size - 1) {
                 forward_device = devices.at(i + 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices.at(0);
             }
         }
     }
     uint32_t num_links = operation_attributes.num_links;
 
-    std::string device_order = detail::device_order_array_string(ring_size, ring_index);
+    std::string device_order = detail::device_order_array_string(ring_size, ring_index, topology);
 
     std::map<std::string, std::string> reader_defines = {{"DEVICE_ORDER", device_order}};
 
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     const auto dim = operation_attributes.dim;
     uint32_t rank = input_shape.size();
     auto& output_tensor = tensor_return_value;
-    auto& output_shape = output_tensor.get_logical_shape();
-    auto& padded_output_shape = output_tensor.get_padded_shape();
-    const auto& input_tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
-    const auto& output_tile_shape = output_tensor.get_tensor_spec().tile().get_tile_shape();
-    auto input_tensor_width = input_tensor.get_logical_shape()[-1];
-    auto output_tensor_width = output_tensor.get_logical_shape()[-1];
-    auto input_tensor_width_in_tiles = input_tensor.get_logical_shape()[-1] / input_tile_shape[1];
-    auto output_tensor_width_in_tiles = output_tensor.get_logical_shape()[-1] / output_tile_shape[1];
+    auto& output_shape = output_tensor.logical_shape();
+    auto& padded_output_shape = output_tensor.padded_shape();
+    const auto& input_tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    const auto& output_tile_shape = output_tensor.tensor_spec().tile().get_tile_shape();
+    auto input_tensor_width = input_tensor.logical_shape()[-1];
+    auto output_tensor_width = output_tensor.logical_shape()[-1];
+    auto input_tensor_width_in_tiles = input_tensor.logical_shape()[-1] / input_tile_shape[1];
+    auto output_tensor_width_in_tiles = output_tensor.logical_shape()[-1] / output_tile_shape[1];
     auto input_shard_spec = input_tensor.shard_spec().value();
     auto output_shard_spec = output_tensor.shard_spec().value();
     const auto& cross_device_semaphore = operation_attributes.cross_device_semaphore;
@@ -335,7 +353,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
     auto input_tensor_buffer = input_tensor.buffer();
     auto output_tensor_buffer = output_tensor.buffer();
     auto packet_buffer = tensor_args.intermediate_packet_buffer.buffer();
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t input_page_size = tile_size(cb_data_format);
     uint32_t output_page_size = tile_size(cb_data_format);
@@ -343,9 +361,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {output_tensor};
-
-    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, ttnn::ccl::Topology::Linear);
-    LineTopology line_topology(ring_size, ring_index);
 
     // need to drop unused cores in shard spec
     auto input_grid = input_shard_spec.grid;
@@ -358,8 +373,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
     tt::tt_metal::Program program{};
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    size_t packet_size_bytes = input_tensor.get_dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size)
-                                                                              : fabric_max_packet_size;
+    size_t packet_size_bytes =
+        input_tensor.dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size) : fabric_max_packet_size;
     uint32_t num_pages_per_packet = packet_size_bytes / input_page_size;
     auto per_worker_num_tiles = (output_tensor_width_in_tiles + num_links - 1) / num_links;
     if (per_worker_num_tiles < num_pages_per_packet) {  // if num_tiles per worker is smaller than packet size
@@ -629,7 +644,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
         output_cores_per_device,
         packet_receiver_worker_core.x,
         packet_receiver_worker_core.y,
-        num_packet_worker_cores};
+        num_packet_worker_cores,
+        topology == tt::tt_fabric::Topology::Ring ? 1u : 0u};
 
     auto writer_defines = reader_defines;
     bool skip_write_back = output_cores == packet_worker_cores and num_pages_per_packet == output_tiles_per_core_width;
@@ -686,10 +702,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
 
     uint32_t link_idx = 0;
 
-    bool forward_fabric_connection =
-        !(line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD));
-    bool backward_fabric_connection =
-        !(line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD));
+    bool forward_fabric_connection = forward_device.has_value();
+    bool backward_fabric_connection = backward_device.has_value();
 
     for (auto core : all_cores) {
         std::vector<uint32_t> writer_runtime_args = {

@@ -8,7 +8,7 @@
 #include <buffer.hpp>
 #include <event.hpp>
 #include <host_api.hpp>
-#include <logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_metal.hpp>
 #include <chrono>
 #include <fstream>
@@ -82,12 +82,6 @@ void ValidateBufferRegion(
         region.size);
 }
 }  // namespace detail
-
-enum DispatchWriteOffsets {
-    DISPATCH_WRITE_OFFSET_ZERO = 0,
-    DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE = 1,
-    DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE = 2,
-};
 
 inline uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
     return device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;

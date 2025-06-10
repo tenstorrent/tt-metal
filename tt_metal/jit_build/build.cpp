@@ -25,7 +25,7 @@
 #include "impl/context/metal_context.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "jit_build_settings.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
 #include "tt_backend_api_types.hpp"
@@ -162,7 +162,7 @@ void JitBuildEnv::init(
         case ARCH::BLACKHOLE: common_flags = "-mcpu=tt-bh -fno-rvtt-sfpu-replay "; break;
         default: TT_ASSERT(false, "Invalid arch"); break;
     }
-    common_flags += "-std=c++17 -flto -ffast-math ";
+    common_flags += "-std=c++17 -flto=auto -ffast-math ";
 
     if (rtoptions.get_riscv_debug_info_enabled()) {
         common_flags += "-g ";

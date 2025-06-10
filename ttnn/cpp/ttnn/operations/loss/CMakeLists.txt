@@ -2,6 +2,7 @@ add_library(ttnn_op_loss ${LIB_TYPE})
 add_library(TT::NN::Ops::Loss ALIAS ttnn_op_loss)
 
 target_precompile_headers(ttnn_op_loss REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_loss)
 
 target_sources(ttnn_op_loss PRIVATE loss.cpp)
 

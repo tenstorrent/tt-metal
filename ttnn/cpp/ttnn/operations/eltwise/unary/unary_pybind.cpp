@@ -553,13 +553,13 @@ void bind_unary_operation_with_int_parameter(
         ttnn::pybind_overload_t{
             [](const unary_operation_t& self,
                const Tensor& input_tensor,
-               const int parameter,
+               const std::optional<int>& parameter,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
                QueueId queue_id) { return self(queue_id, input_tensor, parameter, memory_config, output_tensor); },
             py::arg("input_tensor"),
-            py::arg(parameter_name.c_str()),
             py::kw_only(),
+            py::arg(parameter_name.c_str()) = 0,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
@@ -1971,7 +1971,14 @@ void py_module(py::module& module) {
         ttnn::alt_complex_rotate90,
         R"doc((\mathrm{{output\_tensor}}_{2i}, \mathrm{{output\_tensor}}_{2i+1}) = (-\mathrm{{input\_tensor}}_{2i+1}, \mathrm{{input\_tensor}}_{2i}))doc",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B)doc",
+        "",
         R"doc(The last dimension of the input tensor must be even.)doc");
+    bind_unary_operation(
+        module,
+        ttnn::tanhshrink,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|tanhshrink|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     //  Unaries with fast_and_approximate_mode
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp, R"doc(BFLOAT16, BFLOAT8_B)doc");
@@ -2099,12 +2106,6 @@ void py_module(py::module& module) {
         module,
         ttnn::rad2deg,
         R"doc(Performs rad2deg function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_composite(
-        module,
-        ttnn::tanhshrink,
-        R"doc(Performs tanhshrink function on :attr:`input_tensor`.)doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_composite(
@@ -2274,9 +2275,9 @@ void py_module(py::module& module) {
         module,
         ttnn::round,
         "decimals",
-        "no. of decimal places to round off to [supported range -6 to 7]",
+        "No. of decimal places to round off to [supported range -6 to 7], Defaults to 0.",
         R"doc(Round the input tensor to `decimals` decimal places.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_composite_int(
         module,
         ttnn::polygamma,

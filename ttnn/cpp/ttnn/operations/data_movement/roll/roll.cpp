@@ -14,7 +14,7 @@ namespace ttnn::operations::data_movement {
 ttnn::Tensor RollOperation::invoke(
     const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& shifts, const ttnn::SmallVector<int>& input_dims) {
     ttnn::Tensor result = input_tensor;
-    auto size = result.get_logical_shape();
+    auto size = result.logical_shape();
     int num_dims = size.rank();
 
     TT_FATAL(
@@ -38,7 +38,7 @@ ttnn::Tensor RollOperation::invoke(
         int shift = adjusted_shifts[i];
         int dim = input_dims[i];
 
-        int shift_size = input_tensor.get_logical_shape()[dim];
+        int shift_size = input_tensor.logical_shape()[dim];
         adjusted_shifts[i] = ((shift % shift_size) + shift_size) % shift_size;
     }
 
@@ -82,7 +82,7 @@ ttnn::Tensor RollOperation::invoke(const ttnn::Tensor& input_tensor, const int s
     ttnn::SmallVector<int> shifts = {shift};
     ttnn::SmallVector<int> dims = {1};  // Rolling will happen on dimension 1 after flattening
 
-    auto original_shape = input_tensor.get_logical_shape();
+    auto original_shape = input_tensor.logical_shape();
 
     // Calculate total number of elements for flattening
     int total_elements = 1;

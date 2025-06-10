@@ -40,7 +40,6 @@ set(TTNN_1D_FABRIC_LATENCY_TEST_SRC ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_1d_fabr
 set(TTNN_ACCESSOR_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/accessor/test_sharded_accessor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/accessor/test_sharded_accessor_on_device.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/accessor/test_accessor_benchmarks.cpp
 )
 
 set(TTNN_TENSOR_UNIT_TESTS_SRC
@@ -52,6 +51,7 @@ set(TTNN_TENSOR_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_distributed_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_mesh_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_partition.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_serialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_sharding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_nd_sharding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_vector_conversion.cpp

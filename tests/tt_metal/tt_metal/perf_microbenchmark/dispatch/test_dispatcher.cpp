@@ -33,7 +33,7 @@
 #include "impl/dispatch/dispatch_settings.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -512,6 +512,7 @@ int main(int argc, char** argv) {
             // Just avoid hazard by bumping up min, max - and let user know with a warning.
             if (min_paged_write_base_addr_g < min_buffer_addr) {
                 log_warning(
+                    tt::LogTest,
                     "min_paged_write_base_addr_g: {:x} is too low. Increasing to min_buffer_addr: {:x}",
                     min_paged_write_base_addr_g,
                     min_buffer_addr);
@@ -520,6 +521,7 @@ int main(int argc, char** argv) {
             if (max_paged_write_base_addr_g < min_buffer_addr ||
                 max_paged_write_base_addr_g < min_paged_write_base_addr_g) {
                 log_warning(
+                    tt::LogTest,
                     "max_paged_write_base_addr_g: {:x} is too low. Increasing to min_buffer_addr: {:x}",
                     max_paged_write_base_addr_g,
                     min_buffer_addr);
@@ -597,6 +599,10 @@ int main(int argc, char** argv) {
             host_completion_queue_wr_ptr,
             dev_completion_queue_wr_ptr,
             dev_completion_queue_rd_ptr,
+            MetalContext::instance().dispatch_mem_map(CoreType::WORKER).get_dispatch_stream_index(0),
+            0,  // unused for single device - used to "virtualize" the number of eth cores across devices
+            0,  // unused for single device - used to "virtualize" the number of eth cores across devices
+            0,  // unused for single device - used to "virtualize" the number of eth cores across devices
             0,
             0,
             0,
@@ -605,9 +611,17 @@ int main(int argc, char** argv) {
             0,
             0,
             0,
-            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
-            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
-            0,     // unused for single device - used to "virtualize" the number of eth cores across devices
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
             true,  // is_dram_variant
             true,  // is_host_variant
         };
@@ -728,7 +742,7 @@ int main(int argc, char** argv) {
         pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);

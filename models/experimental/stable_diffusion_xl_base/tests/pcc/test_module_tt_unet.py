@@ -11,6 +11,7 @@ from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelO
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
 def prepare_ttnn_tensors(
@@ -74,7 +75,7 @@ def prepare_ttnn_tensors(
 )
 @pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_unet(
     device,
     input_shape,
@@ -131,28 +132,6 @@ def test_unet(
         device, torch_input_tensor, torch_timestep_tensor, torch_temb_tensor, torch_encoder_tensor, torch_time_ids
     )
 
-    import tracy
-
-    tracy.signpost("Compilation pass")
-    _, _ = tt_unet.forward(
-        ttnn_input_tensor,
-        [B, C, H, W],
-        timestep=ttnn_timestep_tensor,
-        encoder_hidden_states=ttnn_encoder_tensor,
-        added_cond_kwargs=ttnn_added_cond_kwargs,
-    )
-
-    (
-        ttnn_input_tensor,
-        [B, C, H, W],
-        ttnn_timestep_tensor,
-        ttnn_encoder_tensor,
-        ttnn_added_cond_kwargs,
-    ) = prepare_ttnn_tensors(
-        device, torch_input_tensor, torch_timestep_tensor, torch_temb_tensor, torch_encoder_tensor, torch_time_ids
-    )
-
-    tracy.signpost("Second pass")
     ttnn_output_tensor, output_shape = tt_unet.forward(
         ttnn_input_tensor,
         [B, C, H, W],
@@ -168,5 +147,5 @@ def test_unet(
     del unet
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.988)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.995)
     logger.info(f"PCC is: {pcc_message}")

@@ -58,7 +58,7 @@ public:
     void CreateKernel() override;
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;
-    CoreType GetCoreType() override {
+    CoreType GetCoreType() const override {
         // Tunneler kernel is the exception in that it's always on ethernet core even if dispatch is on tensix.
         return CoreType::ETH;
     }

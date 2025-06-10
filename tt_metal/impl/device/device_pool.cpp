@@ -14,6 +14,7 @@
 #include <set>
 #include <utility>
 
+#include "assert.hpp"
 #include "control_plane.hpp"
 #include "core_coord.hpp"
 #include "device_impl.hpp"
@@ -26,7 +27,7 @@
 #include "fabric_types.hpp"
 #include "hal.hpp"
 #include "host_api.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "profiler_types.hpp"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
@@ -314,16 +315,14 @@ void DevicePool::initialize_active_devices() const {
     const auto& active_devices = this->get_all_active_devices();
 
     // Activate fabric (must be before FD)
-    FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
+    FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         log_info(tt::LogMetal, "Initializing Fabric");
         if (tt_fabric::is_2d_fabric_config(fabric_config)) {
             // TODO: need to write routing tables for unified 2d fabric.
             // write routing tables to all ethernet cores
             tt::tt_metal::MetalContext::instance()
-                .get_cluster()
-                .get_control_plane()
-                ->write_routing_tables_to_all_chips();
+                .get_control_plane().write_routing_tables_to_all_chips();
         }
 
         // Initialize fabric on mmio device
@@ -470,7 +469,7 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
         }
     }
 
-    FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
+    FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     // Only can launch Fabric if all devices are active
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         for (int i = 0; i < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); i++) {
@@ -488,13 +487,13 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
 }
 
 void DevicePool::wait_for_fabric_router_sync() const {
-    FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
+    FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (!tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
         return;
     }
 
-    const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    const auto& fabric_context = control_plane->get_fabric_context();
+    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
 
     auto wait_for_handshake = [&](IDevice* dev) {
         if (!dev) {
@@ -740,10 +739,10 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     }
 
     // Terminate fabric routers
-    const auto fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
+    const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
-        const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-        const auto& fabric_context = control_plane->get_fabric_context();
+        const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& fabric_context = control_plane.get_fabric_context();
         auto [termination_signal_address, signal] = fabric_context.get_fabric_router_termination_address_and_signal();
         std::vector<uint32_t> termination_signal(1, signal);
 

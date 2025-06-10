@@ -5,8 +5,8 @@
 #include <chrono>
 #include <emmintrin.h>
 #include <fmt/base.h>
-#include <stdint.h>
 #include <stdio.h>
+#include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -18,11 +18,9 @@
 #include <map>
 #include <memory>
 #include <optional>
-#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -39,7 +37,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/dispatch/command_queue_common.hpp"
 #include "impl/dispatch/dispatch_settings.hpp"
@@ -239,22 +237,22 @@ void init(int argc, char** argv) {
     debug_g = test_args::has_command_option(input_args, "-d");
 
     if (debug_g && use_dram_exec_buf_g) {
-        tt::log_fatal("Exec buf is not supported with debug commands");
+        log_fatal(tt::LogTest, "Exec buf is not supported with debug commands");
         exit(0);
     }
 
     if (packetized_path_en_g && !(split_prefetcher_g && split_dispatcher_g)) {
-        tt::log_fatal("Packetized path requires split prefetcher and dispatcher");
+        log_fatal(tt::LogTest, "Packetized path requires split prefetcher and dispatcher");
         exit(0);
     }
 
     if (!packetized_path_en_g && packetized_path_timeout_en_g) {
-        tt::log_fatal("Packetized path timeout specified without enabling the packetized path");
+        log_fatal(tt::LogTest, "Packetized path timeout specified without enabling the packetized path");
         exit(0);
     }
 
     if (test_device_id_g != 0 && !packetized_path_en_g) {
-        tt::log_fatal("Split device requires packetized path and split prefetcher/dispatcher");
+        log_fatal(tt::LogTest, "Split device requires packetized path and split prefetcher/dispatcher");
         exit(0);
     }
 }
@@ -1235,6 +1233,7 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(
 
     uint32_t length = exec_buf_cmds.size() * sizeof(uint32_t);
     length += (page_size - (length & (page_size - 1))) & (page_size - 1);  // rounded up to full pages
+    exec_buf_cmds.resize(length / sizeof(uint32_t));  // make sure access to the last segment do not overrun the buffer
 
     uint32_t pages = length / page_size;
     uint32_t index = 0;
@@ -1645,7 +1644,7 @@ void gen_prefetcher_cmds(
         case 7: gen_packed_read_test(device, prefetch_cmds, cmd_sizes, device_data); break;
         case 8: gen_ringbuffer_read_test(device, prefetch_cmds, cmd_sizes, device_data); break;
         default:
-            log_fatal("Unknown test: {}", test_type_g);
+            log_fatal(tt::LogTest, "Unknown test: {}", test_type_g);
             exit(0);
             break;
     }
@@ -2059,14 +2058,26 @@ void configure_for_single_chip(
         0,                                           // unused: for prefetch_hd <--> dispatch_hd
         0,                                           // unused: for prefetch_hd <--> dispatch_hd
         0,                                           // unused: for prefetch_hd <--> dispatch_hd
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
         scratch_db_size_g,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
     };
 
     constexpr NOC my_noc_index = NOC::NOC_0;
@@ -2352,17 +2363,29 @@ void configure_for_single_chip(
         host_completion_queue_wr_ptr,
         dev_completion_queue_wr_ptr,
         dev_completion_queue_rd_ptr,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
         MetalContext::instance().dispatch_mem_map(DISPATCH_CORE_TYPE).get_dispatch_stream_index(0),
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
@@ -3498,9 +3521,9 @@ int main(int argc, char** argv) {
         if (test_device_id_g == 0) {
             device_r = device;
         } else {
+            const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
             auto const& device_active_eth_cores = device->get_active_ethernet_cores();
-            auto remote_chips =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(device_id_l);
+            auto remote_chips = cluster.get_devices_controlled_by_mmio_device(device_id_l);
             // remove mmio chip from the set. get_devices_controlled_by_mmio_device() returns a set that
             // holds mmio chips as well as remote chips accessed through that mmmio chip.
             remote_chips.erase(device_id_l);
@@ -3515,6 +3538,9 @@ int main(int argc, char** argv) {
 
             device_id_r = test_device_id_g;
             for (auto eth_core : device_active_eth_cores) {
+                if (!cluster.is_ethernet_link_up(device->id(), eth_core)) {
+                    continue;
+                }
                 auto [connected_device_id, eth_receiver_core] = device->get_connected_ethernet_core(eth_core);
                 if (remote_chips.find(connected_device_id) != remote_chips.end()) {
                     device_id_r = connected_device_id;
@@ -3588,7 +3614,10 @@ int main(int argc, char** argv) {
         }
 
         if ((1 << exec_buf_log_page_size_g) * device->allocator()->get_num_banks(BufferType::DRAM) > cmddat_q_size_g) {
-            log_fatal("Exec buffer must fit in cmddat_q, page size too large ({})", 1 << exec_buf_log_page_size_g);
+            log_fatal(
+                tt::LogTest,
+                "Exec buffer must fit in cmddat_q, page size too large ({})",
+                1 << exec_buf_log_page_size_g);
             exit(0);
         }
 
@@ -3788,7 +3817,7 @@ int main(int argc, char** argv) {
         }
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
