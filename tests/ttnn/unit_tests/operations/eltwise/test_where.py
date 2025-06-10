@@ -5,25 +5,80 @@
 import torch
 import ttnn
 import pytest
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
     "a_shape, b_shape, c_shape",
     [
-        ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),
+        ((1, 1, 64, 64), (1, 1, 64, 64), (1, 1, 64, 64)),
+        # ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),
         # ((2, 3, 1, 1), (2, 3, 32, 32), (2, 3, 32, 32)),
     ],
 )
-def test_ttnn_where(a_shape, b_shape, c_shape, device):
-    torch.manual_seed(0)
-    C = torch.ones(a_shape, dtype=torch.float32)
-    T = torch.randn(b_shape, dtype=torch.float32)
-    F = torch.ones(c_shape, dtype=torch.float32) * 10
-    golden = torch.where(C.bool(), T, F)
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_ttnn_where(a_shape, b_shape, c_shape, dtype, device):
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    C = torch.ones(a_shape, dtype=torch_dtype)
+    T = torch.randn(b_shape, dtype=torch_dtype)
+    F = torch.ones(c_shape, dtype=torch_dtype) * 10
+    golden_ttt = torch.where(C.bool(), T, F)
 
-    ttnn_C = ttnn.from_torch(C, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_C = ttnn.from_torch(C, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_F = ttnn.from_torch(F, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_result_ttt = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
+    result_ttt = ttnn.to_torch(ttnn_result_ttt)
+    # assert_with_pcc(result_ttt, golden_ttt)
+    print("ttt result:")
+    print(result_ttt)
+    print("ttt golden:")
+    print(golden_ttt)
+    print()
+    print(torch.max(torch.abs(result_ttt - golden_ttt)))
+    assert torch.equal(result_ttt, golden_ttt)
+
+    # tts: tensor, tensor, scalar
+    scalar_F = 10.0
+    golden_tts = torch.where(C != 0, T, scalar_F)
+    ttnn_result_tts = ttnn.where(ttnn_C, ttnn_T, scalar_F)
+    result_tts = ttnn.to_torch(ttnn_result_tts)
+    # assert_with_pcc(result_tts, golden_tts)
+
+    print("tts result:")
+    print(result_tts)
+    print("tts golden:")
+    print(golden_tts)
+    print()
+    print(result_tts - golden_tts)
+    print(torch.max(torch.abs(result_tts - golden_tts)))
+    assert torch.equal(result_tts, golden_tts)
+
+    # tst: tensor, scalar, tensor
+    scalar_T = 5.0
+    golden_tst = torch.where(C != 0, scalar_T, F)
+    ttnn_result_tst = ttnn.where(ttnn_C, scalar_T, ttnn_F)
+    result_tst = ttnn.to_torch(ttnn_result_tst)
+    # assert_with_pcc(result_tst, golden_tst)
+
+    print("tst result:")
+    print(result_tst)
+    print("tst golden:")
+    print(golden_tst)
+    print()
+    print(torch.max(torch.abs(result_tst - golden_tst)))
+    assert torch.equal(result_tst, golden_tst)
+
+
+def test_ttnn_where_int(device):
+    C = torch.ones(4, 4, dtype=torch.int32)
+    T = torch.randint(-100, 100, (4, 4), dtype=torch.int32)
+    F = torch.ones(4, 4, dtype=torch.int32) * 10
+    golden = torch.where(C != 0, T, F)
+
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_F = ttnn.from_torch(F, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
     result = ttnn.to_torch(ttnn_result)
     # print(result)
