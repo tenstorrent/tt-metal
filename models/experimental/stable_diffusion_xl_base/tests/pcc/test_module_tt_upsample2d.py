@@ -15,6 +15,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     to_channel_last_ttnn,
     from_channel_last_ttnn,
 )
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize("input_shape, up_block_id", [((1, 1280, 32, 32), 0), ((1, 640, 64, 64), 1)])
@@ -22,7 +23,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 @pytest.mark.parametrize("padding", [(1, 1)])
 @pytest.mark.parametrize("dilation", [(1, 1)])
 @pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_upsample2d(
     device, input_shape, conv_weights_dtype, up_block_id, stride, padding, dilation, use_program_cache, reset_seeds
 ):
