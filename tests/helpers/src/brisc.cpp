@@ -27,8 +27,7 @@ void device_setup()
     TTI_NOP;
 
     // Set default sfpu constant register state
-    TTI_SFPLOADI(ckernel::p_sfpu::LREG0, 0xA, 0xbf80); // -1.0f -> LREG0
-    TTI_SFPCONFIG(0, 11, 0);                           // LREG0 -> LREG11
+    TTI_SFPCONFIG(0, 11, 1); // loading -1 to LREG11 where sfpi expects it
 
     // Initialize tensix semaphores
     TTI_SEMINIT(1, 0, ckernel::semaphore::UNPACK_TO_DEST);
