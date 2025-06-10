@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,9 +12,7 @@
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/binary_bitwise_sfpu.h"
 #include "compute_kernel_api/binary_shift.h"
-#include "compute_kernel_api/add_int32_sfpu.h"
-#include "compute_kernel_api/add_uint32_sfpu.h"
-#include "compute_kernel_api/add_uint16_sfpu.h"
+#include "compute_kernel_api/add_int_sfpu.h"
 #include "compute_kernel_api/sub_int32_sfpu.h"
 #include "compute_kernel_api/sub_uint16_sfpu.h"
 #include "compute_kernel_api/mul_uint16_sfpu.h"
@@ -118,14 +116,8 @@ void MAIN {
 #ifdef BINOP_INIT
             BINOP_INIT
 #endif
-#ifdef ADD_INT32_INIT
-            ADD_INT32_INIT
-#endif
-#ifdef ADD_UINT32_INIT
-            ADD_UINT32_INIT
-#endif
-#ifdef ADD_UINT16_INIT
-            ADD_UINT16_INIT
+#ifdef ADD_INT_INIT
+            ADD_INT_INIT
 #endif
 #ifdef SUB_INT32_INIT
             SUB_INT32_INIT
