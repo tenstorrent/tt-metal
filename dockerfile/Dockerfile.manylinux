@@ -94,7 +94,7 @@ ENV SFPI_RPM=sfpi-x86_64_Linux.rpm
 WORKDIR /tmp
 RUN source /tmp/sfpi-version.sh && \
     wget https://github.com/tenstorrent/sfpi/releases/download/${sfpi_version}/${SFPI_RPM} && \
-    dnf install ./${SFPI_RPM} && \
+    dnf install -y ./${SFPI_RPM} && \
     rm -rf ./${SFPI_RPM}
 
 # ENV needed
