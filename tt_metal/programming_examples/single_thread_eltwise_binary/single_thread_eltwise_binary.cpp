@@ -127,8 +127,8 @@ int main() {
         /*
          * Create source data and write to DRAM.
          */
-        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
-            dram_buffer_size, 1, std::chrono::system_clock::now().time_since_epoch().count());
+        constexpr float original_val = 6.0f;
+        std::vector<uint32_t> src0_vec  = create_constant_vector_of_bfloat16(dram_buffer_size, original_val);
 
         EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
 

@@ -6,6 +6,18 @@
 
 #include "compute_kernel_api/eltwise_binary_st.h"
 #include "debug/dprint.h"
+#include "debug/dprint_tensix.h"
+
+#include "debug/dprint.h"
+
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+        UNPACK(( DPRINT << "======" << ENDL() ));
+        for (uint8_t r = 0; r < 32; ++ r) {
+            SliceRange sr = SliceRange{.h0 = r, .h1 = (uint8_t)(r+1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+            UNPACK(( DPRINT << (uint)r << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL() ));
+        }
+        UNPACK(( DPRINT << "++++++" << ENDL() ));
+}
 
 namespace NAMESPACE {
 void MAIN {
@@ -59,6 +71,7 @@ void MAIN {
 
         UNPACK(DPRINT <<"RWD" <<ENDL());	
 
+//	print_full_tile(cb_out0);
         // Pack all the output tiles from destination register out to 
 	// the output circular buffer that resides in L1 memory	
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
@@ -71,8 +84,11 @@ void MAIN {
 
         UNPACK(DPRINT <<"RRELD" <<ENDL());	
 
+
 	// Update the write pointer and counts for the output circular buffer. 
         cb_push_back_st(cb_out0, per_core_block_size);
+
+//	print_full_tile(cb_out0);
 
         UNPACK(DPRINT <<"PBD" <<ENDL());	
 
