@@ -677,10 +677,6 @@ def test_demo_text(
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     # If batch_size=1, the same prompt is repeated for each batch
-    test_id = "accuracy"
-
-    if token_accuracy:
-        token_acc = TokenAccuracy(model_name="Llama3.2-1B-Instruct")
 
     model_args, model, page_table, tt_kv_cache, tokenizer = prepare_generator_args(
         num_devices=num_devices,
@@ -699,6 +695,15 @@ def test_demo_text(
             pytest.skip(
                 f"Max seq len {max_seq_len} not supported by model {m_args.model_name}. The model's max context len is {m_args.max_context_len}"
             )
+
+    for m_args in model_args:
+        if m_args.max_context_len < max_seq_len:
+            pytest.skip(
+                f"Max seq len {max_seq_len} not supported by model {m_args.model_name}. The model's max context len is {m_args.max_context_len}"
+            )
+
+    if token_accuracy:
+        token_acc = TokenAccuracy(model_name=model_args[0].model_name)
 
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
