@@ -133,7 +133,8 @@ size_t get_num_fabric_cols(
     }
 }
 
-static int run_single_test(TestParams& test_params, const std::string& test_mode) {
+static int run_single_test(
+    std::unique_ptr<Fabric1DFixture>& test_fixture, TestParams& test_params, const std::string& test_mode) {
     auto chip_send_type = test_params.fabric_unicast ? tt::tt_fabric::CHIP_UNICAST : tt::tt_fabric::CHIP_MULTICAST;
     auto [noc_send_type, flush] = get_noc_send_type(test_params.message_noc_type);
 
@@ -147,13 +148,15 @@ static int run_single_test(TestParams& test_params, const std::string& test_mode
     try {
         if (test_mode == "1_fabric_instance") {
             Run1DFabricPacketSendTest(
-                test_specs, std::get<WriteThroughputStabilityTestWithPersistentFabricParams>(test_params.params));
+                test_fixture,
+                test_specs,
+                std::get<WriteThroughputStabilityTestWithPersistentFabricParams>(test_params.params));
         } else if (test_mode == "1D_fabric_on_mesh") {
             auto& params = std::get<WriteThroughputStabilityTestWithPersistentFabricParams>(test_params.params);
             if (params.fabric_mode == FabricTestMode::Linear) {
-                Run1DFabricPacketSendTest<Fabric1DLineDeviceInitFixture>(test_specs, params);
+                Run1DFabricPacketSendTest<Fabric1DLineDeviceInitFixture>(test_fixture, test_specs, params);
             } else if (params.fabric_mode == FabricTestMode::FullRing) {
-                Run1DFabricPacketSendTest<Fabric1DRingDeviceInitFixture>(test_specs, params);
+                Run1DFabricPacketSendTest<Fabric1DRingDeviceInitFixture>(test_fixture, test_specs, params);
             } else {
                 TT_THROW(
                     "Invalid fabric mode when using device init fabric in 1D fabric on mesh BW test: {}",
@@ -163,9 +166,9 @@ static int run_single_test(TestParams& test_params, const std::string& test_mode
             auto& params = std::get<FullMeshTestParams>(test_params.params);
             TT_FATAL(params.fabric_mode[0] == params.fabric_mode[1], "Mixed fabric mode not supported by this test");
             if (params.fabric_mode[0] == FabricTestMode::Linear) {
-                Run1DFullMeshFabricPacketSendTest<Fabric1DLineDeviceInitFixture>(test_specs[0], params);
+                Run1DFullMeshFabricPacketSendTest<Fabric1DLineDeviceInitFixture>(test_fixture, test_specs[0], params);
             } else if (params.fabric_mode[0] == FabricTestMode::FullRing) {
-                Run1DFullMeshFabricPacketSendTest<Fabric1DRingDeviceInitFixture>(test_specs[0], params);
+                Run1DFullMeshFabricPacketSendTest<Fabric1DRingDeviceInitFixture>(test_fixture, test_specs[0], params);
             } else {
                 TT_THROW(
                     "Invalid fabric mode when using device init fabric in 1D fabric on mesh BW test: {}",
@@ -310,6 +313,7 @@ static void run_daemon_mode() {
 
     log_info(tt::LogTest, "Daemon listening on pipe: {}", daemon_pipe_path);
 
+    std::unique_ptr<Fabric1DFixture> test_fixture = nullptr;
     while (daemon_running) {
         std::ifstream pipe(daemon_pipe_path);
         if (!pipe.is_open()) {
@@ -353,7 +357,7 @@ static void run_daemon_mode() {
                         log_warning(tt::LogTest, "Test environment validation failed");
                         result = 1;  // Return 1 for environment validation failure
                     } else {
-                        result = run_single_test(test_params, test_mode);
+                        result = run_single_test(test_fixture, test_params, test_mode);
                     }
 
                     write_result_to_pipe(result);
@@ -410,5 +414,7 @@ int main(int argc, char** argv) {
         TT_FATAL(params.line_size > 0, "line_size must be greater than 0");
     }
 
-    return run_single_test(test_params, test_mode);
+    std::unique_ptr<Fabric1DFixture> test_fixture = nullptr;
+    auto result = run_single_test(test_fixture, test_params, test_mode);
+    return result;
 }
