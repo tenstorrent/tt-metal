@@ -230,6 +230,7 @@ template <enum CQNocInlineFlags flags, enum CQNocWait wait = CQ_NOC_WAIT, enum C
 FORCE_INLINE void cq_noc_inline_dw_write_with_state(
     uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF, uint8_t noc = noc_index) {
 #if defined(ARCH_BLACKHOLE)
+    noc_async_writes_flushed();  // ensure inline_l1_src_addr is not overwritten
     uint32_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc, dst_addr);
     volatile tt_l1_ptr uint32_t* inline_l1_src_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inline_l1_src_addr);
