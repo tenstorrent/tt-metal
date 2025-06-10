@@ -64,6 +64,43 @@ FORCE_INLINE void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_r
     }
 }
 
+template <
+    bool one_scalar_per_core,
+    uint32_t in_scalar_cb_id,
+    uint32_t reader_nindices,
+    bool split_reader,
+    uint32_t TILE_WIDTH>
+FORCE_INLINE void fill_scalar(
+    uint32_t& scalar_start,
+    uint32_t& scalar_end,
+    uint32_t& scalar_value,
+    uint32_t& scalar_index,
+    uint32_t& counter,
+    volatile uint16_t* config_ptr) {
+    cb_reserve_back(in_scalar_cb_id, 1);
+    while ((counter >= scalar_end) && scalar_end != reader_nindices) {
+        scalar_start = scalar_end;
+        scalar_value = config_ptr[3 * scalar_index + 1];
+        scalar_end = config_ptr[3 * scalar_index + 2];
+        scalar_index++;
+    }
+    // We want to fill the scalar CB at most only the fisrt 2 times since the number of pages is 2, only for the
+    // intervals [x, y) where y >= x + 3 exactly 2 times and when y < x + 3 only once. When split reader is
+    // enabled counter takes even or odd values only depennding on the reader id so if the scalar start is even
+    // and counter is even it will fullfill the first half of the condition counter == scalar_start || counter
+    // == scalar_start + 2. When reader is even and scalar_start is odd or vice versa we will fullfill the
+    // second half of the condition counter == scalar_start + 1 || counter == scalar_start + 3.
+    if (counter < scalar_end && (counter == scalar_start || counter == scalar_start + 1 ||
+                                 (split_reader && (counter == scalar_start + 2 || counter == scalar_start + 3)))) {
+        fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_value, false);
+    }
+    cb_push_back(in_scalar_cb_id, 1);
+    counter++;
+    if constexpr (split_reader) {
+        counter++;
+    }
+}
+
 /**
  * Pool 2D (Max pool 2D and Avg pool 2D)
  */
@@ -172,28 +209,6 @@ void kernel_main() {
     }
 
     while (num_segments--) {
-        if constexpr (!one_scalar_per_core) {
-            cb_reserve_back(in_scalar_cb_id, 1);
-            while ((counter >= scalar_end) && scalar_end != reader_nindices) {
-                scalar_start = scalar_end;
-                scalar_value = config_ptr[3 * scalar_index + 1];
-                scalar_end = config_ptr[3 * scalar_index + 2];
-                scalar_index++;
-            }
-            // We want to fill the scalar CB at most only the fisrt 2 times since the number of pages is 2, only for the
-            // intervals [x, y) where y >= x + 3 exactly 2 times and when y < x + 3 only once. When split reader is
-            // enabled counter takes even or odd values only depennding on the reader id so if the scalar start is even
-            // and counter is even it will fullfill the first half of the condition counter == scalar_start || counter
-            // == scalar_start + 2. When reader is even and scalar_start is odd or vice versa we will fullfill the
-            // second half of the condition counter == scalar_start + 1 || counter == scalar_start + 3.
-            if (counter < scalar_end &&
-                (counter == scalar_start || counter == scalar_start + 1 ||
-                 (split_reader && (counter == scalar_start + 2 || counter == scalar_start + 3)))) {
-                fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_value, false);
-            }
-            cb_push_back(in_scalar_cb_id, 1);
-        }
-
         uint32_t start_end_segment = reader_indices_ptr[segments_counter++];
         uint16_t start = start_end_segment & 0xffff;
         uint16_t end = start_end_segment >> 16;
@@ -204,8 +219,11 @@ void kernel_main() {
         }
 
         for (uint16_t ind = start; ind <= end; ind += 2 * stride_w) {
+            if constexpr (!one_scalar_per_core) {
+                fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, split_reader, TILE_WIDTH>(
+                    scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
+            }
             reader_indices_on_core--;
-            counter++;
             read_window_with_top_left_index<
                 in_nblocks_c,
                 in_cb_id,
@@ -220,16 +238,17 @@ void kernel_main() {
                 remaining_elems,
                 in_cb_sz,
                 bf16_init_value>(ind, in_l1_read_base_addr);
-            if (split_reader) {
-                counter++;
-                if (ind == end) {
-                    first_row_value = false;
-                }
+            if (split_reader && ind == end) {
+                first_row_value = false;
             }
         }
     }
 
     while (reader_indices_on_core--) {
+        if constexpr (!one_scalar_per_core) {
+            fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, split_reader, TILE_WIDTH>(
+                scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
+        }
         read_window_with_top_left_index<
             in_nblocks_c,
             in_cb_id,
