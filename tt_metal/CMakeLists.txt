@@ -40,6 +40,7 @@ target_sources(
             api/tt-metalium/blockfloat_common.hpp
             api/tt-metalium/buffer.hpp
             api/tt-metalium/buffer_distribution_spec.hpp
+            api/tt-metalium/buffer_page_mapping.hpp
             api/tt-metalium/buffer_types.hpp
             api/tt-metalium/circular_buffer.hpp
             api/tt-metalium/circular_buffer_constants.h
@@ -54,13 +55,13 @@ target_sources(
             api/tt-metalium/device.hpp
             api/tt-metalium/device_pool.hpp
             api/tt-metalium/dispatch_core_common.hpp
-            api/tt-metalium/distribution_spec.hpp
             api/tt-metalium/event.hpp
             api/tt-metalium/fabric_host_interface.h
             api/tt-metalium/fabric_edm_packet_header.hpp
             api/tt-metalium/global_circular_buffer.hpp
             api/tt-metalium/global_semaphore.hpp
             api/tt-metalium/graph_tracking.hpp
+            api/tt-metalium/fabric_types.hpp
             api/tt-metalium/hal.hpp
             api/tt-metalium/hal_types.hpp
             api/tt-metalium/hlk_desc.hpp
@@ -76,6 +77,8 @@ target_sources(
             api/tt-metalium/mesh_device_view.hpp
             api/tt-metalium/metal_soc_descriptor.h
             api/tt-metalium/persistent_kernel_cache.hpp
+            api/tt-metalium/profiler_optional_metadata.hpp
+            api/tt-metalium/profiler_types.hpp
             api/tt-metalium/program.hpp
             api/tt-metalium/program_cache.hpp
             api/tt-metalium/program_descriptors.hpp
@@ -91,11 +94,13 @@ target_sources(
             api/tt-metalium/sub_device_types.hpp
             api/tt-metalium/system_mesh.hpp
             api/tt-metalium/tile.hpp
+            api/tt-metalium/tilize_utils.hpp
             api/tt-metalium/tt_align.hpp
             api/tt-metalium/tt_backend_api_types.hpp
             api/tt-metalium/tt_metal.hpp
             api/tt-metalium/util.hpp
             api/tt-metalium/utils.hpp
+            api/tt-metalium/vector_aligned.hpp
             api/tt-metalium/work_split.hpp
             api/tt-metalium/distributed_context.hpp
 )
@@ -110,6 +115,7 @@ set_target_properties(
         VERIFY_INTERFACE_HEADER_SETS
             FALSE
 )
+
 target_sources(
     jitapi
     INTERFACE
@@ -174,7 +180,7 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/common/inc/cunpack_common.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_abs.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_activations.h
-            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_add_int32.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_add_int.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary_bitwise.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h
@@ -249,7 +255,7 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/cunpack_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_abs.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_activations.h
-            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_add_int32.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_add_int.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary_bitwise.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h
