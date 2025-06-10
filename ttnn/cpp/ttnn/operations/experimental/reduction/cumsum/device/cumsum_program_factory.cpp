@@ -86,7 +86,7 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
     // Parameters setup
     const auto& tile = input_tensor.tensor_spec().tile();
     uint32_t num_tiles = output_tensor.physical_volume() / tile.get_tile_hw();
-    
+
     const uint32_t xy_volume = tensor_shape[tensor_rank - 1] * tensor_shape[tensor_rank - 2];  // W * H
     const uint32_t num_tiles_per_row = tensor_shape[dim];      // each row contains N independent tiles
     const uint32_t num_rows = num_tiles / num_tiles_per_row;   // total number of rows in tensor
