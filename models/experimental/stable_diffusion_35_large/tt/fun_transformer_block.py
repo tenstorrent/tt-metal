@@ -58,6 +58,7 @@ class TtTransformerBlockParameters:
                 device=device,
                 weight_shape=[embedding_dim + hidden_dim_padding],
                 eps=cls.eps,
+                parallel_config=parallel_config,
             )
 
         has_spatial_attn = has_substate(state, "attn2")

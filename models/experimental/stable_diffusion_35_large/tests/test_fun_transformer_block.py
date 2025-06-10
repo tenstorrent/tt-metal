@@ -21,17 +21,21 @@ TILE_SIZE = 32
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
-    [(2, 4)],
-    indirect=True,
-)
-@pytest.mark.parametrize(
     (
         "model_name",
         "block_index",
         "batch_size",
         "spatial_sequence_length",
         "prompt_sequence_length",
+    ),
+    [
+        ("large", 0, 1, 4096, 333),
+        #        ("large", 37, 2, 4096, 333),
+    ],
+)
+@pytest.mark.parametrize(
+    (
+        "mesh_device",
         "cfg_factor",
         "sp_factor",
         "tp_factor",
@@ -40,9 +44,26 @@ TILE_SIZE = 32
         "topology",
     ),
     [
-        ("large", 0, 1, 4096, 333, 1, 2, 4, 2, 4, ttnn.Topology.Linear),
-        #        ("large", 37, 2, 4096, 333),
+        # [(1, 1), 1, 1, 1, 1, 1, ttnn.Topology.Linear],
+        # [(1, 2), 1, 1, 2, 1, 2, ttnn.Topology.Linear],
+        # [(1, 4), 1, 1, 4, 1, 4, ttnn.Topology.Linear],
+        [(1, 8), 1, 1, 8, 1, 8, ttnn.Topology.Linear],
+        # [(1, 2), 1, 2, 1, 2, 1, ttnn.Topology.Linear],
+        # [(2, 2), 1, 2, 2, 2, 2, ttnn.Topology.Linear],
+        [(2, 4), 1, 2, 4, 2, 4, ttnn.Topology.Linear],
+        [(2, 4), 1, 4, 2, 4, 2, ttnn.Topology.Linear],
     ],
+    ids=[
+        # "cfg1_sp1_tp1", # Fails, maybe because 1x1 mesh can't instantiate fabric
+        # "cfg1_sp1_tp2",
+        # "cfg1_sp1_tp4",
+        "cfg1_sp1_tp8",
+        # "cfg1_sp2_tp1",
+        # "cfg1_sp2_tp2",
+        "cfg1_sp2_tp4",
+        "cfg1_sp4_tp2",
+    ],
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 716800}], indirect=True
@@ -63,8 +84,10 @@ def test_transformer_block(
     up_factor: int,
     topology: ttnn.Topology,
 ) -> None:
+    sp_axis = tuple(mesh_device.shape).index(sp_factor)
+    tp_axis = tuple(mesh_device.shape).index(tp_factor)
     parallel_manager = StableDiffusionParallelManager(
-        mesh_device, cfg_factor, sp_factor, tp_factor, rp_factor, up_factor, topology
+        mesh_device, cfg_factor, sp_factor, tp_factor, rp_factor, up_factor, topology, sp_axis, tp_axis
     )
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
@@ -117,14 +140,16 @@ def test_transformer_block(
             mode="constant",
             value=0,
         )
+
+    spatial_shard_dims = [None, None]
+    spatial_shard_dims[parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis] = 2
+    spatial_shard_dims[parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis] = 3
+
     tt_spatial = from_torch_fast_2d(
         spatial_padded_4d,
         mesh_device=mesh_device,
         mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
-        dims=[
-            parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 2,
-            parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 2,
-        ],
+        dims=spatial_shard_dims,
         dtype=ttnn_dtype,
         layout=ttnn.TILE_LAYOUT,
     )
@@ -141,11 +166,14 @@ def test_transformer_block(
     #         mode="constant",
     #         value=0,
     #     )
+    prompt_shard_dims = [None, None]
+    if parallel_manager.is_tensor_parallel:
+        prompt_shard_dims[parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis] = 3
     tt_prompt = from_torch_fast_2d(
         prompt_padded_4d,
         mesh_device=mesh_device,
         mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
-        dims=[None, parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 2],
+        dims=prompt_shard_dims,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn_dtype,
     )
@@ -210,10 +238,7 @@ def test_transformer_block(
         mesh_composer=ttnn.ConcatMesh2dToTensor(
             mesh_device,
             mesh_shape=tuple(mesh_device.shape),
-            dims=[
-                parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 2,
-                parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 2,
-            ],
+            dims=spatial_shard_dims,
         ),
     )
     tt_spatial_output_torch = tt_spatial_output_torch[:, :, 0:spatial_sequence_length, :embedding_dim]
@@ -221,16 +246,16 @@ def test_transformer_block(
         spatial_output, tt_spatial_output_torch, pcc=0.995, shard_dim=0, num_devices=mesh_device.get_num_devices()
     )
 
+    prompt_shard_dims[
+        parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis
+    ] = 2  # Concat replicas on sequence
     if tt_prompt_output is not None:
         tt_prompt_output_torch = ttnn.to_torch(
             tt_prompt_output,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 mesh_device,
                 mesh_shape=tuple(mesh_device.shape),
-                dims=[
-                    parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 2,
-                    parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 2,
-                ],
+                dims=prompt_shard_dims,
             ),
         )
         tt_prompt_output_torch = tt_prompt_output_torch[:, :, 0:prompt_sequence_length, :embedding_dim]

@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 from .utils import from_torch_fast, from_torch_fast_2d
-from .parallel_config import StableDiffusionParallelManager
+from .parallel_config import StableDiffusionParallelManager, DiTParallelConfig
 
 
 @dataclass
@@ -50,9 +50,10 @@ class TtLayerNormParameters:
         distributed: bool = True,
         weight_shape: list[int] | None = None,
         eps: float = 1e-5,
+        parallel_config: DiTParallelConfig,
     ) -> TtLayerNormParameters:
-        _, mesh_width = device.shape
-        distributed = distributed and mesh_width > 1
+        distributed = distributed and parallel_config.tensor_parallel.factor > 1
+        mesh_width = parallel_config.tensor_parallel.factor
 
         weight = state.get("weight")
         bias = state.get("bias")
@@ -69,7 +70,9 @@ class TtLayerNormParameters:
             weight = weight.reshape([-1, h])
             bias = bias.reshape([-1, h])
 
-        mesh_mapper = ttnn.ShardTensor2dMesh(device, tuple(device.shape), (None, -1)) if distributed else None
+        dims = [None, None]
+        dims[parallel_config.tensor_parallel.mesh_axis] = -1
+        mesh_mapper = ttnn.ShardTensor2dMesh(device, tuple(device.shape), dims) if distributed else None
         layout = ttnn.ROW_MAJOR_LAYOUT if distributed else ttnn.TILE_LAYOUT
         if distributed and dtype != ttnn.float32:
             dtype = ttnn.bfloat16

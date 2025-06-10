@@ -48,10 +48,10 @@ def create_dit_parallel_config(
         sequence_parallel.mesh_shape[sequence_parallel.mesh_axis]
         == cfg_parallel.mesh_shape[sequence_parallel.mesh_axis] // sequence_parallel.factor
     )
-    assert (
-        sequence_parallel.mesh_shape[1 - sequence_parallel.mesh_axis]
-        == cfg_parallel.mesh_shape[1 - sequence_parallel.mesh_axis] // tensor_parallel.factor
-    )
+    # assert (
+    #     sequence_parallel.mesh_shape[1 - sequence_parallel.mesh_axis]
+    #     == cfg_parallel.mesh_shape[1 - sequence_parallel.mesh_axis] // tensor_parallel.factor
+    # )
 
     # validate tensor config
     assert tensor_parallel.mesh_axis in [0, 1]
@@ -59,10 +59,10 @@ def create_dit_parallel_config(
         tensor_parallel.mesh_shape[tensor_parallel.mesh_axis]
         == cfg_parallel.mesh_shape[tensor_parallel.mesh_axis] // tensor_parallel.factor
     )
-    assert (
-        tensor_parallel.mesh_shape[1 - tensor_parallel.mesh_axis]
-        == cfg_parallel.mesh_shape[1 - tensor_parallel.mesh_axis] // sequence_parallel.factor
-    )
+    # assert (
+    #     tensor_parallel.mesh_shape[1 - tensor_parallel.mesh_axis]
+    #     == cfg_parallel.mesh_shape[1 - tensor_parallel.mesh_axis] // sequence_parallel.factor
+    # )
 
     # validate ring config
     assert ring_parallel.mesh_axis in [0, 1]
@@ -87,31 +87,37 @@ def create_dit_parallel_config(
 
 
 class StableDiffusionParallelManager:
-    def __init__(self, mesh_device, cfg_factor, sp_factor, tp_factor, rp_factor, up_factor, topology):
+    def __init__(
+        self, mesh_device, cfg_factor, sp_factor, tp_factor, rp_factor, up_factor, topology, sp_axis=0, tp_axis=1
+    ):
         self.mesh_device = mesh_device
         mesh_shape = tuple(mesh_device.shape)
         cfg_parallel = ParallelConfig(
             mesh_shape=(mesh_shape[0], mesh_shape[1] // cfg_factor), factor=cfg_factor, mesh_axis=1
         )
+        sp_mesh = list(cfg_parallel.mesh_shape)
+        sp_mesh[sp_axis] = sp_mesh[sp_axis] // sp_factor
         sequence_parallel = ParallelConfig(
-            mesh_shape=(cfg_parallel.mesh_shape[0] // sp_factor, cfg_parallel.mesh_shape[1] // tp_factor),
+            mesh_shape=sp_mesh,
             factor=sp_factor,
-            mesh_axis=0,
+            mesh_axis=sp_axis,
         )
+        tp_mesh = list(cfg_parallel.mesh_shape)
+        tp_mesh[tp_axis] = tp_mesh[tp_axis] // tp_factor
         tensor_parallel = ParallelConfig(
-            mesh_shape=(cfg_parallel.mesh_shape[0] // sp_factor, cfg_parallel.mesh_shape[1] // tp_factor),
+            mesh_shape=tp_mesh,
             factor=tp_factor,
-            mesh_axis=1,
+            mesh_axis=tp_axis,
         )
         ring_parallel = ParallelConfig(
-            mesh_shape=(cfg_parallel.mesh_shape[0] // rp_factor, cfg_parallel.mesh_shape[1] // up_factor),
+            mesh_shape=sp_mesh,
             factor=rp_factor,
-            mesh_axis=0,
+            mesh_axis=sp_axis,
         )
         ulysses_parallel = ParallelConfig(
-            mesh_shape=(cfg_parallel.mesh_shape[0] // rp_factor, cfg_parallel.mesh_shape[1] // up_factor),
+            mesh_shape=tp_mesh,
             factor=up_factor,
-            mesh_axis=1,
+            mesh_axis=tp_axis,
         )
         self.dit_parallel_config = create_dit_parallel_config(
             mesh_shape=mesh_shape,
