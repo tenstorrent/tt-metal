@@ -31,12 +31,11 @@ inline void eltwise_ternary_sfpu_configure_mop();
 
 template <DstSync Dst>
 inline void _llk_math_eltwise_ternary_sfpu_start_(const uint dst_index) {
-    // if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
-    //     math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
-    // } else {
-    //     math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
-    // }
-    math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
+    if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
+        math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
+    } else {
+        math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
+    }
     // math::set_addr_mod_base();
     TTI_SETC16(2, 1);  // set addr mod base (use addr mods 4..7) ADDR_MOD_SET_Base_ADDR32 = 2 for wormhole
 
