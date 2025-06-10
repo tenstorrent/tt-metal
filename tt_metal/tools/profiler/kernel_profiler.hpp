@@ -377,6 +377,22 @@ __attribute__((noinline)) void quick_push() {
 #endif
 }
 
+// Initiates a quick_push() if the specified cmd buf is NOT currently in linked
+// state, and linked arg is set to true. Useful for preemptively flushing to
+// DRAM in the event that a long series of linked multicast will prevent
+// flushing and cause dropped events.
+void quick_push_if_linked(uint32_t cmd_buf, bool linked) {
+#if (                                                                                          \
+    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
+    defined(COMPILE_FOR_IDLE_ERISC))
+    uint32_t cmd_buf_reg_val = NOC_CMD_BUF_READ_REG(noc_index, cmd_buf, NOC_CTRL);
+    bool cmd_buf_currently_linked = cmd_buf_reg_val & NOC_CMD_VC_LINKED;
+    if (linked && !cmd_buf_currently_linked) {
+        kernel_profiler::quick_push();
+    }
+#endif
+}
+
 template <uint32_t timer_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
 struct profileScope {
     bool start_marked = false;
