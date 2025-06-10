@@ -13,6 +13,9 @@ COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_depende
 COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker --mode runtime
 
+# Ensure tcmalloc is used as the default memory allocator
+ENV LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libtcmalloc_minimal.so.4:${LD_PRELOAD}
+
 #############################################################
 
 FROM base AS ci-build

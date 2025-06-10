@@ -90,6 +90,8 @@ target_include_directories(
 target_include_directories(ttnn_core SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 target_link_libraries(
     ttnn_core
+    PUBLIC
+        tcmalloc
     PRIVATE
         TT::Metalium
         xtensor
@@ -427,6 +429,8 @@ target_include_directories(
 
 target_link_libraries(
     ttnncpp
+    PUBLIC
+        tcmalloc
     PRIVATE
         TT::Metalium
         TTNN::Core
@@ -524,6 +528,7 @@ if(WITH_PYTHON_BINDINGS)
         ttnn
         PUBLIC
             TTNN::CPP
+            tcmalloc
         PRIVATE
             pybind11::module
             Boost::algorithm

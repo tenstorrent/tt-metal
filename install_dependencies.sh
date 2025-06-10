@@ -13,6 +13,7 @@ usage()
     echo "[--validate, -v]            Validate that required packages are installed"
     echo "[--docker, -d]              Specialize execution for docker"
     echo "[--no-distributed]          Don't install distributed compute dependencies (OpenMPI)"
+    echo "[--no-tcmalloc]             Don't install tcmalloc"
     echo "[--mode, -m <mode>]         Select installation mode: runtime, build, baremetal"
     exit 1
 }
@@ -38,6 +39,7 @@ fi
 validate=0
 docker=0
 distributed=1
+tcmalloc=1
 mode="baremetal"
 
 while [ $# -gt 0 ]; do
@@ -55,6 +57,10 @@ while [ $# -gt 0 ]; do
             ;;
         --no-distributed)
             distributed=0
+            shift
+            ;;
+        --no-tcmalloc)
+            tcmalloc=0
             shift
             ;;
 	--mode|-m)
@@ -96,6 +102,9 @@ ub_runtime_packages()
     if [ "$distributed" -eq 1 ]; then
         UB_RUNTIME_LIST+=(openmpi-bin)
     fi
+    if [ "$tcmalloc" -eq 1 ]; then
+        UB_RUNTIME_LIST+=(libtcmalloc-minimal4)
+    fi
 }
 
 ub_buildtime_packages()
@@ -121,6 +130,9 @@ ub_buildtime_packages()
 
     if [ "$distributed" -eq 1 ]; then
         UB_BUILDTIME_LIST+=(libopenmpi-dev)
+    fi
+    if [ "$tcmalloc" -eq 1 ]; then
+        UB_BUILDTIME_LIST+=(libtcmalloc-minimal4)
     fi
 }
 

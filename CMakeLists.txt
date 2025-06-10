@@ -116,6 +116,7 @@ message(STATUS "Build with LTO: ${TT_LTO_ENABLED}")
 message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
 message(STATUS "Build with LightMetal Trace Enabled: ${TT_ENABLE_LIGHT_METAL_TRACE}")
 message(STATUS "Build with Multihost Distributed Compute: ${ENABLE_DISTRIBUTED}")
+message(STATUS "Build with TCMalloc: ${ENABLE_TCMALLOC}")
 
 ############################################################################################################################
 
@@ -143,7 +144,33 @@ endif()
 #   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
 #   in order to propogate to the rest of tt_metal, tt_eager, etc.
 ############################################################################################################################
+
+add_library(tcmalloc INTERFACE)
+if(ENABLE_TCMALLOC)
+    find_library(TCMALLOC_LIB NAMES tcmalloc_minimal)
+    if(TCMALLOC_LIB)
+        message(STATUS "Found TCMalloc: ${TCMALLOC_LIB}")
+        target_compile_options(
+            tcmalloc
+            INTERFACE
+                -fno-builtin-malloc
+                -fno-builtin-calloc
+                -fno-builtin-realloc
+                -fno-builtin-free
+        )
+        target_link_libraries(tcmalloc INTERFACE ${TCMALLOC_LIB})
+    else()
+        message(
+            FATAL_ERROR
+            "TCMalloc requested but not found. Install libtcmalloc-minimal4 or disable with -DENABLE_TCMALLOC=OFF"
+        )
+    endif()
+else()
+    message(STATUS "TCMalloc: Disabled")
+endif()
+
 add_library(metal_common_libs INTERFACE)
+
 target_link_libraries(
     metal_common_libs
     INTERFACE
@@ -152,6 +179,7 @@ target_link_libraries(
         atomic
         hwloc
         numa
+        tcmalloc
 )
 
 add_compile_options(
