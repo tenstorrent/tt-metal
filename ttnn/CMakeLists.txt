@@ -76,7 +76,6 @@ target_sources(
         core/tensor/tensor_utils.cpp
         core/tensor/types.cpp
         core/tensor/xtensor/partition.cpp
-        core/tensor/nd_sharding_utils.cpp
 )
 target_include_directories(
     ttnn_core
