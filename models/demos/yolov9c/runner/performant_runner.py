@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,6 @@ import torch.nn.functional as F
 
 import ttnn
 from models.demos.yolov9c.runner.performant_runner_infra import YOLOv9PerformanceRunnerInfra
-from models.demos.yolov9c.tt.model_preprocessing import create_yolov9c_input_tensors
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -18,18 +17,23 @@ class YOLOv9PerformantRunner:
         device_batch_size=1,
         act_dtype=ttnn.bfloat16,
         weight_dtype=ttnn.bfloat16,
+        model_task="segment",
         model_location_generator=None,
         resolution=(640, 640),
+        torch_input_tensor=None,
     ):
         self.device = device
         self.resolution = resolution
+        self.torch_input_tensor = torch_input_tensor
         self.runner_infra = YOLOv9PerformanceRunnerInfra(
             device,
             device_batch_size,
             act_dtype,
             weight_dtype,
+            model_task,
             model_location_generator,
             resolution=resolution,
+            torch_input_tensor=self.torch_input_tensor,
         )
 
         (
@@ -99,10 +103,8 @@ class YOLOv9PerformantRunner:
 
     def run(self, torch_input_tensor, check_pcc=False):
         n, h, w, c = torch_input_tensor.shape
-        torch_input_tensor = F.pad(torch_input_tensor, (0, 29))
+        torch_input_tensor = F.pad(torch_input_tensor, (0, 29), mode="constant", value=0)
         tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        tt_inputs = create_yolov9c_input_tensors(self.device, model=True)
-
         output = self._execute_yolov9_trace_2cqs_inference(tt_inputs_host)
         if check_pcc:
             torch_input_tensor = torch_input_tensor.reshape(n, h, w, c)
