@@ -11,6 +11,7 @@
 #include <vector>
 #include <functional>
 #include <taskflow/taskflow.hpp>
+#include <taskflow/algorithm/for_each.hpp>
 #include "common/executor.hpp"
 
 namespace tt::tt_metal {
@@ -107,14 +108,15 @@ DistributedHostBuffer DistributedHostBuffer::transform(
     const auto& local_shards = local_shards_.values();
     std::vector<Shard> transformed_shards(local_shards.size());
 
-    std::function<void(size_t)> process_shard = [&](size_t i) {
-        transformed_shards[i] = Shard{.buffer = fn(local_shards[i].buffer), .is_populated = true};
-    };
     if (policy == ProcessShardExecutionPolicy::SEQUENTIAL || indices_to_process.size() < 2) {
-        std::for_each(indices_to_process.begin(), indices_to_process.end(), process_shard);
+        std::for_each(indices_to_process.begin(), indices_to_process.end(), [&](size_t i) {
+            transformed_shards[i] = Shard{.buffer = fn(local_shards[i].buffer), .is_populated = true};
+        });
     } else {
         tf::Taskflow taskflow;
-        taskflow.for_each(indices_to_process.begin(), indices_to_process.end(), process_shard);
+        taskflow.for_each(indices_to_process.begin(), indices_to_process.end(), [&](size_t i) {
+            transformed_shards[i] = Shard{.buffer = fn(local_shards[i].buffer), .is_populated = true};
+        });
         detail::GetExecutor().run(taskflow).wait();
     }
 
@@ -128,12 +130,13 @@ DistributedHostBuffer DistributedHostBuffer::transform(
 void DistributedHostBuffer::apply(const ApplyFn& fn, ProcessShardExecutionPolicy policy) const {
     const std::vector<size_t> indices_to_process = get_populated_local_shard_indices();
     const auto& local_shards = local_shards_.values();
-    std::function<void(size_t)> process_shard = [&](size_t i) { fn(local_shards[i].buffer); };
     if (policy == ProcessShardExecutionPolicy::SEQUENTIAL || indices_to_process.size() < 2) {
-        std::for_each(indices_to_process.begin(), indices_to_process.end(), process_shard);
+        std::for_each(
+            indices_to_process.begin(), indices_to_process.end(), [&](size_t i) { fn(local_shards[i].buffer); });
     } else {
         tf::Taskflow taskflow;
-        taskflow.for_each(indices_to_process.begin(), indices_to_process.end(), process_shard);
+        taskflow.for_each(
+            indices_to_process.begin(), indices_to_process.end(), [&](size_t i) { fn(local_shards[i].buffer); });
         detail::GetExecutor().run(taskflow).wait();
     }
 }
