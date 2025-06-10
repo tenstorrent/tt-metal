@@ -10,6 +10,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <algorithm>
 #include <cstdint>
@@ -80,6 +81,7 @@ bool hammer_pcie_g = false;
 bool hammer_pcie_type_g = false;
 bool test_write = false;
 bool linked = false;
+bool dump_profiler_results = false;
 uint32_t nop_count_g = 0;
 
 void init(int argc, char** argv) {
@@ -121,6 +123,7 @@ void init(int argc, char** argv) {
         log_info(LogTest, " -hpt:hammer hugepage PCIe hammer type: 0:32bit writes 1:128bit non-temporal writes");
         log_info(LogTest, "  -psrta: pass page size as a runtime argument (default compile time define)");
         log_info(LogTest, " -nop: time loop of <n> nops");
+        log_info(LogTest, "-profdump: dump profiler results before closing device");
         exit(0);
     }
 
@@ -158,6 +161,8 @@ void init(int argc, char** argv) {
     }
 
     linked = test_args::has_command_option(input_args, "-link");
+
+    dump_profiler_results = test_args::has_command_option(input_args, "-profdump");
 
     worker_g = CoreRange({core_x, core_y}, {core_x, core_y});
     src_worker_g = {src_core_x, src_core_y};
@@ -485,6 +490,10 @@ int main(int argc, char** argv) {
             std::stringstream ss;
             ss << std::fixed << std::setprecision(3) << bw;
             log_info(LogTest, "BW: {} GB/s", ss.str());
+        }
+
+        if (dump_profiler_results) {
+            tt_metal::detail::DumpDeviceProfileResults(device);
         }
 
         pass &= tt_metal::CloseDevice(device);
