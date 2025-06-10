@@ -26,6 +26,7 @@ struct WhereDeviceOperation {
         tt::tt_metal::MemoryConfig memory_config;
         DataType input_dtype;
         std::optional<DataType> dtype;
+        WhereVariant where_variant;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
         DataType get_dtype() const;
