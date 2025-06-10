@@ -38,14 +38,12 @@ FORCE_INLINE void read_sticks(
     uint32_t reader_offset,
     uint32_t& l1_write_addr_act,
     uint32_t& reader_idx) {
-    uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-    uint32_t num_elems = two_reader_indices & 0xffff;
+    uint16_t num_elems = packed_reader_indices_ptr[reader_idx] & 0xffff;
 
     while (num_elems--) {
         reader_idx++;
-        two_reader_indices = packed_reader_indices_ptr[reader_idx];
-        uint16_t start_ind = two_reader_indices & 0xffff;
-        uint16_t end_ind = two_reader_indices >> 16;
+        uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
+        uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
 
         if constexpr (dilation_w == 1) {
             for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {

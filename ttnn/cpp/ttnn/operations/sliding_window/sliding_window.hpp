@@ -149,7 +149,8 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
     uint32_t stride_w,
-    bool has_act_block = false,
+    bool is_conv =
+        false,  // In convs, we have the concept of dividing the act block (act_block_h_override and split reader)
     uint32_t reader0_datums = 0,
     uint32_t reader1_datums = 0,
     bool pad_cores = true);

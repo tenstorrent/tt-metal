@@ -673,11 +673,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         2 * act_block_w_ntiles,
         act_tile_size);
 
-    ttnn::operations::sliding_window::ParallelConfig parallel_config;
-    parallel_config.grid = a.shard_spec().value().grid;
-    parallel_config.shard_scheme = a.memory_config().memory_layout();
-    parallel_config.shard_orientation = a.shard_spec().value().orientation;
-    auto pad_metadata = ttnn::operations::sliding_window::generate_pad_metadata(sliding_window_config);
+    ttnn::operations::sliding_window::ParallelConfig parallel_config{
+        .grid = a.shard_spec().value().grid,
+        .shard_scheme = a.memory_config().memory_layout(),
+        .shard_orientation = a.shard_spec().value().orientation};
+
     auto op_trace_metadata = ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
     auto shard_boundaries =
         ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
