@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       model-selection:
-        description: "⚠️ If 'llama3_70b' is selected, all checkbox selections would be ignored.⚠️"
+        description: "Select model to run tests on."
         required: true
         type: choice
         options:
@@ -12,7 +12,7 @@ on:
           - llama3_70b
         default: "all"
       trigger_type:
-        description: "Select appropriate trigger."
+        description: "⚠️ If not 'manual', all checkbox selections will be ignored. ⚠️"
         required: true
         type: choice
         options:
@@ -64,6 +64,71 @@ on:
         default: false
 run-name: ${{ inputs.description }}
 jobs:
+  # Centralized logic to determine what should run
+  determine-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      run-quick: ${{ steps.logic.outputs.run-quick }}
+      run-unit: ${{ steps.logic.outputs.run-unit }}
+      run-frequent: ${{ steps.logic.outputs.run-frequent }}
+      run-demo: ${{ steps.logic.outputs.run-demo }}
+      run-model-perf: ${{ steps.logic.outputs.run-model-perf }}
+      run-stress: ${{ steps.logic.outputs.run-stress }}
+    steps:
+      - name: Determine test execution
+        id: logic
+        # Skip all but tg-quick if trigger-type is not manual
+        run: |
+          case "${{ inputs.trigger_type }}" in
+            "manual")
+              echo "run-quick=${{ inputs.tg-quick }}" >> $GITHUB_OUTPUT
+              echo "run-unit=${{ inputs.tg-unit }}" >> $GITHUB_OUTPUT
+              echo "run-frequent=${{ inputs.tg-frequent }}" >> $GITHUB_OUTPUT
+              echo "run-demo=${{ inputs.tg-demo }}" >> $GITHUB_OUTPUT
+              echo "run-model-perf=${{ inputs.tg-model-perf }}" >> $GITHUB_OUTPUT
+              echo "run-stress=${{ inputs.tg-stress }}" >> $GITHUB_OUTPUT
+              ;;
+            "model-pr")
+              echo "run-quick=true" >> $GITHUB_OUTPUT
+              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-frequent=false" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              echo "run-stress=false" >> $GITHUB_OUTPUT
+              ;;
+            "op-pr")
+              echo "run-quick=true" >> $GITHUB_OUTPUT
+              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-frequent=false" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              echo "run-stress=false" >> $GITHUB_OUTPUT
+              ;;
+            "nightly")
+              echo "run-quick=true" >> $GITHUB_OUTPUT
+              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-frequent=false" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              echo "run-stress=false" >> $GITHUB_OUTPUT
+              ;;
+            "hw-self-test")
+              echo "run-quick=true" >> $GITHUB_OUTPUT
+              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-frequent=false" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              echo "run-stress=false" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "run-quick=true" >> $GITHUB_OUTPUT
+              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-frequent=false" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              echo "run-stress=false" >> $GITHUB_OUTPUT
+              ;;
+          esac
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -75,8 +140,8 @@ jobs:
       build-wheel: true
       version: 22.04
   tg-quick:
-    if: ${{ inputs.tg-quick }}
-    needs: build-artifact
+    if: ${{ inputs.tg-quick || needs.determine-tests.outputs.run-quick == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-quick.yaml
     with:
@@ -88,8 +153,8 @@ jobs:
       topology-6u: ${{ contains(inputs.extra-tag, 'topology-6u') }}
 
   tg-unit-tests:
-    if: ${{ inputs.tg-unit }}
-    needs: build-artifact
+    if: ${{ inputs.tg-unit || needs.determine-tests.outputs.run-unit == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-unit-tests-impl.yaml
     with:
@@ -99,8 +164,8 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: ${{ contains(inputs.extra-tag, 'topology-6u') && 'topology-6u' || 'config-tg' }}
   tg-frequent-tests:
-    if: ${{ inputs.tg-frequent }}
-    needs: build-artifact
+    if: ${{ inputs.tg-frequent || needs.determine-tests.outputs.run-frequent == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-frequent-tests-impl.yaml
     with:
@@ -110,8 +175,8 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: ${{ contains(inputs.extra-tag, 'topology-6u') && 'topology-6u' || 'config-tg' }}
   tg-demo-tests:
-    if: ${{ inputs.tg-demo }}
-    needs: build-artifact
+    if: ${{ inputs.tg-demo || needs.determine-tests.outputs.run-demo == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-demo-tests-impl.yaml
     with:
@@ -121,8 +186,8 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: ${{ contains(inputs.extra-tag, 'topology-6u') && 'topology-6u' || 'config-tg' }}
   tg-model-perf-tests:
-    if: ${{ inputs.tg-model-perf }}
-    needs: build-artifact
+    if: ${{ inputs.tg-model-perf || needs.determine-tests.outputs.run-model-perf == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
     with:
@@ -132,8 +197,8 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: ${{ contains(inputs.extra-tag, 'topology-6u') && 'topology-6u' || 'config-tg' }}
   tg-stress-test:
-    needs: build-artifact
-    if: ${{ inputs.tg-stress }}
+    if: ${{ inputs.tg-stress || needs.determine-tests.outputs.run-stress == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-stress.yaml
     with:
