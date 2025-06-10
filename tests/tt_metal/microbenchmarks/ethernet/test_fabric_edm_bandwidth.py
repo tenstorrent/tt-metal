@@ -650,6 +650,14 @@ def initialize_daemon_mode(request):
         stop_fabric_edm_daemon()
 
 
+# restart daemon since we want to re-program the device init side fabric for different topology
+@pytest.fixture(scope="module")
+def restart_fabric_edm_daemon():
+    stop_fabric_edm_daemon()
+    start_fabric_edm_daemon()
+    yield
+
+
 @pytest.mark.ubench_quick_tests
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
@@ -1078,6 +1086,8 @@ def test_fabric_t3k_all_rows_and_cols_mcast_bw(
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.HalfRing, FabricTestMode.FullRing, FabricTestMode.Linear])
 @pytest.mark.parametrize("num_cluster_cols", [4])
 def test_fabric_6u_4chip_cols_mcast_bw(
+    # restart since previous test is using linear topology
+    restart_fabric_edm_daemon,
     is_unicast,
     num_messages,
     num_links,
