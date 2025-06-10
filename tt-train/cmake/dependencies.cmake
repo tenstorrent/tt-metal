@@ -117,3 +117,5 @@ CPMAddPackage(
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
 )
 # gersemi: on
+
+CPMAddPackage(NAME tt-logger GITHUB_REPOSITORY tenstorrent/tt-logger GIT_TAG v1.0.7)

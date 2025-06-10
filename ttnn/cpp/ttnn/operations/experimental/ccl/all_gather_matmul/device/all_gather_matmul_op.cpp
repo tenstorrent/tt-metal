@@ -39,7 +39,7 @@ void AllGatherMatmul::validate(
     // All Gather Matmul validate
     TT_FATAL(this->all_gather_struct.dim == 3, "AllGatherMatmul requires dim=3 for the AllGather operaitons.");
     TT_FATAL(
-        input_tensor.get_padded_shape()[0] == 1 && input_tensor.get_padded_shape()[1] == 1,
+        input_tensor.padded_shape()[0] == 1 && input_tensor.padded_shape()[1] == 1,
         "AllGatherMatmul requires input tensor to have batch size of 1.");
     std::visit(
         [&](const auto& config) {
@@ -195,7 +195,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_impl(
     ttnn::Tensor datacopy_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];
 
     /* Matmul setup */
-    bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.get_logical_shape());
+    bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -209,7 +209,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_impl(
             program_config,
             /*bcast_batch=*/std::nullopt,
             memory_config_mm.value_or(input_tensor.memory_config()),
-            dtype.value_or(input_tensor.get_dtype()),
+            dtype.value_or(input_tensor.dtype()),
             compute_kernel_config,
             /*untilize_out=*/false,
             user_core_coord,
@@ -277,6 +277,7 @@ std::vector<ttnn::Tensor> all_gather_matmul(
     const std::vector<ttnn::Tensor>& weight_tensors,
     const uint32_t dim,
     const CoreCoord all_gather_core_grid_offset,
+    const std::optional<const Tensor>& bias,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config_ag,
     std::optional<size_t> user_defined_num_workers,
@@ -301,7 +302,7 @@ std::vector<ttnn::Tensor> all_gather_matmul(
             weight_tensors.at(i),
             dim,
             all_gather_core_grid_offset,
-	    std::nullopt,
+            bias,
             num_links,
             memory_config_ag,
             user_defined_num_workers,

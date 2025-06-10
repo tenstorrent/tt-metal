@@ -40,14 +40,14 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
     const CoreRangeSet& sub_core_grids) {
     tt::tt_metal::Program program{};
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
     IDevice* device = a.device();
 
-    uint32_t ntiles = a.volume() / TILE_HW;
+    uint32_t ntiles = a.physical_volume() / TILE_HW;
     uint32_t ncores = sub_core_grids.num_cores();
     for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
         if (ntiles % ncores == 0) {
@@ -61,7 +61,7 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
 
     uint32_t max_tiles = 1;
     uint32_t ntiles_per_block = ntiles / ncores;
-    uint32_t stick_s = a.get_padded_shape()[-1];
+    uint32_t stick_s = a.padded_shape()[-1];
     uint32_t ntiles_per_row = stick_s / TILE_WIDTH;
     uint32_t stick_size = stick_s * output.element_size();
     uint32_t ntiles_per_column = ntiles / ntiles_per_row;
@@ -139,7 +139,7 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
+    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
@@ -221,16 +221,16 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
     IDevice* device = a.device();
 
     auto grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t ntiles = a.volume() / TILE_HW;
+    uint32_t ntiles = a.physical_volume() / TILE_HW;
     uint32_t ncores_x = grid_size.x;
     uint32_t ncores_y = grid_size.y;
     // uint32_t ncores_x = 2;
@@ -248,7 +248,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     // (max_l1_size / (input_single_tile_size + output_single_tile_size))/2;  // 2 CBs, double buffering each
     uint32_t max_tiles = 1;
 
-    uint32_t stick_s = a.get_padded_shape()[-1];
+    uint32_t stick_s = a.padded_shape()[-1];
     uint32_t ntiles_per_row = stick_s / TILE_WIDTH;
     uint32_t stick_size = stick_s * output.element_size();
     uint32_t ntiles_per_column = ntiles / ntiles_per_row;
@@ -330,7 +330,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
+    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
@@ -453,24 +453,24 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 operation::ProgramWithCallbacks untilize_multi_core_block(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
-    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    const auto& input_shape = a.get_padded_shape();
-    const auto& output_shape = output.get_padded_shape();
+    const auto& input_shape = a.padded_shape();
+    const auto& output_shape = output.padded_shape();
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t a_tile_width = a.get_tensor_spec().tile().get_width();
-    uint32_t a_tile_height = a.get_tensor_spec().tile().get_height();
+    uint32_t a_tile_width = a.tensor_spec().tile().get_width();
+    uint32_t a_tile_height = a.tensor_spec().tile().get_height();
 
-    uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / a_tile_width;
-    uint32_t num_tiles_per_col = a.get_padded_shape()[-2] / a_tile_height;
+    uint32_t num_tiles_per_row = a.padded_shape()[-1] / a_tile_width;
+    uint32_t num_tiles_per_col = a.padded_shape()[-2] / a_tile_height;
 
-    uint32_t num_blocks = (a.get_padded_shape()[-1] * a.get_padded_shape()[-2]) / (a_tile_height * a_tile_width);
+    uint32_t num_blocks = (a.padded_shape()[-1] * a.padded_shape()[-2]) / (a_tile_height * a_tile_width);
 
     auto
         [ncores,
@@ -493,7 +493,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     uint32_t row_size_bytes;
 
     uint32_t el_size = a.element_size();
-    if (a.get_dtype() == DataType::BFLOAT8_B) {
+    if (a.dtype() == DataType::BFLOAT8_B) {
         row_size_bytes = input_shape[-1] * output.element_size();
         el_size = output.element_size();
     } else {
@@ -569,9 +569,9 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     // reader
 
     uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    uint32_t num_tiles_2d = a.get_padded_shape()[-1] * a.get_padded_shape()[-2] / TILE_HW;
+    uint32_t num_tiles_2d = a.padded_shape()[-1] * a.padded_shape()[-2] / TILE_HW;
 
-    auto log_shape = output.get_logical_shape();
+    auto log_shape = output.logical_shape();
     uint32_t third_dim = 1;
     if (log_shape.rank() == 3) {
         third_dim = log_shape[-3];
@@ -592,7 +592,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
 
-    uint32_t total_num_rows = output.get_logical_shape()[-2];
+    uint32_t total_num_rows = output.logical_shape()[-2];
     std::map<std::string, std::string> writer_defines = {
         {"STICK_SIZE_IS_POW2", std::to_string((uint32_t)(stick_size_is_power_of_two))}};
 
@@ -744,22 +744,22 @@ operation::ProgramWithCallbacks untilize_multi_core(
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
     IDevice* device = a.device();
 
-    uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / TILE_WIDTH;
+    uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
 
-    uint32_t num_tiles_per_col = a.get_padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t num_tiles_per_col = a.padded_shape()[-2] / TILE_HEIGHT;
 
-    uint32_t ntiles = a.volume() / TILE_HW;
-    uint32_t stick_s = a.get_padded_shape()[-1];
-    uint32_t ntiles_per_block = a.get_padded_shape()[-1] / TILE_WIDTH;
+    uint32_t ntiles = a.physical_volume() / TILE_HW;
+    uint32_t stick_s = a.padded_shape()[-1];
+    uint32_t ntiles_per_block = a.padded_shape()[-1] / TILE_WIDTH;
     uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
-    uint32_t block_size_nbytes = a.get_padded_shape()[-1] * output.element_size();
+    uint32_t block_size_nbytes = a.padded_shape()[-1] * output.element_size();
     auto grid_size = device->compute_with_storage_grid_size();
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(grid_size, nblocks);
@@ -768,8 +768,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     if (!src_sharded and !out_sharded) {
         if (num_tiles_per_row > threshold_row_block) {
             if (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col) {
-                uint32_t num_blocks_block =
-                    (a.get_padded_shape()[-1] * a.get_padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
+                uint32_t num_blocks_block = (a.padded_shape()[-1] * a.padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
 
                 auto
                     [ncores_block,
@@ -840,12 +839,11 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
         num_rows_block = shard_spec.shape[0];
         block_row_size = shard_spec.shape[1] * output.element_size();  // in0_block_w * TILE_WIDTH * dtype_nbytes
-        output_row_size = output.get_padded_shape()[-1] * output.element_size();  // output row size bytes
-        last_block_row_size_unpadded =
-            block_row_size -
-            (tt::round_up(output.get_padded_shape()[-1], shard_spec.shape[1]) - output.get_padded_shape()[-1]) *
-                output.element_size();
-        uint32_t num_output_rows = output.volume() / output.get_padded_shape()[-1];
+        output_row_size = output.padded_shape()[-1] * output.element_size();  // output row size bytes
+        last_block_row_size_unpadded = block_row_size - (tt::round_up(output.padded_shape()[-1], shard_spec.shape[1]) -
+                                                         output.padded_shape()[-1]) *
+                                                            output.element_size();
+        uint32_t num_output_rows = output.physical_volume() / output.padded_shape()[-1];
         num_output_rows_unpadded =
             num_rows_block - (tt::round_up(num_output_rows, shard_spec.shape[0]) - num_output_rows);
         end_core = (*shard_spec.grid.ranges().begin()).end_coord;
@@ -951,7 +949,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
+    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
@@ -1004,7 +1002,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                 tile_start_id                         // start_id
             };
         }
-        // log_debug("reader[{}]: {},{} = {} ({})", src0_buffer->address(), core.x, core.y, tile_start_id,
+        // log_debug(tt::LogOp, "reader[{}]: {},{} = {} ({})", src0_buffer->address(), core.x, core.y, tile_start_id,
         // ntiles_per_block * nblocks_per_core);
 
         // writer runtime args
@@ -1064,7 +1062,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                     row_start_id};
             }
         }
-        // log_debug("writer[{}]: {},{} = {} {}", dst_buffer->address(), core.x, core.y, block_size_nbytes,
+        // log_debug(tt::LogOp, "writer[{}]: {},{} = {} {}", dst_buffer->address(), core.x, core.y, block_size_nbytes,
         // row_start_id);
 
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
@@ -1092,7 +1090,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                 tile_start_id                                         // start_id
             };
         }
-        // log_debug("reader: {},{} = {} ({})", core.x, core.y, tile_start_id, ntiles_per_block *
+        // log_debug(tt::LogOp, "reader: {},{} = {} ({})", core.x, core.y, tile_start_id, ntiles_per_block *
         // nblocks_per_core_cliff);
 
         // writer runtime args
@@ -1151,7 +1149,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                     row_start_id};
             }
         }
-        // log_debug("writer: {},{} = {} {}", core.x, core.y, block_size_nbytes, row_start_id);
+        // log_debug(tt::LogOp, "writer: {},{} = {} {}", core.x, core.y, block_size_nbytes, row_start_id);
 
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
 
@@ -1204,28 +1202,28 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     CoreRange core({0, 0}, {0, 0});
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    const auto& tile_shape = a.get_tensor_spec().tile().get_tile_shape();
+    const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
     uint32_t tile_volume = tile_height * tile_width;
 
-    uint32_t num_tiles = a.volume() / tile_volume;
+    uint32_t num_tiles = a.physical_volume() / tile_volume;
 
-    uint32_t num_blocks_across_height = a.volume() / a.get_padded_shape()[-1] / tile_height;
+    uint32_t num_blocks_across_height = a.physical_volume() / a.padded_shape()[-1] / tile_height;
     uint32_t num_columns_of_blocks = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
         output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        num_columns_of_blocks = a.get_padded_shape()[-1] / output.shard_spec().value().shape[1];
+        num_columns_of_blocks = a.padded_shape()[-1] / output.shard_spec().value().shape[1];
     }
 
-    uint32_t num_tiles_per_column_row = a.get_padded_shape()[-1] / num_columns_of_blocks / tile_width;
+    uint32_t num_tiles_per_column_row = a.padded_shape()[-1] / num_columns_of_blocks / tile_width;
 
     // Determine how much L1 space we can use for input and output CBs,
     // ensuring that we don't intrude into other L1 storage space
@@ -1250,8 +1248,8 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     uint32_t num_blocks_per_column_row = num_tiles_per_column_row / num_tiles_per_block;
     uint32_t single_block_width_size = num_tiles_per_block * TILE_WIDTH * output.element_size();
-    uint32_t num_total_sticks = a.volume() / a.get_padded_shape()[-1] * num_columns_of_blocks;
-    uint32_t stick_size = a.volume() * output.element_size() / num_total_sticks;
+    uint32_t num_total_sticks = a.physical_volume() / a.padded_shape()[-1] * num_columns_of_blocks;
+    uint32_t stick_size = a.physical_volume() * output.element_size() / num_total_sticks;
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
@@ -1341,7 +1339,7 @@ operation::ProgramWithCallbacks untilize_single_core(
     // Compute file path
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
+    if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");

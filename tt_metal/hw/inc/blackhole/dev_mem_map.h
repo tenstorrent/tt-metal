@@ -124,12 +124,14 @@
 
 /////////////
 // Stack info
-// Increasing the stack size comes at the expense of less local memory for globals
-#define MEM_BRISC_STACK_MIN_SIZE 896
-#define MEM_NCRISC_STACK_MIN_SIZE 1040
-#define MEM_TRISC0_STACK_MIN_SIZE 640
-#define MEM_TRISC1_STACK_MIN_SIZE 512
-#define MEM_TRISC2_STACK_MIN_SIZE 768
+// Stack and globals share the same piece of memory, one grows at the
+// expense of the other.
+#define MEM_BRISC_STACK_MIN_SIZE 256
+#define MEM_NCRISC_STACK_MIN_SIZE 256
+#define MEM_TRISC0_STACK_MIN_SIZE 192
+#define MEM_TRISC1_STACK_MIN_SIZE 192
+#define MEM_TRISC2_STACK_MIN_SIZE 256
+#define MEM_ERISC_STACK_MIN_SIZE 192
 
 #define MEM_SYSENG_RESERVED_SIZE (64 * 1024)
 // This Barrier is not the same as the metal L1 barrier (MEM_L1_BARRIER)
@@ -139,7 +141,7 @@
 #define MEM_ERISC_SYNC_INFO_SIZE (160 + 16 * MEM_MAX_NUM_CONCURRENT_TRANSACTIONS)
 #define MEM_ERISC_FABRIC_ROUTER_CONFIG_SIZE 2064
 #define MEM_ERISC_MAILBOX_SIZE 12544
-#define MEM_ERISC_KERNEL_CONFIG_SIZE (69 * 1024)
+#define MEM_ERISC_KERNEL_CONFIG_SIZE (25 * 1024)
 #define MEM_ERISC_BASE 0
 
 // From the top of L1. Common.
@@ -163,7 +165,6 @@
 #define MEM_ERISC_FIRMWARE_SIZE (24 * 1024)
 #define MEM_SUBORDINATE_ERISC_FIRMWARE_SIZE (24 * 1024)
 #define MEM_ERISC_KERNEL_SIZE (24 * 1024)
-#define MEM_ERISC_STACK_MIN_SIZE 1024
 #define MEM_ERISC_RESERVED1 0
 #define MEM_ERISC_RESERVED1_SIZE 1024
 

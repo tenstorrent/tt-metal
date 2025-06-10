@@ -194,6 +194,15 @@ void py_module(py::module& module) {
             py::arg("submesh_shape"),
             py::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevices are alive
         .def(
+            "get_submeshes",
+            &MeshDevice::get_submeshes,
+            R"doc(
+              Get the submeshes created on this MeshDevice.
+
+                Returns:
+                    List[MeshDevice]: The submeshes created on this MeshDevice.
+        )doc")
+        .def(
             "compute_with_storage_grid_size",
             &MeshDevice::compute_with_storage_grid_size,
             R"doc(
@@ -561,25 +570,6 @@ void py_module(py::module& module) {
                 Tensor: The aggregated tensor.
             )doc");
     module.def(
-        "aggregate_tensor",
-        [](const std::vector<Tensor>& tensors, const MeshToTensor& composer) -> Tensor {
-            Tensor aggregated_tensor = aggregate_as_tensor(tensors, AllGatherTensor{});
-
-            return aggregate_tensor(aggregated_tensor, composer);
-        },
-        py::arg("tensor"),
-        py::arg("composer"),
-        R"doc(
-            Aggregates a set of shard tensors into a single host tensor using the provided composer.
-
-            Args:
-                tensor (Tensor): The tensor to aggregate.
-                composer (MeshToTensor): The composer to use for aggregation.
-
-            Returns:
-                Tensor: The aggregated tensor.
-            )doc");
-    module.def(
         "aggregate_as_tensor",
         [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors, AllGatherTensor{}); },
         py::arg("tensors"),
@@ -592,6 +582,20 @@ void py_module(py::module& module) {
 
             Returns:
                 Tensor: The aggregated tensor.
+            )doc");
+    module.def(
+        "combine_device_tensors",
+        [](const std::vector<Tensor>& tensors) -> Tensor { return combine_device_tensors(tensors); },
+        py::arg("tensors"),
+        py::kw_only(),
+        R"doc(
+            Combines tensor shards allocated on individual devices into a single multi-device tensor. All tensors shards must be allocated on the same mesh buffer.
+
+            Args:
+                tensors (List[Tensor]): The tensor shards to combine.
+
+            Returns:
+                Tensor: The combined tensor.
             )doc");
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
 }

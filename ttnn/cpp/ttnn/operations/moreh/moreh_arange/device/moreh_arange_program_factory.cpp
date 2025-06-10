@@ -11,8 +11,8 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    auto dtype = output.get_dtype();
-    auto W = output.get_padded_shape()[-1];
+    auto dtype = output.dtype();
+    auto W = output.padded_shape()[-1];
     auto Wt = tt::div_up(W, tt::constants::TILE_WIDTH);
 
     auto start = operation_attributes.start;

@@ -14,6 +14,7 @@
 #include <set>
 #include <utility>
 
+#include "assert.hpp"
 #include "control_plane.hpp"
 #include "core_coord.hpp"
 #include "device_impl.hpp"
@@ -26,7 +27,7 @@
 #include "fabric_types.hpp"
 #include "hal.hpp"
 #include "host_api.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "profiler_types.hpp"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"

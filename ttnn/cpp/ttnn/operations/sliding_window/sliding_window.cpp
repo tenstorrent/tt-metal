@@ -37,7 +37,8 @@ std::array<uint32_t, 4> get_pair_n4_padding(
             }
         },
         padding);
-    tt::log_debug("Padding = ({}, {}), ({}, {})", ret_padding[0], ret_padding[1], ret_padding[2], ret_padding[3]);
+    log_debug(
+        tt::LogOp, "Padding = ({}, {}), ({}, {})", ret_padding[0], ret_padding[1], ret_padding[2], ret_padding[3]);
     return ret_padding;
 }
 /**
@@ -1208,7 +1209,7 @@ Tensor construct_on_host_config_tensor(
 
 Tensor move_config_tensor_to_device(
     const Tensor& config_tensor, const ParallelConfig& p_config, bool is_block_sharded, IDevice* device) {
-    auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_logical_shape()[-1]});
+    auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.logical_shape()[-1]});
     log_debug(tt::LogOp, "shard_shape: ({}, {})", shard_shape[0], shard_shape[1]);
     auto config_shard_orientation =
         is_block_sharded ? (p_config.shard_orientation == ShardOrientation::COL_MAJOR ? ShardOrientation::ROW_MAJOR

@@ -26,7 +26,7 @@
 #include "jit_build_options.hpp"
 #include "jit_build_settings.hpp"
 #include "kernel.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 
 enum class UnpackToDestMode : uint8_t;

@@ -145,6 +145,7 @@ class TtTransformerBlock(LightweightModule):
             # since we want residual to be bfloat16
             attn_in_sharded, _ = self.attention_norm(x, None, mode)
             h = x
+
         else:
             # In subsequent Layers we take the h tensor from before and modify it in place
             attn_in_sharded, _ = self.attention_norm(x, h, mode)
@@ -161,6 +162,7 @@ class TtTransformerBlock(LightweightModule):
         )
         if mode == "prefill":
             h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
+            x.deallocate(True)
             ff_in_sharded, _ = self.ff_norm(h, None, mode)
 
         if mode == "decode":
@@ -173,6 +175,8 @@ class TtTransformerBlock(LightweightModule):
             out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
             if mode == "decode":
                 ff_out.deallocate(True)
+            if mode == "prefill":
+                h.deallocate(True)
             return out, None
         else:
             return ff_out, h

@@ -70,17 +70,17 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     using tt::tt_metal::CircularBufferConfig;
 
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
-    const auto shape = a.get_padded_shape();
+    const auto shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
-    const uint32_t NC = a.volume() / HW;
+    const uint32_t NC = a.physical_volume() / HW;
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
-    const auto& a_dtype = a.get_dtype();
+    const auto& a_dtype = a.dtype();
 
     const uint32_t Wt = W / TILE_WIDTH;
     const uint32_t Ht = H / TILE_HEIGHT;
-    const uint32_t stats_tiles_cols = stats.get_padded_shape()[-1] / TILE_WIDTH;
+    const uint32_t stats_tiles_cols = stats.padded_shape()[-1] / TILE_WIDTH;
     const uint32_t tile_cols_per_device = is_rmsnorm ? 1 : 2;
     const uint32_t num_devices = stats_tiles_cols / tile_cols_per_device;
     TT_FATAL(num_devices > 0, "Number of devices must be greater than 0");
@@ -89,14 +89,14 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
 
     uint32_t num_tile_rows = NC * Ht;
 
-    tt::log_debug("is_rmsnorm: {}", is_rmsnorm);
-    tt::log_debug("W: {}", W);
-    tt::log_debug("H: {}", H);
-    tt::log_debug("num_tile_rows: {}", num_tile_rows);
-    tt::log_debug("Wt: {}", Wt);
-    tt::log_debug("Ht: {}", Ht);
-    tt::log_debug("stats_tiles_cols: {}", stats_tiles_cols);
-    tt::log_debug("num_devices: {}", num_devices);
+    log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
+    log_debug(tt::LogOp, "W: {}", W);
+    log_debug(tt::LogOp, "H: {}", H);
+    log_debug(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
+    log_debug(tt::LogOp, "Wt: {}", Wt);
+    log_debug(tt::LogOp, "Ht: {}", Ht);
+    log_debug(tt::LogOp, "stats_tiles_cols: {}", stats_tiles_cols);
+    log_debug(tt::LogOp, "num_devices: {}", num_devices);
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -112,15 +112,15 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     uint32_t block_size =
         fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
 
-    tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.get_dtype());
-    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.dtype());
+    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat gamma_cb_data_format =
-        gamma.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().get_dtype())
-                          : tt::DataFormat::Float16_b;
+    tt::DataFormat gamma_cb_data_format = gamma.has_value()
+                                              ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype())
+                                              : tt::DataFormat::Float16_b;
     tt::DataFormat beta_cb_data_format = beta.has_value()
-                                             ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().get_dtype())
+                                             ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype())
                                              : tt::DataFormat::Float16_b;
     uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
     uint32_t stats_single_tile_size = tt::tt_metal::detail::TileSize(stats_data_format);
@@ -130,14 +130,14 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     uint32_t gamma_single_tile_size = tt::tt_metal::detail::TileSize(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt::tt_metal::detail::TileSize(beta_cb_data_format);
 
-    tt::log_debug("in_data_format: {}", in_data_format);
-    tt::log_debug("out_data_format: {}", out_data_format);
-    tt::log_debug("cb_data_format: {}", cb_data_format);
-    tt::log_debug("gamma_cb_data_format: {}", gamma_cb_data_format);
-    tt::log_debug("beta_cb_data_format: {}", beta_cb_data_format);
-    tt::log_debug("math_fidelity: {}", math_fidelity);
-    tt::log_debug("math_approx_mode: {}", math_approx_mode);
-    tt::log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
+    log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
+    log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
+    log_debug(tt::LogOp, "gamma_cb_data_format: {}", gamma_cb_data_format);
+    log_debug(tt::LogOp, "beta_cb_data_format: {}", beta_cb_data_format);
+    log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
+    log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
+    log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
     tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
     uint32_t inb_single_tile_size = 0;
@@ -148,20 +148,20 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto dst_addr = output.buffer()->address();
 
-    uint32_t num_tiles = a.volume() / TILE_HW;
-    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().volume() / TILE_HW : 0;
-    uint32_t num_beta_tiles = beta.has_value() ? beta.value().volume() / TILE_HW : 0;
+    uint32_t num_tiles = a.physical_volume() / TILE_HW;
+    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
 
     // For bert, tensor is packed as RM with width 32
-    if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
-        num_gamma_tiles = gamma.has_value() ? gamma.value().volume() / TILE_WIDTH : 0;
+    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
+        num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
     }
-    if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
-        num_beta_tiles = beta.has_value() ? beta.value().volume() / TILE_WIDTH : 0;
+    if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
+        num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
     }
 
-    tt::log_debug("num_gamma_tiles: {}", num_gamma_tiles);
-    tt::log_debug("num_beta_tiles: {}", num_beta_tiles);
+    log_debug(tt::LogOp, "num_gamma_tiles: {}", num_gamma_tiles);
+    log_debug(tt::LogOp, "num_beta_tiles: {}", num_beta_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -257,12 +257,12 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
          num_tile_rows_per_core_group_1,
          num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
-    tt::log_debug("num_cores: {}", num_cores);
-    tt::log_debug("grid_size: {}", grid_size);
-    tt::log_debug("core_group_1: {}", core_group_1.str());
-    tt::log_debug("num_tile_rows_per_core_group_1: {}", num_tile_rows_per_core_group_1);
-    tt::log_debug("core_group_2: {}", core_group_2.str());
-    tt::log_debug("num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
+    log_debug(tt::LogOp, "num_cores: {}", num_cores);
+    log_debug(tt::LogOp, "grid_size: {}", grid_size);
+    log_debug(tt::LogOp, "core_group_1: {}", core_group_1.str());
+    log_debug(tt::LogOp, "num_tile_rows_per_core_group_1: {}", num_tile_rows_per_core_group_1);
+    log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
+    log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -279,8 +279,8 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         (std::uint32_t)stats_tiles_cols,
     };
 
-    if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().get_padded_shape()[-1] * gamma.value().element_size();
+    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
+        auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(gamma_stick_size);
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
         reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
@@ -294,7 +294,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
                                                       (std::uint32_t)is_dram(output),
                                                       (std::uint32_t)block_size};
 
-    bool tile_dtype_is_bfloat16 = a.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
+    bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
     std::map<string, string> reader_defines;
     std::map<string, string> compute_defines;
     if (gamma.has_value()) {
@@ -308,8 +308,8 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         compute_defines["RMSNORM"] = "1";
     }
 
-    auto use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or
-                                (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
+    auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
+                                (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
     TT_FATAL(
         use_row_major_kernel || (!gamma.has_value() && !beta.has_value()),
         "Only row major gamma and beta are supported");
@@ -437,10 +437,10 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
 
     for (const auto& cb : program.circular_buffers()) {
         for (const auto index : cb->buffer_indices()) {
-            tt::log_debug("cb_id {}", index);
-            tt::log_debug("page_size: {}", cb->page_size(index));
-            tt::log_debug("num_pages: {}", cb->num_pages(index));
-            tt::log_debug("data_format: {}", cb->data_format(index));
+            log_debug(tt::LogOp, "cb_id {}", index);
+            log_debug(tt::LogOp, "page_size: {}", cb->page_size(index));
+            log_debug(tt::LogOp, "num_pages: {}", cb->num_pages(index));
+            log_debug(tt::LogOp, "data_format: {}", cb->data_format(index));
         }
     }
 

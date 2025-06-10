@@ -334,5 +334,20 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
     }
 }
 
+TEST_F(MeshEventsTestSuite, EventQuery) {
+    uint32_t NUM_ITERS = 500;
+    // Stress EventQuery API and ensure that an event is marked as completed post synchronization.
+    for (auto i = 0; i < NUM_ITERS; i++) {
+        auto event = EnqueueRecordEventToHost(mesh_device_->mesh_command_queue(0));
+        if (i % 10 == 0) {
+            EventSynchronize(event);
+            EXPECT_TRUE(EventQuery(event));
+        }
+    }
+    // Create a dummy event from the future that has not been issued yet.
+    auto event = MeshEvent(0xffff, mesh_device_.get(), 0, MeshCoordinateRange(mesh_device_->shape()));
+    EXPECT_FALSE(EventQuery(event));  // Querying an event that has not been issued should return false.
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed::test
