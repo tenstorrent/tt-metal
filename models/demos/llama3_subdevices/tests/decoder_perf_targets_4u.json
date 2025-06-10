@@ -35,7 +35,7 @@
         },
         "AllGatherAsync_0": {
             "op_name": "AllGatherAsync_Binary_Mult",
-            "kernel_duration": 11328.694444444445,
+            "kernel_duration": 9575.690972222223,
             "op_to_op": 959.5555,
             "first_to_last_start": 96.77777777777777,
             "non-overlapped-dispatch-time": 4351.1,
@@ -190,8 +190,8 @@
         "Untilize_0": {
             "op_name": "Untilize",
             "kernel_duration": 1517.3333333333335,
-            "op_to_op": 800,
-            "first_to_last_start": 2043.3333333333333,
+            "op_to_op": 1371.111111111111,
+            "first_to_last_start": 1562.888888888889,
             "non-overlapped-dispatch-time": 3113.6,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.4,
