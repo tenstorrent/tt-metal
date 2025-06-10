@@ -21,7 +21,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::select_program_factory(
 void LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
-    auto input_spec = input_tensor.get_tensor_spec();
+    auto input_spec = input_tensor.tensor_spec();
 
     TT_FATAL(attributes.dim == 3, "dim must be 3, got {}", attributes.dim);
     TT_FATAL(attributes.cluster_axis == 1, "cluster_axis must be 1, got {}", attributes.cluster_axis);
@@ -65,7 +65,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
     // input is unpadded, output is padded. Ex, input: 3584, 112 tiles, padded to 5 tiles per core, total width is 120
     // tiles (3840). this should be changed to use unpadded output in the future.
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     const auto batch = attributes.slice_size;
     const auto head_dim = attributes.head_dim;
     const Shape q_output_shape({input_shape[0], batch, attributes.num_heads, head_dim});
@@ -102,15 +102,15 @@ LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
         TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
-                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), q_mem_config)),
+                input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), q_mem_config)),
         TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
-                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), k_mem_config)),
+                input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), k_mem_config)),
         TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
-                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), v_mem_config))};
+                input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), v_mem_config))};
 }
 
 LlamaReduceScatterCreateHeadsDeviceOperation::tensor_return_value_t
@@ -146,7 +146,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::invoke(
     const std::optional<ttnn::MemoryConfig>& qkv_memory_config) {
     return {
         operation_attributes_t{
-            .dim = (dim < 0 ? uint32_t(input_tensor.get_logical_shape().rank() + dim) : (uint32_t)dim),
+            .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
             .cross_device_semaphore = semaphore,
             .subdevice_id = subdevice_id,
             .cluster_axis = cluster_axis,

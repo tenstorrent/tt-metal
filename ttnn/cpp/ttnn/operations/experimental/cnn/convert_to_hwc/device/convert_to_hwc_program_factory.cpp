@@ -45,7 +45,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const uint32_t intermediary_tile_size = tt::tt_metal::detail::TileSize(intermediary_format);
 
     const uint32_t cb_in_id = tt::CBIndex::c_0;
-    const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     const uint32_t input_element_size = tt::datum_size(input_format);
     const uint32_t cb_in_page_size = input_shard_width * input_element_size;
     const uint32_t cb_in_total_size = input_shard_height * cb_in_page_size;
