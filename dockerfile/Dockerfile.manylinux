@@ -90,16 +90,12 @@ RUN git clone --branch ${OMPI_TAG} --depth 1 https://github.com/open-mpi/ompi.gi
 COPY tt_metal/sfpi-version.sh /tmp/sfpi-version.sh
 
 # Clone SFPI repo recursively from the specified branch
+https://github.com/tenstorrent/sfpi/releases/download/v6.12.0/sfpi-aarch64_Linux.rpm
 WORKDIR /tmp
 RUN source /tmp/sfpi-version.sh && \
-    git clone --recurse-submodules -b ${sfpi_version} https://github.com/tenstorrent/sfpi.git && \
-    cd sfpi && \
-    ./scripts/build.sh && \
-    tar cf - include | tar xf - -C build/sfpi && \
-    mkdir -p /opt/tenstorrent/sfpi && \
-    cp -a build/sfpi/* /opt/tenstorrent/sfpi/ && \
-    cd .. && \
-    rm -rf sfpi
+    wget https://github.com/tenstorrent/sfpi/releases/download/${sfpi_version}/sfpi-aarch64_Linux.rpm && \
+    dnf install ./sfpi-aarch64_Linux.rpm && \
+    rm -rf ./sfpi-aarch64_Linux.rpm
 
 # ENV needed
 ENV PATH=${OMPI_PREFIX}/bin:$PATH
