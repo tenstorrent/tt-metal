@@ -503,11 +503,29 @@ get_padded_slice_runtime_args_tile_sharded_output(
         uint32_t output_written_end = num_sticks_written_end / num_output_sticks_per_dim[0];
 
         for (uint32_t j = 0; j < num_dims; j++) {
-            start_index_per_dim[j] = output_written_start % num_output_sticks_per_dim[j];
+            start_index_per_dim[j] =
+                (j == num_dims - 1) ? output_written_start : output_written_start % num_output_sticks_per_dim[j];
             output_written_start = output_written_start / num_output_sticks_per_dim[j];
+
             end_index_per_dim[j] =
                 (j == num_dims - 1) ? output_written_end : output_written_end % num_output_sticks_per_dim[j];
             output_written_end = output_written_end / num_output_sticks_per_dim[j];
+        }
+
+        // If this core's start location is beyond the output tensor's end, we need to clamp it to the end.
+        if (start_index_per_dim[num_dims - 1] >= actual_output_shape[0]) {
+            start_index_per_dim[num_dims - 1] = actual_output_shape[0] - 1;
+            for (uint32_t j = 1; j < num_dims - 1; j++) {
+                start_index_per_dim[j] = actual_output_shape[num_dims - 1 - j];
+            }
+        }
+
+        // If this core's end location is beyond the output tensor's end, we need to clamp it to the end.
+        if (end_index_per_dim[num_dims - 1] >= actual_output_shape[0]) {
+            end_index_per_dim[num_dims - 1] = actual_output_shape[0] - 1;
+            for (uint32_t j = 1; j < num_dims - 1; j++) {
+                end_index_per_dim[j] = actual_output_shape[num_dims - 1 - j];
+            }
         }
         std::vector<uint32_t> start_index_in_input_per_dim(num_dims);
         std::vector<uint32_t> end_index_in_input_per_dim(num_dims);
@@ -546,6 +564,10 @@ get_padded_slice_runtime_args_tile_sharded_output(
                                     TILE_HEIGHT) *
                                    num_output_tiles_per_dim[0];
         }
+        if (num_full_rows < 0) {
+            num_full_rows = 0;
+            num_tiles_this_core = 0;
+        }
         log_debug(
             tt::LogOp,
             "For Core {}, Input Start ID {}, End ID {}, Output Start Coord: {}, End Coord : {}, Input Start Coord: {}, "
@@ -563,7 +585,6 @@ get_padded_slice_runtime_args_tile_sharded_output(
             num_tiles_this_core);
 
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
-        reader_kernel_args[0] += width_offset;
 
         uint32_t addr_offset = 2;
         reader_kernel_args[addr_offset++] = input_start_id + width_offset;
@@ -591,7 +612,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
             num_tiles_this_core / num_tiles_per_channel,  // number of tiles to read
         };
 
-        std::vector<uint32_t> writer_kernel_args = {num_tiles_this_core, num_tiles_per_channel};
+        std::vector<uint32_t> writer_kernel_args = {num_tiles_this_core, num_tiles_per_channel, num_sticks_per_core};
         writer_kernel_args.insert(writer_kernel_args.end(), reversed_start_index.begin(), reversed_start_index.end());
         writer_kernel_args.insert(
             writer_kernel_args.end(), reversed_output_start_in_input.begin(), reversed_output_start_in_input.end());

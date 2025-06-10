@@ -56,6 +56,10 @@ void kernel_main() {
 
             src_buffer_l1_addr += tile_size;
             src_stick_id++;
+#ifdef DEBUG
+            DPRINT << "src_stick_id: " << src_stick_id << ", src_noc_addr: " << src_noc_addr
+                   << ", src_buffer_l1_addr: " << src_buffer_l1_addr << ", tiles_read: " << tiles_read << ENDL();
+#endif
             for (uint32_t j = 0; j < num_dims; j++) {
                 id_per_dim[j]++;
                 if (id_per_dim[j] == num_unpadded_sticks[j]) {
