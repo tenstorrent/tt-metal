@@ -244,32 +244,26 @@ TEST(Cluster, TestMeshFullConnectivity) {
             }
         }
         if (target_system_topology.has_value()) {
+            auto validate_num_connections = [&](uint32_t num_connections, uint32_t num_expected_chip_connections) {
+                EXPECT_EQ(num_connections, num_expected_chip_connections)
+                    << chip_ss.str() << " is connected to " << num_connections << " other chips, expected "
+                    << num_expected_chip_connections << " chips for " << magic_enum::enum_name(*target_system_topology)
+                    << " topology";
+            };
             if (*target_system_topology == FabricType::TORUS_2D) {
                 static constexpr std::uint32_t num_expected_chip_connections = 4;
-                EXPECT_EQ(num_connections_to_chip.size(), num_expected_chip_connections)
-                    << chip_ss.str() << " is connected to " << num_connections_to_chip.size()
-                    << " other chips, expected " << num_expected_chip_connections << " chips for "
-                    << magic_enum::enum_name(*target_system_topology) << " topology";
+                validate_num_connections(num_connections_to_chip.size(), num_expected_chip_connections);
             } else if (*target_system_topology == FabricType::MESH) {
                 // TODO: This is UBB specific where we only consider internal connections when determining MESH topology
                 if (is_chip_on_corner_of_mesh(chip)) {
                     static constexpr std::uint32_t num_expected_chip_connections = 2;
-                    EXPECT_EQ(num_internal_connections_to_chip.size(), num_expected_chip_connections)
-                        << chip_ss.str() << " is connected to " << num_internal_connections_to_chip.size()
-                        << " other chips, expected " << num_expected_chip_connections << " chips for "
-                        << magic_enum::enum_name(*target_system_topology) << " topology";
+                    validate_num_connections(num_internal_connections_to_chip.size(), num_expected_chip_connections);
                 } else if (is_chip_on_edge_of_mesh(chip)) {
                     static constexpr std::uint32_t num_expected_chip_connections = 3;
-                    EXPECT_EQ(num_internal_connections_to_chip.size(), num_expected_chip_connections)
-                        << chip_ss.str() << " is connected to " << num_internal_connections_to_chip.size()
-                        << " other chips, expected " << num_expected_chip_connections << " chips for "
-                        << magic_enum::enum_name(*target_system_topology) << " topology";
+                    validate_num_connections(num_internal_connections_to_chip.size(), num_expected_chip_connections);
                 } else {
                     static constexpr std::uint32_t num_expected_chip_connections = 4;
-                    EXPECT_EQ(num_internal_connections_to_chip.size(), num_expected_chip_connections)
-                        << chip_ss.str() << " is connected to " << num_internal_connections_to_chip.size()
-                        << " other chips, expected " << num_expected_chip_connections << " chips for "
-                        << magic_enum::enum_name(*target_system_topology) << " topology";
+                    validate_num_connections(num_internal_connections_to_chip.size(), num_expected_chip_connections);
                 }
             }
         }
