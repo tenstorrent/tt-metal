@@ -4,7 +4,6 @@
 
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh
 from models.common.lightweightmodule import LightweightModule
 
 
@@ -32,14 +31,15 @@ class TtMixtralMLP(LightweightModule):
             cache_name = lambda name: args.weight_cache_path(dtypes[name]) / (
                 f"layers.{layer_num}.feed_forward_multidevice_unsqueezed.experts.{name}"
             )
+
         as_tensor = lambda name: ttnn.as_tensor(
             torch_weight(name),
             dtype=dtypes[name],
             device=self.mesh_device,
-            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=0),
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             layout=self.model_config["MLP_W_LAYOUT_TILE"],
-            memory_config=self.model_config["MLP_WEIGHTS_MEMCFG"],
-            cache_file_name=cache_name(name),
+            memory_config=self.get_mem_config(name, torch_weight),
+            # cache_file_name=cache_name(name),
         )
 
         self.w1 = as_tensor("w1")
@@ -47,6 +47,15 @@ class TtMixtralMLP(LightweightModule):
         self.w3 = as_tensor("w3")
 
         self.prefill_mlp_config = self.model_config["PREFILL_MLP_COMPUTE_CONFIG"]
+
+    def get_mem_config(self, name: str, weight) -> ttnn._ttnn.tensor.MemoryConfig:
+        num_device = self.mesh_device.get_num_devices()
+        if name == "w2":
+            _, _, hidden_dim, dim = weight(name).shape
+            return self.model_args.create_dram_sharded_mem_config(hidden_dim, dim)
+        else:
+            _, _, dim, hidden_dim = weight(name).shape
+            return self.model_args.create_dram_sharded_mem_config(dim, hidden_dim)
 
     def forward(self, x: ttnn.Tensor, mode="decode") -> ttnn.Tensor:
         """
@@ -61,9 +70,9 @@ class TtMixtralMLP(LightweightModule):
             if seq_len >= 2048 // 2:  # Too big to compute. Set different program configs based on seqlen
                 # Reshape input to to fit on device and parallelize computation
                 x = ttnn.reshape(x, [1, seq_len // 1024, 1024, self.model_args.dim])
-                pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG"]
-                pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"]
-                pc_3 = self.model_config["PREFILL_MLP_W3_PRG_CONFIG"]
+                pc_1 = self.model_config["PREFILL_MIXTRAL_MLP_W1_W3_PRG_CONFIG"](seq_len)
+                pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
+                pc_3 = self.model_config["PREFILL_MIXTRAL_MLP_W1_W3_PRG_CONFIG"](seq_len)
             elif seq_len == 128:
                 pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"]
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"]
@@ -72,6 +81,8 @@ class TtMixtralMLP(LightweightModule):
                 pc_1 = None
                 pc_2 = None
                 pc_3 = None
+
+            # breakpoint()
 
             w1_out = ttnn.linear(
                 x,
@@ -92,11 +103,12 @@ class TtMixtralMLP(LightweightModule):
                 program_config=pc_3,
             )
 
-            x.deallocate(True)
-            w2_in = ttnn.multiply(w1_out, w3_out, output_tensor=w1_out)
+            ttnn.deallocate(x)
 
-            w3_out.deallocate(True)
-            w1_out.deallocate(True)
+            w2_in = ttnn.multiply(w1_out, w3_out, dtype=ttnn.bfloat16, memory_config=w1_out.memory_config())
+
+            ttnn.deallocate(w3_out)
+            ttnn.deallocate(w1_out)
 
             w2_out = ttnn.linear(
                 w2_in,
@@ -107,28 +119,31 @@ class TtMixtralMLP(LightweightModule):
                 program_config=pc_2,
             )
 
-            w2_in.deallocate(True)
+            ttnn.deallocate(w2_in)
 
             if seq_len >= 2048:  # Reshape back to intended shape
                 w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, self.model_args.dim])
 
         else:  # Decode mode
+            breakpoint()
             w1_out = ttnn.matmul(
                 x,
                 self.w1,
                 program_config=self.model_config["FF1_OUTPUT_PROGCFG"],  # SILu activation fused in the op
-                memory_config=self.model_config["FF1_OUTPUT_MEMCFG"],
+                # memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 compute_kernel_config=self.model_args.compute_kernel_config_lofi,
                 dtype=ttnn.bfloat8_b,
             )
+            breakpoint()
             w3_out = ttnn.matmul(
                 x,
                 self.w3,
                 program_config=self.model_config["FF3_OUTPUT_PROGCFG"],
-                memory_config=self.model_config["FF3_OUTPUT_MEMCFG"],
+                # memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 compute_kernel_config=self.model_args.compute_kernel_config_lofi,
                 dtype=ttnn.bfloat8_b,
             )
+
             w2_in = ttnn.mul(w1_out, w3_out)
             w1_out.deallocate(True)
             w3_out.deallocate(True)
