@@ -64,9 +64,8 @@ private:
     std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> router_config_ = nullptr;
     std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> dateline_router_config_ = nullptr;
 
-    // Thread-safe arrays replacing unordered_maps for device-specific data
-    // Using vectors with device IDs as indices (device IDs are 0-based consecutive integers)
-    static constexpr size_t MAX_DEVICES = 256;  // Conservative upper bound
+    // Using vectors. Use Device IDs as indices
+    static constexpr size_t MAX_DEVICES = 256;
     static constexpr chan_id_t UNINITIALIZED_MASTER_ROUTER_CHAN = std::numeric_limits<chan_id_t>::max();
     static constexpr uint32_t UNINITIALIZED_ROUTERS = std::numeric_limits<uint32_t>::max();
     std::vector<chan_id_t> master_router_chans_;
