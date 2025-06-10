@@ -89,8 +89,7 @@ RUN git clone --branch ${OMPI_TAG} --depth 1 https://github.com/open-mpi/ompi.gi
 
 COPY tt_metal/sfpi-version.sh /tmp/sfpi-version.sh
 
-# Clone SFPI repo recursively from the specified branch
-https://github.com/tenstorrent/sfpi/releases/download/v6.12.0/sfpi-aarch64_Linux.rpm
+# Install SFPI
 WORKDIR /tmp
 RUN source /tmp/sfpi-version.sh && \
     wget https://github.com/tenstorrent/sfpi/releases/download/${sfpi_version}/sfpi-aarch64_Linux.rpm && \
