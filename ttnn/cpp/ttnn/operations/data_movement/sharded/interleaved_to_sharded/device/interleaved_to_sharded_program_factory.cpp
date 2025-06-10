@@ -313,28 +313,37 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
                 aligned_offset = 0;
             }
 
-            tt::tt_metal::SetRuntimeArgs(
-                program,
-                unary_reader_kernel_id,
-                core,
-                {src_buffer->address(),
-                 num_units_per_row,
-                 shard_height,
-                 shard_width,
-                 padded_offset_bytes,
-                 static_cast<uint32_t>(aligned),
-                 aligned_width_offset,
-                 aligned_shard_width,
-                 aligned_offset,
-                 curr_idx_h});
+            // Reader run-time args
+            std::vector<uint32_t> reader_run_time_args = {
+                src_buffer->address(),
+                num_units_per_row,
+                shard_height,
+                shard_width,
+                padded_offset_bytes,
+                static_cast<uint32_t>(aligned),
+                aligned_width_offset,
+                aligned_shard_width,
+                aligned_offset,
+                curr_idx_h};
+            tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
+
+            // Writer run-time args
+            std::vector<uint32_t> writer_run_time_args;
+            if (dst_is_dram) {
+                writer_run_time_args = {
+                    // TODO: (GR) Fill out
+                };
+            } else {
+                writer_run_time_args = {curr_num_units_per_shard};
+            }
+            tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
+
+            // Update indexing
             curr_idx_w += input_unit_size;
             if (curr_idx_w >= num_units_per_row) {
                 curr_idx_w = 0;
                 curr_idx_h += num_units_per_shard_height;
             }
-
-            // TODO: (GR) Update
-            tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {curr_num_units_per_shard});
         }
         if (convert_df) {
             tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, {curr_num_units_per_shard});

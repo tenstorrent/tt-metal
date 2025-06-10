@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <stdint.h>
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
@@ -48,9 +49,9 @@ void kernel_main() {
             noc_async_write_tile(tile_id, s, l1_read_addr);
             tile_id++;
             l1_read_addr += tile_bytes;
-            noc_async_write_barrier();
         }
         row_start_tile_id += output_width_tiles;
     }
+    noc_async_write_barrier();
     cb_pop_front(cb_id_out, block_width_padded_num_tiles);
 }
