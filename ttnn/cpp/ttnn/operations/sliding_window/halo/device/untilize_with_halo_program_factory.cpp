@@ -75,13 +75,13 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     Buffer* dst_buffer = output_tensor.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    const bool skip_untilize = input_tensor.get_layout() == Layout::ROW_MAJOR;
+    const bool skip_untilize = input_tensor.layout() == Layout::ROW_MAJOR;
 
-    const auto input_shape = input_tensor.get_padded_shape();
-    const auto output_shape = output_tensor.get_padded_shape();
+    const auto input_shape = input_tensor.padded_shape();
+    const auto output_shape = output_tensor.padded_shape();
 
-    const tt::DataFormat in_df = datatype_to_dataformat_converter(input_tensor.get_dtype());
-    const tt::DataFormat out_df = datatype_to_dataformat_converter(output_tensor.get_dtype());
+    const tt::DataFormat in_df = datatype_to_dataformat_converter(input_tensor.dtype());
+    const tt::DataFormat out_df = datatype_to_dataformat_converter(output_tensor.dtype());
     const uint32_t out_nbytes = datum_size(out_df);
 
     const CoreRangeSet all_cores = output_tensor.shard_spec().value().grid;
@@ -174,9 +174,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         }
     }
 
-    TT_ASSERT(padding_config.get_dtype() == DataType::UINT16);
-    TT_ASSERT(gather_config0.get_dtype() == DataType::UINT16);
-    TT_ASSERT(gather_config1.get_dtype() == DataType::UINT16);
+    TT_ASSERT(padding_config.dtype() == DataType::UINT16);
+    TT_ASSERT(gather_config0.dtype() == DataType::UINT16);
+    TT_ASSERT(gather_config1.dtype() == DataType::UINT16);
 
     const uint32_t num_cores = all_cores.num_cores();
 
@@ -332,11 +332,11 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     Buffer* dst_buffer = output_tensor.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    auto input_shape = input_tensor.get_padded_shape();
-    auto output_shape = output_tensor.get_padded_shape();
+    auto input_shape = input_tensor.padded_shape();
+    auto output_shape = output_tensor.padded_shape();
 
-    tt::DataFormat in_df = datatype_to_dataformat_converter(input_tensor.get_dtype());
-    tt::DataFormat out_df = datatype_to_dataformat_converter(output_tensor.get_dtype());
+    tt::DataFormat in_df = datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat out_df = datatype_to_dataformat_converter(output_tensor.dtype());
     uint32_t out_nbytes = datum_size(out_df);
 
     CoreRangeSet all_cores = output_tensor.shard_spec().value().grid;
@@ -354,7 +354,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     uint32_t in_page_size = tt::tt_metal::detail::TileSize(in_df);
     uint32_t out_tile_size = tt::tt_metal::detail::TileSize(out_df);
 
-    const bool skip_untilize = input_tensor.get_layout() == Layout::ROW_MAJOR;
+    const bool skip_untilize = input_tensor.layout() == Layout::ROW_MAJOR;
     bool wide_tensor = ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH;
     if (skip_untilize) {
         uint32_t in_nbytes = datum_size(in_df);
@@ -428,9 +428,9 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
             CreateKernel(program, compute_kernel, all_cores, ComputeConfig{.compile_args = compute_ct_args});
     }
 
-    TT_ASSERT(padding_config.get_dtype() == DataType::UINT16);
-    TT_ASSERT(local_config.get_dtype() == DataType::UINT16);
-    TT_ASSERT(remote_config.get_dtype() == DataType::UINT16);
+    TT_ASSERT(padding_config.dtype() == DataType::UINT16);
+    TT_ASSERT(local_config.dtype() == DataType::UINT16);
+    TT_ASSERT(remote_config.dtype() == DataType::UINT16);
 
     const uint32_t num_cores = all_cores.num_cores();
 
