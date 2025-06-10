@@ -3,11 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import re
 
 
 class ModelOptimisations:
     def __init__(self, conv_act_dtype=ttnn.bfloat16, conv_w_dtype=ttnn.bfloat16):
         self.conv_configs = {}
+        self.matmul_configs = {}
+        self.compute_configs = {}
         self.prepared_weights = False
         self.conv_w_dtype = conv_w_dtype
         self.conv_ws_dtype = ttnn.bfloat8_b
@@ -357,11 +360,176 @@ class ModelOptimisations:
             always_preprocess_weights=False,
         )
 
+        self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_4096"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 8),
+            in0_block_w=1,  # max is 20, 1 seems optimal?
+            per_core_M=16,
+            per_core_N=3,
+            out_subblock_h=8,
+            out_subblock_w=1,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_1024"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=4,  # max is 40, 4 seems optimal?
+            per_core_M=4,
+            per_core_N=5,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs["2D_FF2_SEQ_LEN_1024"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=16,  # max is 160, 20 seems optimal?
+            out_subblock_h=1,
+            out_subblock_w=5,
+            per_core_M=4,
+            per_core_N=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs["2D_FF2_SEQ_LEN_4096"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 8),
+            in0_block_w=2,  # max is 80, 2 seems optimal
+            out_subblock_h=8,
+            out_subblock_w=1,
+            per_core_M=16,
+            per_core_N=3,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs["1D_RESNET_LINEAR"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=10,  # max is 40, 10 seems optimal
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            mcast_in0=True,
+            fuse_batch=False,
+            fused_activation=None,
+        )
+
+        self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
     def clear_weight_preprocess(self):
         if not self.prepared_weights:
             for config_name in self.conv_configs:
                 self.conv_configs[config_name].always_preprocess_weights = False
             self.prepared_weights = True
+
+    def get_matmul_config(self, matmul_path):
+        if matmul_path is None:
+            return None
+
+        if not ("decoder" in matmul_path):
+            # # # Down block 1 # # #
+            pattern_downn_block_1_dense_out = re.compile(
+                r"down_blocks\.1\.attentions\.[01]\.transformer_blocks\.[01]\.attn[12]\.dense_out"
+            )
+
+            # 8 occurences
+            if pattern_downn_block_1_dense_out.search(matmul_path):
+                return self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_4096"]
+
+            pattern_down_blocks_1_ff2 = re.compile(
+                r"down_blocks\.1\.attentions\.[01]\.transformer_blocks\.[01]\.ff\.net\.2"
+            )
+
+            # 4 occurences
+            if pattern_down_blocks_1_ff2.search(matmul_path):
+                return self.matmul_configs["2D_FF2_SEQ_LEN_4096"]
+
+            # # # Down block 2 # # #
+            pattern_down_blocks_2_dense_out = re.compile(
+                r"down_blocks\.2\.attentions\.[01]\.transformer_blocks\.[0123456789]\.attn[12]\.dense_out"
+            )
+
+            # 40 occurences
+            if pattern_down_blocks_2_dense_out.search(matmul_path):
+                return self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_1024"]
+
+            pattern_down_blockcs_2_ff2 = re.compile(
+                r"down_blocks\.2\.attentions\.[01]\.transformer_blocks\.[0123456789]\.ff\.net\.2"
+            )
+
+            # 20 occurences
+            if pattern_down_blockcs_2_ff2.search(matmul_path):
+                return self.matmul_configs["2D_FF2_SEQ_LEN_1024"]
+
+            # # # Mid block  # # #
+            pattern_mid_block_ff2 = re.compile(
+                r"mid_block\.attentions\.0\.transformer_blocks\.[0123456789]\.ff\.net\.2"
+            )
+
+            # 10 occurences
+            if pattern_mid_block_ff2.search(matmul_path):
+                return self.matmul_configs["2D_FF2_SEQ_LEN_1024"]
+
+            pattern_mid_block_dense_out = re.compile(
+                r"mid_block\.attentions\.0\.transformer_blocks\.[0123456789]\.attn[12]\.dense_out"
+            )
+
+            # 20 occurences
+            if pattern_mid_block_dense_out.search(matmul_path):
+                return self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_1024"]
+
+            # # # Up block 0 # # #
+            pattern_up_blocks_0_dense_out = re.compile(
+                r"up_blocks\.0\.attentions\.[012]\.transformer_blocks\.[0123456789]\.attn[12]\.dense_out"
+            )
+
+            # 60 occurences
+            if pattern_up_blocks_0_dense_out.search(matmul_path):
+                return self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_1024"]
+
+            pattern_up_blocks_0_ff2 = re.compile(
+                r"up_blocks\.0\.attentions\.[012]\.transformer_blocks\.[0123456789]\.ff\.net\.2"
+            )
+
+            # 30 occurences
+            if pattern_up_blocks_0_ff2.search(matmul_path):
+                return self.matmul_configs["2D_FF2_SEQ_LEN_1024"]
+
+            # # # Up block 1 # # #
+            pattern_up_blocks_1_dense_out = re.compile(
+                r"up_blocks\.1\.attentions\.[012]\.transformer_blocks\.[01]\.attn[12]\.dense_out"
+            )
+
+            # 12 occurences
+            if pattern_up_blocks_1_dense_out.search(matmul_path):
+                return self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_4096"]
+
+            pattern_up_blocks_1_ff2 = re.compile(
+                r"up_blocks\.1\.attentions\.[012]\.transformer_blocks\.[01]\.ff\.net\.2"
+            )
+
+            # 6 occurences
+            if pattern_up_blocks_1_ff2.search(matmul_path):
+                return self.matmul_configs["2D_FF2_SEQ_LEN_4096"]
+
+            pattern_resnet_linear = re.compile(
+                r"(down_blocks\.[012]\.resnets\.[01]\.linear|up_blocks\.[012]\.resnets\.[012]\.linear|mid_block\.resnets\.[01]\.linear)"
+            )
+
+            if pattern_resnet_linear.search(matmul_path):
+                return self.matmul_configs["1D_RESNET_LINEAR"]
+        return None
+
+    def get_mm_compute_config(self, module_path):
+        # for now, return default config
+        return self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"]
 
     def get_conv_config(self, conv_path):
         if conv_path is None:
