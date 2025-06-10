@@ -92,20 +92,20 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     bool is_last_chip = ring_index == ring_size - 1;
     uint32_t output_page_size = 0;
     uint32_t stats_page_size;
-    tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.value().get_dtype());
+    tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.value().dtype());
     tt::DataFormat residual_data_format = in_data_format;
     if (b)
     {
-        residual_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.value().get_dtype());
+        residual_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.value().dtype());
     }
-    if (output.get_layout() == Layout::TILE) {
+    if (output.layout() == Layout::TILE) {
         output_page_size = output.tensor_spec().tile().get_tile_size(out_data_format);
     } else {
         output_page_size = output.buffer()->page_size();
     }
-    if (stats.value().get_layout() == Layout::TILE) {
+    if (stats.value().layout() == Layout::TILE) {
         stats_page_size = stats.value().tensor_spec().tile().get_tile_size(stats_data_format);
     } else {
         stats_page_size = stats.value().buffer()->page_size();
@@ -176,9 +176,9 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         }
     }
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat gamma_cb_data_format =
-        gamma.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().get_dtype())
-                          : tt::DataFormat::Float16_b;
+    tt::DataFormat gamma_cb_data_format = gamma.has_value()
+                                              ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype())
+                                              : tt::DataFormat::Float16_b;
     // tile sizes
     uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
     uint32_t residual_single_tile_size = tt::tt_metal::detail::TileSize(residual_data_format);
@@ -188,18 +188,18 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     uint32_t gamma_single_tile_size = tt::tt_metal::detail::TileSize(gamma_cb_data_format);
     uint32_t bfloat16_tile_size = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 
-    tt::log_debug("in_data_format: {}", in_data_format);
-    tt::log_debug("res_data_format: {}", residual_data_format);
-    tt::log_debug("out_data_format: {}", out_data_format);
-    tt::log_debug("cb_data_format: {}", cb_data_format);
-    tt::log_debug("gamma_cb_data_format: {}", gamma_cb_data_format);
-    tt::log_debug("math_fidelity: {}", math_fidelity);
-    tt::log_debug("math_approx_mode: {}", math_approx_mode);
-    tt::log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
+    log_debug(tt::LogOp, "res_data_format: {}", residual_data_format);
+    log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
+    log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
+    log_debug(tt::LogOp, "gamma_cb_data_format: {}", gamma_cb_data_format);
+    log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
+    log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
+    log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
     // tensor shape
-    const auto shape = a.get_padded_shape();
-    uint32_t M = a.volume() / shape[-1];
+    const auto shape = a.padded_shape();
+    uint32_t M = a.physical_volume() / shape[-1];
     uint32_t K = shape[-1];
     uint32_t Mt = M / TILE_WIDTH;
     uint32_t Kt = K / TILE_WIDTH;
@@ -237,7 +237,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         storage_core_noc_x.push_back((std::uint32_t)mesh_device->worker_core_from_logical_core(core).x);
         storage_core_noc_y.push_back((std::uint32_t)mesh_device->worker_core_from_logical_core(core).y);
 
-        tt::log_debug(
+        log_debug(
+            tt::LogOp,
             "Storage core: ({}, {}), physical coords: ({}, {})",
             core.x,
             core.y,
@@ -257,7 +258,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     uint32_t num_distributed_devices = 1;
     uint32_t pre_num_distributed_devices = 1;
     if (stats.has_value()) {
-        post_all_gather_stats_block_tiles = stats.value().get_padded_shape()[-1] / TILE_WIDTH;
+        post_all_gather_stats_block_tiles = stats.value().padded_shape()[-1] / TILE_WIDTH;
         num_distributed_devices = post_all_gather_stats_block_tiles;
     }
 
@@ -686,8 +687,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         in3_cb_index,
         in4_cb_index,
         in5_cb_index};
-    if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().get_padded_shape()[-1] * gamma.value().element_size();
+    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
+        auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
         writer_compile_time_args.push_back(gamma_stick_size);
     } else {
         writer_compile_time_args.push_back(0);
@@ -901,7 +902,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
 
-        tt::log_debug("core: {}, {}", core.x, core.y);
+        log_debug(tt::LogOp, "core: {}, {}", core.x, core.y);
 
         uint32_t width_index = 0;
         width_index = i;
@@ -1065,7 +1066,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
                 std::min(num_tiles_left_on_current_worker_core, num_tiles_available_at_current_storage_core);
             current_worker_num_segments_to_write_back += 1;
 
-            tt::log_debug(
+            log_debug(
+                tt::LogOp,
                 "New segment for worker core {}, Worker core offset: {}, Storage core offset: {}, Num tiles to "
                 "write "
                 "back: {}",

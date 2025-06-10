@@ -34,9 +34,8 @@ struct MeshBufferAllocationExpected {
 };
 
 struct MeshBufferReadWriteExpected {
-    using ExplicitCoreMappingInBytes =
-        std::pair<std::vector<tt::tt_metal::CoreCoord>, std::vector<tt::tt_metal::DistributionSpec::TargetData>>;
-    ExplicitCoreMappingInBytes explicit_core_mapping_in_bytes;
+    using ExplicitCorePageMapping = std::vector<std::vector<uint32_t>>;
+    ExplicitCorePageMapping explicit_core_page_mapping;
 };
 
 struct BufferAllocationParams {
@@ -95,8 +94,8 @@ TEST_P(MeshBufferAllocationTests, Allocation) {
     const auto shard_view = mesh_buffer->get_device_buffer(mesh_coordinate);
 
     // Check that the stored cores in local device buffer matches expected cores to be used
-    const auto& [cores, _] = shard_view->get_bank_data_mapping();
-    EXPECT_EQ(cores, params.expected.cores);
+    auto page_mapping = shard_view->buffer_distribution_spec()->compute_page_mapping();
+    EXPECT_EQ(page_mapping.all_cores, params.expected.cores);
 
     /* These are the params allocator cares about; check all of them */
     EXPECT_EQ(shard_view->num_cores().value(), params.expected.num_cores);
@@ -114,6 +113,7 @@ TEST_P(MeshBufferAllocationTests, Allocation) {
     EXPECT_EQ(shard_view->aligned_size_per_bank(), shard_view->aligned_size() / shard_view->num_cores().value());
 }
 
+// clang-format off
 INSTANTIATE_TEST_SUITE_P(
     BufferDistributionSpec,
     MeshBufferAllocationTests,
@@ -131,10 +131,10 @@ INSTANTIATE_TEST_SUITE_P(
                 .buffer_type = BufferType::L1,
             },
             MeshBufferAllocationExpected{
-                .cores = {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {0, 1}, {1, 1}},
-                .num_cores = 6,
-                .num_dev_pages = 10 * 6,  // Shard shape is 10 pages
-                .aligned_size = 2048 * 60,
+                .cores = {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {0, 1}, {1, 1}, {2, 1}, {3, 1}, {0, 2}, {1, 2}, {2, 2}, {3, 2}, {0, 3}, {1, 3}, {2, 3}, {3, 3}},
+                .num_cores = 16,
+                .num_dev_pages = 10 * 16,  // Shard shape is 10 pages
+                .aligned_size = 2048 * 160,
                 .aligned_size_per_bank = 2048 * 10,
             },
         },
@@ -151,10 +151,10 @@ INSTANTIATE_TEST_SUITE_P(
                 .buffer_type = BufferType::L1,
             },
             MeshBufferAllocationExpected{
-                .cores = {{0, 0}, {0, 1}, {0, 2}, {0, 3}},
-                .num_cores = 4,
-                .num_dev_pages = 384 * 4,  // Shard shape is 384 pages
-                .aligned_size = 256 * 1536,
+                .cores = {{0, 0}, {0, 1}, {0, 2}, {0, 3}, {1, 0}, {1, 1}, {1, 2}, {1, 3}, {2, 0}, {2, 1}, {2, 2}, {2, 3}, {3, 0}, {3, 1}, {3, 2}, {3, 3}},
+                .num_cores = 16,
+                .num_dev_pages = 384 * 16,  // Shard shape is 384 pages
+                .aligned_size = 256 * 6144,
                 .aligned_size_per_bank = 256 * 384,
             },
         },
@@ -200,18 +200,13 @@ INSTANTIATE_TEST_SUITE_P(
             },
         })  // Values
 );
+// clang-format on
 
 class MeshBufferReadWriteTests : public GenericMeshDeviceFixture,
                                  public ::testing::WithParamInterface<std::tuple<bool, bool, BufferReadWriteParams>> {};
 
 TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
     const auto& [cq_write, cq_read, params] = GetParam();
-
-    // The expected values are assuming 16 byte alignment, which is true for L1 for WH + BH
-    // If want to extend tests to DRAM or other alignment, can update expected values to be derived from aligned page
-    // size
-    const auto allocator_alignment = mesh_device_->allocator()->get_alignment(params.inputs.buffer_type);
-    ASSERT_EQ(allocator_alignment, 16);
 
     // Create a replicated mesh buffer across generic mesh device; tests will only use first device
     const auto mesh_buffer = create_replicated_mesh_buffer_from_inputs(params.inputs, mesh_device_.get());
@@ -222,6 +217,8 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
     const auto local_device = shard_view->device();
     const auto host_size_in_bytes = mesh_buffer->device_local_size();
     const auto bank_base_address = mesh_buffer->address();
+    const auto page_size = mesh_buffer->page_size();
+    const auto aligned_page_size = mesh_buffer->get_backing_buffer()->aligned_page_size();
 
     // Double check that mesh buffer properties match local single-device buffer properties
     ASSERT_EQ(host_size_in_bytes, shard_view->size());
@@ -270,7 +267,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         tt::test_utils::generate_uniform_random_vector<uint8_t>(0, UINT8_MAX, host_size_in_bytes / sizeof(uint8_t));
 
     if (cq_write) {
-        tt::log_info("Writing with: FDMeshCommandQueue enqueue_write_shards");
+        log_info(tt::LogTest, "Writing with: FDMeshCommandQueue enqueue_write_shards");
         std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
             .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
             .host_data = const_cast<void*>(reinterpret_cast<const void*>(src.data())),
@@ -278,7 +275,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, shard_data_transfer, /*blocking=*/false);
         Finish(mesh_device_->mesh_command_queue());
     } else {
-        tt::log_info("Writing with: WriteToBuffer (equivalent to SDMeshCommandQueue enqueue_write_shards)");
+        log_info(tt::LogTest, "Writing with: WriteToBuffer (equivalent to SDMeshCommandQueue enqueue_write_shards)");
         tt::tt_metal::detail::WriteToBuffer(*shard_view, src);
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(local_device->id());
     }
@@ -291,7 +288,20 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         // changed to another dtype
         const auto* src_ptr = static_cast<const uint8_t*>(src.data());
 
-        const auto& [cores, core_mapping_in_bytes] = params.expected.explicit_core_mapping_in_bytes;
+        auto buffer_page_mapping = shard_view->buffer_distribution_spec()->compute_page_mapping();
+        const auto& cores = buffer_page_mapping.all_cores;
+        const auto& page_mapping = buffer_page_mapping.core_host_page_indices;
+
+        const auto& expected_page_mapping = params.expected.explicit_core_page_mapping;
+        EXPECT_TRUE(expected_page_mapping.size() <= page_mapping.size());
+        for (size_t expected_core_idx = 0; expected_core_idx < expected_page_mapping.size(); expected_core_idx++) {
+            EXPECT_EQ(page_mapping[expected_core_idx], expected_page_mapping[expected_core_idx]);
+        }
+        for (size_t empty_core_idx = expected_page_mapping.size(); empty_core_idx < page_mapping.size();
+             empty_core_idx++) {
+            EXPECT_EQ(page_mapping[empty_core_idx], std::vector<uint32_t>(page_mapping[empty_core_idx].size()));
+        }
+
         for (size_t i = 0; i < cores.size(); i++) {
             tt::tt_metal::detail::ReadFromDeviceL1(
                 local_device,
@@ -302,12 +312,16 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
                 shard_view->core_type());
 
             const auto* result_per_core_ptr = reinterpret_cast<const uint8_t*>(result_per_core.data());
-            for (const auto& chunk_mapping_in_bytes : core_mapping_in_bytes[i]) {
+            for (size_t core_page = 0; core_page < page_mapping[i].size(); core_page++) {
+                if (!page_mapping[i][core_page]) {
+                    continue;
+                }
+                const auto host_page = page_mapping[i][core_page];
                 EXPECT_EQ(
                     std::memcmp(
-                        src_ptr + chunk_mapping_in_bytes.src,
-                        result_per_core_ptr + chunk_mapping_in_bytes.dst,
-                        chunk_mapping_in_bytes.size),
+                        src_ptr + host_page * page_size,
+                        result_per_core_ptr + core_page * aligned_page_size,
+                        page_size),
                     0);
             }
         }
@@ -317,7 +331,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
     std::vector<uint8_t> dst(host_size_in_bytes / sizeof(uint8_t), 0);
 
     if (cq_read) {
-        tt::log_info("Reading with: FDMeshCommandQueue enqueue_read_shards");
+        log_info(tt::LogTest, "Reading with: FDMeshCommandQueue enqueue_read_shards");
         std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
             .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
             .host_data = const_cast<void*>(reinterpret_cast<const void*>(dst.data())),
@@ -325,7 +339,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         mesh_device_->mesh_command_queue().enqueue_read_shards(shard_data_transfer, mesh_buffer, /*blocking=*/false);
         Finish(mesh_device_->mesh_command_queue());
     } else {
-        tt::log_info("Reading with: ReadFromBuffer (equivalent to SDMeshCommandQueue enqueue_read_shards)");
+        log_info(tt::LogTest, "Reading with: ReadFromBuffer (equivalent to SDMeshCommandQueue enqueue_read_shards)");
         tt::tt_metal::detail::ReadFromBuffer(*shard_view, dst);
     }
 
@@ -333,6 +347,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
     EXPECT_EQ(src, dst);
 }
 
+// clang-format off
 INSTANTIATE_TEST_SUITE_P(
     BufferDistributionSpec,
     MeshBufferReadWriteTests,
@@ -353,16 +368,16 @@ INSTANTIATE_TEST_SUITE_P(
                     .buffer_type = BufferType::L1,
                 },
                 MeshBufferReadWriteExpected{
-                    .explicit_core_mapping_in_bytes = MeshBufferReadWriteExpected::ExplicitCoreMappingInBytes(
-                        {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {0, 1}, {1, 1}, {2, 1}, {3, 1}},
-                        {{{0, 0, 2048}, {2048, 2048, 2048}},
-                         {{4096, 0, 2048}},
-                         {{6144, 0, 2048}, {8192, 2048, 2048}},
-                         {{10240, 0, 2048}},
-                         {{12288, 0, 2048}, {14336, 2048, 2048}},
-                         {{16384, 0, 2048}},
-                         {{18432, 0, 2048}, {20480, 2048, 2048}},
-                         {{22528, 0, 2048}}}),
+                    .explicit_core_page_mapping = {
+                        {0, 1},
+                        {2, 0},
+                        {3, 4},
+                        {5, 0},
+                        {6, 7},
+                        {8, 0},
+                        {9, 10},
+                        {11, 0},
+                    },
                 },
             },
             // HEIGHT sharding with padding along shard width + random CoreRangeSet; tile layout
@@ -379,12 +394,12 @@ INSTANTIATE_TEST_SUITE_P(
                     .buffer_type = BufferType::L1,
                 },
                 MeshBufferReadWriteExpected{
-                    .explicit_core_mapping_in_bytes = MeshBufferReadWriteExpected::ExplicitCoreMappingInBytes(
-                        {{4, 6}, {5, 6}, {6, 6}, {1, 1}},
-                        {{{0, 0, 1088}, {1088, 1088, 1088}, {2176, 3264, 1088}, {3264, 4352, 1088}},
-                         {{4352, 0, 1088}, {5440, 1088, 1088}, {6528, 3264, 1088}, {7616, 4352, 1088}},
-                         {{8704, 0, 1088}, {9792, 1088, 1088}, {10880, 3264, 1088}, {11968, 4352, 1088}},
-                         {{13056, 0, 1088}, {14144, 1088, 1088}, {15232, 3264, 1088}, {16320, 4352, 1088}}}),
+                    .explicit_core_page_mapping = {
+                        {0, 1, 0, 2, 3, 0},
+                        {4, 5, 0, 6, 7, 0},
+                        {8, 9, 0, 10, 11, 0},
+                        {12, 13, 0, 14, 15, 0},
+                    },
                 },
             },
             // WIDTH sharding with padding along shard height; row major layout with aligned page size
@@ -400,10 +415,10 @@ INSTANTIATE_TEST_SUITE_P(
                     .buffer_type = BufferType::L1,
                 },
                 MeshBufferReadWriteExpected{
-                    .explicit_core_mapping_in_bytes = MeshBufferReadWriteExpected::ExplicitCoreMappingInBytes(
-                        {{0, 0}, {1, 0}},
-                        {{{0, 0, 16}, {32, 16, 16}, {64, 32, 16}, {96, 64, 16}, {128, 80, 16}, {160, 96, 16}},
-                         {{16, 0, 16}, {48, 16, 16}, {80, 32, 16}, {112, 64, 16}, {144, 80, 16}, {176, 96, 16}}}),
+                    .explicit_core_page_mapping = {
+                        {0, 2, 4, 0, 6, 8, 10, 0},
+                        {1, 3, 5, 0, 7, 9, 11, 0},
+                    },
                 },
             },
             // ND sharding with multiple shards per bank; row major layout with non-aligned page size
@@ -420,25 +435,18 @@ INSTANTIATE_TEST_SUITE_P(
                     .buffer_type = BufferType::L1,
                 },
                 MeshBufferReadWriteExpected{
-                    .explicit_core_mapping_in_bytes = MeshBufferReadWriteExpected::ExplicitCoreMappingInBytes(
-                        {{0, 0}, {0, 1}, {0, 2}, {0, 3}, {0, 4}, {1, 0}, {1, 1}, {1, 2}, {1, 3}, {1, 4}},
-                        {{{0, 0, 4},
-                          {4, 16, 4},
-                          {12, 32, 4},
-                          {16, 48, 4},
-                          {120, 64, 4},
-                          {124, 80, 4},
-                          {132, 96, 4},
-                          {136, 112, 4}},
-                         {{8, 0, 4}, {20, 32, 4}, {128, 64, 4}, {140, 96, 4}},
-                         {{24, 0, 4}, {28, 16, 4}, {36, 32, 4}, {40, 48, 4}},
-                         {{32, 0, 4}, {44, 32, 4}},
-                         {{48, 0, 4}, {52, 16, 4}, {60, 32, 4}, {64, 48, 4}},
-                         {{56, 0, 4}, {68, 32, 4}},
-                         {{72, 0, 4}, {76, 16, 4}, {84, 32, 4}, {88, 48, 4}},
-                         {{80, 0, 4}, {92, 32, 4}},
-                         {{96, 0, 4}, {100, 16, 4}, {108, 32, 4}, {112, 48, 4}},
-                         {{104, 0, 4}, {116, 32, 4}}}),
+                    .explicit_core_page_mapping = {
+                        {0, 1, 3, 4, 30, 31, 33, 34},
+                        {2, 0, 5, 0, 32, 0, 35, 0},
+                        {6, 7, 9, 10, 0, 0, 0, 0},
+                        {8, 0, 11, 0, 0, 0, 0, 0},
+                        {12, 13, 15, 16, 0, 0, 0, 0},
+                        {14, 0, 17, 0, 0, 0, 0, 0},
+                        {18, 19, 21, 22, 0, 0, 0, 0},
+                        {20, 0, 23, 0, 0, 0, 0, 0},
+                        {24, 25, 27, 28, 0, 0, 0, 0},
+                        {26, 0, 29, 0, 0, 0, 0, 0}
+                    },
                 },
             },
             // ND sharding with multiple shards per bank; tile layout
@@ -455,69 +463,15 @@ INSTANTIATE_TEST_SUITE_P(
                     .buffer_type = BufferType::L1,
                 },
                 MeshBufferReadWriteExpected{
-                    .explicit_core_mapping_in_bytes = MeshBufferReadWriteExpected::ExplicitCoreMappingInBytes(
-                        {{0, 0}, {1, 0}, {2, 0}, {0, 1}, {1, 1}},
-                        {{{0, 0, 2048},
-                          {2048, 2048, 2048},
-                          {6144, 4096, 2048},
-                          {8192, 6144, 2048},
-                          {24576, 8192, 2048},
-                          {26624, 10240, 2048},
-                          {30720, 12288, 2048},
-                          {32768, 14336, 2048},
-                          {53248, 16384, 2048},
-                          {59392, 20480, 2048},
-                          {77824, 24576, 2048},
-                          {83968, 28672, 2048},
-                          {110592, 32768, 2048},
-                          {112640, 34816, 2048},
-                          {116736, 36864, 2048},
-                          {118784, 38912, 2048}},
-                         {{4096, 0, 2048},
-                          {10240, 4096, 2048},
-                          {28672, 8192, 2048},
-                          {34816, 12288, 2048},
-                          {61440, 16384, 2048},
-                          {63488, 18432, 2048},
-                          {67584, 20480, 2048},
-                          {69632, 22528, 2048},
-                          {86016, 24576, 2048},
-                          {88064, 26624, 2048},
-                          {92160, 28672, 2048},
-                          {94208, 30720, 2048},
-                          {114688, 32768, 2048},
-                          {120832, 36864, 2048}},
-                         {{12288, 0, 2048},
-                          {14336, 2048, 2048},
-                          {18432, 4096, 2048},
-                          {20480, 6144, 2048},
-                          {36864, 8192, 2048},
-                          {38912, 10240, 2048},
-                          {43008, 12288, 2048},
-                          {45056, 14336, 2048},
-                          {65536, 16384, 2048},
-                          {71680, 20480, 2048},
-                          {90112, 24576, 2048},
-                          {96256, 28672, 2048}},
-                         {{16384, 0, 2048},
-                          {22528, 4096, 2048},
-                          {40960, 8192, 2048},
-                          {47104, 12288, 2048},
-                          {98304, 16384, 2048},
-                          {100352, 18432, 2048},
-                          {104448, 20480, 2048},
-                          {106496, 22528, 2048}},
-                         {{49152, 0, 2048},
-                          {51200, 2048, 2048},
-                          {55296, 4096, 2048},
-                          {57344, 6144, 2048},
-                          {73728, 8192, 2048},
-                          {75776, 10240, 2048},
-                          {79872, 12288, 2048},
-                          {81920, 14336, 2048},
-                          {102400, 16384, 2048},
-                          {108544, 20480, 2048}}}),
+                    .explicit_core_page_mapping = {
+                        {0, 1, 3, 4, 12, 13, 15, 16, 26, 0, 29, 0, 38, 0, 41, 0, 54, 55, 57, 58, 0, 0, 0, 0},
+                        {2, 0, 5, 0, 14, 0, 17, 0, 30, 31, 33, 34, 42, 43, 45, 46, 56, 0, 59, 0, 0, 0, 0, 0},
+                        {6, 7, 9, 10, 18, 19, 21, 22, 32, 0, 35, 0, 44, 0, 47, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+                        {8, 0, 11, 0, 20, 0, 23, 0, 48, 49, 51, 52, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+                        {24, 25, 27, 28, 36, 37, 39, 40, 50, 0, 53, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+                    },
                 },
             })  // Values
         )       // Combine
 );
+// clang-format on

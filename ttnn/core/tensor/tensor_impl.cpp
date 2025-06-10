@@ -127,7 +127,7 @@ Tensor pad_bfloat8_b(
     const ttnn::Shape& output_padded_shape,
     const ttnn::Shape& input_tensor_start,
     float pad_value) {
-    auto tile = tensor.get_tensor_spec().tile();
+    auto tile = tensor.tensor_spec().tile();
     // TODO(arakhmati): do not convert to FLOAT32
 
     // Convert to FLOAT32 tensor and pad
@@ -139,13 +139,13 @@ Tensor pad_bfloat8_b(
     auto float_tensor = Tensor(
                             std::move(input_float_buffer),
                             TensorSpec(
-                                tensor.get_logical_shape(),
+                                tensor.logical_shape(),
                                 TensorLayout::fromPaddedShape(
                                     DataType::FLOAT32,
-                                    PageConfig(tensor.get_layout(), tile),
+                                    PageConfig(tensor.layout(), tile),
                                     MemoryConfig{},
-                                    tensor.get_logical_shape(),
-                                    tensor.get_padded_shape())))
+                                    tensor.logical_shape(),
+                                    tensor.padded_shape())))
                             .pad(output_padded_shape, input_tensor_start, pad_value);
 
     // Convert back to BFLOAT8_B
@@ -157,7 +157,7 @@ Tensor pad_bfloat8_b(
         float_tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
             DataType::BFLOAT8_B,
-            tensor.get_tensor_spec().page_config(),
+            tensor.tensor_spec().page_config(),
             MemoryConfig{},
             float_tensor.logical_shape(),
             float_tensor.padded_shape()));
@@ -166,7 +166,7 @@ Tensor pad_bfloat8_b(
 
 Tensor unpad_bfloat8_b(
     const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
-    auto tile = tensor.get_tensor_spec().tile();
+    auto tile = tensor.tensor_spec().tile();
     // TODO(arakhmati): do not convert to FLOAT32
 
     // Convert to FLOAT32 tensor and unpad
@@ -177,13 +177,13 @@ Tensor unpad_bfloat8_b(
     auto float_tensor = Tensor(
                             std::move(input_float_buffer),
                             TensorSpec(
-                                tensor.get_logical_shape(),
+                                tensor.logical_shape(),
                                 TensorLayout::fromPaddedShape(
                                     DataType::FLOAT32,
-                                    PageConfig(tensor.get_layout(), tile),
+                                    PageConfig(tensor.layout(), tile),
                                     MemoryConfig{},
-                                    tensor.get_logical_shape(),
-                                    tensor.get_padded_shape())))
+                                    tensor.logical_shape(),
+                                    tensor.padded_shape())))
                             .unpad(output_tensor_start, output_tensor_end);
 
     // Convert back to BFLOAT8_B
@@ -194,13 +194,13 @@ Tensor unpad_bfloat8_b(
     return Tensor(
         std::move(output_uint32_buffer),
         TensorSpec(
-            float_tensor.get_logical_shape(),
+            float_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 DataType::BFLOAT8_B,
-                PageConfig(tensor.get_layout(), tile),
+                PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
-                float_tensor.get_logical_shape(),
-                float_tensor.get_padded_shape())));
+                float_tensor.logical_shape(),
+                float_tensor.padded_shape())));
 }
 
 Tensor pad_bfloat4_b(
@@ -208,7 +208,7 @@ Tensor pad_bfloat4_b(
     const ttnn::Shape& output_padded_shape,
     const ttnn::Shape& input_tensor_start,
     float pad_value) {
-    auto tile = tensor.get_tensor_spec().tile();
+    auto tile = tensor.tensor_spec().tile();
     // TODO(arakhmati): do not convert to FLOAT32
 
     // Convert to FLOAT32 tensor and pad
@@ -219,13 +219,13 @@ Tensor pad_bfloat4_b(
     auto float_tensor = Tensor(
                             std::move(input_float_buffer),
                             TensorSpec(
-                                tensor.get_logical_shape(),
+                                tensor.logical_shape(),
                                 TensorLayout::fromPaddedShape(
                                     DataType::FLOAT32,
-                                    PageConfig(tensor.get_layout(), tile),
+                                    PageConfig(tensor.layout(), tile),
                                     MemoryConfig{},
-                                    tensor.get_logical_shape(),
-                                    tensor.get_logical_shape())))
+                                    tensor.logical_shape(),
+                                    tensor.logical_shape())))
                             .pad(output_padded_shape, input_tensor_start, pad_value);
 
     // Convert back to BFLOAT4_B
@@ -237,7 +237,7 @@ Tensor pad_bfloat4_b(
         float_tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
             DataType::BFLOAT4_B,
-            tensor.get_tensor_spec().page_config(),
+            tensor.tensor_spec().page_config(),
             MemoryConfig{},
             float_tensor.logical_shape(),
             float_tensor.padded_shape()));
@@ -246,7 +246,7 @@ Tensor pad_bfloat4_b(
 
 Tensor unpad_bfloat4_b(
     const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
-    auto tile = tensor.get_tensor_spec().tile();
+    auto tile = tensor.tensor_spec().tile();
     // TODO(arakhmati): do not convert to FLOAT32
 
     // Convert to FLOAT32 tensor and unpad
@@ -257,13 +257,13 @@ Tensor unpad_bfloat4_b(
     auto float_tensor = Tensor(
                             std::move(input_float_buffer),
                             TensorSpec(
-                                tensor.get_logical_shape(),
+                                tensor.logical_shape(),
                                 TensorLayout::fromPaddedShape(
                                     DataType::FLOAT32,
-                                    PageConfig(tensor.get_layout(), tile),
+                                    PageConfig(tensor.layout(), tile),
                                     MemoryConfig{},
-                                    tensor.get_logical_shape(),
-                                    tensor.get_padded_shape())))
+                                    tensor.logical_shape(),
+                                    tensor.padded_shape())))
                             .unpad(output_tensor_start, output_tensor_end);
 
     // Convert back to BFLOAT4_B
@@ -274,13 +274,13 @@ Tensor unpad_bfloat4_b(
     return Tensor(
         std::move(output_uint32_buffer),
         TensorSpec(
-            float_tensor.get_logical_shape(),
+            float_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 DataType::BFLOAT4_B,
-                PageConfig(tensor.get_layout(), tile),
+                PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
-                float_tensor.get_logical_shape(),
-                float_tensor.get_padded_shape())));
+                float_tensor.logical_shape(),
+                float_tensor.padded_shape())));
 }
 
 // ======================================================================================
@@ -429,10 +429,10 @@ std::string to_string(
 template <typename T>
 std::string to_string(
     const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout) {
-    const auto tile = tensor.get_tensor_spec().tile();
-    const auto shape = tensor.get_logical_shape();
-    const auto dtype = original_dtype.value_or(tensor.get_dtype());
-    const auto layout = original_layout.value_or(tensor.get_layout());
+    const auto tile = tensor.tensor_spec().tile();
+    const auto shape = tensor.logical_shape();
+    const auto dtype = original_dtype.value_or(tensor.dtype());
+    const auto layout = original_layout.value_or(tensor.layout());
 
     if (!tensor.is_allocated()) {
         return fmt::format(
@@ -446,8 +446,8 @@ std::string to_string(
     return std::visit(
         tt::stl::overloaded{
             [&](const HostStorage& storage) -> std::string {
-                if (tensor.get_layout() != Layout::ROW_MAJOR) {
-                    if (tensor.get_dtype() == DataType::BFLOAT8_B || tensor.get_dtype() == DataType::BFLOAT4_B) {
+                if (tensor.layout() != Layout::ROW_MAJOR) {
+                    if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
                         return to_string<float>(ttnn::to_dtype(tensor, DataType::FLOAT32), dtype, layout);
                     }
                     return to_string<T>(
@@ -457,7 +457,7 @@ std::string to_string(
                         layout);
                 }
 
-                const auto strides = tensor.get_tensor_spec().compute_strides();
+                const auto strides = tensor.tensor_spec().compute_strides();
                 const auto buffer = host_buffer::get_as<T>(storage.buffer);
                 return detail::to_string(buffer, shape, strides, dtype, layout);
             },
@@ -493,7 +493,7 @@ std::string to_string(
                 }
                 return ss.str();
             }},
-        tensor.get_storage());
+        tensor.storage());
 }
 
 template std::string to_string<bfloat16>(
@@ -541,7 +541,7 @@ Tensor to_host_helper(const Tensor& tensor, bool blocking = true, ttnn::QueueId 
         read_data_from_device_buffer<T>(*device_buffer, data_vec);
     }
     auto output_buffer = HostBuffer(std::move(data_vec));
-    return Tensor(std::move(output_buffer), tensor.get_tensor_spec());
+    return Tensor(std::move(output_buffer), tensor.tensor_spec());
 }
 
 template <typename T>
@@ -573,7 +573,7 @@ Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_
 template <typename T>
 Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
     TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
-    const auto& storage = std::get<DeviceStorage>(tensor.get_storage());
+    const auto& storage = std::get<DeviceStorage>(tensor.storage());
     const auto& mesh_buffer = storage.mesh_buffer;
     ttnn::MeshDevice* device = mesh_buffer->device();
     distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue(*cq_id);
@@ -612,7 +612,7 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
 
     MultiDeviceHostStorage host_storage(std::move(buffers));
-    return Tensor(std::move(host_storage), tensor.get_tensor_spec(), tensor.get_distributed_tensor_config());
+    return Tensor(std::move(host_storage), tensor.tensor_spec(), tensor.distributed_tensor_config());
 }
 
 template Tensor to_host_mesh_tensor<bfloat16>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id);
@@ -710,9 +710,9 @@ Tensor to_device(const Tensor& tensor, IDevice* target_device, const MemoryConfi
     TT_FATAL(target_device != nullptr, "Need target device in order to move tensor to device!");
 
     TensorSpec tensor_spec(
-        tensor.get_logical_shape(), tensor.get_tensor_spec().tensor_layout().with_memory_config(memory_config));
-    auto device_buffer = tensor_impl::to_device_buffer<T>(tensor.get_storage(), target_device, tensor_spec, cq_id);
-    return Tensor(DeviceStorage{device_buffer}, tensor_spec, tensor.get_distributed_tensor_config());
+        tensor.logical_shape(), tensor.tensor_spec().tensor_layout().with_memory_config(memory_config));
+    auto device_buffer = tensor_impl::to_device_buffer<T>(tensor.storage(), target_device, tensor_spec, cq_id);
+    return Tensor(DeviceStorage{device_buffer}, tensor_spec, tensor.distributed_tensor_config());
 }
 
 template Tensor to_device<bfloat16>(
@@ -843,12 +843,12 @@ Tensor to_device_mesh_tensor(
     TT_FATAL(mesh_device != nullptr, "Need target device in order to move tensor to device!");
 
     TensorSpec tensor_spec(
-        tensor.get_logical_shape(), tensor.get_tensor_spec().tensor_layout().with_memory_config(memory_config));
+        tensor.logical_shape(), tensor.tensor_spec().tensor_layout().with_memory_config(memory_config));
 
     auto mesh_buffer = allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
     DeviceStorage mesh_storage =
-        to_device_mesh_buffer<T>(tensor.get_storage(), mesh_buffer, tensor_spec, *tensor.tensor_attributes, cq_id);
-    return Tensor(std::move(mesh_storage), tensor_spec, tensor.get_distributed_tensor_config());
+        to_device_mesh_buffer<T>(tensor.storage(), mesh_buffer, tensor_spec, *tensor.tensor_attributes, cq_id);
+    return Tensor(std::move(mesh_storage), tensor_spec, tensor.distributed_tensor_config());
 }
 
 template <typename T>
@@ -857,16 +857,16 @@ void copy_to_mesh_tensor(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::Q
     TT_FATAL(mesh_tensor.storage_type() == StorageType::DEVICE, "Mesh tensor is not on device.");
     TT_FATAL(mesh_tensor.is_allocated(), "Buffer must be allocated on device.");
 
-    TT_FATAL(host_tensor.get_logical_shape() == mesh_tensor.get_logical_shape(), "Host tensor has different shape");
-    TT_FATAL(host_tensor.get_dtype() == mesh_tensor.get_dtype(), "Host tensor has different dtype");
+    TT_FATAL(host_tensor.logical_shape() == mesh_tensor.logical_shape(), "Host tensor has different shape");
+    TT_FATAL(host_tensor.dtype() == mesh_tensor.dtype(), "Host tensor has different dtype");
     TT_FATAL(
-        host_tensor.get_tensor_spec().page_config() == mesh_tensor.get_tensor_spec().page_config(),
+        host_tensor.tensor_spec().page_config() == mesh_tensor.tensor_spec().page_config(),
         "Host tensor has different page config");
 
-    auto mesh_buffer = std::get<DeviceStorage>(mesh_tensor.get_storage()).mesh_buffer;
+    auto mesh_buffer = std::get<DeviceStorage>(mesh_tensor.storage()).mesh_buffer;
 
     DeviceStorage mesh_storage = to_device_mesh_buffer<T>(
-        host_tensor.get_storage(), mesh_buffer, mesh_tensor.get_tensor_spec(), *host_tensor.tensor_attributes, cq_id);
+        host_tensor.storage(), mesh_buffer, mesh_tensor.tensor_spec(), *host_tensor.tensor_attributes, cq_id);
 
     mesh_tensor.tensor_attributes->get_storage() = mesh_storage;
 }
@@ -1149,7 +1149,7 @@ template std::vector<uint8_t> decode_tensor_data<uint8_t>(
 
 template <typename T>
 Tensor to_layout(const Tensor& tensor, Layout target_layout) {
-    if (tensor.get_layout() == target_layout) {
+    if (tensor.layout() == target_layout) {
         return tensor;
     }
 
@@ -1158,7 +1158,7 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
         return transform(tensor, [&](const Tensor& tensor_shard) { return to_layout<T>(tensor_shard, target_layout); });
     }
 
-    auto source_layout = tensor.get_layout();
+    auto source_layout = tensor.layout();
     auto tile = tensor.tensor_spec().tile();
     auto physical_shape = tensor.tensor_spec().physical_shape();
     auto convert =
@@ -1182,18 +1182,18 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
                 return HostBuffer(std::move(convert(input_data)));
             },
             [](const auto& s) -> HostBuffer { TT_THROW("Unsupported storage type {}", tt::stl::get_type_name(s)); }},
-        tensor.get_storage());
+        tensor.storage());
 
     return Tensor(
         host_buffer,
         TensorSpec(
-            tensor.get_logical_shape(),
+            tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
-                tensor.get_dtype(),
-                PageConfig(target_layout, tensor.get_tensor_spec().tile()),
+                tensor.dtype(),
+                PageConfig(target_layout, tensor.tensor_spec().tile()),
                 MemoryConfig{},
-                tensor.get_logical_shape(),
-                tensor.get_padded_shape())));
+                tensor.logical_shape(),
+                tensor.padded_shape())));
 }
 
 template Tensor to_layout<bfloat16>(const Tensor& tensor, Layout target_layout);
@@ -1207,11 +1207,11 @@ template <typename T>
 Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout) {
     static_assert(std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b>, "Invalid type T");
     // TODO: Flip to assert when we remove use cases in python and c++
-    if (tensor.get_layout() != target_layout or tensor.get_layout() != Layout::TILE) {
+    if (tensor.layout() != target_layout or tensor.layout() != Layout::TILE) {
         log_warning(
             tt::LogAlways,
             "Tensor layout must be Layout::TILE for bfloat8_b or bfloat4_b! Conversion from {} to {} was not executed!",
-            tensor.get_layout(),
+            tensor.layout(),
             target_layout);
     }
     return tensor;
@@ -1247,12 +1247,12 @@ Tensor pad(
     }
 
     auto pad_value_ = static_cast<T>(pad_value);
-    auto input_padded_shape = tensor.get_padded_shape();
+    auto input_padded_shape = tensor.padded_shape();
     if (input_padded_shape.rank() < 2) {
         input_padded_shape = input_padded_shape.to_rank(2);
     }
     const auto input_strides = tensor.strides();
-    const auto input_data_type = tensor.get_dtype();
+    const auto input_data_type = tensor.dtype();
 
     auto pad = [&input_padded_shape, &output_padded_shape, &input_tensor_start, &pad_value_](const auto& input_buffer) {
         const int rank = input_padded_shape.rank();
@@ -1321,14 +1321,14 @@ Tensor pad(
                 return HostBuffer(pad(input_data));
             },
             [](const auto& s) -> HostBuffer { TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s)); }},
-        tensor.get_storage());
+        tensor.storage());
     return Tensor(
         std::move(output_buffer),
-        tensor.get_logical_shape(),
+        tensor.logical_shape(),
         output_padded_shape,
-        tensor.get_dtype(),
-        tensor.get_layout(),
-        tensor.get_tensor_spec().tile());
+        tensor.dtype(),
+        tensor.layout(),
+        tensor.tensor_spec().tile());
 }
 
 template Tensor pad<bfloat16>(
@@ -1391,7 +1391,7 @@ Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const
         });
     }
 
-    const auto input_shape = tensor.get_padded_shape();
+    const auto input_shape = tensor.padded_shape();
     const auto input_strides = tensor.strides();
 
     // Validate inputs and compute output shape
@@ -1436,13 +1436,13 @@ Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const
                 return HostBuffer(unpad(input_data));
             },
             [](const auto& s) -> HostBuffer { TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s)); }},
-        tensor.get_storage());
+        tensor.storage());
     return Tensor(
         std::move(output_buffer),
         ttnn::Shape(output_shape),
-        tensor.get_dtype(),
-        tensor.get_layout(),
-        tensor.get_tensor_spec().tile());
+        tensor.dtype(),
+        tensor.layout(),
+        tensor.tensor_spec().tile());
 }
 
 template Tensor unpad<bfloat16>(
@@ -1486,9 +1486,9 @@ Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
     return Tensor(
         HostBuffer(std::move(output_buffer)),
         shard_shape,
-        tensor.get_dtype(),
-        tensor.get_layout(),
-        tensor.get_tensor_spec().tile());
+        tensor.dtype(),
+        tensor.layout(),
+        tensor.tensor_spec().tile());
 }
 
 template Tensor extract_shard<bfloat16>(const Tensor& tensor, const uint32_t& core_id);

@@ -181,7 +181,7 @@ void GraphProcessor::track_program(tt::tt_metal::Program* program, const tt::tt_
 
 void GraphProcessor::track_function_start(std::string_view function_name, std::span<std::any> input_parameters) {
     const std::lock_guard<std::mutex> lock(mutex);
-    tt::log_debug("Begin op: {}", function_name);
+    log_debug(tt::LogAlways, "Begin op: {}", function_name);
     std::unordered_map<std::string, std::string> params = {
         {kInputs, std::to_string(input_parameters.size())},
         {kName, std::string(function_name)},
@@ -213,14 +213,14 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
         if (it != begin_function_any_map.end()) {
             it->second(any);
         } else {
-            tt::log_debug("input any type name ignored: {}", graph_demangle(any.type().name()));
+            log_debug(tt::LogAlways, "input any type name ignored: {}", graph_demangle(any.type().name()));
         }
     }
 }
 
 void GraphProcessor::track_function_end_impl() {
     auto name = graph[current_op_id.top()].params[kName];
-    tt::log_debug("End op: {}", name);
+    log_debug(tt::LogAlways, "End op: {}", name);
 
     auto counter = graph.size();
     {
@@ -248,14 +248,14 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     if (it != end_function_any_map.end()) {
         it->second(output_tensors);
     } else {
-        tt::log_debug("output any type name ignored: {}", graph_demangle(output_tensors.type().name()));
+        log_debug(tt::LogAlways, "output any type name ignored: {}", graph_demangle(output_tensors.type().name()));
     }
     TT_ASSERT(current_op_id.size() > 0);  // we should always have capture_start on top
     current_op_id.pop();
 }
 
 int GraphProcessor::add_tensor(const Tensor& t) {
-    auto& storage = t.get_storage();
+    auto& storage = t.storage();
     tt::tt_metal::Buffer* buffer = std::visit(
         [&t]<typename T>(const T& storage) -> tt::tt_metal::Buffer* {
             if constexpr (std::is_same_v<T, DeviceStorage>) {
@@ -274,7 +274,8 @@ int GraphProcessor::add_tensor(const Tensor& t) {
         storage);
     std::int64_t tensor_id;
     if (not t.tensor_id.has_value()) {
-        tt::log_warning(
+        log_warning(
+            tt::LogAlways,
             "Tensor doesn't have tensor_id, generating new one. Ideally this should not happen. Please set tensor_id "
             "for this tensor ahead of time.");
         tensor_id = ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();
@@ -282,7 +283,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
         tensor_id = t.tensor_id.value();
     }
     auto tensor_counter = tensor_id_to_counter.count(tensor_id) > 0 ? tensor_id_to_counter[tensor_id] : graph.size();
-    auto shape = t.get_logical_shape();
+    auto shape = t.logical_shape();
 
     std::unordered_map<std::string, std::string> params = {
         {kShape, fmt::format("{}", shape)},
@@ -296,8 +297,10 @@ int GraphProcessor::add_tensor(const Tensor& t) {
     }
 
     if (buffer == nullptr) {
-        tt::log_debug(
-            "Tensor doesn't have buffer, but storage is {}", graph_demangle(get_type_in_var(t.get_storage()).name()));
+        log_debug(
+            tt::LogAlways,
+            "Tensor doesn't have buffer, but storage is {}",
+            graph_demangle(get_type_in_var(t.storage()).name()));
     } else {
         auto buffer_id = add_buffer(buffer);
         graph[buffer_id].connections.push_back(tensor_counter);

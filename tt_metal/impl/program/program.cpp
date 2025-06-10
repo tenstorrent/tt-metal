@@ -57,7 +57,7 @@
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "profiler_state.hpp"
 #include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
@@ -72,6 +72,7 @@
 #include "tt_backend_api_types.hpp"
 #include "tt_memory.h"
 #include "tt_metal/detail/kernel_cache.hpp"
+#include "tt_metal/impl/debug/inspector.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
@@ -216,6 +217,12 @@ detail::ProgramImpl::ProgramImpl() :
 
     program_configs_.resize(programmable_core_count_);
     program_config_sizes_.resize(programmable_core_count_ + 2);
+
+    Inspector::program_created(this);
+}
+
+detail::ProgramImpl::~ProgramImpl() noexcept {
+    Inspector::program_destroyed(this);
 }
 
 Program::Program() : internal_(std::make_shared<detail::ProgramImpl>()) {
@@ -1334,7 +1341,10 @@ void Program::allocate_kernel_bin_buf_on_device(IDevice* device) {
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     //ZoneScoped;
-    if (compiled_.contains(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
+    auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
+
+    if (compiled_.contains(build_env.build_key)) {
+        Inspector::program_compile_already_exists(this, device, build_env.build_key);
         return;
     }
     // Clear the determined sub_device_ids when we compile the program for the first time
@@ -1342,6 +1352,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     if (compiled_.empty()) {
         this->sub_device_ids_[device->id()].erase(device->get_active_sub_device_manager_id());
     }
+
+    Inspector::program_compile_started(this, device, build_env.build_key);
 
     TT_FATAL(
         device->is_initialized(),
@@ -1400,9 +1412,9 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         for (auto &[id, kernel] : kernels) {
             validate_kernel_placement(kernel);
             launch_build_step(
-                [kernel, device, this] {
+                [kernel, device, this, &build_env] {
                     JitBuildOptions build_options(
-                        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env);
+                        build_env.build_env);
                     KernelImpl::from(*kernel).set_build_options(build_options);
                     if (this->compiled_.empty()) {
                         this->set_remote_circular_buffer_init(kernel);
@@ -1413,7 +1425,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     auto kernel_hash = KernelCompileHash(
                         kernel,
                         build_options,
-                        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
+                        build_env.build_key);
 
                     const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
                     kernel->set_full_name(kernel_path_suffix);
@@ -1432,6 +1444,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     }
                     while (not detail::HashLookup::inst().is_bin_generated(kernel_hash)) {
                     }
+
+                    Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
                 },
                 events);
         }
@@ -1448,7 +1462,9 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);
     }
 
-    compiled_.insert(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
+    compiled_.insert(build_env.build_key);
+
+    Inspector::program_compile_finished(this, device, build_env.build_key);
 }
 
 void Program::compile(IDevice* device, bool force_slow_dispatch) { internal_->compile(device, force_slow_dispatch); }
@@ -1614,6 +1630,10 @@ ProgramBinaryStatus Program::get_program_binary_status(std::size_t device_id) co
 }
 void Program::set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status) {
     internal_->set_program_binary_status(device_id, status);
+}
+void detail::ProgramImpl::set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status) {
+    Inspector::program_set_binary_status(this, device_id, status);
+    this->binaries_on_device_[device_id] = status;
 }
 
 const std::vector<SubDeviceId>& Program::determine_sub_device_ids(const IDevice* device) {

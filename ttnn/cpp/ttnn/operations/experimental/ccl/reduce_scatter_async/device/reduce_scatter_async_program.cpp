@@ -10,7 +10,7 @@
 #include <array>
 #include <ranges>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt_stl/span.hpp>
@@ -663,9 +663,9 @@ static ReduceScatterKernelHandles build_line_reduce_scatter_worker_ct(
 }
 
 static size_t get_page_size(const Tensor& tensor) {
-    if (tensor.get_layout() == Layout::TILE) {
-        auto dtype = tt::tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());
-        return tensor.get_tensor_spec().tile().get_tile_size(dtype);
+    if (tensor.layout() == Layout::TILE) {
+        auto dtype = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+        return tensor.tensor_spec().tile().get_tile_size(dtype);
     } else {
         return tensor.buffer()->page_size();
     }
@@ -2252,7 +2252,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
     auto const cb_handles = create_worker_circular_buffers(
         program,
         worker_cores.all_worker_cores,
-        tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype()),
+        tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()),
         math_in0_cb,
         math_in1_cb,
         math_out_cb,

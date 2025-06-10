@@ -24,7 +24,7 @@
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
@@ -108,7 +108,9 @@ HalProgrammableCoreType Kernel::get_kernel_programmable_core_type() const {
         case RISCV::BRISC:
         case RISCV::NCRISC:
         case RISCV::COMPUTE: return HalProgrammableCoreType::TENSIX;
-        case RISCV::ERISC: return this->is_idle_eth() ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
+        case RISCV::ERISC:
+        case RISCV::ERISC1:
+            return this->is_idle_eth() ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
         default: TT_ASSERT(false, "Unsupported kernel processor!");
     }
     return HalProgrammableCoreType::TENSIX;
@@ -120,7 +122,8 @@ CoreType Kernel::get_kernel_core_type() const {
         case RISCV::BRISC:
         case RISCV::NCRISC:
         case RISCV::COMPUTE: return CoreType::WORKER;
-        case RISCV::ERISC: return CoreType::ETH;
+        case RISCV::ERISC:
+        case RISCV::ERISC1: return CoreType::ETH;
         default: TT_ASSERT(false, "Unsupported kernel processor!");
     }
     return CoreType::WORKER;
@@ -599,7 +602,14 @@ RISCV DataMovementKernel::processor() const {
     return RISCV::BRISC;
 }
 
-RISCV EthernetKernel::processor() const { return RISCV::ERISC; }
+RISCV EthernetKernel::processor() const {
+    switch (this->config_.processor) {
+        case DataMovementProcessor::RISCV_0: return RISCV::ERISC;
+        case DataMovementProcessor::RISCV_1: return RISCV::ERISC1;
+        default: TT_THROW("Unsupported data movement processor");
+    }
+    return RISCV::ERISC;
+}
 
 RISCV ComputeKernel::processor() const { return RISCV::COMPUTE; }
 

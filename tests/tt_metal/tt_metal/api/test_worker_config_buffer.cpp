@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <time.h>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <cstddef>
 #include <deque>
 #include <utility>
