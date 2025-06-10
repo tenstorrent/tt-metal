@@ -15,6 +15,7 @@ class TtAttention(nn.Module):
         device,
         state_dict,
         module_path,
+        model_config,
         query_dim: int,
         heads: int = 8,
         out_dim: int = None,
@@ -39,6 +40,7 @@ class TtAttention(nn.Module):
             exp_approx_mode=False,
         )
 
+        # Todo: In a separate PR, make this use HiFi2 (move it to default compute kernel config)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=True,
@@ -75,6 +77,9 @@ class TtAttention(nn.Module):
             self.tt_v_weights, _ = prepare_linear_params(device, v_weights, None, weights_dtype)
 
         self.tt_out_weights, self.tt_out_bias = prepare_linear_params(device, out_weights, out_bias, weights_dtype)
+        self.dense_out_program_config = model_config.get_matmul_config(module_path + ".dense_out")
+        self.default_compute_kernel_config = model_config.get_mm_compute_config(module_path)
+        assert self.dense_out_program_config is not None, "dense_out_program_config should not be None"
 
     def forward(self, hidden_states, attention_mask, encoder_hidden_states=None):
         if encoder_hidden_states is None:
@@ -147,6 +152,8 @@ class TtAttention(nn.Module):
             hidden_states,
             self.tt_out_weights,
             bias=self.tt_out_bias,
+            program_config=self.dense_out_program_config,
+            compute_kernel_config=self.default_compute_kernel_config,
         )
 
         return hidden_states

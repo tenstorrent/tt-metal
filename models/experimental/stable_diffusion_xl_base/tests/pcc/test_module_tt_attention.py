@@ -6,6 +6,7 @@ from loguru import logger
 import torch
 import pytest
 import ttnn
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from models.experimental.stable_diffusion_xl_base.tt.tt_attention import TtAttention
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -47,10 +48,12 @@ def test_attention(
         torch_attention = unet.down_blocks[down_block_id].attentions[0].transformer_blocks[0].attn1
     else:
         torch_attention = unet.down_blocks[down_block_id].attentions[0].transformer_blocks[0].attn2
+    model_config = ModelOptimisations()
     tt_attention = TtAttention(
         device,
         state_dict,
         f"down_blocks.{down_block_id}.attentions.0.transformer_blocks.0.attn{attn_id}",
+        model_config,
         query_dim,
         num_attn_heads,
         out_dim,

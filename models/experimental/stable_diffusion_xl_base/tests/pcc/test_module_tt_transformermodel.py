@@ -6,6 +6,7 @@ from loguru import logger
 import torch
 import pytest
 import ttnn
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from models.experimental.stable_diffusion_xl_base.tt.tt_transformermodel import TtTransformer2DModel
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -43,10 +44,12 @@ def test_transformermodel(
     state_dict = unet.state_dict()
 
     torch_transformerblock = unet.down_blocks[down_block_id].attentions[0]
+    model_config = ModelOptimisations()
     tt_transformerblock = TtTransformer2DModel(
         device,
         state_dict,
         f"down_blocks.{down_block_id}.attentions.0",
+        model_config,
         query_dim,
         num_attn_heads,
         out_dim,
