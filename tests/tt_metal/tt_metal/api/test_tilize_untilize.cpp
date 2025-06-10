@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <vector>
-#include <random>
 #include <sys/types.h>
 
 #include <gtest/gtest.h>
@@ -305,31 +304,28 @@ std::vector<T> convert_layout(
 
 }  // namespace reference
 
+namespace {
 template <typename T>
-std::vector<T>& get_test_data() {
-    constexpr size_t MAX_BATCH = 1;
-    constexpr size_t MAX_ROWS = 128;
-    constexpr size_t MAX_COLS = 128;
-
+std::vector<T>& get_test_data(size_t n_elements = 128 * 128) {
     static std::vector<T> data;
-    if (!data.empty()) {
-        return data;
+    static size_t max_n_elements = 0;
+    if (n_elements > max_n_elements) {
+        max_n_elements = n_elements;
+    } else {
+        if (!data.empty()) {
+            return data;
+        }
     }
 
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
-
-    size_t n_elements = MAX_BATCH * MAX_ROWS * MAX_COLS;
     data.resize(n_elements);
 
     for (size_t i = 0; i < n_elements; i++) {
-        float val = dist(gen);
-        data[i] = static_cast<T>(val);
+        data[i] = static_cast<T>(static_cast<float>(i));
     }
 
     return data;
 }
+}  // namespace
 
 // Note: tuple is used for ::testing::Combine
 using TilizeUntilizeParams = std::tuple<
@@ -588,4 +584,72 @@ INSTANTIATE_TEST_SUITE_P(
             std::make_pair(PhysicalSize{2, 16}, PhysicalSize{2, 16}),
             std::make_pair(PhysicalSize{1, 16}, PhysicalSize{1, 16})),  // tile_shape.
         ::testing::Bool()                                               // transpose
+        ));
+
+// Note: tuple is used for ::testing::Combine
+using TilizeUntilizeBigBuffersParams = std::tuple<PhysicalSize, TensorLayoutType, TensorLayoutType, bool, bool>;
+
+class TilizeUntilizeBigBufferTestsFixture : public ::testing::TestWithParam<TilizeUntilizeBigBuffersParams> {};
+
+// Disabled by default, since they take a lot of timne to run. To still run them, use --gtest_also_run_disabled_tests
+TEST_P(TilizeUntilizeBigBufferTestsFixture, DISABLED_TilizeUntilizeBigBuffer) {
+    auto params = GetParam();
+    PhysicalSize shape = std::get<0>(params);
+    auto from_layout = std::get<1>(params);
+    auto to_layout = std::get<2>(params);
+    bool transpose_within_face = std::get<3>(params);
+    bool transpose_of_faces = std::get<4>(params);
+
+    if (from_layout == to_layout) {
+        return;
+    }
+
+    size_t n_rows = shape[0];
+    size_t n_cols = shape[1];
+    size_t n_elements = n_rows * n_cols;
+
+    auto run_for_type = [&](auto type) {
+        using Type = decltype(type);
+        const auto& data = get_test_data<Type>(n_elements);
+        tt::stl::Span<const Type> input(data.data(), n_elements);
+
+        auto converted = convert_layout(
+            input,
+            shape,
+            from_layout,
+            to_layout,
+            std::nullopt,
+            std::nullopt,
+            transpose_within_face,
+            transpose_of_faces);
+
+        auto converted_back = convert_layout(
+            tt::stl::make_const_span(converted),
+            shape,
+            to_layout,
+            from_layout,
+            std::nullopt,
+            std::nullopt,
+            transpose_within_face,
+            transpose_of_faces);
+
+        auto converted_back_span = tt::stl::make_const_span(converted_back);
+        ASSERT_EQ(input.size(), converted_back.size());
+        ASSERT_TRUE(std::equal(input.begin(), input.end(), converted_back_span.begin()));
+    };
+
+    run_for_type(bfloat16{});
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TilizeUntilizeBigBufferTests,
+    TilizeUntilizeBigBufferTestsFixture,
+    ::testing::Combine(
+        ::testing::Values(PhysicalSize{1ULL << 16, 1ULL << 17}),  // shape
+        ::testing::Values(
+            TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED, TensorLayoutType::TILED_NFACES),
+        ::testing::Values(
+            TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED, TensorLayoutType::TILED_NFACES),
+        ::testing::Bool(),  // transpose_within_face  true doesn't work even in reference
+        ::testing::Bool()   // transpose_of_faces     true doesn't work even in reference
         ));

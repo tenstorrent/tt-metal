@@ -19,6 +19,14 @@ public:
     ShapeBase() { init(); };
     explicit ShapeBase(const Container& shape) : value_(shape) { init(); }
     explicit ShapeBase(Container&& shape) : value_(std::move(shape)) { init(); }
+    template <typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
+    explicit ShapeBase(const tt::stl::SmallVector<T>& shape) : value_(shape.begin(), shape.end()) {
+        init();
+    }
+    template <typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
+    explicit ShapeBase(const tt::stl::SmallVector<T>&& shape) : value_(shape.begin(), shape.end()) {
+        init();
+    }
     explicit ShapeBase(std::initializer_list<uint32_t> ilist) : value_(ilist) { init(); }
     template <std::size_t N>
     explicit ShapeBase(const std::array<uint32_t, N>& arr) : value_(arr.begin(), arr.end()) {

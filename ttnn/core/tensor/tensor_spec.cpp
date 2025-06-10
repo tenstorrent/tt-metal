@@ -215,8 +215,8 @@ std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() con
 
     // For block sharding, we need to update the core grid to ensure the same distribution of shards
     if (mem_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        size_t num_shards_along_height = std::max(div_up(physical_shape().height(), shard_spec.shape[0]), 1u);
-        size_t num_shards_along_width = std::max(div_up(physical_shape().width(), shard_spec.shape[1]), 1u);
+        size_t num_shards_along_height = std::max(div_up(physical_shape().height(), shard_spec.shape[0]), 1ul);
+        size_t num_shards_along_width = std::max(div_up(physical_shape().width(), shard_spec.shape[1]), 1ul);
         if (shard_spec.orientation != ShardOrientation::ROW_MAJOR) {
             std::swap(num_shards_along_height, num_shards_along_width);
         }
