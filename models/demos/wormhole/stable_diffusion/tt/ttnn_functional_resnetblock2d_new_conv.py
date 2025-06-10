@@ -444,7 +444,6 @@ class resnetBlock2D:
                 weights_dtype=ttnn.bfloat8_b,
                 activation="",
                 shard_layout=self.conv1_shard_layout,
-                transpose_shards=False,
                 reshard_if_not_optimal=False,
             )
             compute_config = ttnn.init_device_compute_kernel_config(
@@ -543,7 +542,6 @@ class resnetBlock2D:
                     weights_dtype=ttnn.bfloat8_b,
                     activation="",
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                    transpose_shards=False,
                     reshard_if_not_optimal=False,
                 )
                 compute_config = ttnn.init_device_compute_kernel_config(
@@ -697,7 +695,6 @@ class resnetBlock2D:
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            transpose_shards=False,
             reshard_if_not_optimal=False,
         )
         compute_config = get_default_compute_config(self.device)
@@ -765,7 +762,6 @@ class resnetBlock2D:
                 weights_dtype=ttnn.bfloat8_b,
                 activation="",
                 shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                transpose_shards=False,
                 reshard_if_not_optimal=False,
             )
             compute_config = ttnn.init_device_compute_kernel_config(
