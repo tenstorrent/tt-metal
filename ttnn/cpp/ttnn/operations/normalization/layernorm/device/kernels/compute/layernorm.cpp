@@ -10,11 +10,17 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
+#include "compute_kernel_api/reg_api.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/layernorm.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/eltwise_unary/fill.h"
+
 #include "debug/dprint.h"
+#include "dprint_tensix.h"
 #include "debug/dprint_pages.h"
 
 ALWI void ACQ() { acquire_dst(); }
@@ -62,13 +68,23 @@ void MAIN {
     constexpr uint32_t cb_x = cb_in;
 #endif
 
+    pack_reconfig_data_format(cb_scaler);
+    cb_wait_front(cb_scaler, 1);  // comes from the reader
+    init_sfpu(cb_scaler, cb_scaler);
+    fill_tile_init();
+    tile_regs_acquire();
+    fill_tile(0, 1.0f);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, cb_scaler);
+    cb_push_back(cb_scaler, 1);  // second cb_scaler index now has 1 as its value
+    tile_regs_release();
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in, cb_inb, cb_x);
 #else
     binary_op_init_common(cb_in, cb_in, cb_xmm2);
 #endif
 
-    cb_wait_front(cb_scaler, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
     constexpr int cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
@@ -86,11 +102,8 @@ void MAIN {
         add_tiles_init(cb_in, cb_inb);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             ACQ();
-            // UNPACK(( { DPRINT  << "Waiting on cb_x" << ENDL(); } ));
             cb_wait_front(cb_in, blk);
-            // UNPACK(( { DPRINT  << "Waiting on cb_inb" << ENDL(); } ));
             cb_wait_front(cb_inb, blk);
-            // UNPACK(( { DPRINT  << "Done Waiting on cb_inb" << ENDL(); } ));
             cb_reserve_back(cb_x, blk);
             for (uint32_t j = 0; j < blk; j++) {
                 add_tiles(cb_in, cb_inb, j, j, j);
@@ -133,12 +146,15 @@ void MAIN {
         // We first reduce input from cb_x, then store the intermediates in cb_ex
         reconfig_data_format(cb_x, cb_scaler);
         pack_reconfig_data_format(cb_ex);
-        mul_tiles_init(cb_x, cb_scaler);
+        mul_tiles_bcast_scalar_init_short(cb_x, cb_scaler);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            tile_regs_acqurie();
+            tile_regs_acquire();
             cb_wait_front(cb_x, blk);
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles(cb_x, cb_scaler, wtr, 0, wtr);
+                UNPACK(tt::compute::common::print_full_tile(cb_x, wtr, true));
+                UNPACK(tt::compute::common::print_full_tile(cb_scaler, 0, true));
+                mul_tiles_bcast_scalar(cb_x, cb_scaler, wtr, 0, wtr);
+                dprint_tensix_dest_reg(wtr);
             }
             cb_pop_front(cb_x, blk);
             tile_regs_commit();
@@ -151,10 +167,11 @@ void MAIN {
             tile_regs_release();
         }
 
+        DPRINT << "----------------Now Reduce---------" << ENDL();
         reconfig_data_format(cb_ex, cb_ex);
         pack_reconfig_data_format(cb_ex);
         // 4 dst regs if FP32 and 8 is BFLOAT 16
-        add_tiles_init(cb_ex, cb_ex, true);
+        add_tiles_init(cb_ex, cb_ex);
         uint32_t cb_reduce_input = cb_x;
         uint32_t cb_length = Wt;
         constexpr uint32_t num_dst_regs = FLOAT32_DTYPE ? 4 : 8;
@@ -165,19 +182,22 @@ void MAIN {
                 if (dstreg == 0) {
                     tile_regs_acquire();
                 }
-                // If we have an odd cb_length, we want to just copy the first index into dst0
-                if (i == 0 && cb_length & 1 == 1) {
+                cb_wait_front(cb_ex, 2);
+                UNPACK(tt::compute::common::print_full_tile(cb_ex, 0, true));
+                UNPACK(tt::compute::common::print_full_tile(cb_ex, 1, true));
+                add_tiles(cb_ex, cb_ex, 0, 1, dstreg);
+                dprint_tensix_dest_reg(dstreg);
+                cb_pop_front(cb_ex, 2);
+                // If we have an odd cb_length, we want to add the third tile to the result of the first two
+                if (i == 0 && (cb_length & 1) == 1) {
                     cb_wait_front(cb_ex, 1);
-                    copy_tile_init(cb_ex);
-                    copy_tile(cb_ex, 0, dst0);
+                    binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex);
+                    binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex, 0, dst0);
                     cb_pop_front(cb_ex, 1);
-                    add_tile_init(cb_ex, cb_ex, true);
+                    add_tiles_init(cb_ex, cb_ex);
                     // We decriment here since we no longer have an odd tile, it just is added to dst0
                     cb_length--;
                 }
-                cb_wait_front(cb_ex, 2);
-                add_tiles(cb_ex, cb_ex, 0, 1, dstreg);
-                cb_pop_front(cb_ex, 2);
                 // We commit our registers either when we are finished or we are about to run out of dst registers
                 if (dstreg == num_dst_regs - 1 || i + 2 == cb_length) {
                     tile_regs_wait();
@@ -200,14 +220,16 @@ void MAIN {
         // TODO change this to a cb
         reconfig_data_format(cb_ex, cb_scaler);
         cb_reserve_back(cb_ex, onetile);
+        cb_wait_front(cb_ex, onetile);
         reduce_init_delta<false>(cb_ex, cb_scaler, cb_ex);
         tile_regs_acquire();
-        reduce_tile(cb_ex, cb_scaler, 0, scaler0, dst0);
+        reduce_tile(cb_ex, cb_scaler, 0, scaler0 + 1, dst0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(dst0, cb_ex);
         reduce_uninit();
         reduce_revert_delta(cb_ex);
+        cb_pop_front(cb_ex, 1);
         cb_push_back(cb_ex, 1);
         tile_regs_release();
 
@@ -219,6 +241,7 @@ void MAIN {
             reconfig_data_format(cb_x, cb_ex);
         }
         cb_wait_front(cb_ex, 1);  // should have 1 tile
+        DPRINT << "----------------FINAL Reduce---------" << ENDL();
         UNPACK(tt::compute::common::print_full_tile(cb_ex, 0, true));
         cb_reserve_back(cb_xmm, Wt);
         sub_bcast_cols_init_short(cb_x, cb_ex);

@@ -197,7 +197,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     }
     uint32_t im5_t = 2 * block_size;  // for buffering to/from *gamma/+beta
     uint32_t im4_t = 8;               // 8 just in case, 4 would prob suffice
-    uint32_t im1_t = WtB / 2;
+    uint32_t im1_t = WtB;
     uint32_t in2_t = 2;  // scaler for reduce coming from reader
     uint32_t in3_t = 2;  // epsilon coming from reader
     uint32_t im2_t = WtB / 2;  //
@@ -726,7 +726,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     // block size for in1 (tensor b)
     uint32_t in1_CB_size = in0_CB_size;
     // in2 - scaler
-    uint32_t in2_CB_size = bfloat16_tile_size;
+    uint32_t in2_CB_size = bfloat16_tile_size * 2;
     // in3 - eps
     uint32_t in3_CB_size = bfloat16_tile_size;
     // gamma

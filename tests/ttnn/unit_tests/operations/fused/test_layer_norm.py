@@ -33,7 +33,7 @@ def test_layer_norm(device, h, w):
 
 
 @pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [64])
+@pytest.mark.parametrize("w", [64 * 15])
 def test_layer_norm_sim(device, h, w):
     torch.manual_seed(0)
     vals = []
