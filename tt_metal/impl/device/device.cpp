@@ -997,11 +997,9 @@ void Device::init_command_queue_device() {
     }
 }
 
-void Device::init_fabric() {
-    fabric_program_ = create_and_compile_fabric_program(this);
-    if (fabric_program_ == nullptr) {
-        return;
-    }
+void Device::init_fabric(std::unique_ptr<Program> fabric_program) {
+    TT_ASSERT(fabric_program != nullptr);
+    fabric_program_ = std::move(fabric_program);
 
     configure_fabric_cores(this);
 

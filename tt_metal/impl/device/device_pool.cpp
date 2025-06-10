@@ -11,6 +11,7 @@
 #include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
 #include <algorithm>
 #include <cstdlib>
+#include <future>
 #include <set>
 #include <utility>
 
@@ -310,6 +311,36 @@ void DevicePool::initialize_host(IDevice* dev) const {
     watcher_attach(dev->id());
 }
 
+void DevicePool::init_fabric(const std::vector<IDevice*>& active_devices) const {
+    std::vector<std::unique_ptr<Program>> fabric_programs(active_devices.size());
+
+    // Parallel compilation of fabric programs
+    std::vector<std::future<std::unique_ptr<Program>>> futures;
+    futures.reserve(active_devices.size());
+
+    for (uint32_t i = 0; i < active_devices.size(); i++) {
+        auto& dev = active_devices[i];
+        futures.emplace_back(std::async(std::launch::async, [dev]() -> std::unique_ptr<Program> {
+            auto fabric_program = create_and_compile_fabric_program(dev);
+            if (!fabric_program) {
+                log_warning(tt::LogMetal, "Fabric program is not created for device {}", dev->id());
+            }
+            return fabric_program;
+        }));
+    }
+
+    // Sequential initialization of fabric programs
+    for (uint32_t i = 0; i < active_devices.size(); i++) {
+        auto fabric_programs = futures[i].get();
+        auto& dev = active_devices[i];
+        if (!fabric_programs) {
+            log_warning(tt::LogMetal, "Fabric program is not valid for device {}", dev->id());
+            continue;
+        }
+        dev->init_fabric(std::move(fabric_programs));
+    }
+}
+
 void DevicePool::initialize_active_devices() const {
     const auto& active_devices = this->get_all_active_devices();
 
@@ -325,9 +356,7 @@ void DevicePool::initialize_active_devices() const {
         }
 
         // Initialize fabric on mmio device
-        for (const auto& dev : active_devices) {
-            dev->init_fabric();
-        }
+        init_fabric(active_devices);
         log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
     }
 

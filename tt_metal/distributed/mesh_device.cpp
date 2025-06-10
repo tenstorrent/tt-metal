@@ -832,9 +832,9 @@ void MeshDevice::init_command_queue_device() {
     TT_THROW("init_command_queue_device() is not supported on MeshDevice - use individual devices instead");
     reference_device()->init_command_queue_device();
 }
-void MeshDevice::init_fabric() {
+void MeshDevice::init_fabric(std::unique_ptr<Program> fabric_program) {
     TT_THROW("init_fabric_program() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->init_fabric();
+    reference_device()->init_fabric(std::move(fabric_program));
 }
 
 program_cache::detail::ProgramCache& MeshDevice::get_program_cache() { return *program_cache_; }
