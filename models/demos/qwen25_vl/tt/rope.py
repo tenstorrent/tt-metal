@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
-from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.rope import RotarySetup as TTTransformerRotarySetup
+from ttnn import ReplicateTensorToMesh
 
 
 class RotarySetup(LightweightModule):

@@ -2,20 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-from loguru import logger
 import os
-import ttnn
-from models.demos.qwen25_vl.tt.mlp import MLP
-from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
 
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.demos.qwen25_vl.tt.vision_mlp import MLP
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()

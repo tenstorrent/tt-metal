@@ -6,7 +6,6 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import pad_to_size
 
 
@@ -29,11 +28,11 @@ class MLP(LightweightModule):
             cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}"
 
         # Simplified tensor creation with DRAM memory config
-        as_sharded_tensor = lambda name, dims, type: ttnn.as_tensor(
+        as_weight_tensor = lambda name, dims, type: ttnn.as_tensor(
             pad_hidden_dim(torch_weight(name[:2]), dims[0]),
             dtype=type,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=args.cluster_shape),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name),
@@ -44,7 +43,7 @@ class MLP(LightweightModule):
             pad_hidden_dim(torch_bias(name[:2]), dim=-1) if pad else torch_bias(name[:2]),
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name),
@@ -53,9 +52,12 @@ class MLP(LightweightModule):
         self.four_bit_mlp = args.optimizations.bfp4_mlp
 
         # Create weights with appropriate precision
-        self.w1 = as_sharded_tensor("w1", (-1, -2), ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b)
-        self.w2 = as_sharded_tensor("w2", (-2, -1), ttnn.bfloat8_b)
-        self.w3 = as_sharded_tensor("w3", (-1, -2), ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b)
+        self.w1 = as_weight_tensor("w1", (-1, -2), ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b)
+        # self.w1.shape = [640, 3456] each device of N300 sharded on dim=0
+        self.w2 = as_weight_tensor("w2", (-2, -1), ttnn.bfloat8_b)
+        # self.w2.shape = [3456, 640] each device of N300 sharded on dim=1
+        self.w3 = as_weight_tensor("w3", (-1, -2), ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b)
+        # self.w3.shape = [640, 3456] each device of N300 sharded on dim=0
 
         # Create bias tensors
         self.w1_bias = as_bias_tensor("w1_bias", pad=True)
@@ -95,10 +97,6 @@ class MLP(LightweightModule):
         )
         ttnn.deallocate(x)
 
-        # All-reduce for w1 and w3 outputs
-        w1_out = tt_all_reduce(w1_out, self.mesh_device, cluster_axis=1, topology=self.args.ccl_topology())
-        w3_out = tt_all_reduce(w3_out, self.mesh_device, cluster_axis=1, topology=self.args.ccl_topology())
-
         # Multiply with SiLU activation
         w2_in = ttnn.mul(
             w1_out,
@@ -121,19 +119,7 @@ class MLP(LightweightModule):
         )
         ttnn.deallocate(w2_in)
 
-        # Final all-reduce
-        w2_out_reduced = tt_all_reduce(
-            w2_out,
-            self.mesh_device,
-            cluster_axis=0,
-            dim=3,
-            dtype=self.args.ccl_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.args.ccl_topology(),
-        )
-
-        # Reshape to expected output format
-        original_shape = w2_out_reduced.shape
+        original_shape = w2_out.shape
         return ttnn.reshape(
-            w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
+            w2_out, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )

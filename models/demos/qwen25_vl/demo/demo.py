@@ -330,7 +330,7 @@ def test_demo(
     if use_tt_vision:
         # Create the TorchVisionTransformer wrapper using the original vision model as reference
         vision_model_args = VisionModelArgs(
-            mesh_device.create_submesh(ttnn.MeshShape(1, 1), offset=None),
+            mesh_device,
             max_batch_size=batch_size,
             max_seq_len=max_seq_len,
         )

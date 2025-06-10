@@ -54,7 +54,9 @@ class VisionTransformer(LightweightModule):
         self.fullatt_block_indexes = args.hf_config.vision_config.fullatt_block_indexes
 
         # Create transformation matrix for RoPE QK prefill
-        transformation_mat_torch = get_rot_transformation_mat(args.head_dim)
+        transformation_mat_torch = get_rot_transformation_mat(
+            args.head_dim
+        )  # todo)) args.head_dim is ignored inside the function
         self.transformation_mats = {
             "prefill": ttnn.as_tensor(
                 transformation_mat_torch,
@@ -213,7 +215,9 @@ class DropInVisionTransformer(torch.nn.Module):
         all_pixel_values = pixel_values
         all_grid_thw = grid_thw
         final_outputs = []
+        # todo)) refactor this code to leverage tt-mesh's ttnn.ShardTensorToMesh(mesh_device, dim=batch_size_dim) for data parallelism
         for grid_thw in all_grid_thw:
+            # --- pick out the pixel_values for this users' images (grid_thw.prod() pixels) ---
             pixel_values = all_pixel_values[: grid_thw.prod(), :]
             all_pixel_values = all_pixel_values[grid_thw.prod() :, :]
             # --- Preprocessing ---
@@ -260,14 +264,18 @@ class DropInVisionTransformer(torch.nn.Module):
                 dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
                 layout=ttnn.TILE_LAYOUT,
                 device=self.model_args.mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
+                # mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
+                # todo)) refactor this code to make the intent clear, which is data parallelism
+                mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
             )
             sin = ttnn.from_torch(
                 sin_padded,
                 dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
                 layout=ttnn.TILE_LAYOUT,
                 device=self.model_args.mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
+                # mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
+                # todo)) refactor this code to make the intent clear, which is data parallelism
+                mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
             )
             rot_mats = [cos, sin]
 
@@ -290,10 +298,9 @@ class DropInVisionTransformer(torch.nn.Module):
 
             # --- Postprocessing ---
             # 1. Convert TT output back to torch tensor
-            mesh_composer = ttnn.ConcatMesh2dToTensor(
-                self.model_args.mesh_device, dims=(1, 3), mesh_shape=self.model_args.cluster_shape
-            )
-            tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=mesh_composer)
+            tt_output_torch = ttnn.to_torch(
+                tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1)
+            )  # todo)) figure out why tt_out has a tensor on each device in the mesh
 
             # deallocate TT output
             ttnn.deallocate(tt_out)

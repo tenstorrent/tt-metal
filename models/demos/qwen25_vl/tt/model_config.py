@@ -6,6 +6,7 @@ import math
 
 from loguru import logger
 
+import ttnn
 from models.demos.qwen25_vl.tt.common import nearest_multiple
 from models.tt_transformers.tt.model_config import ModelArgs
 
@@ -47,6 +48,29 @@ class VisionModelArgs(ModelArgs):
         )  # todo)) implement finer grained control similar to tt_transformers'
 
         assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
+
+    def prepare_residual_tensor_prefill(self, x_bsh, force_replicated=False):
+        """
+        Prepare inputs for prefill mode.
+        x: (batch, seq, hidden_dim)
+        B: batch (1)
+        S: sequence len
+        H: dim
+        """
+
+        x_1BSH = x_bsh.unsqueeze(0)
+
+        # input goes to DRAM
+        xs_1BSH = ttnn.from_torch(
+            x_1BSH,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # todo)) refactor this code to make the intent clear, which is data parallelism
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+        )
+        return xs_1BSH
 
     # Visual model does not use distributed norm for now
     def is_distributed_norm(self, mode):

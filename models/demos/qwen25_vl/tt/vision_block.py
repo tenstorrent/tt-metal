@@ -3,10 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.common.rmsnorm import RMSNorm
 from models.demos.qwen25_vl.tt.vision_attention import VisionAttention
-from models.demos.qwen25_vl.tt.mlp import MLP
+from models.demos.qwen25_vl.tt.vision_mlp import MLP
 
 
 class VisionBlock(LightweightModule):
@@ -53,37 +52,26 @@ class VisionBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
         )
-        self.attention_norm = DistributedNorm(
-            RMSNorm(
-                device=mesh_device,
-                dim=args.dim,
-                eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
-                state_dict=state_dict,
-                state_dict_prefix=args.get_state_dict_prefix("", layer_num),
-                weight_cache_path=None if args.dummy_weights else weight_cache_path,
-                weight_dtype=ttnn.bfloat16,
-                weight_key="norm1",
-                is_distributed=self.args.is_distributed_norm,
-                ccl_topology=self.args.ccl_topology(),
-            ),
-            args,
-            TG=args.is_galaxy,
+        self.attention_norm = RMSNorm(
+            device=mesh_device,
+            dim=args.dim,
+            eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
+            state_dict=state_dict,
+            state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+            weight_cache_path=None if args.dummy_weights else weight_cache_path,
+            weight_dtype=ttnn.bfloat16,
+            weight_key="norm1",
         )
-        self.ff_norm = DistributedNorm(
-            RMSNorm(
-                device=mesh_device,
-                dim=args.dim,
-                eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
-                state_dict=state_dict,
-                state_dict_prefix=args.get_state_dict_prefix("", layer_num),
-                weight_cache_path=None if args.dummy_weights else weight_cache_path,
-                weight_dtype=ttnn.bfloat16,
-                weight_key="norm2",
-                is_distributed=self.args.is_distributed_norm,
-                ccl_topology=self.args.ccl_topology(),
-            ),
-            args,
-            TG=args.is_galaxy,
+        # args.dim = 1280
+        self.ff_norm = RMSNorm(
+            device=mesh_device,
+            dim=args.dim,
+            eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
+            state_dict=state_dict,
+            state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+            weight_cache_path=None if args.dummy_weights else weight_cache_path,
+            weight_dtype=ttnn.bfloat16,
+            weight_key="norm2",
         )
 
     def forward(
@@ -111,12 +99,13 @@ class VisionBlock(LightweightModule):
         # Here x and attn_out are both fractured across devices
         h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
         ttnn.deallocate(attn_out)
-        x.deallocate(True)
+        ttnn.deallocate(x)
 
         # Norms take fractured inputs and output replicated across devices
         ff_in = self.ff_norm(h, mode="prefill")
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in, mode="prefill")
+        ttnn.deallocate(ff_in)
         # ff_out and h are both fractured across devices
         out = ttnn.add(
             h,
@@ -124,4 +113,7 @@ class VisionBlock(LightweightModule):
             memory_config=skip_mem_cfg,
             dtype=self.args.ccl_dtype if TG and not self.args.is_distributed_norm(mode="prefill") else ttnn.bfloat16,
         )
+        ttnn.deallocate(h)
+        ttnn.deallocate(ff_out)
+
         return out  # fractured across devices

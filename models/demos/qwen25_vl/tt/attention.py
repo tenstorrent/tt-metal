@@ -3,12 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.ccl import tt_all_reduce, tt_all_gather
-from loguru import logger
+from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 
 # Potential warning that we don't want to show for every layer and token
 global_padded_head_warning_shown = False
