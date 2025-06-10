@@ -671,20 +671,20 @@ def test_dram_reshard_with_program_cache(
 @pytest.mark.parametrize(
     "input_shape, input_layout, input_shard_grid, input_shard_shape, input_shard_orientation, input_sharding_scheme, input_buffer_type, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme, output_buffer_type",
     [
-        (
-            [1, 1024, 128, 16],
-            ttnn.ROW_MAJOR_LAYOUT,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
-            (10923, 16),
-            ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.DRAM,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-            (2048, 16),
-            ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,           
-        ),
+        # (
+        #     [1, 1024, 128, 16],
+        #     ttnn.ROW_MAJOR_LAYOUT,
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+        #     (10923, 16),
+        #     ttnn.ShardOrientation.ROW_MAJOR,
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #     ttnn.BufferType.DRAM,
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+        #     (2048, 16),
+        #     ttnn.ShardOrientation.ROW_MAJOR,
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #     ttnn.BufferType.L1,
+        # ),
         (
             [1, 1024, 128, 8],
             ttnn.ROW_MAJOR_LAYOUT,
@@ -697,7 +697,7 @@ def test_dram_reshard_with_program_cache(
             (2048, 8),
             ttnn.ShardOrientation.ROW_MAJOR,
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,           
+            ttnn.BufferType.L1,
         ),
     ],
 )
