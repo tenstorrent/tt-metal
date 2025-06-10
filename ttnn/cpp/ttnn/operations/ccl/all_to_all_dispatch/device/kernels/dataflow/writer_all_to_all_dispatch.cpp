@@ -46,17 +46,48 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(26);
     constexpr bool is_ring_topology = (bool)get_compile_time_arg_val(27);
 
+    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(28);
+    constexpr uint32_t src_chip_id = get_compile_time_arg_val(29);
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(30);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(31);  // ew_dim
+
     uint32_t input_tensor_address = get_arg_val<uint32_t>(0);
     uint32_t indices_tensor_address = get_arg_val<uint32_t>(1);
     uint32_t mapping_tensor_address = get_arg_val<uint32_t>(2);
     uint32_t output_tensor_address = get_arg_val<uint32_t>(3);
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(4);
-
     uint32_t global_semaphore_address = get_arg_val<uint32_t>(5);
 
-    uint32_t dst_mesh_id = 0;
-    // uint32_t router_noc_xy = 0;
+    constexpr uint8_t dest_chip_id[num_devices] = DEST_CHIP_ID;
+    constexpr uint8_t dest_mesh_id[num_devices] = DEST_MESH_ID;
+    constexpr uint8_t route[num_devices] = ROUTE;
 
     auto output_addr_gen = get_interleaved_addr_gen<output_is_dram, output_page_size>(output_tensor_address);
     auto metadata_addr_gen = get_interleaved_addr_gen<metadata_is_dram, metadata_page_size>(metadata_tensor_address);
+
+    /**
+     * this exists to add packet coalescing in the future
+     * std::array<std::array<bool, batches_per_device>, num_devices> device_to_batch = {false};
+     */
+
+    cb_wait_front(input_tensor_cb_id, batches_per_device * input_pages);
+    cb_wait_front(indices_tensor_cb_id, indices_pages);
+    cb_wait_front(mapping_tensor_cb_id, mapping_pages);
+
+    for (uint32_t b = 0; b < batches_per_device; b++) {
+        uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id) + b * input_page_size;
+        for (uint32_t k = 0; k < selected_experts_k; k++) {
+            uint32_t offset = b * indices_page_size + k * sizeof(uint16_t);
+            uint16_t expert_chosen = *((uint16_t*)get_read_ptr(indices_tensor_cb_id) + offset);
+            uint32_t expert_offset = expert_chosen * mapping_page_size;
+
+            uint16_t* devices_for_expert = (uint16_t*)(get_read_ptr(mapping_tensor_cb_id) + expert_offset);
+
+            for (uint32_t d = 0; d < num_devices; d++) {
+                if (devices_for_expert[d] == 1) {
+                    break;
+                }
+            }
+        }
+    }
 }

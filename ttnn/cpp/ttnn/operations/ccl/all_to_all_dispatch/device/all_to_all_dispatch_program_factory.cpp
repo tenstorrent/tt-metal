@@ -129,6 +129,94 @@ uint32_t select_link(
     }
 }
 
+std::string stringify_vector(const std::vector<uint32_t>& vec) {
+    std::string result = "{";
+    for (const auto& elem : vec) {
+        result += std::to_string(elem) + ", ";
+    }
+    result += "}";
+    return result;
+}
+
+uint32_t get_route(
+    const MeshDeviceView& mesh_view,
+    const MeshCoordinate& src,
+    const MeshCoordinate& dst,
+    tt::tt_fabric::Topology topology) {
+    // return 0 if North, 1 if East, 2 if South, 3 if West
+    uint32_t rows = mesh_view.num_rows();
+    uint32_t cols = mesh_view.num_cols();
+
+    uint32_t src_row = src[0];
+    uint32_t src_col = src[1];
+    uint32_t dst_row = dst[0];
+    uint32_t dst_col = dst[1];
+
+    enum Route {
+        North = 0,
+        East = 1,
+        South = 2,
+        West = 3,
+    };
+
+    auto is_even_parity = [](uint32_t r, uint32_t c) { return ((r + c) % 2) == 0; };
+
+    if (topology == tt::tt_fabric::Topology::Ring) {
+        // ── Horizontal (E/W) ───────────────────────────────────────
+        uint32_t dcol_fwd = (dst_col + cols - src_col) % cols;  // steps going East
+        uint32_t dcol_back = (cols - dcol_fwd) % cols;          // steps going West
+        uint32_t h_steps = std::min(dcol_fwd, dcol_back);
+        uint32_t h_dir = (dcol_fwd <= dcol_back) ? Route::East : Route::West;
+
+        // ── Vertical (N/S) ─────────────────────────────────────────
+        uint32_t drow_fwd = (dst_row + rows - src_row) % rows;  // steps going South
+        uint32_t drow_back = (rows - drow_fwd) % rows;          // steps going North
+        uint32_t v_steps = std::min(drow_fwd, drow_back);
+        uint32_t v_dir = (drow_fwd <= drow_back) ? Route::South : Route::North;
+
+        // ── Decide first hop ───────────────────────────────────────
+        if (v_steps == 0 && h_steps == 0) {
+            return Route::North;  // src == dst (shouldn’t happen)
+        }
+
+        if (v_steps == 0) {
+            return h_dir;  // same wrapped row
+        }
+        if (h_steps == 0) {
+            return v_dir;  // same wrapped column
+        }
+
+        // Both axes viable: choose the strictly shorter one;
+        // if equal, split traffic by source-tile parity.
+        if (v_steps < h_steps) {
+            return v_dir;
+        }
+        if (h_steps < v_steps) {
+            return h_dir;
+        }
+
+        // Tie → load-balance 50-50 on checkerboard parity
+        bool vertical_first = is_even_parity(src_row, src_col);
+        return vertical_first ? v_dir : h_dir;
+
+    } else {  // Linear
+        if (src_row == dst_row) {
+            return src_col < dst_col ? Route::East : Route::West;
+        } else {
+            return src_row < dst_row ? Route::South : Route::North;
+        }
+        // ── Diagonal case ──────────────────────────────────────────────
+        // Use a checkerboard parity of the *source* coordinate to decide
+        // whether we step vertically first (true) or horizontally first (false).
+        bool vertical_first = is_even_parity(src_row, src_col);
+        if (vertical_first) {
+            return src_row < dst_row ? Route::South : Route::North;
+        } else {
+            return src_col < dst_col ? Route::East : Route::West;
+        }
+    }
+}
+
 }  // namespace detail
 
 AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::cached_mesh_workload_t
@@ -139,8 +227,10 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_mesh_workload(
     tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    auto mesh_device = tensor_args.input_tensor.mesh_device();
+
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
+        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value, tensor_coords);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
@@ -152,7 +242,8 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
@@ -232,7 +323,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     tt::tt_metal::CircularBufferConfig cb_input_tensor_config =
         tt::tt_metal::CircularBufferConfig(
-            buffering_factor * input_page_size, {{input_tensor_cb_id, input_data_format}})
+            batches_per_device * input_pages * input_page_size, {{input_tensor_cb_id, input_data_format}})
             .set_page_size(input_tensor_cb_id, input_page_size);
 
     tt::tt_metal::CircularBufferConfig cb_indices_tensor_config =
@@ -264,6 +355,8 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto subdevice_core_range_set =
         mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.subdevice_id);
 
+    auto control_plane = tt::tt_fabric::get_control_plane();
+
     auto subdevice_cores = corerange_to_cores(subdevice_core_range_set);
     TT_FATAL(
         subdevice_cores.size() >= num_links,
@@ -288,6 +381,24 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto send_preparation_buffer =
         tt::tt_metal::CreateCircularBuffer(program, sender_core, send_preparation_buffer_config);
 
+    auto fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(src_device->id());
+    uint32_t src_mesh_id = *fabric_node_id.mesh_id;
+    uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
+
+    std::vector<uint32_t> dest_mesh_id, dest_chip_id, route;
+    for (const auto& coord : tensor_coords.coords()) {
+        auto device = mesh_device->get_device(coord);
+        auto fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(device->id());
+        dest_mesh_id.push_back(*fabric_node_id.mesh_id);
+        dest_chip_id.push_back((uint32_t)fabric_node_id.chip_id);
+        route.push_back(detail::get_route(mesh_view, mesh_coordinate, coord, topology));
+    }
+    tt::log_info(tt::LogAlways, "route: {}", detail::stringify_vector(route));
+    tt::log_info(tt::LogAlways, "dest_chip_id: {}", detail::stringify_vector(dest_chip_id));
+    tt::log_info(tt::LogAlways, "dest_mesh_id: {}", detail::stringify_vector(dest_mesh_id));
+
+    // TODO: add fabric node and mesh id to the compile time args
+    // TODO: add an array mapping logical device id to physical device id
     std::vector<uint32_t> reader_compile_time_args = {
         input_tensor.buffer()->is_dram(),
         indices_tensor.buffer()->is_dram(),
@@ -322,6 +433,12 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
         num_links,
         topology == tt::tt_fabric::Topology::Ring ? 1u : 0u,
+
+        *src_mesh_id,
+        (uint32_t)src_chip_id,
+        mesh_view.num_rows(),
+        mesh_view.num_cols()
+
     };
 
     auto writer_compile_time_args = reader_compile_time_args;
@@ -338,11 +455,16 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         sender_core,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
+    std::map<std::string, std::string> writer_defines = {
+        {"DEST_CHIP_ID", detail::stringify_vector(dest_chip_id)},
+        {"DEST_MESH_ID", detail::stringify_vector(dest_mesh_id)},
+        {"ROUTE", detail::stringify_vector(route)}};
+
     tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/all_to_all_dispatch/device/kernels/dataflow/writer_all_to_all_dispatch.cpp",
         sender_core,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
     std::vector<uint32_t> reader_runtime_args = {
         input_tensor.buffer()->address(),
@@ -374,7 +496,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             neighbor_coordinate[1],
             link_id);
         tt::tt_fabric::append_fabric_connection_rt_args(
-            src_physical_device_id, neighbor->id(), link_id, program, sender_core, reader_runtime_args);
+            src_physical_device_id, neighbor->id(), link_id, program, sender_core, writer_runtime_args);
     }
 
     tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, sender_cores.at(0), reader_runtime_args);
