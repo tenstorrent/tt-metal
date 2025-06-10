@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/kernel_helper_functions/pad_tile.hpp"
+#include "pad_tile.hpp"
 
 void kernel_main() {
     // in0/in1 common args
