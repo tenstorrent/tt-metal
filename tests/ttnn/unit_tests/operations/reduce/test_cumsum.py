@@ -229,7 +229,7 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
         (torch.int32, ttnn.int32),
     ],
 )
-def test_cumsum_with_program_cache(size, dim, dtypes, device):
+def test_cumsum_callback(size, dim, dtypes, device, use_program_cache):
     torch.manual_seed(29112024)
 
     (torch_dtype, ttnn_dtype) = dtypes
@@ -258,3 +258,5 @@ def test_cumsum_with_program_cache(size, dim, dtypes, device):
 
         if torch_output.numel() > 0:
             assert_allclose(expected_output, torch_output)
+
+    assert device.num_program_cache_entries() >= 1
