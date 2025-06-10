@@ -140,7 +140,7 @@ TEST_P(EmptyTensorTest, Combinations) {
     }
 
     auto tensor = tt::tt_metal::create_device_tensor(shape, dtype, layout, device_, memory_config);
-    EXPECT_EQ(tensor.get_logical_shape(), shape);
+    EXPECT_EQ(tensor.logical_shape(), shape);
 
     test_utils::test_tensor_on_device(shape, tensor_layout, device_);
 }

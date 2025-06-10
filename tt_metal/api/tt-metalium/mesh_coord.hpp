@@ -123,6 +123,9 @@ public:
     const MeshCoordinate& start_coord() const;
     const MeshCoordinate& end_coord() const;
 
+    // Returns the shape of the coordinate range (dimensions).
+    MeshShape shape() const;
+
     // Returns true if the range contains the given coordinate.
     bool contains(const MeshCoordinate& coord) const;
 

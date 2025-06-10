@@ -86,7 +86,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         }
     }
 
-    uint32_t num_tiles = a.volume() / TILE_HW;
+    uint32_t num_tiles = a.physical_volume() / TILE_HW;
 
     uint32_t num_cores, num_tiles_per_core_group_1, num_tiles_per_core_group_2, num_cores_total;
     if (zero_start_grid) {
@@ -122,8 +122,8 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         if (block_or_width_sharded) {
             block_size = block_width * block_height;
             end_core = (*shard_spec.value().grid.ranges().begin()).end_coord;
-            output_width = output.get_padded_shape()[-1] / TILE_WIDTH;
-            uint32_t output_height = output.volume() / output.get_padded_shape()[-1] / TILE_HEIGHT;
+            output_width = output.padded_shape()[-1] / TILE_WIDTH;
+            uint32_t output_height = output.physical_volume() / output.padded_shape()[-1] / TILE_HEIGHT;
             last_unpadded_block_height = block_height - (round_up(output_height, block_height) - output_height);
             last_unpadded_block_width = block_width - (round_up(output_width, block_width) - output_width);
         }

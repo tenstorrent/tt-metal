@@ -65,7 +65,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     ttnn::SmallVector<int64_t> reduce_dims = {3};
     Tensor np_out = ttnn::moreh_sum(np_tensor, reduce_dims, false, std::nullopt, std::nullopt, std::nullopt);
     Tensor np_out_host = np_out.cpu();
-    auto buffer = std::get<MultiDeviceHostStorage>(np_out_host.get_storage()).get_buffer(0);
+    auto buffer = std::get<MultiDeviceHostStorage>(np_out_host.storage()).get_buffer(0);
     const auto golden_output = buffer.view_as<bfloat16>();
     // Events for host - device synchronization
     // Running sum-reduce with preallocated output
@@ -74,9 +74,9 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(input_shape));
     ASSERT_EQ(
         output_buf_size_datums * datum_size_bytes,
-        tensor_layout.compute_packed_buffer_size_bytes(np_out.get_padded_shape()));
+        tensor_layout.compute_packed_buffer_size_bytes(np_out.padded_shape()));
     auto input_tensor = allocate_tensor_on_mesh(TensorSpec(input_shape, tensor_layout), device);
-    auto output_tensor = allocate_tensor_on_mesh(TensorSpec(np_out.get_logical_shape(), tensor_layout), device);
+    auto output_tensor = allocate_tensor_on_mesh(TensorSpec(np_out.logical_shape(), tensor_layout), device);
     // Populate input_tensor with data
     ttnn::write_buffer(io_cq, input_tensor, {host_data});
     // Record the completion of the write event

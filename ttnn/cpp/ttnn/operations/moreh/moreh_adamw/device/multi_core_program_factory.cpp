@@ -29,7 +29,7 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
     uint32_t step = operation_attributes.step;
     bool amsgrad = operation_attributes.amsgrad;
 
-    uint32_t num_units = param_in.volume() / tt::constants::TILE_HW;
+    uint32_t num_units = param_in.physical_volume() / tt::constants::TILE_HW;
 
     const std::optional<Tensor>& max_exp_avg_sq_in = tensor_args.max_exp_avg_sq_in;
 
@@ -61,7 +61,7 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto data_format = tt_metal::datatype_to_dataformat_converter(param_in.get_dtype());
+    auto data_format = tt_metal::datatype_to_dataformat_converter(param_in.dtype());
     auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
     CreateCircularBuffer(

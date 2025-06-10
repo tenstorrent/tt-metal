@@ -423,7 +423,7 @@ HostBuffer create_row_major_host_buffer(
 HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padded_output) {
     TT_ASSERT(is_cpu_tensor(tt_tensor) || is_multi_device_host_tensor(tt_tensor), "Tensor must be on host for padding");
 
-    const auto& tensor_spec = tt_tensor.get_tensor_spec();
+    const auto& tensor_spec = tt_tensor.tensor_spec();
     auto convert_to_logical = [&tensor_spec, padded_output](const HostBuffer& buffer) {
         const auto tt_dtype = tensor_spec.data_type();
         switch (tt_dtype) {
@@ -474,10 +474,10 @@ HostBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool padde
             [&tt_tensor](auto&&) -> HostBuffer {
                 TT_THROW(
                     "Tensor with {} cannot be converted to torch",
-                    tt::stl::get_active_type_name_in_variant(tt_tensor.get_storage()));
+                    tt::stl::get_active_type_name_in_variant(tt_tensor.storage()));
             },
         },
-        tt_tensor.get_storage()));
+        tt_tensor.storage()));
 }
 
 py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool padded_output = false) {
@@ -492,7 +492,7 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool
     auto frombuffer = torch.attr("frombuffer");
 
     py::object torch_dtype = [&]() {
-        switch (tt_tensor.get_tensor_spec().data_type()) {
+        switch (tt_tensor.tensor_spec().data_type()) {
             case DataType::UINT8: return torch.attr("uint8");
             case DataType::UINT16: return torch.attr("int16");
             case DataType::INT32: return torch.attr("int32");
@@ -506,11 +506,11 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool
         TT_THROW("Unreachable");
     }();
 
-    auto logical_shape = tt_tensor.get_logical_shape();
+    auto logical_shape = tt_tensor.logical_shape();
     auto view = logical_shape.view();
     std::vector<uint32_t> torch_shape(view.begin(), view.end());
     auto tensor = [&]() {
-        if (tt_tensor.volume() == 0) {
+        if (tt_tensor.physical_volume() == 0) {
             auto pytorch_empty = torch.attr("empty");
             return pytorch_empty(torch_shape, py::arg("dtype") = torch_dtype);
         }
@@ -518,7 +518,7 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool
     }();
 
     if (padded_output) {
-        auto shape = tt_tensor.get_padded_shape();
+        auto shape = tt_tensor.padded_shape();
         torch_shape = std::vector<std::uint32_t>(shape.cbegin(), shape.cend());
     }
     tensor = tensor.attr("reshape")(torch_shape);
@@ -537,7 +537,7 @@ py::object convert_tt_tensor_to_numpy_tensor(const Tensor& tt_tensor) {
     auto frombuffer = np.attr("frombuffer");
 
     py::object np_dtype = [&]() {
-        switch (tt_tensor.get_tensor_spec().data_type()) {
+        switch (tt_tensor.tensor_spec().data_type()) {
             case DataType::UINT8: return np.attr("ubyte");
             case DataType::UINT16: return np.attr("int16");
             case DataType::INT32: return np.attr("int32");
@@ -551,7 +551,7 @@ py::object convert_tt_tensor_to_numpy_tensor(const Tensor& tt_tensor) {
         TT_THROW("Unreachable");
     }();
 
-    auto logical_shape = tt_tensor.get_logical_shape();
+    auto logical_shape = tt_tensor.logical_shape();
     auto view = logical_shape.view();
     std::vector<uint32_t> np_shape(view.begin(), view.end());
     auto tensor = frombuffer(buffer, py::arg("dtype") = np_dtype);
@@ -991,12 +991,12 @@ void pytensor_module(py::module& m_tensor) {
                     py_tensor = np.zeros((1, 1, 32, 32))
                     ttnn.Tensor(py_tensor, ttnn.bfloat16, device, ttnn.TILE_LAYOUT)
             )doc")
-        .def_property_readonly("spec", [](const Tensor& self) { return self.get_tensor_spec(); })
-        .def_property_readonly("shape", [](const Tensor& self) { return self.get_logical_shape(); })
-        .def_property_readonly("padded_shape", [](const Tensor& self) { return self.get_padded_shape(); })
-        .def_property_readonly("dtype", [](const Tensor& self) { return self.get_dtype(); })
-        .def_property_readonly("layout", [](const Tensor& self) { return self.get_layout(); })
-        .def_property_readonly("tile", [](const Tensor& self) { return self.get_tensor_spec().tile(); })
+        .def_property_readonly("spec", [](const Tensor& self) { return self.tensor_spec(); })
+        .def_property_readonly("shape", [](const Tensor& self) { return self.logical_shape(); })
+        .def_property_readonly("padded_shape", [](const Tensor& self) { return self.padded_shape(); })
+        .def_property_readonly("dtype", [](const Tensor& self) { return self.dtype(); })
+        .def_property_readonly("layout", [](const Tensor& self) { return self.layout(); })
+        .def_property_readonly("tile", [](const Tensor& self) { return self.tensor_spec().tile(); })
         .def(
             "deallocate",
             [](Tensor& self, bool force) { return self.deallocate(force); },
@@ -1449,19 +1449,19 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             // TODO: Rename to physical_volume
             "volume",
-            [](const Tensor& self) { return self.volume(); },
+            [](const Tensor& self) { return self.physical_volume(); },
             R"doc(
             Get the volume of the tensor.
 
             .. code-block:: python
 
-                volume = tt_tensor.volume()
+                volume = tt_tensor.physical_volume()
 
         )doc")
         .def(
             // TODO: Rename to volume
             "logical_volume",
-            [](const Tensor& self) { return self.get_logical_volume(); },
+            [](const Tensor& self) { return self.logical_volume(); },
             R"doc(
             Get the logical volume of the tensor.
 
@@ -1552,10 +1552,10 @@ void pytensor_module(py::module& m_tensor) {
                         [&](auto&&) -> HostBuffer {
                             TT_THROW(
                                 "{} doesn't support buffer method",
-                                tt::stl::get_active_type_name_in_variant(self.get_storage()));
+                                tt::stl::get_active_type_name_in_variant(self.storage()));
                         },
                     },
-                    self.get_storage());
+                    self.storage());
             },
             R"doc(
             Get the underlying buffer.
@@ -1579,10 +1579,10 @@ void pytensor_module(py::module& m_tensor) {
                         [&](auto&&) -> uint32_t {
                             TT_THROW(
                                 "{} doesn't support buffer_address method",
-                                tt::stl::get_active_type_name_in_variant(self.get_storage()));
+                                tt::stl::get_active_type_name_in_variant(self.storage()));
                         },
                     },
-                    self.get_storage());
+                    self.storage());
             },
             R"doc(
             Get the address of the underlying buffer.
@@ -1595,16 +1595,16 @@ void pytensor_module(py::module& m_tensor) {
 
         )doc")
         .def(
-            "get_layout", [](const Tensor& self) { return self.get_layout(); }, R"doc(
+            "get_layout", [](const Tensor& self) { return self.layout(); }, R"doc(
             Get memory layout of TT Tensor.
 
             .. code-block:: python
 
-                layout = tt_tensor.get_layout()
+                layout = tt_tensor.layout()
 
         )doc")
         .def(
-            "get_tile", [](const Tensor& self) { return self.get_tensor_spec().tile(); }, R"doc(
+            "get_tile", [](const Tensor& self) { return self.tensor_spec().tile(); }, R"doc(
             Get tile dims of TT Tensor.
 
             .. code-block:: python
@@ -1640,12 +1640,12 @@ void pytensor_module(py::module& m_tensor) {
 
         )doc")
         .def(
-            "get_dtype", [](const Tensor& self) { return self.get_dtype(); }, R"doc(
+            "get_dtype", [](const Tensor& self) { return self.dtype(); }, R"doc(
             Get dtype of TT Tensor.
 
             .. code-block:: python
 
-                dtype = tt_tensor.get_dtype()
+                dtype = tt_tensor.dtype()
         )doc")
         .def(
             "reshape",
