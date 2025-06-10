@@ -353,7 +353,7 @@ IDEAS:
 /* ======== PACKET SIZES ======== */
 
 TEST_F(DeviceFixture, TensixDataMovementAllToAllPacketSizes) {
-    uint32_t test_case_id = 1;
+    uint32_t test_case_id = 0;
 
     /* Parameters */
 
@@ -371,9 +371,27 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAllPacketSizes) {
 
 /* ======== DIRECTED IDEAL ======== */
 
+/* ======== All to All ======== */
+TEST_F(DeviceFixture, TensixDataMovementAllToAllDirectedIdeal) {
+    uint32_t test_case_id = 1;
+
+    /* Parameters */
+
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord sub_start_coord = {0, 0};
+
+    CoreCoord mst_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+
+    unit_tests::dm::all_to_all::directed_ideal_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
+}
+
 /* ======== 2x2 to 1x1 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllToAll2x2To1x1DirectedIdeal) {
-    uint32_t test_case_id = 6;
+    uint32_t test_case_id = 2;
 
     /* Parameters */
 
@@ -389,7 +407,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAll2x2To1x1DirectedIdeal) {
 
 /* ======== 4x4 to 1x1 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllToAll4x4To1x1DirectedIdeal) {
-    uint32_t test_case_id = 6;
+    uint32_t test_case_id = 3;
 
     /* Parameters */
 
@@ -405,7 +423,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAll4x4To1x1DirectedIdeal) {
 
 /* ======== 1x1 to 2x2 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllToAll1x1To2x2DirectedIdeal) {
-    uint32_t test_case_id = 6;
+    uint32_t test_case_id = 4;
 
     /* Parameters */
 
@@ -421,7 +439,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAll1x1To2x2DirectedIdeal) {
 
 /* ======== 1x1 to 4x4 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllToAll1x1To4x4DirectedIdeal) {
-    uint32_t test_case_id = 6;
+    uint32_t test_case_id = 5;
 
     /* Parameters */
 
@@ -446,24 +464,6 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAll2x2To2x2DirectedIdeal) {
 
     CoreCoord mst_grid_size = {2, 2};
     CoreCoord sub_grid_size = {2, 2};
-
-    unit_tests::dm::all_to_all::directed_ideal_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
-}
-
-/* ======== All to All ======== */
-TEST_F(DeviceFixture, TensixDataMovementAllToAllDirectedIdeal) {
-    uint32_t test_case_id = 6;
-
-    /* Parameters */
-
-    CoreCoord mst_start_coord = {0, 0};
-    CoreCoord sub_start_coord = {0, 0};
-
-    CoreCoord mst_grid_size = {
-        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
-    CoreCoord sub_grid_size = {
-        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
 
     unit_tests::dm::all_to_all::directed_ideal_test(
         arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
