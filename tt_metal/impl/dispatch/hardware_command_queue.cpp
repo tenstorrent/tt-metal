@@ -30,7 +30,7 @@
 #include "dprint_server.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "program/program_device_map.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
@@ -238,22 +238,7 @@ void HWCommandQueue::enqueue_read_buffer(
     // TODO: enqueue_read_from_core will call select_sub_device_ids every loop which will have minor overhead
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
-    if (buffer_obj.is_nd_sharded()) {
-        const auto& [banks, bank_mapping_in_bytes] = buffer_obj.get_bank_data_mapping();
-        for (size_t i = 0; i < banks.size(); i++) {
-            const auto virtual_core =
-                buffer_obj.device()->virtual_core_from_logical_core(banks[i], buffer_obj.core_type());
-            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                enqueue_read_from_core(
-                    virtual_core,
-                    (char*)dst + chunk_mapping_in_bytes.src,
-                    buffer_obj.address() + chunk_mapping_in_bytes.dst,
-                    chunk_mapping_in_bytes.size,
-                    false,
-                    sub_device_ids);
-            }
-        }
-    } else if (is_sharded(buffer_obj.buffer_layout())) {
+    if (is_sharded(buffer_obj.buffer_layout())) {
         // Forward data from each core to the completion queue.
         // Then have the completion queue reader thread copy this data to user space.
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
@@ -322,32 +307,9 @@ void HWCommandQueue::enqueue_write_buffer(
     // TODO: enqueue_write_to_core will call select_sub_device_ids every loop which will have minor overhead
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
-    if (buffer_obj.is_nd_sharded()) {
-        const auto& [banks, bank_mapping_in_bytes] = buffer_obj.get_bank_data_mapping();
-        for (size_t i = 0; i < banks.size(); i++) {
-            const auto virtual_core =
-                buffer_obj.device()->virtual_core_from_logical_core(banks[i], buffer_obj.core_type());
-            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                enqueue_write_to_core(
-                    virtual_core,
-                    (char*)data + chunk_mapping_in_bytes.src,
-                    buffer_obj.address() + chunk_mapping_in_bytes.dst,
-                    chunk_mapping_in_bytes.size,
-                    false,
-                    sub_device_ids);
-            }
-        }
-    } else {
-        auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-        buffer_dispatch::write_to_device_buffer(
-            data,
-            buffer_obj,
-            region,
-            this->id_,
-            this->expected_num_workers_completed_,
-            dispatch_core_type,
-            sub_device_ids);
-    }
+    auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+    buffer_dispatch::write_to_device_buffer(
+        data, buffer_obj, region, this->id_, this->expected_num_workers_completed_, dispatch_core_type, sub_device_ids);
 
     if (blocking) {
         this->finish(sub_device_ids);
@@ -669,7 +631,7 @@ void HWCommandQueue::read_completion_queue() {
 
 void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_finish");
-    tt::log_debug(tt::LogDispatch, "Finish for command queue {}", this->id_);
+    log_debug(tt::LogDispatch, "Finish for command queue {}", this->id_);
     std::shared_ptr<Event> event = std::make_shared<Event>();
     this->enqueue_record_event(event, sub_device_ids);
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled()) {
@@ -848,7 +810,7 @@ void HWCommandQueue::record_end() {
 void HWCommandQueue::terminate() {
     ZoneScopedN("HWCommandQueue_terminate");
     TT_FATAL(!this->manager_.get_bypass_mode(), "Terminate cannot be used with tracing");
-    tt::log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
+    log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
     auto command = EnqueueTerminateCommand(this->id_, this->device_, this->manager_);
     this->enqueue_command(command, false, {});
 }

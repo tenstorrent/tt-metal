@@ -43,6 +43,9 @@ target_sources(
         reduce_scatter_minimal_async/reduce_scatter_minimal_async.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp
+        all_broadcast_async/all_broadcast_async.cpp
+        all_broadcast_async/device/all_broadcast_async_op.cpp
+        all_broadcast_async/device/all_broadcast_async_program.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})

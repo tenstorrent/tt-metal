@@ -40,6 +40,7 @@ target_sources(
             api/tt-metalium/blockfloat_common.hpp
             api/tt-metalium/buffer.hpp
             api/tt-metalium/buffer_distribution_spec.hpp
+            api/tt-metalium/buffer_page_mapping.hpp
             api/tt-metalium/buffer_types.hpp
             api/tt-metalium/circular_buffer.hpp
             api/tt-metalium/circular_buffer_constants.h
@@ -54,7 +55,6 @@ target_sources(
             api/tt-metalium/device.hpp
             api/tt-metalium/device_pool.hpp
             api/tt-metalium/dispatch_core_common.hpp
-            api/tt-metalium/distribution_spec.hpp
             api/tt-metalium/event.hpp
             api/tt-metalium/fabric_host_interface.h
             api/tt-metalium/fabric_edm_packet_header.hpp
@@ -68,7 +68,6 @@ target_sources(
             api/tt-metalium/kernel.hpp
             api/tt-metalium/kernel_types.hpp
             api/tt-metalium/lightmetal_binary.hpp
-            api/tt-metalium/logger.hpp
             api/tt-metalium/math.hpp
             api/tt-metalium/memory_reporter.hpp
             api/tt-metalium/mesh_config.hpp
@@ -80,6 +79,8 @@ target_sources(
             api/tt-metalium/program.hpp
             api/tt-metalium/program_cache.hpp
             api/tt-metalium/program_descriptors.hpp
+            api/tt-metalium/profiler_optional_metadata.hpp
+            api/tt-metalium/profiler_types.hpp
             api/tt-metalium/runtime_args_data.hpp
             api/tt-metalium/semaphore.hpp
             api/tt-metalium/shape.hpp
@@ -173,7 +174,7 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/common/inc/cunpack_common.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_abs.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_activations.h
-            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_add_int32.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_add_int.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary_bitwise.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h
@@ -248,7 +249,7 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/cunpack_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_abs.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_activations.h
-            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_add_int32.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_add_int.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary_bitwise.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h
@@ -334,6 +335,7 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         Reflect::Reflect
         TT::STL
+        tt-logger::tt-logger
     PRIVATE
         Metalium::Metal::Impl
         metal_common_libs
@@ -346,6 +348,7 @@ target_link_libraries(
         HAL::wormhole
         HAL::blackhole
         FlatBuffers::FlatBuffers
+        TT::Metalium::Logging
 )
 
 target_precompile_headers(tt_metal REUSE_FROM TT::CommonPCH)
@@ -380,6 +383,7 @@ include_directories(
     api/tt-metalium
 )
 
+add_subdirectory(logging)
 add_subdirectory(hw)
 add_subdirectory(hostdevcommon)
 add_subdirectory(common)
@@ -428,6 +432,7 @@ if(TT_INSTALL)
             TracyClient
             span
             small_vector
+            tt-logger
         EXPORT Metalium
         FILE_SET
         api

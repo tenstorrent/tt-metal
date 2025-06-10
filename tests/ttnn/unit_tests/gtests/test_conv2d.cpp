@@ -8,7 +8,7 @@
 #include <tuple>
 #include <vector>
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/small_vector.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/device.hpp"

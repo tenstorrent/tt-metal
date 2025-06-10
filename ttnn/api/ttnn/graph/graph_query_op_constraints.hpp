@@ -10,7 +10,7 @@
 #include <string>
 
 #include <nlohmann/json.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tuple>
 #include <variant>
 #include "ttnn/graph/graph_processor.hpp"
@@ -101,7 +101,7 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
             op_trace = capture_inner.end_graph_capture();
         }  // end of inner graph capture
         catch (const std::exception& e) {
-            tt::log_debug(tt::LogOp, "Error during graph capture: {}", e.what());
+            log_debug(tt::LogOp, "Error during graph capture: {}", e.what());
             return ConstraintQueryResponse{
                 ExecutionStatus::Error, {0, 0, 0}, /* output_tensor_spec= */ std::nullopt, e.what()};
         }
@@ -120,7 +120,7 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
     return ConstraintQueryResponse{
         ExecutionStatus::Success,
         {cb_peak_size_per_core, l1_buffers_peak_per_core, l1_output_buffer_per_core},
-        output.get_tensor_spec()};
+        output.tensor_spec()};
 }
 
 }  // namespace ttnn::graph

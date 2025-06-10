@@ -33,8 +33,8 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
 
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.get_logical_shape();
-    auto output_shape = output_tensor.get_logical_shape();
+    auto input_shape = input_tensor.logical_shape();
+    auto output_shape = output_tensor.logical_shape();
 
     TT_FATAL(
         input_tensor.element_size() == output_tensor.element_size(),
@@ -174,13 +174,13 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.get_logical_shape();
+    auto input_shape = input_tensor.logical_shape();
     for (uint32_t i = 0; i < input_shape.rank(); i++) {
         input_shape[i] = output_tensor_end[i] - output_tensor_start[i];
     }
-    tt::log_debug("Slice Write Input Shape: {}", input_shape);
-    auto output_shape = output_tensor.get_logical_shape();
-    tt::log_debug("Slice Write Output Shape: {}", output_shape);
+    log_debug(tt::LogOp, "Slice Write Input Shape: {}", input_shape);
+    auto output_shape = output_tensor.logical_shape();
+    log_debug(tt::LogOp, "Slice Write Output Shape: {}", output_shape);
 
     TT_FATAL(
         input_tensor.element_size() == output_tensor.element_size(),
@@ -251,10 +251,10 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     for (auto& i : accumulated_total_per_dim) {
         accumulated_str += std::to_string(i) + ", ";
     }
-    tt::log_debug("Slice Write Accumulated Sticks: {}", accumulated_str);
-    tt::log_debug("Slice Write Unpadded Sticks: {}", unpadded_sticks_str);
-    tt::log_debug("Slice Write Padded Sticks: {}", padded_sticks_str);
-    tt::log_debug("Accumulated Input : {}", accumulated_input_total_per_dim);
+    log_debug(tt::LogOp, "Slice Write Accumulated Sticks: {}", accumulated_str);
+    log_debug(tt::LogOp, "Slice Write Unpadded Sticks: {}", unpadded_sticks_str);
+    log_debug(tt::LogOp, "Slice Write Padded Sticks: {}", padded_sticks_str);
+    log_debug(tt::LogOp, "Accumulated Input : {}", accumulated_input_total_per_dim);
 
     using namespace tt::tt_metal::experimental;
     auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
@@ -266,7 +266,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         "slice_write expects output start for the last dimension to be 0. Got {}",
         output_tensor_start[-1]);
 
-    tt::log_debug("Output Buffer adddress: {}", output_buffer->address());
+    log_debug(tt::LogOp, "Output Buffer adddress: {}", output_buffer->address());
     std::vector<uint32_t> common_writer_kernel_args = {
         output_buffer->address() + output_tensor_start[-1] * output_tensor.element_size(),
         output_row_size_bytes,
@@ -285,14 +285,15 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
     auto num_cores_total = cores.size();
 
-    auto total_num_input_sticks = input_tensor.volume() / input_shape[-1];
+    auto total_num_input_sticks = input_tensor.physical_volume() / input_shape[-1];
     const auto num_sticks_per_core = shard_spec.shape[0];
     // issue more reads before calling barrier
     const uint32_t num_sticks_per_core_read =
         tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core, input_row_size_bytes_offset, max_read_size);
     const uint32_t num_read_per_barrier = num_sticks_per_core / num_sticks_per_core_read;
 
-    tt::log_debug(
+    log_debug(
+        tt::LogOp,
         "num_sticks_per_core = {}, num_sticks_per_core_read = {}, num_read_per_barrier = {}",
         num_sticks_per_core,
         num_sticks_per_core_read,
@@ -328,7 +329,8 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
         uint32_t num_sticks_this_core = std::min(num_sticks_per_core, max_num_sticks_this_core + 1);
 
-        tt::log_debug(
+        log_debug(
+            tt::LogOp,
             "Start ID: {}, Start ID per dim : {} , Size till end : {} Num Sticks: {} for Core: {}",
             start_id,
             id_per_dim,
@@ -358,13 +360,13 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = input.device();
-    const auto output_padded_shape = output.get_padded_shape();
-    const auto input_padded_shape = input.get_padded_shape();
+    const auto output_padded_shape = output.padded_shape();
+    const auto input_padded_shape = input.padded_shape();
 
-    auto input_shape = input.get_logical_shape();
-    auto output_shape = output.get_logical_shape();
+    auto input_shape = input.logical_shape();
+    auto output_shape = output.logical_shape();
 
-    uint32_t num_unpadded_sticks = input.volume() / input_shape[-1];
+    uint32_t num_unpadded_sticks = input.physical_volume() / input_shape[-1];
 
     TT_FATAL(input.shard_spec().has_value(), "Input tensor should be sharded");
     TT_FATAL(
@@ -377,10 +379,10 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
     auto input_cores = shard_spec.grid;
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
-    tt::log_debug("Input cores = {}", input_cores);
-    tt::log_debug("Input shard spec = {}", shard_spec);
+    log_debug(tt::LogOp, "Input cores = {}", input_cores);
+    log_debug(tt::LogOp, "Input shard spec = {}", shard_spec);
 
-    auto total_num_input_sticks = input.volume() / input_shape[-1];
+    auto total_num_input_sticks = input.physical_volume() / input_shape[-1];
     auto num_input_sticks_per_core = shard_spec.shape[0];
 
     uint32_t output_row_size_bytes = output_shape[-1] * output.element_size();
@@ -417,8 +419,8 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     TT_FATAL(
         input_cb_data_format == output_cb_data_format,
         "Input & output should have the same data format, {} , {}",
@@ -498,15 +500,15 @@ operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
     const Tensor& output,
     const ttnn::Shape& output_tensor_start,
     const ttnn::Shape& output_tensor_end) {
-    const ttnn::Shape output_shape = output.get_padded_shape();
+    const ttnn::Shape output_shape = output.padded_shape();
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = input.device();
-    const auto output_padded_shape = output.get_padded_shape();
-    const auto input_padded_shape = input.get_padded_shape();
+    const auto output_padded_shape = output.padded_shape();
+    const auto input_padded_shape = input.padded_shape();
 
-    uint32_t num_unpadded_sticks = input.volume() / input.get_padded_shape()[-1];
+    uint32_t num_unpadded_sticks = input.physical_volume() / input.padded_shape()[-1];
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -519,7 +521,7 @@ operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
 
     tt::tt_metal::Buffer* src0_buffer = input.buffer();
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     uint32_t output_row_size_bytes = output_padded_shape[-1] * output.element_size();
     uint32_t input_row_size_bytes = input_padded_shape[-1] * input.element_size();
@@ -618,7 +620,7 @@ operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
             uint32_t num_cores_x = compute_with_storage_grid_size.x;
             uint32_t num_cores_y = compute_with_storage_grid_size.y;
             uint32_t num_cores_total = num_cores_x * num_cores_y;
-            uint32_t num_unpadded_sticks = src_tensor.volume() / src_tensor.get_padded_shape()[-1];
+            uint32_t num_unpadded_sticks = src_tensor.physical_volume() / src_tensor.padded_shape()[-1];
             auto
                 [num_cores,
                  all_cores,
@@ -668,7 +670,7 @@ operation::ProgramWithCallbacks slice_write_multi_core(
     }
     TT_FATAL(!output.is_sharded(), "Sharded output is not supported for slice_write operation");
     TT_FATAL(!has_step, "Step is not supported for slice_write operation");
-    TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for slice_write operation");
+    TT_FATAL(a.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for slice_write operation");
     if (a.is_sharded()) {  // Supports Height & Block Sharding
         return slice_write_rm_sharded_input_multi_core(a, output, output_tensor_start, output_tensor_end);
     } else if (!a.is_sharded()) {

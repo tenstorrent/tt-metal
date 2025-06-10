@@ -76,7 +76,6 @@ target_sources(
         core/tensor/tensor_utils.cpp
         core/tensor/types.cpp
         core/tensor/xtensor/partition.cpp
-        core/tensor/nd_sharding_utils.cpp
 )
 target_include_directories(
     ttnn_core
@@ -284,6 +283,7 @@ set(TTNN_SRC_PYBIND
 
 set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_broadcast_async/all_broadcast_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_reduce/all_reduce_${PY_BINDING}.cpp
