@@ -211,8 +211,9 @@ constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS = DOWNSTREAM_SENDER_NUM_BUFFERS_A
 constexpr size_t SKIP_CHANNEL_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + NUM_DOWNSTREAM_CHANNELS;
 constexpr bool skip_receiver_channel_1_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX);
 constexpr bool skip_sender_channel_1_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX + 1);
+constexpr bool skip_sender_vc1_channel_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX + 2);
 
-constexpr size_t MAIN_CT_ARGS_IDX_1 = SKIP_CHANNEL_IDX + 2;
+constexpr size_t MAIN_CT_ARGS_IDX_1 = SKIP_CHANNEL_IDX + 3;
 constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1);
 constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 1);
 constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 2);
