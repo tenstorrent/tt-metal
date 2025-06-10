@@ -25,6 +25,12 @@
 #define DYNAMIC_NOC_X(noc, x) NOC_0_X(noc, noc_size_x, (x))
 #define DYNAMIC_NOC_Y(noc, y) NOC_0_Y(noc, noc_size_y, (y))
 
+#define NOC_ADDR_COORD_SHIFT 36
+#define NUM_DRAM_BANKS 6
+#define NUM_NOCS 2
+int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
+uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
+
 #endif
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
