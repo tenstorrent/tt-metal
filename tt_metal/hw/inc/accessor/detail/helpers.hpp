@@ -37,15 +37,16 @@ constexpr auto array_rta_sequence_wrapper() {
     return make_rta_array_from_sequence<Base>(std::make_index_sequence<Size>{});
 }
 
+// Statically conditional static buffer
 template <bool Enable, typename T = void, std::size_t N = 0>
 struct ConditionalBuffer {
     T value[N];  // when Enable == true
 };
 
-// Specialization for false: empty struct
 template <std::size_t N, typename T>
 struct ConditionalBuffer<false, T, N> {};
 
+// Statically conditional field of class with type T
 template <bool Emable, typename T = void>
 struct ConditionalField {
     T value;
@@ -62,10 +63,9 @@ struct ConditionalField<false, T> {
 };
 
 template <typename T, bool Enable>
-struct ConditionalStaticInstance {
-    // empty
-};
+struct ConditionalStaticInstance {};
 
+// Statically conditionall static instance of type T
 template <typename T>
 struct ConditionalStaticInstance<T, true> {
     static constexpr T instance{/* args */};
@@ -82,7 +82,7 @@ struct has_subscript_operator<T, std::void_t<decltype(std::declval<T>()[std::dec
 template <typename T>
 constexpr bool has_subscript_operator_v = has_subscript_operator<T>::value;
 
-// No c++20 == to std::span :(
+// No c++20 == no std::span :(
 template <typename T>
 struct Span {
     T* _data;

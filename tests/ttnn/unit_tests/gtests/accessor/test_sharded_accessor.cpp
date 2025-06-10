@@ -66,8 +66,8 @@ template <size_t NumBanks>
 using BankCoordWrapperDynamic = nd_sharding::detail::BankCoordWrapperDynamicStaticNBanksDynamicCoords<NumBanks>;
 
 struct ArgsConfigPlaceholder {
-    static constexpr size_t CTA_BASE = static_cast<size_t>(-1);
-    static constexpr size_t CRTA_BASE = static_cast<size_t>(-1);
+    static constexpr size_t CTA_OFFSET = static_cast<size_t>(-1);
+    static constexpr size_t CRTA_OFFSET = static_cast<size_t>(-1);
 };
 
 // If inputs are passed as constexpr arrays, we can use this style to directly create the structs

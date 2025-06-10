@@ -19,41 +19,22 @@ using distribution_spec_t = typename detail::DistributionSpecWrapper<CTA_BASE, C
 // compile_time_args_skip is required to be constexpr since cta argument index must be constexpr
 template <typename DSpec>
 constexpr size_t compile_time_args_skip() {
-    // should be evaluated at compile time if rank and num_banks are static
-    if constexpr (DSpec::has_static_rank) {
-        if constexpr (DSpec::has_static_num_banks) {
-            return 1 +  // +1 for crta config
-                   DSpec::has_static_rank + DSpec::has_static_num_banks +
-                   (DSpec::rank_ct * DSpec::TensorShapeT::is_static) +
-                   (DSpec::rank_ct * DSpec::ShardShapeT::is_static) +
-                   (DSpec::num_banks_ct * DSpec::BankCoordsT::is_static);
-        } else {
-            return 1 + DSpec::has_static_rank + DSpec::has_static_num_banks +
-                   (DSpec::rank_ct * DSpec::TensorShapeT::is_static) + (DSpec::rank_ct * DSpec::ShardShapeT::is_static);
-        }
-    } else {
-        if constexpr (DSpec::has_static_num_banks) {
-            return 1 + DSpec::has_static_rank + DSpec::has_static_num_banks +
-                   (DSpec::num_banks_ct * DSpec::BankCoordsT::is_static);
-        } else {
-            return 1 + DSpec::has_static_rank + DSpec::has_static_num_banks;
-        }
-    }
+    return DSpec::ArgsLoc::NumArgsCT;
 }
 
 template <typename DSpec, std::enable_if_t<DSpec::has_static_rank && DSpec::has_static_num_banks, int> = 0>
 constexpr size_t runtime_args_skip() {
     // should be evaluated at compile time if rank and num_banks are static
-    return !DSpec::has_static_rank + !DSpec::has_static_num_banks + (DSpec::rank_ct * !DSpec::TensorShapeT::is_static) +
-           (DSpec::rank_ct * !DSpec::ShardShapeT::is_static) + (DSpec::num_banks_ct * !DSpec::BankCoordsT::is_static);
+    return !DSpec::has_static_rank + !DSpec::has_static_num_banks + (DSpec::rank_ct * !DSpec::TensorShape::is_static) +
+           (DSpec::rank_ct * !DSpec::ShardShape::is_static) + (DSpec::num_banks_ct * !DSpec::BankCoords::is_static);
 }
 
 template <typename DSpec, std::enable_if_t<!DSpec::has_static_rank || !DSpec::has_static_num_banks, int> = 0>
 size_t runtime_args_skip() {
     return !DSpec::has_static_rank + !DSpec::has_static_num_banks +
-           (DSpec::fetch_rank() * !DSpec::TensorShapeT::is_static) +
-           (DSpec::fetch_rank() * !DSpec::ShardShapeT::is_static) +
-           (DSpec::fetch_num_banks() * !DSpec::BankCoordsT::is_static);
+           (DSpec::fetch_rank() * !DSpec::TensorShape::is_static) +
+           (DSpec::fetch_rank() * !DSpec::ShardShape::is_static) +
+           (DSpec::fetch_num_banks() * !DSpec::BankCoords::is_static);
 }
 
 template <typename DSpec, size_t PageSize = detail::UNKNOWN>
@@ -75,16 +56,13 @@ struct ShardedAccessor {
 
     template <
         typename DSpec_ = DSpec,
-        std::enable_if_t<(DSpec_::is_static or DSpec_::ArgumentsLocation::CRTA_BASE == static_cast<size_t>(-1)), int> =
-            0>
+        std::enable_if_t<(DSpec_::is_static or DSpec_::ArgsLoc::CRTA_OFFSET == static_cast<size_t>(-1)), int> = 0>
     ShardedAccessor(const size_t bank_base_address_in = 0, uint32_t page_size_in = 0) :
         bank_base_address(bank_base_address_in), page_size_rt(page_size_in) {}
 
     template <
         typename DSpec_ = DSpec,
-        std::enable_if_t<
-            (!DSpec_::is_static and DSpec_::ArgumentsLocation::CRTA_BASE != static_cast<size_t>(-1)),
-            int> = 0>
+        std::enable_if_t<(!DSpec_::is_static and DSpec_::ArgsLoc::CRTA_OFFSET != static_cast<size_t>(-1)), int> = 0>
     constexpr explicit ShardedAccessor(const size_t bank_base_address_in, uint32_t page_size_in = 0) :
         dspec_instance(detail::build_dspec_from_args<DSpec>()),
         bank_base_address(bank_base_address_in),
