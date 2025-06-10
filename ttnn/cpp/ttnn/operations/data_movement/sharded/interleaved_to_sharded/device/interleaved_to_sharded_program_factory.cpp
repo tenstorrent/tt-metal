@@ -105,7 +105,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     }
     tt::tt_metal::CircularBufferConfig output_cb_out_config =
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
-            .set_page_size(out_cb_index, output_page_size)
+            .set_page_size(out_cb_index, output_page_size);
     if (!dst_is_dram) {
         output_cb_out_config = output_cb_out_config.set_globally_allocated_address(*output.buffer());
     }
@@ -245,6 +245,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
                     num_units_per_row,
                     curr_idx_h + curr_idx_w,
                     starting_idx_h};
+                shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
             } else {
                 writer_run_time_args = {curr_num_units_per_shard};
             }
@@ -332,9 +333,16 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             // Writer run-time args
             std::vector<uint32_t> writer_run_time_args;
             if (dst_is_dram) {
+                uint32_t page_id_within_row = curr_idx_w / input_unit_size;
+                uint32_t output_width_in_pages = tt::div_up(num_units_per_row, input_unit_size);
                 writer_run_time_args = {
-                    // TODO: (GR) Fill out
+                    dst_buffer->address(),
+                    shard_height,
+                    shard_width,
+                    curr_idx_h + page_id_within_row,
+                    output_width_in_pages
                 };
+                shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
             } else {
                 writer_run_time_args = {curr_num_units_per_shard};
             }
