@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include <benchmark/benchmark.h>
 
 #include <tt-metalium/distributed_host_buffer.hpp>
