@@ -431,7 +431,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("override_sharding_config") = false,
         py::arg("shard_layout") = std::nullopt,
         py::arg("core_grid") = std::nullopt,
-        py::arg("transpose_shards") = true,
+        py::arg("transpose_shards") = false,
         py::arg("output_layout") = Layout::TILE,
         py::arg("preprocess_weights_on_device") = false,
         py::arg("always_preprocess_weights") = false,

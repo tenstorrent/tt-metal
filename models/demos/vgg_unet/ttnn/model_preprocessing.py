@@ -99,7 +99,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s1["0"]["deallocate_activation"] = True
     parameters.conv_args.s1["0"]["reshard_if_not_optimal"] = False
     parameters.conv_args.s1["0"]["shard_layout"] = None
-    parameters.conv_args.s1["0"]["transpose_shards"] = False
     parameters.conv_args.s1["0"]["activation"] = "relu"
 
     parameters.conv_args.s1["2"]["act_block_h"] = None
@@ -108,7 +107,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s1["2"]["deallocate_activation"] = True
     parameters.conv_args.s1["2"]["reshard_if_not_optimal"] = False
     parameters.conv_args.s1["2"]["shard_layout"] = None
-    parameters.conv_args.s1["2"]["transpose_shards"] = False
     parameters.conv_args.s1["2"]["activation"] = "relu"
 
     parameters.conv_args.s2["5"]["act_block_h"] = None
@@ -117,7 +115,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s2["5"]["deallocate_activation"] = True
     parameters.conv_args.s2["5"]["reshard_if_not_optimal"] = False
     parameters.conv_args.s2["5"]["shard_layout"] = None
-    parameters.conv_args.s2["5"]["transpose_shards"] = False
     parameters.conv_args.s2["5"]["activation"] = "relu"
 
     parameters.conv_args.s2["7"]["act_block_h"] = None
@@ -126,7 +123,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s2["7"]["deallocate_activation"] = True
     parameters.conv_args.s2["7"]["reshard_if_not_optimal"] = False
     parameters.conv_args.s2["7"]["shard_layout"] = None
-    parameters.conv_args.s2["7"]["transpose_shards"] = False
     parameters.conv_args.s2["7"]["activation"] = "relu"
 
     parameters.conv_args.s3["10"]["act_block_h"] = None
@@ -135,7 +131,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s3["10"]["deallocate_activation"] = True
     parameters.conv_args.s3["10"]["reshard_if_not_optimal"] = False
     parameters.conv_args.s3["10"]["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    parameters.conv_args.s3["10"]["transpose_shards"] = False
     parameters.conv_args.s3["10"]["activation"] = "relu"
 
     parameters.conv_args.s3["12"]["act_block_h"] = None
@@ -144,7 +139,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s3["12"]["deallocate_activation"] = True
     parameters.conv_args.s3["12"]["reshard_if_not_optimal"] = False
     parameters.conv_args.s3["12"]["shard_layout"] = None
-    parameters.conv_args.s3["12"]["transpose_shards"] = False
     parameters.conv_args.s3["12"]["activation"] = "relu"
 
     parameters.conv_args.s3["14"]["act_block_h"] = None
@@ -153,7 +147,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s3["14"]["deallocate_activation"] = True
     parameters.conv_args.s3["14"]["reshard_if_not_optimal"] = False
     parameters.conv_args.s3["14"]["shard_layout"] = None
-    parameters.conv_args.s3["14"]["transpose_shards"] = False
     parameters.conv_args.s3["14"]["activation"] = "relu"
 
     parameters.conv_args.s3["16"]["act_block_h"] = None
@@ -162,7 +155,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s3["16"]["deallocate_activation"] = True
     parameters.conv_args.s3["16"]["reshard_if_not_optimal"] = False
     parameters.conv_args.s3["16"]["shard_layout"] = None
-    parameters.conv_args.s3["16"]["transpose_shards"] = False
     parameters.conv_args.s3["16"]["activation"] = "relu"
 
     parameters.conv_args.s4["19"]["act_block_h"] = None
@@ -171,7 +163,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s4["19"]["deallocate_activation"] = True
     parameters.conv_args.s4["19"]["reshard_if_not_optimal"] = False
     parameters.conv_args.s4["19"]["shard_layout"] = None
-    parameters.conv_args.s4["19"]["transpose_shards"] = False
     parameters.conv_args.s4["19"]["activation"] = "relu"
 
     parameters.conv_args.s4["21"]["act_block_h"] = None
@@ -180,7 +171,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s4["21"]["deallocate_activation"] = True
     parameters.conv_args.s4["21"]["reshard_if_not_optimal"] = False
     parameters.conv_args.s4["21"]["shard_layout"] = None
-    parameters.conv_args.s4["21"]["transpose_shards"] = False
     parameters.conv_args.s4["21"]["activation"] = "relu"
 
     parameters.conv_args.s4["23"]["act_block_h"] = None
@@ -189,7 +179,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s4["23"]["deallocate_activation"] = True
     parameters.conv_args.s4["23"]["reshard_if_not_optimal"] = False
     parameters.conv_args.s4["23"]["shard_layout"] = None
-    parameters.conv_args.s4["23"]["transpose_shards"] = False
     parameters.conv_args.s4["23"]["activation"] = "relu"
 
     parameters.conv_args.s4["25"]["act_block_h"] = None
@@ -198,7 +187,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s4["25"]["deallocate_activation"] = True
     parameters.conv_args.s4["25"]["reshard_if_not_optimal"] = False
     parameters.conv_args.s4["25"]["shard_layout"] = None
-    parameters.conv_args.s4["25"]["transpose_shards"] = False
     parameters.conv_args.s4["25"]["activation"] = "relu"
 
     parameters.conv_args.b1["28"]["act_block_h"] = None
@@ -207,7 +195,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.b1["28"]["deallocate_activation"] = True
     parameters.conv_args.b1["28"]["reshard_if_not_optimal"] = False
     parameters.conv_args.b1["28"]["shard_layout"] = None
-    parameters.conv_args.b1["28"]["transpose_shards"] = False
     parameters.conv_args.b1["28"]["activation"] = "relu"
 
     parameters.conv_args.b1["30"]["act_block_h"] = None
@@ -216,7 +203,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.b1["30"]["deallocate_activation"] = True
     parameters.conv_args.b1["30"]["reshard_if_not_optimal"] = False
     parameters.conv_args.b1["30"]["shard_layout"] = None
-    parameters.conv_args.b1["30"]["transpose_shards"] = False
     parameters.conv_args.b1["30"]["activation"] = "relu"
 
     parameters.conv_args.b1["32"]["act_block_h"] = None
@@ -225,7 +211,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.b1["32"]["deallocate_activation"] = True
     parameters.conv_args.b1["32"]["reshard_if_not_optimal"] = False
     parameters.conv_args.b1["32"]["shard_layout"] = None
-    parameters.conv_args.b1["32"]["transpose_shards"] = False
     parameters.conv_args.b1["32"]["activation"] = "relu"
 
     parameters.conv_args.b1["34"]["act_block_h"] = None
@@ -234,7 +219,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.b1["34"]["deallocate_activation"] = True
     parameters.conv_args.b1["34"]["reshard_if_not_optimal"] = False
     parameters.conv_args.b1["34"]["shard_layout"] = None
-    parameters.conv_args.b1["34"]["transpose_shards"] = False
     parameters.conv_args.b1["34"]["activation"] = "relu"
 
     parameters.conv_args.d1.up["act_block_h"] = None
@@ -243,7 +227,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d1.up["deallocate_activation"] = False
     parameters.conv_args.d1.up["reshard_if_not_optimal"] = False
     parameters.conv_args.d1.up["shard_layout"] = None
-    parameters.conv_args.d1.up["transpose_shards"] = False
     parameters.conv_args.d1.up["dtype"] = ttnn.bfloat16
 
     parameters.conv_args.d1.conv_block.conv1["act_block_h"] = None
@@ -252,7 +235,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d1.conv_block.conv1["deallocate_activation"] = True
     parameters.conv_args.d1.conv_block.conv1["reshard_if_not_optimal"] = False
     parameters.conv_args.d1.conv_block.conv1["shard_layout"] = None
-    parameters.conv_args.d1.conv_block.conv1["transpose_shards"] = False
     parameters.conv_args.d1.conv_block.conv1["activation"] = "relu"
     parameters.conv_args.d1.conv_block.conv1["padding"] = (1, 1)
     parameters.conv_args.d1.conv_block.conv1["do_sharded_to_interleaved"] = True
@@ -263,7 +245,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d1.conv_block.conv2["deallocate_activation"] = True
     parameters.conv_args.d1.conv_block.conv2["reshard_if_not_optimal"] = False
     parameters.conv_args.d1.conv_block.conv2["shard_layout"] = None
-    parameters.conv_args.d1.conv_block.conv2["transpose_shards"] = False
     parameters.conv_args.d1.conv_block.conv2["activation"] = "relu"
     parameters.conv_args.d1.conv_block.conv2["padding"] = (1, 1)
     parameters.conv_args.d1.conv_block.conv2["do_sharded_to_interleaved"] = True
@@ -274,7 +255,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d2.up["deallocate_activation"] = True
     parameters.conv_args.d2.up["reshard_if_not_optimal"] = False
     parameters.conv_args.d2.up["shard_layout"] = None
-    parameters.conv_args.d2.up["transpose_shards"] = False
     parameters.conv_args.d2.up["dtype"] = ttnn.bfloat16
 
     parameters.conv_args.d2.conv_block.conv1["act_block_h"] = None
@@ -283,7 +263,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d2.conv_block.conv1["deallocate_activation"] = True
     parameters.conv_args.d2.conv_block.conv1["reshard_if_not_optimal"] = False
     parameters.conv_args.d2.conv_block.conv1["shard_layout"] = None
-    parameters.conv_args.d2.conv_block.conv1["transpose_shards"] = False
     parameters.conv_args.d2.conv_block.conv1["activation"] = "relu"
     parameters.conv_args.d2.conv_block.conv1["padding"] = (1, 1)
     parameters.conv_args.d2.conv_block.conv1["do_sharded_to_interleaved"] = True
@@ -294,7 +273,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d2.conv_block.conv2["deallocate_activation"] = True
     parameters.conv_args.d2.conv_block.conv2["reshard_if_not_optimal"] = False
     parameters.conv_args.d2.conv_block.conv2["shard_layout"] = None
-    parameters.conv_args.d2.conv_block.conv2["transpose_shards"] = False
     parameters.conv_args.d2.conv_block.conv2["activation"] = "relu"
     parameters.conv_args.d2.conv_block.conv2["padding"] = (1, 1)
     parameters.conv_args.d2.conv_block.conv2["do_sharded_to_interleaved"] = False
@@ -305,7 +283,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d3.up["deallocate_activation"] = True
     parameters.conv_args.d3.up["reshard_if_not_optimal"] = False
     parameters.conv_args.d3.up["shard_layout"] = None
-    parameters.conv_args.d3.up["transpose_shards"] = False
     parameters.conv_args.d3.up["dtype"] = ttnn.bfloat16
 
     parameters.conv_args.d3.conv_block.conv1["act_block_h"] = None
@@ -314,7 +291,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d3.conv_block.conv1["deallocate_activation"] = True
     parameters.conv_args.d3.conv_block.conv1["reshard_if_not_optimal"] = False
     parameters.conv_args.d3.conv_block.conv1["shard_layout"] = None
-    parameters.conv_args.d3.conv_block.conv1["transpose_shards"] = False
     parameters.conv_args.d3.conv_block.conv1["activation"] = "relu"
     parameters.conv_args.d3.conv_block.conv1["padding"] = (1, 1)
     parameters.conv_args.d3.conv_block.conv1["do_sharded_to_interleaved"] = True
@@ -325,7 +301,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d3.conv_block.conv2["deallocate_activation"] = True
     parameters.conv_args.d3.conv_block.conv2["reshard_if_not_optimal"] = False
     parameters.conv_args.d3.conv_block.conv2["shard_layout"] = None
-    parameters.conv_args.d3.conv_block.conv2["transpose_shards"] = False
     parameters.conv_args.d3.conv_block.conv2["activation"] = "relu"
     parameters.conv_args.d3.conv_block.conv2["padding"] = (1, 1)
     parameters.conv_args.d3.conv_block.conv2["do_sharded_to_interleaved"] = True
@@ -336,7 +311,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d4.up["deallocate_activation"] = True
     parameters.conv_args.d4.up["reshard_if_not_optimal"] = False
     parameters.conv_args.d4.up["shard_layout"] = None
-    parameters.conv_args.d4.up["transpose_shards"] = False
     parameters.conv_args.d4.up["dtype"] = ttnn.bfloat16
 
     parameters.conv_args.d4.conv_block.conv1["act_block_h"] = None
@@ -345,7 +319,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d4.conv_block.conv1["deallocate_activation"] = True
     parameters.conv_args.d4.conv_block.conv1["reshard_if_not_optimal"] = False
     parameters.conv_args.d4.conv_block.conv1["shard_layout"] = None
-    parameters.conv_args.d4.conv_block.conv1["transpose_shards"] = False
     parameters.conv_args.d4.conv_block.conv1["activation"] = "relu"
     parameters.conv_args.d4.conv_block.conv1["padding"] = (1, 1)
     parameters.conv_args.d4.conv_block.conv1["do_sharded_to_interleaved"] = True
@@ -356,7 +329,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d4.conv_block.conv2["deallocate_activation"] = True
     parameters.conv_args.d4.conv_block.conv2["reshard_if_not_optimal"] = False
     parameters.conv_args.d4.conv_block.conv2["shard_layout"] = None
-    parameters.conv_args.d4.conv_block.conv2["transpose_shards"] = False
     parameters.conv_args.d4.conv_block.conv2["activation"] = "relu"
     parameters.conv_args.d4.conv_block.conv2["padding"] = (1, 1)
     parameters.conv_args.d4.conv_block.conv2["do_sharded_to_interleaved"] = True
@@ -367,7 +339,6 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.out["deallocate_activation"] = True
     parameters.conv_args.out["reshard_if_not_optimal"] = False
     parameters.conv_args.out["shard_layout"] = None
-    parameters.conv_args.out["transpose_shards"] = False
     parameters.conv_args.out["activation"] = ""
     parameters.conv_args.out["padding"] = (0, 0)
 

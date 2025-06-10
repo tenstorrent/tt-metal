@@ -62,7 +62,6 @@ class Conv:
             enable_act_double_buffer=conv_param.enable_act_double_buffer,
             enable_split_reader=conv_param.enable_split_reader,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
-            transpose_shards=conv_param.transpose_shards,
         )
         config_override = None
         if conv_param.act_block_h is not None:

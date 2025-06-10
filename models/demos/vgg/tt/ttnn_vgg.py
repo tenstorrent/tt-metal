@@ -92,7 +92,6 @@ def ttnn_vgg16(
                 activation="relu",
                 deallocate_activation=False,
                 reallocate_halo_output=False,
-                transpose_shards=True,
                 shard_layout=(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED if h_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                 ),
@@ -244,7 +243,6 @@ def ttnn_vgg11(
                 activation="relu",
                 deallocate_activation=False,
                 reallocate_halo_output=False,
-                transpose_shards=True,
                 shard_layout=(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED if h_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                 ),

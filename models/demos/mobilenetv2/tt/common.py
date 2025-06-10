@@ -61,7 +61,6 @@ class TtMobileNetV2Conv2D:
             activation="",
             shard_layout=self.shard_layout,
             act_block_w_div=1,
-            transpose_shards=False,
             deallocate_activation=self.deallocate_activation,
             enable_act_double_buffer=self.enable_act_double_buffer,
             enable_split_reader=self.enable_split_reader,

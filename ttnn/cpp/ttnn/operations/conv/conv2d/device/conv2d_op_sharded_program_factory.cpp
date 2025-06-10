@@ -1460,8 +1460,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         cb_indices.temp_sum_cb,
         partials_cb_uses_output};
 
-    auto writer_mcast_noc = tt::tt_metal::NOC::NOC_0;
-    auto reader_noc =
+    const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    ;
+    const tt::tt_metal::NOC reader_noc =
         writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
     auto writer_mcast_sender_id = CreateKernel(
         program,
@@ -1536,8 +1537,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
 
             bool reader_is_noc_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
-
-            TT_FATAL(!reader_is_noc_0, "Error");
 
             if (transpose_mcast) {
                 CoreCoord bottom_core = {(std::size_t)core_x_i, (std::size_t)num_cores_y - 1};
@@ -1641,7 +1640,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             } else {
                 CoreCoord top_core = {(std::size_t)core_x_i, 0};
                 auto top_core_physical = device->worker_core_from_logical_core(top_core);
-                TT_FATAL(writer_mcast_noc == tt::tt_metal::NOC::NOC_0, "Error");
                 if (core_y_i == 0) {
                     // sender
                     if (writer_mcast_noc == tt::tt_metal::NOC::NOC_0) {
@@ -1650,12 +1648,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                         sender_rt_args.push_back(top_core_physical.x);                // weights_mcast_dest_noc_end_x
                         sender_rt_args.push_back(bottom_right_core_physical.y);       // weights_mcast_dest_noc_end_y
                     } else {
-                        // TODO: ...
-                        TT_THROW("TODO: Writer on NOC 1 not supported yet!");
-                        // writer_rt_args.push_back(bottom_right_core_physical.x); // weights_mcast_dest_noc_start_x
-                        // writer_rt_args.push_back(right_core_physical.y); // weights_mcast_dest_noc_start_y
-                        // writer_rt_args.push_back(top_left_core_plus_one_physical.x); // weights_mcast_dest_noc_end_x
-                        // writer_rt_args.push_back(right_core_physical.y); // weights_mcast_dest_noc_end_y
+                        sender_rt_args.push_back(top_core_physical.x);                // weights_mcast_dest_noc_start_x
+                        sender_rt_args.push_back(bottom_right_core_physical.y);       // weights_mcast_dest_noc_start_y
+                        sender_rt_args.push_back(top_core_physical.x);                // weights_mcast_dest_noc_end_x
+                        sender_rt_args.push_back(top_left_core_plus_one_physical.y);  // weights_mcast_dest_noc_end_y
                     }
 
                     sender_rt_args.push_back(num_cores_y - 1);  // weights_mcast_num_dests
@@ -1709,8 +1705,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     }  // for num_cores
 
-    auto mcast_sender_cores_vec = grid_to_cores(mcast_sender_cores.start_coord, mcast_sender_cores.end_coord, true);
-    auto mcast_receiver_cores_vec = corerange_to_cores(mcast_receiver_cores, std::nullopt, true);
+    std::vector<CoreCoord> mcast_sender_cores_vec =
+        grid_to_cores(mcast_sender_cores.start_coord, mcast_sender_cores.end_coord, true);
     // Capture conv_reader_indices_storage to cache this with the program
     auto override_runtime_arguments_callback =
         [mcast_sender_cores = mcast_sender_cores_vec,
