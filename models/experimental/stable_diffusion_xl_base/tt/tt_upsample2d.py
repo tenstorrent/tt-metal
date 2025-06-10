@@ -46,6 +46,13 @@ class TtUpsample2D(nn.Module):
         )
 
     def interpolate(self, hidden_states):
+        memory_config = ttnn.create_sharded_memory_config(
+            shape=hidden_states.shape,
+            core_grid=ttnn.CoreGrid(y=8, x=5),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        hidden_states = ttnn.to_memory_config(hidden_states, memory_config)
         hidden_states = ttnn.upsample(hidden_states, (self.scale_factor, self.scale_factor))
         B, H, W, C = list(hidden_states.shape)
         return hidden_states, [B, C, H, W]
