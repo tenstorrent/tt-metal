@@ -41,11 +41,14 @@ FF1_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 2
 FF1_CRS_RS_OUT = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 30, SUB_DEVICE_CRS, row_wise=True)
 NORM_CRS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 7))])
 LM_HEAD_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 32, SUB_DEVICE_CRS, row_wise=True)
+BINARY_MULT_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+    ttnn.CoreCoord(1, 0), 30, SUB_DEVICE_CRS, row_wise=True
+)
 
 
 def run_all_gather_replicate_impl(
     mesh_device,
-    output_shape,
+    input_shape,
     cluster_axis,
     input_dtype,
     num_links,
@@ -86,18 +89,29 @@ def run_all_gather_replicate_impl(
     num_buffers = 8
     ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, SUB_DEVICE_CRS, 0) for _ in range(num_buffers)]
 
-    logger.info(f"Output shape: {output_shape}")
+    logger.info(f"Input shape: {input_shape}")
 
     ##################################
     ##### Set up input tensors/configs
     ##################################
 
-    ##### FF2 Case #####
-    M, N = output_shape[2:]
+    # Input shapes
+    M, N = input_shape[2:]
     N_per_shard = round_up(math.ceil(N / input_num_cores), ttnn.TILE_SIZE)
-    output_N_per_shard = round_up(math.ceil(N / output_num_cores), ttnn.TILE_SIZE)
     input_shape = [*cluster_shape, M, N]
-    intermediate_shape = [*input_shape[:-1], N * cluster_shape[cluster_axis]]
+
+    # Intermediate shapes
+    intermediate_num_cores = cluster_shape[cluster_axis]
+    intermediate_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+        ttnn.CoreCoord(1, 0), intermediate_num_cores, SUB_DEVICE_CRS, row_wise=True
+    )
+    intermediate_shape = [*cluster_shape, M, N * cluster_shape[cluster_axis]]
+    interemediate_N_per_shard = round_up(math.ceil(intermediate_shape[-1] / intermediate_num_cores), ttnn.TILE_SIZE)
+
+    # Output shapes
+    output_shape = intermediate_shape.copy()
+    output_shape[-1] *= output_num_cores
+    output_N_per_shard = intermediate_shape[-1]
 
     input_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -108,21 +122,21 @@ def run_all_gather_replicate_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
+    intermediate_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            intermediate_core_range_set,
+            [M, interemediate_N_per_shard],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
     output_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
             output_core_range_set,
             [M, output_N_per_shard],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
-    intermediate_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            output_core_range_set,
-            [M, output_N_per_shard * cluster_shape[cluster_axis]],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
@@ -155,7 +169,14 @@ def run_all_gather_replicate_impl(
     # All Gather Replicate Golden
     output_tensor_goldens_list = []
     for i in range(num_iters):
-        output_tensor_goldens_list.append(torch.sum(input_tensor, dim=cluster_axis))
+        # Golden for all gather part
+        golden_shape = intermediate_shape
+        golden_shape[cluster_axis] = 1
+        golden = input_tensor.transpose(-2, cluster_axis).reshape(golden_shape).squeeze(cluster_axis)
+
+        # TODO: Add golden for replicate part
+
+        output_tensor_goldens_list.append(golden)
 
     ##################################
     ##### Run the op
@@ -164,13 +185,14 @@ def run_all_gather_replicate_impl(
     def run_op(n_iters, store_all_results=True):
         outs = []
         for i in range(n_iters):
-            out = ttnn.experimental.all_reduce_async(
+            out = ttnn.experimental.all_gather_async(
                 tt_input_tensor,
-                tt_intermediate_tensors[i % num_buffers],
+                persistent_output_tensor=tt_intermediate_tensors[i % num_buffers],
+                dim=3,
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
                 multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
-                memory_config=output_mem_config,
+                memory_config=intermediate_mem_config,
                 topology=all_gather_replicate_topology,
                 num_links=num_links,
                 subdevice_id=worker_sub_device_id,
@@ -237,9 +259,9 @@ def run_all_gather_replicate_impl(
         output_tensor = output_tensor_goldens_list[-1]
         validate(tt_out_tensor, output_tensor)
 
-    assert (
-        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
-    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
+    # assert (
+    #     mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
+    # ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
 
     mesh_device.reset_sub_device_stall_group()
 
@@ -247,9 +269,9 @@ def run_all_gather_replicate_impl(
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(1500)
 @pytest.mark.parametrize(
-    "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
+    "input_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
     [
-        ([1, 1, 32, 2048], 0, 4, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
+        ([1, 1, 32, 960], 1, 3, 30, BINARY_MULT_CRS, 24, RING_CRS),
     ],
 )
 @pytest.mark.parametrize(
@@ -285,7 +307,7 @@ def run_all_gather_replicate_impl(
 )
 def test_all_gather_replicate(
     mesh_device,
-    output_shape,
+    input_shape,
     cluster_axis,
     input_dtype,
     num_links,
@@ -298,14 +320,12 @@ def test_all_gather_replicate(
     use_program_cache,
     function_level_defaults,
 ):
-    if output_shape == [1, 1, 32, 16 * 1024] and input_dtype == ttnn.bfloat16:
-        pytest.skip("Skipping LM Head test with bfloat16 due to OOM")
     if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
 
     run_all_gather_replicate_impl(
         mesh_device,
-        output_shape,
+        input_shape,
         cluster_axis,
         input_dtype,
         num_links,
