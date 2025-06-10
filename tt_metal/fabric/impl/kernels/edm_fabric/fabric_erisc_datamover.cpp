@@ -391,6 +391,7 @@ FORCE_INLINE void send_next_data(
     //             channel sync
 
     uint32_t src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
+    DPRINT << "Send from " << (uint32_t)src_addr << "\n";
 
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
     size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
