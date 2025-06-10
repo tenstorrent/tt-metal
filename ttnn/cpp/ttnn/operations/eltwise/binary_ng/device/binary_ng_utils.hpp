@@ -26,12 +26,12 @@ enum class KernelName {
     ComputeNoBcast,
     ComputeBcast,
     ComputeScalar,
-    ReaderNoBcastSplit,
-    WriterNoBcastSplit,
-    ReaderRowBcastSplit,
-    ReaderColBcastSplit,
-    ReaderRowBColABcastSplit,
-    ReaderScalarBcastSplit,
+    ReaderNoBcastNg,
+    WriterNoBcastNg,
+    ReaderRowBcastNg,
+    ReaderColBcastNg,
+    ReaderRowBColABcastNg,
+    ReaderScalarBcastNg,
 };
 
 struct BinaryNgKernelConfig {

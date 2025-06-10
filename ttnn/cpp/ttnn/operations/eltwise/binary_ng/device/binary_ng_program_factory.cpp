@@ -419,31 +419,31 @@ void set_or_update_runtime_arguments(
 KernelName get_reader_kernel_name_and_defines(
     const SubtileBroadcastType subtile_broadcast_type, std::map<std::string, std::string>& reader_defines) {
     if (subtile_broadcast_type == SubtileBroadcastType::NONE) {
-        return KernelName::ReaderNoBcastSplit;
+        return KernelName::ReaderNoBcastNg;
     } else if (
         subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
         reader_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
         reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
-        return KernelName::ReaderRowBcastSplit;
+        return KernelName::ReaderRowBcastNg;
     } else if (
         subtile_broadcast_type == SubtileBroadcastType::COL_A ||
         subtile_broadcast_type == SubtileBroadcastType::COL_B) {
         reader_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::COL_A ? "1" : "0";
         reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::COL_B ? "1" : "0";
-        return KernelName::ReaderColBcastSplit;
+        return KernelName::ReaderColBcastNg;
     } else if (
         subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B) {
         reader_defines["SRC_BCAST_COL"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
         reader_defines["SRC_BCAST_ROW_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
-        return KernelName::ReaderRowBColABcastSplit;
+        return KernelName::ReaderRowBColABcastNg;
     } else if (
         subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
         subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
         reader_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ? "1" : "0";
         reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::SCALAR_B ? "1" : "0";
-        return KernelName::ReaderScalarBcastSplit;
+        return KernelName::ReaderScalarBcastNg;
     } else {
         TT_FATAL(false, "Unsupported subtile broadcast type {}", static_cast<int>(subtile_broadcast_type));
     }
@@ -622,8 +622,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
 
-    // READER KERNEL
-    auto reader_defines = make_dataflow_defines(a_dtype, is_sfpu_op);
+    auto reader_defines = make_dataflow_defines(a_dtype);
     reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
     reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
 
@@ -633,9 +632,8 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     if (b.has_value()) {
         kernel_config.reader_kernel = CMAKE_UNIQUE_NAMESPACE::get_reader_kernel_name_and_defines(
             operation_attributes.subtile_broadcast_type, reader_defines);
-        writer_kernel = KernelName::WriterNoBcastSplit;
+        writer_kernel = KernelName::WriterNoBcastNg;
     }
-
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(writer_kernel, is_sfpu_op),
@@ -643,9 +641,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         tt_metal::WriterDataMovementConfig({b_is_dram, c_is_dram, has_sharding}, std::move(writer_defines)));
 
     // READER KERNEL
-    auto reader_defines = make_dataflow_defines(a_dtype);
-    reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
-    reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
