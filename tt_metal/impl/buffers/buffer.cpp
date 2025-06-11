@@ -409,8 +409,8 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
 
     std::shared_ptr<const CompressedBufferPageMapping> new_page_mapping;
     if (is_sharded(buffer_layout_)) {
-        new_page_mapping = std::make_shared<const CompressedBufferPageMapping>(
-            get_compressed_buffer_page_mapping()->filter_by_host_range(
+        new_page_mapping =
+            std::make_shared<const CompressedBufferPageMapping>(get_buffer_page_mapping()->filter_by_host_range(
                 region.offset / page_size(), (region.offset + region.size) / page_size()));
     }
 
@@ -428,7 +428,7 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
     buffer->allocation_status_ = AllocationStatus::ALLOCATED;
     buffer->root_buffer_ = new_root_buffer;
     buffer->root_buffer_offset_ = new_root_buffer_offset;
-    buffer->compressed_buffer_page_mapping_ = new_page_mapping;
+    buffer->buffer_page_mapping_ = new_page_mapping;
 
     return buffer;
 }
@@ -649,21 +649,13 @@ DeviceAddr Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) con
     return base_page_address + offset;
 }
 
-const std::shared_ptr<const BufferPageMapping>& Buffer::get_buffer_page_mapping() {
+const std::shared_ptr<const CompressedBufferPageMapping>& Buffer::get_buffer_page_mapping() {
     TT_FATAL(is_sharded(this->buffer_layout_), "Buffer not sharded");
     if (!this->buffer_page_mapping_) {
-        this->buffer_page_mapping_ = std::make_shared<const BufferPageMapping>(generate_buffer_page_mapping(*this));
+        this->buffer_page_mapping_ =
+            std::make_shared<const CompressedBufferPageMapping>(generate_buffer_page_mapping(*this));
     }
     return this->buffer_page_mapping_;
-}
-
-const std::shared_ptr<const CompressedBufferPageMapping>& Buffer::get_compressed_buffer_page_mapping() {
-    TT_FATAL(is_sharded(this->buffer_layout_), "Buffer not sharded");
-    if (!this->compressed_buffer_page_mapping_) {
-        this->compressed_buffer_page_mapping_ =
-            std::make_shared<const CompressedBufferPageMapping>(*get_buffer_page_mapping());
-    }
-    return this->compressed_buffer_page_mapping_;
 }
 
 std::shared_ptr<Buffer> Buffer::root_buffer() {

@@ -171,8 +171,6 @@ void write_socket_configs(
     const std::shared_ptr<MeshBuffer>& socket_data_buffer,
     const SocketConfig& config,
     SocketEndpoint socket_endpoint) {
-    TT_THROW("Not implemented");
-    /*
     auto mesh_device = config_buffer->device();
     auto peer_device = peer_config_buffer->device();
     auto& core_to_core_id = config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
@@ -245,7 +243,6 @@ void write_socket_configs(
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }
     }
-    */
 }
 
 uint32_t get_physical_mesh_id(MeshDevice* mesh_device, const MeshCoordinate& coord) {

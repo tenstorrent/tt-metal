@@ -54,6 +54,10 @@ std::vector<BufferCorePageMapping::ContiguousHostPages> to_host_page_ranges(
 
 CompressedBufferPageMapping::CompressedBufferPageMapping(const BufferPageMapping& page_mapping) :
     all_cores(page_mapping.all_cores) {
+    for (size_t i = 0; i < all_cores.size(); i++) {
+        core_to_core_id[all_cores[i]] = i;
+    }
+
     size_t num_cores = page_mapping.all_cores.size();
     core_page_mappings.resize(num_cores);
     for (size_t core_id = 0; core_id < num_cores; core_id++) {
@@ -68,15 +72,13 @@ CompressedBufferPageMapping::CompressedBufferPageMapping(const BufferPageMapping
             .host_ranges = CMAKE_UNIQUE_NAMESPACE::to_host_page_ranges(core_host_page_indices),
         });
     }
-
-    // log_info(tt::LogAlways, "BufferPageMapping: {}", page_mapping);
-    // log_info(tt::LogAlways, "CompressedBufferPageMapping: {}", core_page_mappings);
 }
 
 CompressedBufferPageMapping CompressedBufferPageMapping::filter_by_host_range(
     uint32_t start_host_page, uint32_t end_host_page) const {
     CompressedBufferPageMapping result;
     result.all_cores = all_cores;
+    result.core_to_core_id = core_to_core_id;
     result.core_page_mappings.resize(all_cores.size());
 
     BufferCorePageMapping result_core_mapping;
@@ -128,9 +130,6 @@ CompressedBufferPageMapping CompressedBufferPageMapping::filter_by_host_range(
             add_core_mapping(core_id);
         }
     }
-
-    // log_info(tt::LogAlways, "Filtering by host range {}-{}: {}", start_host_page, end_host_page,
-    // result.core_page_mappings);
 
     return result;
 }

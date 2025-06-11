@@ -1306,8 +1306,6 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteShardedSubBufferMultipl
         EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, region, false);
         vector<uint32_t> result;
         EnqueueReadSubBuffer(device->command_queue(), *buffer, result, region, true);
-        log_info(tt::LogTest, "Expected: {}", src);
-        log_info(tt::LogTest, "Result: {}", result);
         EXPECT_EQ(src, result);
     }
 }

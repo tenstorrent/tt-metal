@@ -1836,8 +1836,6 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
         socket_fifo_size);
 }
 
-/*
-
 // Test multiple connections
 TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -2041,8 +2039,6 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
             socket_fifo_size);
     }
 }
-
-*/
 
 // Verify that sockets are correctly created on different sub devices
 TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {

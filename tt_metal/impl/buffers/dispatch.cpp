@@ -298,7 +298,7 @@ ShardedBufferWriteDispatchParams initialize_sharded_buf_dispatch_params(
     const BufferDispatchConstants& buf_dispatch_constants) {
     ShardedBufferWriteDispatchParams dispatch_params;
     dispatch_params.total_pages_to_write = buffer.size() / buffer.page_size();
-    dispatch_params.buffer_page_mapping = buffer.get_compressed_buffer_page_mapping();
+    dispatch_params.buffer_page_mapping = buffer.get_buffer_page_mapping();
     dispatch_params.total_pages_written = 0;
     dispatch_params.page_size_to_write = buffer.aligned_page_size();
     dispatch_params.dst_page_index = 0;
@@ -656,7 +656,7 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     dispatch_params.padded_page_size = buffer.aligned_page_size();
     dispatch_params.src_page_index = 0;
     dispatch_params.unpadded_dst_offset = 0;
-    dispatch_params.buffer_page_mapping = buffer.get_compressed_buffer_page_mapping();
+    dispatch_params.buffer_page_mapping = buffer.get_buffer_page_mapping();
     dispatch_params.total_pages_to_read = buffer.size() / buffer.page_size();
     dispatch_params.total_pages_read = 0;
     dispatch_params.expected_num_workers_completed = expected_num_workers_completed;

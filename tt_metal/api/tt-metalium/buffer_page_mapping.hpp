@@ -62,6 +62,7 @@ struct CompressedBufferPageMapping {
     CompressedBufferPageMapping filter_by_host_range(uint32_t start_host_page, uint32_t end_host_page) const;
 
     std::vector<CoreCoord> all_cores;
+    std::unordered_map<CoreCoord, uint32_t> core_to_core_id;
     std::vector<std::vector<BufferCorePageMapping>> core_page_mappings;
 };
 

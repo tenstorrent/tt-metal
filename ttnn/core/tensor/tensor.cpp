@@ -472,13 +472,10 @@ Tensor Tensor::to_device(distributed::MeshDevice* mesh_device, const MemoryConfi
 Tensor Tensor::cpu(bool blocking, QueueId cq_id) const { return tensor_ops::tensor_cpu(*this, blocking, cq_id); }
 
 Tensor Tensor::extract_shard(const CoreCoord& core) const {
-    TT_THROW("Not implemented");
-    /*
     ZoneScoped;
     const auto& buffer_page_mapping = *this->buffer()->get_buffer_page_mapping();
     auto core_id = buffer_page_mapping.core_to_core_id.at(core);
     return this->extract_shard(core_id);
-    */
 }
 
 Tensor Tensor::extract_shard(const uint32_t& core_id) const {
