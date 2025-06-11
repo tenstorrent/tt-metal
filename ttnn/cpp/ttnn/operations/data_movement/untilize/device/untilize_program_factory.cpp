@@ -749,7 +749,7 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
     tt::tt_metal::IDevice* device = a.device();
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const auto& tile_shape = a.get_tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
@@ -876,7 +876,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     tt::tt_metal::IDevice* device = a.device();
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t tensor_width = a.get_padded_shape()[-1];
     uint32_t tensor_height = a.volume() / tensor_width;
