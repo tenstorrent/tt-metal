@@ -95,7 +95,7 @@ class TtTransformer2DModel(nn.Module):
             epsilon=self.norm_eps,
         )
 
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.linear(
