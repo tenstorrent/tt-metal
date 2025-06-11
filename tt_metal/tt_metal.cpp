@@ -1175,8 +1175,8 @@ uint32_t CreateSemaphore(
             std::optional<uint32_t> semaphore_id;
             TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
             for (const auto& core_range : crs.ranges()) {
-                CoreCoord start_core = core_range.start_coord;
-                CoreCoord end_core = core_range.end_coord;
+                // CoreCoord start_core = core_range.start_coord;
+                // CoreCoord end_core = core_range.end_coord;
                 std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range, core_type);
                 if (!semaphore_id.has_value()) {
                     semaphore_id = semaphore_id_candidate;
