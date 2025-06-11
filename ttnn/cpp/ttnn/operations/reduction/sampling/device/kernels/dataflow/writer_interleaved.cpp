@@ -7,7 +7,7 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-
+#include "debug/dprint.h"
 /* This kernel does:
 Top-p Cumulative Probability Filtering:
 Iteratively accumulates probabilities, comparing them against the nucleus threshold p to determine the smallest set of
@@ -225,6 +225,9 @@ void kernel_main() {
     volatile tt_l1_ptr uint16_t* rand_values = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_rand_addr);
     uint16_t rand = rand_values[0];
 
+    DPRINT << "rand: " << rand << ENDL();
+    DPRINT << "p: " << p << ENDL();
+
     // wait for compute kernel
     cb_wait_front(output_final_indices_rm_cb_index, 32);
     cb_wait_front(output_local_values_cb_index, 1);
@@ -261,11 +264,13 @@ void kernel_main() {
     }
 
     uint16_t bf16_p = static_cast<uint16_t>(p & 0xFFFF);
+    DPRINT << "bf16_p: " << bf16_p << ENDL();
     uint32_t cum_prob = 0;
     bool cutoff_found = false;
     uint32_t top_p_cutoff = end_id_local_phase_1;  // Default to all tokens
     for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
-        bfloat16_add(cum_prob, local_values[i]);
+        // DPRINT << "local vales" << i << " :" << local_values[i] << ENDL();
+        cum_prob = bfloat16_add(cum_prob, local_values[i]);
         if (bfloat16_greater(cum_prob, bf16_p)) {
             top_p_cutoff = i + 1;  // Include this token in the top-p set
             cutoff_found = true;
@@ -275,6 +280,7 @@ void kernel_main() {
     if (!cutoff_found) {
         for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
             // cum sum of local values
+            // DPRINT << "local vales" << i << " :" << local_values[i] << ENDL();
             cum_prob = bfloat16_add(cum_prob, local_values[i]);
             if (bfloat16_greater(cum_prob, bf16_p)) {
                 top_p_cutoff = i + 1;
@@ -282,7 +288,7 @@ void kernel_main() {
             }
         }
     }
-
+    DPRINT << "top_p_cutoff: " << top_p_cutoff << ENDL();
     // adjust phase indices
     end_id_local_phase_1 = start_id_local_phase_1 + (top_p_cutoff - 16);
     if (top_p_cutoff <= 16) {
@@ -299,6 +305,8 @@ void kernel_main() {
     for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
         // cum sum of local values
         cum_sum = bfloat16_div(bfloat16_add(cum_sum, local_values[i]), cum_prob);
+        DPRINT << "cum_sum: " << cum_sum << ENDL();
+        DPRINT << "rand: " << rand << ENDL();
         if (bfloat16_greater(cum_sum, rand)) {
             index_out[core_id] = final_indices[local_indices[i]];
             index_found = true;
@@ -309,6 +317,8 @@ void kernel_main() {
         for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
             // cum sum of local values
             cum_sum = bfloat16_div(bfloat16_add(cum_sum, local_values[i]), cum_prob);
+            DPRINT << "cum_sum: " << cum_sum << ENDL();
+            DPRINT << "rand: " << rand << ENDL();
             if (bfloat16_greater(cum_sum, rand)) {
                 index_out[core_id] = final_indices[local_indices[i]];
                 index_found = true;
