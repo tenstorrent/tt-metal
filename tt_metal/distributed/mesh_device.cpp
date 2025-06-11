@@ -8,7 +8,7 @@
 #include <mesh_coord.hpp>
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
-#include <small_vector.hpp>
+#include <tt_stl/small_vector.hpp>
 #include <sub_device.hpp>
 #include <system_mesh.hpp>
 #include <tt_metal.hpp>
