@@ -16,7 +16,7 @@
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "shape_base.hpp"
-#include "small_vector.hpp"
+#include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 #include "tt_metal/distributed/coordinate_translation.hpp"
 

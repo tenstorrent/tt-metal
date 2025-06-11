@@ -8,7 +8,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include <tt-metalium/small_vector.hpp>
+#include <tt_stl/small_vector.hpp>
 
 namespace PYBIND11_NAMESPACE {
 namespace detail {

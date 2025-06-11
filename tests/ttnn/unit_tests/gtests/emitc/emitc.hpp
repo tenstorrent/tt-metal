@@ -7,7 +7,7 @@
 
 #include "tt-metalium/bfloat16.hpp"
 #include "tt-metalium/shape.hpp"
-#include "tt-metalium/small_vector.hpp"
+#include <tt_stl/small_vector.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/distributed/types.hpp"
