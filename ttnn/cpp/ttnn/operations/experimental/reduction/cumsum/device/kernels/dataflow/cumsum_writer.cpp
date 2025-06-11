@@ -39,9 +39,6 @@ void kernel_main() {
     uint32_t i0 = start_low_tile_index;
     uint32_t i1 = start_high_tile_index;
     for (uint32_t i = start_row; i < start_row + num_rows; i++) {
-        uint32_t i0 = i / (product_high_dims * HtWt);
-        uint32_t i1 = i % (product_high_dims * HtWt);
-
         for (uint32_t j = 0; j < tiles_per_row; j++) {
             uint32_t tile_j = j;
             if (flip) {
@@ -60,6 +57,9 @@ void kernel_main() {
             cb_pop_front(cb_in, 1);
         }
 
+        // The following is equivalent to the following, but does not use integer division
+        // i0 = i / (product_high_dims * HtWt);
+        // i1 = i % (product_high_dims * HtWt);
         i1++;
         if (i1 >= product_high_dims * HtWt) {
             i1 = 0;
