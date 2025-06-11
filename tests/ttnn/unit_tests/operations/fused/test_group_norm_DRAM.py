@@ -14,7 +14,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 
 
-@skip_for_blackhole("Fails on Blackhole. Issue #20913")
+#@skip_for_blackhole("Fails on Blackhole. Issue #20913")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
