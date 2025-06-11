@@ -1297,7 +1297,6 @@ void build_tt_fabric_program(
                 device->id(),
                 remote_chip_id,
                 edm_config,
-                true,  /* enable_persistent_mode */
                 false, /* build_in_worker_connection_mode */
                 false, /* is_dateline */
                 eth_direction);
@@ -1378,7 +1377,6 @@ void build_tt_fabric_program(
                 device->id(),
                 remote_physical_chip_id,
                 curr_edm_config,
-                true,  /* enable_persistent_mode */
                 false, /* build_in_worker_connection_mode */
                 is_dateline,
                 control_plane.routing_direction_to_eth_direction(direction));

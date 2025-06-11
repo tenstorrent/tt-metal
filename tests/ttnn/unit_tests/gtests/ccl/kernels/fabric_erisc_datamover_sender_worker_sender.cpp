@@ -7,7 +7,6 @@
 #include "dataflow_api.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
-#include "tests/ttnn/unit_tests/gtests/ccl/kernels/test_kernels.common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
@@ -66,11 +65,9 @@ void kernel_main() {
         reinterpret_cast<volatile uint32_t* const>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
     *last_message_semaphore_address = 0;
     auto worker_buffer_index_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    bool connected_to_persistent_fabric = get_arg_val<uint32_t>(arg_idx++) != 0;
 
     // TODO: move to semaphore
     auto edm_buffer_index_sem_id = get_arg_val<uint32_t>(arg_idx++);
-    ASSERT(edm_buffer_index_sem_id < 8);
     auto edm_buffer_index_id = edm_buffer_index_sem_id;
     ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(writer_send_sem_addr));
     ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(worker_teardown_sem_addr));
@@ -89,7 +86,7 @@ void kernel_main() {
 
     ASSERT(num_buffers_per_channel > 0);
     auto sender = tt::tt_fabric::WorkerToFabricEdmSender(
-        connected_to_persistent_fabric,
+        true,  // persistent fabric (always true)
         0,
         eth_sender_noc_x,
         eth_sender_noc_y,
@@ -164,9 +161,5 @@ void kernel_main() {
         noc_semaphore_wait(last_message_semaphore_address, 1);
     }
 
-    bool closed_fabric_connection = terminate_fabric_endpoints_farthest_to_nearest(sender, a_packet_header_addr, arg_idx);
-
-    if (!closed_fabric_connection) {
-        sender.close();
-    }
+    sender.close();
 }
