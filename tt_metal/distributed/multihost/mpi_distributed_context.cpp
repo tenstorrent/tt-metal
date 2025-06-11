@@ -474,8 +474,7 @@ void MPIContext::abort(int error_code) const { MPI_Abort(comm_, error_code); }
 void MPIContext::revoke_and_shrink() {
 #if (!OMPI_HAS_ULFM)
     TT_THROW("revoke_and_shrink() requires MPI ULFM support which is not available in this build");
-#endif
-
+#else
     int rc = MPIX_Comm_revoke(comm_);
     if (rc != MPI_SUCCESS && rc != MPI_ERR_REVOKED) {  // another rank may have revoked first
         abort(rc);
@@ -506,17 +505,19 @@ void MPIContext::revoke_and_shrink() {
     this->group_ = new_group;
     this->rank_ = new_rank;
     this->size_ = new_size;
+#endif
 }
 
 bool MPIContext::is_revoked() {
 #if (!OMPI_HAS_ULFM)
     TT_THROW("is_revoked() requires MPI ULFM support which is not available in this build");
-#endif
+#else
     int flag = 0;
     // MPI_Comm_test_inter is safe to call even if the communicator is revoked
     // don't need to check error code
     MPI_Comm_test_inter(comm_, &flag);
     return flag != 0;
+#endif
 }
 
 MPIContext::~MPIContext() {
