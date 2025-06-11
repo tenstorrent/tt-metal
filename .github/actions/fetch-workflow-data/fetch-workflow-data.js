@@ -68,6 +68,58 @@ class WorkflowDataFetcher {
   }
 
   /**
+   * Debug function to fetch earliest and latest data from runs
+   * @param {Array} runs - Array of workflow runs
+   * @returns {Object} Object containing earliest and latest run data
+   */
+  getEarliestAndLatestData(runs) {
+    if (!runs.length) {
+      return {
+        earliest: null,
+        latest: null,
+        message: 'No runs available'
+      };
+    }
+
+    // Sort runs by creation date
+    const sortedRuns = [...runs].sort((a, b) => {
+      const dateA = new Date(a.created_at).getTime();
+      const dateB = new Date(b.created_at).getTime();
+      return dateA - dateB;
+    });
+
+    const earliest = sortedRuns[0];
+    const latest = sortedRuns[sortedRuns.length - 1];
+
+    return {
+      earliest: {
+        id: earliest.id,
+        name: earliest.name,
+        created_at: earliest.created_at,
+        conclusion: earliest.conclusion,
+        status: earliest.status,
+        head_branch: earliest.head_branch,
+        event: earliest.event
+      },
+      latest: {
+        id: latest.id,
+        name: latest.name,
+        created_at: latest.created_at,
+        conclusion: latest.conclusion,
+        status: latest.status,
+        head_branch: latest.head_branch,
+        event: latest.event
+      },
+      total_runs: runs.length,
+      date_range: {
+        start: earliest.created_at,
+        end: latest.created_at,
+        days: ((new Date(latest.created_at) - new Date(earliest.created_at)) / (1000 * 60 * 60 * 24)).toFixed(1)
+      }
+    };
+  }
+
+  /**
    * Core data processing functions
    */
   groupRunsByName(runs) {
@@ -546,6 +598,11 @@ async function run() {
     const uploadPath = cachePath.replace('.json', '-upload.json');
     fs.writeFileSync(uploadPath, JSON.stringify(Array.from(groupedRequestedRuns.entries()), null, 2));
     core.info(`[Fetch] Saved filtered dataset to upload file: ${groupedRequestedRuns.size} workflows, ${requestedPeriodRuns.length} total runs`);
+
+    // Debug: Get earliest and latest data
+    const debugData = fetcher.getEarliestAndLatestData(requestedPeriodRuns);
+    core.info('[Debug] Data range information:');
+    core.info(JSON.stringify(debugData, null, 2));
 
     // Set outputs
     core.setOutput('total-runs', requestedPeriodRuns.length);
