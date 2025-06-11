@@ -158,7 +158,7 @@ jobs:
       build-wheel: true
       version: 22.04
   tg-quick:
-    if: ${{ inputs.tg-quick || needs.determine-tests.outputs.run-quick == 'true' }}
+    if: ${{ needs.determine-tests.outputs.run-quick == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-quick.yaml
@@ -171,7 +171,7 @@ jobs:
       topology-6u: ${{ needs.determine-tests.outputs.is-config-tg == 'false'}}
 
   tg-unit-tests:
-    if: ${{ inputs.tg-unit || needs.determine-tests.outputs.run-unit == 'true' }}
+    if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-unit-tests-impl.yaml
@@ -182,7 +182,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
   tg-frequent-tests:
-    if: ${{ inputs.tg-frequent || needs.determine-tests.outputs.run-frequent == 'true' }}
+    if: ${{ needs.determine-tests.outputs.run-frequent == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-frequent-tests-impl.yaml
@@ -193,7 +193,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
   tg-demo-tests:
-    if: ${{ inputs.tg-demo || needs.determine-tests.outputs.run-demo == 'true' }}
+    if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-demo-tests-impl.yaml
@@ -204,7 +204,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
   tg-model-perf-tests:
-    if: ${{ inputs.tg-model-perf || needs.determine-tests.outputs.run-model-perf == 'true' }}
+    if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
@@ -215,7 +215,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
   tg-stress-test:
-    if: ${{ inputs.tg-stress || needs.determine-tests.outputs.run-stress == 'true' }}
+    if: ${{ needs.determine-tests.outputs.run-stress == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-stress.yaml
