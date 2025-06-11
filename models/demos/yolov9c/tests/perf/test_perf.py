@@ -60,6 +60,7 @@ def test_perf(device, model_task, use_weights_from_ultralytics):
     device.disable_and_clear_program_cache()
 
     torch_input, ttnn_input = create_yolov9c_input_tensors(device, model=True)
+
     batch_size = torch_input.shape[0]
     torch_model = load_torch_model(use_weights_from_ultralytics=use_weights_from_ultralytics, model_task=model_task)
     parameters = create_yolov9c_model_parameters(torch_model, torch_input, device=device)
@@ -69,7 +70,8 @@ def test_perf(device, model_task, use_weights_from_ultralytics):
 
     for i in range(2):
         start = time.time()
-        ttnn_model_output = ttnn_model(ttnn.reallocate(ttnn_input))
+        torch_input, ttnn_input = create_yolov9c_input_tensors(device, model=True)
+        ttnn_model_output = ttnn_model(ttnn_input)
         end = time.time()
         durations.append(end - start)
         dealloc_output(ttnn_model_output)

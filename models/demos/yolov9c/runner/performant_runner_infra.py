@@ -64,6 +64,7 @@ class YOLOv9PerformanceRunnerInfra:
         num_devices = device.get_num_devices()
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
         n, c, h, w = torch_input_tensor.shape
+        ## Converting from image based channels (3) to min channels (16)
         if c == 3:
             c = 16
         input_mem_config = ttnn.create_sharded_memory_config(
