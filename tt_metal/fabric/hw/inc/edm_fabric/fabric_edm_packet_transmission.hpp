@@ -207,6 +207,26 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_
                 tt::tt_fabric::forward_and_local_write_noc_vc);
         } break;
 
+        case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
+            const auto dest_address1 = header.command_fields.unicast_scatter_write.noc_address1;
+            const auto dest_address2 = header.command_fields.unicast_scatter_write.noc_address2;
+            const auto chunk_size1 = header.command_fields.unicast_scatter_write.chunk_size1;
+            noc_async_write_one_packet_with_trid<false, false>(
+                payload_start_address,
+                dest_address1,
+                chunk_size1,
+                transaction_id,
+                tt::tt_fabric::local_chip_data_cmd_buf,
+                tt::tt_fabric::edm_to_local_chip_noc);
+            noc_async_write_one_packet_with_trid<false, false>(
+                payload_start_address + chunk_size1,
+                dest_address2,
+                payload_size_bytes - chunk_size1,
+                transaction_id,
+                tt::tt_fabric::local_chip_data_cmd_buf,
+                tt::tt_fabric::edm_to_local_chip_noc);
+        } break;
+
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC:
         default: {
             ASSERT(false);
