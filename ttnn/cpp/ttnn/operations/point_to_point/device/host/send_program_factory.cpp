@@ -184,7 +184,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         page_idx_start += increment;
     }
 
-    // !TODO #23425
+    // !TODO implement program cache #23425
     return {std::move(program), PointToPointOp::SendReceive::shared_variables_t{}};
 }
 }  // namespace ttnn::operations::point_to_point::detail

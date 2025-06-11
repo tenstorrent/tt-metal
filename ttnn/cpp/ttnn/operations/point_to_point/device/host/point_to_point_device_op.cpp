@@ -52,7 +52,7 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
     TT_FATAL(mesh_device != nullptr, "Point to point expected input tensor on mesh device");
 
     const auto&& device_ids = mesh_device->get_device_ids();
-    TT_FATAL(device_ids.size() == 2, "Point to point expects MeshDevice of size 2");
+    TT_FATAL(device_ids.size() == 2, "Point to point expects MeshDevice of size 2 but got {}", device_ids.size());
 
     TT_FATAL(
         operation_attributes.send_coord != operation_attributes.receive_coord, "Can't send/receive to the same device");
