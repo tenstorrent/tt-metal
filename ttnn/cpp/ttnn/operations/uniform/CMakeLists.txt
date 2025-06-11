@@ -1,5 +1,5 @@
 add_library(ttnn_op_uniform ${LIB_TYPE})
-add_library(TT::NN::Ops::Uniform ALIAS ttnn_op_uniform)
+add_library(TTNN::Ops::Uniform ALIAS ttnn_op_uniform)
 
 target_precompile_headers(ttnn_op_uniform REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_uniform)
@@ -17,7 +17,7 @@ target_link_libraries(
     ttnn_op_uniform
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
 install(TARGETS ttnn_op_uniform LIBRARY COMPONENT tar)

@@ -1,5 +1,5 @@
 add_library(ttnn_op_eltwise_complex_unary ${LIB_TYPE})
-add_library(TT::NN::Ops::Eltwise::Complex::Unary ALIAS ttnn_op_eltwise_complex_unary)
+add_library(TTNN::Ops::Eltwise::Complex::Unary ALIAS ttnn_op_eltwise_complex_unary)
 
 target_precompile_headers(ttnn_op_eltwise_complex_unary REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_complex_unary)
@@ -11,7 +11,7 @@ target_link_libraries(
     ttnn_op_eltwise_complex_unary
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
 install(TARGETS ttnn_op_eltwise_complex_unary LIBRARY COMPONENT tar)
