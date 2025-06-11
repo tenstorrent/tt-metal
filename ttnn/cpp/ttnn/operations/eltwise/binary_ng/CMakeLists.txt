@@ -3,6 +3,12 @@ add_library(TTNN::Ops::Eltwise::Binary::NG ALIAS ttnn_op_eltwise_binary_ng)
 
 target_precompile_headers(ttnn_op_eltwise_binary_ng REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_binary_ng)
+set_target_properties(
+    ttnn_op_eltwise_binary_ng
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 
 target_sources(
     ttnn_op_eltwise_binary_ng
