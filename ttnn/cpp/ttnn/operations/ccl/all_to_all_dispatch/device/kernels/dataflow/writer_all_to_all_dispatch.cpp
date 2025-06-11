@@ -11,13 +11,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 
-enum Direction {
-    EAST = 0,
-    WEST = 1,
-    NORTH = 2,
-    SOUTH = 3,
-};
-
 inline void send_packet(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint64_t noc_dest_addr,
@@ -113,7 +106,7 @@ void kernel_main() {
     cb_wait_front(input_tensor_cb_id, input_pages);
     cb_wait_front(indices_tensor_cb_id, indices_pages);
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
-
+    DPRINT << "SUCCESSFULLY WAITED FOR ALL TENSORS" << ENDL();
     for (uint32_t local_token = 0; local_token < batches_per_device; local_token++) {
         uint32_t b = local_token + batches_per_device * src_chip_id;
         uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id) + local_token * input_page_size;
@@ -127,11 +120,29 @@ void kernel_main() {
 
             for (uint32_t d = 0; d < num_devices; d++) {
                 if (devices_for_expert[d] == 1) {
+                    DPRINT << "local token: " << local_token << " batch: " << b << " expert: " << expert_chosen
+                           << ENDL();
+                    DPRINT << "sending from device: " << src_chip_id << " to device: " << (uint32_t)dest_chip_ids[d]
+                           << ENDL();
+
                     if (dest_chip_ids[d] == src_chip_id) {
                         // simply write via local noc
+                        DPRINT << "Token is being written to local device" << ENDL();
                         noc_async_write(input_token_read_addr, output_token_write_addr, input_page_size);
                         noc_async_write_barrier();
+                        DPRINT << "Token is written to local device" << ENDL();
                     } else {
+                        DPRINT << "Token is being written to remote device via fabric over dest_mesh_id: "
+                               << (uint32_t)dest_mesh_ids[d] << ENDL();
+                        if (routers[d] == 0) {
+                            DPRINT << "Using router: NORTH" << ENDL();
+                        } else if (routers[d] == 1) {
+                            DPRINT << "Using router: EAST" << ENDL();
+                        } else if (routers[d] == 2) {
+                            DPRINT << "Using router: SOUTH" << ENDL();
+                        } else if (routers[d] == 3) {
+                            DPRINT << "Using router: WEST" << ENDL();
+                        }
                         unicast_packet_header->to_noc_unicast_write(
                             NocUnicastCommandHeader{output_token_write_addr}, input_page_size);
                         uint8_t route = routers[d];
@@ -151,17 +162,23 @@ void kernel_main() {
                             input_token_read_addr,
                             input_page_size,
                             fabric_connections[route]);
+                        DPRINT << "Token is written to remote device" << ENDL();
                     }
+                    DPRINT << "successfully sent token" << ENDL() << ENDL();
                 }
             }
         }
     }
+    DPRINT << "SUCCESSFULLY SENT ALL INPUTS" << ENDL();
 
     // send semaphore increment to all other devices
     for (uint32_t local_token = 0; local_token < batches_per_device; local_token++) {
         uint32_t b = local_token + batches_per_device * src_chip_id;
+        DPRINT << "Dispatching metadata for local token " << local_token << " global batch " << b << " on device "
+               << src_chip_id << ENDL();
         for (uint32_t d = 0; d < num_devices; d++) {
             if (dest_chip_ids[d] == src_chip_id) {
+                DPRINT << "Sending metadata to local device " << (uint32_t)dest_chip_ids[d] << ENDL();
                 // send metadata to local device output buffer
                 uint32_t token_indices_address = get_read_ptr(indices_tensor_cb_id) + local_token * indices_page_size;
                 uint64_t metadata_write_addr = get_noc_addr(b, metadata_addr_gen);
@@ -169,7 +186,9 @@ void kernel_main() {
                 noc_async_write_barrier();
                 noc_semaphore_inc(get_noc_addr(global_semaphore_address), 1);
                 noc_async_atomic_barrier();
+                DPRINT << "Metadata sent to local device" << ENDL();
             } else {
+                DPRINT << "Sending metadata to remote device " << (uint32_t)dest_chip_ids[d] << ENDL();
                 // send metadata to other devices
                 uint32_t token_indices_address = get_read_ptr(indices_tensor_cb_id) + local_token * indices_page_size;
                 uint64_t metadata_write_addr = get_noc_addr(b, metadata_addr_gen);
@@ -193,13 +212,17 @@ void kernel_main() {
                     token_indices_address, indices_page_size);
                 fabric_connections[routers[d]].send_payload_flush_blocking_from_address(
                     (uint32_t)metadata_packet_header, sizeof(PACKET_HEADER_TYPE));
+                DPRINT << "Metadata sent to remote device" << ENDL();
             }
         }
+        DPRINT << "Successfully dispatched metadata" << ENDL() << ENDL();
     }
+    DPRINT << "SUCCESSFULLY SENT ALL METADATA" << ENDL();
 
     for (uint32_t i = 0; i < 4; i++) {
         if (directions[i]) {
             fabric_connections[i].close();
         }
     }
+    DPRINT << "SUCCESSFULLY CLOSED ALL FABRIC CONNECTIONS" << ENDL();
 }

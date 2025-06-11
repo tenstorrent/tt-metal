@@ -76,7 +76,12 @@ void kernel_main() {
     }
 
     noc_async_read_barrier();
+    DPRINT << "SUCCESSFULLY READ IN ALL TENSORS" << ENDL();
     cb_push_back(indices_tensor_cb_id, indices_pages);
     cb_push_back(mapping_tensor_cb_id, mapping_pages);
     cb_push_back(input_tensor_cb_id, input_pages);
+    while (*(uint32_t*)global_semaphore_address != batch_size) {
+        DPRINT << "WAITING FOR SEMAPHORE WITH VALUE: " << *(uint32_t*)global_semaphore_address << ENDL();
+    }
+    noc_semaphore_wait((uint32_t*)global_semaphore_address, batch_size);
 }

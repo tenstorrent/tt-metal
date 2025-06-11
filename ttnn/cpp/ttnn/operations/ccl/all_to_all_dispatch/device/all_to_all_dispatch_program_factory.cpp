@@ -297,8 +297,12 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto metadata_page_size = detail::get_page_size(metadata_tensor);
 
     auto input_pages = detail::get_num_pages(input_tensor);
-    // tt::log_info(tt::LogAlways, "input shape: {}, input_pages: {}, input_page_size: {}",
-    // input_tensor.logical_shape(), input_pages, input_page_size);
+    tt::log_info(
+        tt::LogAlways,
+        "input shape: {}, input_pages: {}, input_page_size: {}",
+        input_tensor.logical_shape(),
+        input_pages,
+        input_page_size);
     auto indices_pages = detail::get_num_pages(indices_tensor);
     // tt::log_info(tt::LogAlways, "indices shape: {}, indices_pages: {}, indices_page_size: {}",
     // indices_tensor.logical_shape(), indices_pages, indices_page_size);
