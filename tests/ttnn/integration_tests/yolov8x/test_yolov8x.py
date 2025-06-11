@@ -75,7 +75,6 @@ def test_yolov8x_640(device, input_tensor, use_weights_from_ultralytics):
     ttnn_model = TtYolov8xModel(device=device, parameters=parameters)
     parameters = custom_preprocessor(device, state_dict, inp_h=inp_h, inp_w=inp_w)
 
-    # pad input channels to 16 to avoid slow interleaved2sharded codepath for 3/8 channels
     ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     with torch.inference_mode():
