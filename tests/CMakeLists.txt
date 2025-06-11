@@ -14,7 +14,7 @@ target_link_libraries(
         small_vector
         Boost::algorithm
         TT::Metalium
-        tcmalloc
+        optional_tcmalloc
 )
 
 if(TT_METAL_BUILD_TESTS)

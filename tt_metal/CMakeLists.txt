@@ -353,7 +353,7 @@ target_link_libraries(
         Reflect::Reflect
         TT::STL
         tt-logger::tt-logger
-        tcmalloc
+        optional_tcmalloc
     PRIVATE
         Metalium::Metal::Impl
         metal_common_libs
@@ -451,7 +451,7 @@ if(TT_INSTALL)
             span
             small_vector
             tt-logger
-            tcmalloc
+            optional_tcmalloc
         EXPORT Metalium
         FILE_SET
         api

@@ -145,20 +145,21 @@ endif()
 #   in order to propogate to the rest of tt_metal, tt_eager, etc.
 ############################################################################################################################
 
-add_library(tcmalloc INTERFACE)
+# optional_tcmalloc library is an interface for tcmalloc, non-empty only if ENABLE_TCMALLOC is ON.
+add_library(optional_tcmalloc INTERFACE)
 if(ENABLE_TCMALLOC)
     find_library(TCMALLOC_LIB NAMES tcmalloc_minimal)
     if(TCMALLOC_LIB)
         message(STATUS "Found TCMalloc: ${TCMALLOC_LIB}")
         target_compile_options(
-            tcmalloc
+            optional_tcmalloc
             INTERFACE
                 -fno-builtin-malloc
                 -fno-builtin-calloc
                 -fno-builtin-realloc
                 -fno-builtin-free
         )
-        target_link_libraries(tcmalloc INTERFACE ${TCMALLOC_LIB})
+        target_link_libraries(optional_tcmalloc INTERFACE ${TCMALLOC_LIB})
     else()
         message(
             FATAL_ERROR
@@ -179,7 +180,7 @@ target_link_libraries(
         atomic
         hwloc
         numa
-        tcmalloc
+        optional_tcmalloc
 )
 
 add_compile_options(
