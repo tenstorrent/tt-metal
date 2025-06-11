@@ -136,7 +136,7 @@
             "op_name": "ReduceScatter_FF3",
             "kernel_duration": 9817.020833333334,
             "op_to_op": 812.1111111111111,
-            "first_to_last_start": 347.1111111111111,
+            "first_to_last_start": 562.4444444444445,
             "non-overlapped-dispatch-time": 7359.9,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
@@ -146,7 +146,7 @@
         "RotaryEmbeddingLlamaFusedQK_0": {
             "op_name": "RotaryEmbeddingLlamaFusedQK",
             "kernel_duration": 2821,
-            "op_to_op": 606.1111111111111,
+            "op_to_op": 765.3333333333334,
             "first_to_last_start": 2560.8888888888887,
             "non-overlapped-dispatch-time": 2844.3,
             "kernel_duration_relative_margin": 0.1,
@@ -190,8 +190,8 @@
         "Untilize_0": {
             "op_name": "Untilize",
             "kernel_duration": 1517.3333333333335,
-            "op_to_op": 1371.111111111111,
-            "first_to_last_start": 1562.888888888889,
+            "op_to_op": 741.7777777777778,
+            "first_to_last_start": 2220.5555555555557,
             "non-overlapped-dispatch-time": 3113.6,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.4,
@@ -301,7 +301,7 @@
         },
         "AllGatherAsync_0": {
             "op_name": "AllGatherAsync_0",
-            "kernel_duration": 9597.513888888889,
+            "kernel_duration": 13075.743055555555 ,
             "op_to_op": 703.0,
             "non-overlapped-dispatch-time": 2910.0,
             "kernel_duration_relative_margin": 0.2,
