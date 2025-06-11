@@ -35,7 +35,7 @@
         },
         "AllGatherAsync_0": {
             "op_name": "AllGatherAsync_Binary_Mult",
-            "kernel_duration": 11328.694444444445,
+            "kernel_duration": 9585.454861111111,
             "op_to_op": 959.5555,
             "first_to_last_start": 96.77777777777777,
             "non-overlapped-dispatch-time": 4351.1,
@@ -136,7 +136,7 @@
             "op_name": "ReduceScatter_FF3",
             "kernel_duration": 9817.020833333334,
             "op_to_op": 812.1111111111111,
-            "first_to_last_start": 562.4444444444445,
+            "first_to_last_start": 287.0,
             "non-overlapped-dispatch-time": 7359.9,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
@@ -190,8 +190,8 @@
         "Untilize_0": {
             "op_name": "Untilize",
             "kernel_duration": 1517.3333333333335,
-            "op_to_op": 741.7777777777778,
-            "first_to_last_start": 2220.5555555555557,
+            "op_to_op": 1563.7777777777778,
+            "first_to_last_start": 1563.7777777777778,
             "non-overlapped-dispatch-time": 3113.6,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.4,
@@ -301,7 +301,7 @@
         },
         "AllGatherAsync_0": {
             "op_name": "AllGatherAsync_0",
-            "kernel_duration": 13075.743055555555 ,
+            "kernel_duration": 9880.5 ,
             "op_to_op": 703.0,
             "non-overlapped-dispatch-time": 2910.0,
             "kernel_duration_relative_margin": 0.2,
