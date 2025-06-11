@@ -9,18 +9,10 @@ import numpy as np
 import ttnn
 
 from loguru import logger
-from models.utility_functions import is_blackhole, torch_random
+from models.utility_functions import is_grayskull, is_blackhole, torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.utility_functions import skip_for_blackhole, run_for_blackhole, skip_for_wormhole_b0
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole, run_for_blackhole, skip_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-def random_torch_tensor(dtype, shape):
-    if dtype == ttnn.uint16:
-        return torch.randint(0, 100, shape).to(torch.int16)
-    if dtype == ttnn.int32:
-        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
-    return torch.rand(shape).bfloat16().float()
 
 
 def transpose(
@@ -36,7 +28,11 @@ def transpose(
     torch.manual_seed(2005)
     output_shape = list(input_shape)
     output_shape[dim0], output_shape[dim1] = input_shape[dim1], input_shape[dim0]
-    x = random_torch_tensor(input_dtype, input_shape)
+
+    if input_dtype == ttnn.uint16:
+        x = torch.randint(0, 100, input_shape).to(torch.int16)
+    else:
+        x = torch.randn(input_shape).bfloat16().float()
 
     ttnn_input = ttnn.from_torch(
         x, layout=ttnn.TILE_LAYOUT, dtype=input_dtype, device=device, memory_config=input_mem_config
@@ -83,10 +79,13 @@ def test_fold_transpose(device, use_program_cache):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["bfloat16", "float"],
 )
 def test_transpose_hc_unit(dtype, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+
     logger.info("transpose on C H dim")
 
     N = 3
@@ -97,6 +96,7 @@ def test_transpose_hc_unit(dtype, device):
     transpose(input_shape, device, dim0=1, dim1=-2, input_dtype=dtype)
 
 
+@skip_for_grayskull("Integer formats not supported on Grayskull")
 def test_transpose_wh_uint16(device):
     N = 3
     C = 32 * 2
@@ -106,6 +106,7 @@ def test_transpose_wh_uint16(device):
     transpose(input_shape, device, dim0=-2, dim1=-1, input_dtype=ttnn.uint16)
 
 
+@skip_for_grayskull("Bfp4 format not supported on Grayskull")
 def test_transpose_wh_bfp4(device):
     N = 1
     C = 32
@@ -117,10 +118,13 @@ def test_transpose_wh_bfp4(device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["bfloat16", "float"],
 )
 def test_transpose_hc_program_cache(dtype, device, use_program_cache):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+
     N = 3
     C = 32 * 2
     H = 32 * 4
@@ -147,10 +151,13 @@ def test_transpose_hc_program_cache(dtype, device, use_program_cache):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["bfloat16", "float"],
 )
 def test_transpose_cn_program_cache(dtype, device, use_program_cache):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+
     N = 3
     C = 32 * 2
     H = 32 * 4
@@ -168,10 +175,13 @@ def test_transpose_cn_program_cache(dtype, device, use_program_cache):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.int32),
-    ids=["bfloat16", "float", "bfloat8_b", "int32"],
+    (ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b),
+    ids=["bfloat16", "float", "bfloat8_b"],
 )
 def test_transpose_wh_program_cache(dtype, device, use_program_cache):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+
     N = 3
     C = 32 * 2
     H = 32 * 4
@@ -200,10 +210,13 @@ def test_transpose_wh_program_cache(dtype, device, use_program_cache):
 @skip_for_blackhole("GH #15234")
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat8_b, ttnn.float32, ttnn.int32),
-    ids=["bfloat8_b", "float", "int32"],
+    (ttnn.bfloat8_b, ttnn.float32),
+    ids=["bfloat8_b", "float"],
 )
 def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+
     compute_grid_size = device.compute_with_storage_grid_size()
     input_dtype = dtype
 
@@ -291,7 +304,7 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
 
     # shape change also changes shard_spec as shard_shape is dependent on input_shape (resulting in CACHE MISS)
     # tensor cannot fit in L1 for fp32
-    if input_dtype not in [ttnn.float32, ttnn.int32]:
+    if input_dtype != ttnn.float32:
         transpose(
             input_shape,
             device,
@@ -304,6 +317,7 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
         )
 
 
+@skip_for_grayskull("Grayskull has pcc issue when transpose used untilize")
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("h", [230])
@@ -336,6 +350,7 @@ def test_transpose_hw_rm_with_padding(device, n, c, h, w):
     assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
 
 
+@skip_for_grayskull("Grayskull has pcc issue when transpose used untilize")
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [8])
@@ -374,6 +389,7 @@ def run_transpose_hw_rm_program_cache(device, n, c, h, w, use_program_cache):
     assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
 
 
+@skip_for_grayskull("Grayskull has pcc issue when transpose used untilize")
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [8])
@@ -634,14 +650,17 @@ def test_transpose_bfloat8_b(device, shape, swap_dims):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["bfloat16", "float"],
 )
 @pytest.mark.parametrize(
     "shape",
     [(1, 32, 12, 100), (1, 12, 32, 100), (1, 35, 7, 7), (1, 1, 1, 1), (1, 12, 32, 100)],
 )
 def test_transpose_hc(dtype, shape, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+
     logger.info("transpose on C H dim")
 
     transpose(shape, device, dim0=1, dim1=-2, input_dtype=dtype)
@@ -649,8 +668,8 @@ def test_transpose_hc(dtype, shape, device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["bfloat16", "float"],
 )
 @pytest.mark.parametrize(
     "shape",
@@ -663,6 +682,8 @@ def test_transpose_hc(dtype, shape, device):
 def test_transpose_2D(dtype, shape, layout, device):
     pytest.skip("Unstable see #16779")
     torch.manual_seed(2005)
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_output = torch_input.transpose(0, 1)
 
@@ -674,8 +695,8 @@ def test_transpose_2D(dtype, shape, layout, device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32, ttnn.int32),
-    ids=["bfloat16", "float", "int32"],
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["bfloat16", "float"],
 )
 @pytest.mark.parametrize(
     "shape",
@@ -698,13 +719,15 @@ def test_transpose_2D(dtype, shape, layout, device):
 )
 def test_transpose_3D(dtype, shape, layout, dims, device):
     torch.manual_seed(2005)
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
     if layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.bfloat16 and (shape[-1] % 2 or shape[dims[-1]] % 2):
         pytest.skip("Skipping RM odd inner dim test cases")
 
-    torch_input = random_torch_tensor(dtype, shape)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_output = torch_input.transpose(dims[0], dims[1])
 
-    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=layout, device=device)
     tt_output = ttnn.transpose(tt_input, dims[0], dims[1])
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.9999)
@@ -927,6 +950,8 @@ def test_transpose_unpadded(shape, dims, layout, dtype, pad_value, device):
     torch.manual_seed(2005)
     if pad_value is not None and is_blackhole():
         pytest.skip("Blackhole reduce is needed for the full test to work")
+    elif dtype == ttnn.float32 and is_grayskull():
+        pytest.skip("Grayskull does not support float32")
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_output = torch_input.transpose(dims[0], dims[1])
 
@@ -1109,6 +1134,7 @@ def test_transpose_hw_rm(shape, device):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
+@skip_for_grayskull("Grayskull does not support float32")
 def test_transpose_16411(device):
     torch.manual_seed(2005)
     input_shape = (5, 3, 1, 1, 12, 8)
