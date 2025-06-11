@@ -1,5 +1,13 @@
-set(VECADD_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/vecadd/vecadd.cpp)
+cmake_minimum_required(VERSION 3.22...3.30)
+project(metal_examples_contributed)
 
-CREATE_PGM_EXAMPLES_EXE("${VECADD_SRCS}" "contributed") # output binaries to build/programming_examples/contributed
+# Add the vecadd example subdirectory
+add_subdirectory(vecadd)
 
-add_custom_target(contributed DEPENDS ${PROGRAMMING_EXAMPLES_TEST_TARGETS})
+# Copy the executable to the root build directory for CI pipeline to find
+add_custom_command(
+    TARGET metal_example_vecadd
+    POST_BUILD
+    COMMAND
+        ${CMAKE_COMMAND} -E copy vecadd/metal_example_vecadd metal_example_vecadd
+)
