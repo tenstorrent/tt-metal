@@ -723,6 +723,12 @@ def test_dram_to_l1_reshard_fruit(
     output_mem_config = ttnn.MemoryConfig(output_sharding_scheme, output_buffer_type, output_shard_spec)
 
     input = torch.randn(input_shape).bfloat16()
+    # seed = 0
+    # for i in range(input_shape[0]):
+    #     for j in range(input_shape[1]):
+    #         for k in range(input_shape[2]):
+    #                 input[i, j, k] = seed
+    #                 seed += 1
     # input = random.random()*torch.ones(input_shape).bfloat16()
     input_tensor = ttnn.Tensor(input, ttnn.bfloat16, device=device, layout=input_layout, mem_config=input_mem_config)
 
