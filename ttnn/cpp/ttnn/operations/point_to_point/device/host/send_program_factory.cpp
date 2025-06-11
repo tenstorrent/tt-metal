@@ -16,17 +16,22 @@ std::tuple<uint32_t, bool, IDevice*> calculate_fabric_connection(
     const ccl::Topology& topology) {
     auto devices = mesh_device->get_devices();
     auto begin_it = devices.cbegin();
-    int src_idx =
-        std::find_if(begin_it, devices.cend(), [&](auto& d) { return d == mesh_device->get_device(src_coord); }) -
-        begin_it;
-    int dest_idx =
-        std::find_if(begin_it, devices.cend(), [&](auto& d) { return d == mesh_device->get_device(dest_coord); }) -
-        begin_it;
+
+    auto src_it =
+        std::find_if(begin_it, devices.cend(), [&](auto& d) { return d == mesh_device->get_device(src_coord); });
+    TT_FATAL(src_it != devices.cend(), "Invalid source coordinate");
+    int src_idx = src_it - begin_it;
+
+    auto dest_it =
+        std::find_if(begin_it, devices.cend(), [&](auto& d) { return d == mesh_device->get_device(dest_coord); });
+    TT_FATAL(dest_it != devices.cend(), "Invalid dest coordinate");
+
+    int dest_idx = dest_it - begin_it;
 
     // sign indicates direction, however fabrics' forward/backward concept is reversed
     int line_hops = dest_idx - src_idx;
 
-    TT_ASSERT(line_hops != 0);
+    TT_FATAL(line_hops != 0, "Should not be send/receiving to the same device");
 
     if (topology == ccl::Topology::Ring) {
         int ring_hops = line_hops + (line_hops < 0 ? -1 : 1) * mesh_device->get_devices().size();
@@ -34,14 +39,14 @@ std::tuple<uint32_t, bool, IDevice*> calculate_fabric_connection(
         if (std::abs(ring_hops) < std::abs(line_hops)) {
             bool dst_is_forward = (ring_hops > 0);
             auto next_device = devices.at(src_idx + (dst_is_forward ? 1 : -1));
-            TT_ASSERT(next_device != nullptr);
+            TT_FATAL(next_device != nullptr, "Did not find next device");
             return std::make_tuple(std::abs(ring_hops), !dst_is_forward, next_device);
         }
     }
 
     bool dst_is_forward = (line_hops > 0);
     auto next_device = devices.at(src_idx + (dst_is_forward ? 1 : -1));
-    TT_ASSERT(next_device != nullptr);
+    TT_FATAL(next_device != nullptr, "Did not find next device");
     return std::make_tuple(std::abs(line_hops), !dst_is_forward, next_device);
 }
 
@@ -179,7 +184,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         page_idx_start += increment;
     }
 
-    // !TODO
+    // !TODO #23425
     return {std::move(program), PointToPointOp::SendReceive::shared_variables_t{}};
 }
 }  // namespace ttnn::operations::point_to_point::detail
