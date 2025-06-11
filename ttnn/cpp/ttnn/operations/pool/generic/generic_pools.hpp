@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
@@ -44,6 +43,7 @@ struct AvgPool2DOp {
         std::array<uint32_t, 2> stride,
         std::array<uint32_t, 2> padding,
         bool ceil_mode = false,
+        bool count_include_pad = true,
         std::optional<int32_t> divisor_override = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
