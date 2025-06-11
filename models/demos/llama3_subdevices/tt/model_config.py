@@ -1967,12 +1967,12 @@ class TtModelArgs:
             self.model_name = "Llama3.1-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-            self.max_prefill_chunk_size = 64 * 1024
+            self.max_prefill_chunk_size = 128 * 1024
         elif "3.3-70B" in checkpoint_dir:
             self.model_name = "Llama3.3-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-            self.max_prefill_chunk_size = 64 * 1024
+            self.max_prefill_chunk_size = 128 * 1024
         else:
             logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
         self.orig_context_len = 8192
@@ -1990,13 +1990,13 @@ class TtModelArgs:
         self._set_params_from_dict(config, is_hf=True)
         self.is_70b = self.dim == 8192 and self.n_layers == 80
         if self.is_70b:
-            self.max_prefill_chunk_size = 64 * 1024
+            self.max_prefill_chunk_size = 128 * 1024
         # TODO Hack for deepseek distill 70b. generalize if needed
         if "Llama-70B" in checkpoint_dir:  # if we're using a distill version of 70B, use same settings as Llama-70b
             self.model_name = "Deepseek-R1-Distill-70B"
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-            self.max_prefill_chunk_size = 64 * 1024
+            self.max_prefill_chunk_size = 128 * 1024
             self.orig_context_len = 8192
 
     def __repr__(self):
