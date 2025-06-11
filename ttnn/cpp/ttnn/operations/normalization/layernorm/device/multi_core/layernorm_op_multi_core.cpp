@@ -200,7 +200,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     uint32_t im1_t = WtB;
     uint32_t in2_t = 2;  // scaler for reduce coming from reader
     uint32_t in3_t = 2;  // epsilon coming from reader
-    uint32_t im2_t = WtB / 2;  //
+    uint32_t im2_t = WtB;  //
     bool cb_fits_in_L1 = CB_can_fit_in_L1(
         in0_t * in_single_tile_size,
         in1_t * inb_single_tile_size,

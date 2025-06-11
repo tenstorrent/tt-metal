@@ -73,7 +73,7 @@ test_sweep_args = [
         1e-6,
     ),
 ]
-for i in range(3, 4):
+for i in range(3, 25):
     test_sweep_args.append(
         (
             [
