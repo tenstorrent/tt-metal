@@ -503,9 +503,9 @@ def run_llama3_demo(
 
                 if not stress_test:
                     # Increment failure count if throughput is too low
-                    if ( iteration < 200 and 
-                        (tokens_per_second_per_user < tsu_thresholds["min"]
-                        or tokens_per_second_per_user > tsu_thresholds["max"])
+                    if iteration < 200 and (
+                        tokens_per_second_per_user < tsu_thresholds["min"]
+                        or tokens_per_second_per_user > tsu_thresholds["max"]
                     ):
                         tsu_failures += 1
 
