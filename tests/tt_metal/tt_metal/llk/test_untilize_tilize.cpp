@@ -414,6 +414,50 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilizeA_B) {
     }
 }
 
+TEST_F(DeviceFixture, TensixComputeUnpackTilizeBenchmarkPlaygroundFP161) {
+    unit_tests::compute::tilize::TestConfig test_config = {
+        .short_init = true,
+        .dst_full_sync_en = false,
+        .fp32_dest_acc_en = false,
+        .bfp8_output = false,
+
+        .input_single_tile_size = 16 * 16 * 4 * 2,
+        .output_single_tile_size = 16 * 16 * 4 * 2,
+
+        .num_tiles_r = 1,
+        .num_tiles_c = 1,
+        .num_faces_per_tile = 4,
+        .face_r_dim = 16,
+
+        .untilize_type = std::nullopt,
+        .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+
+        .golden_function = ::unit_tests::compute::gold_standard_tilize};
+    unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+}
+
+TEST_F(DeviceFixture, TensixComputeUnpackTilizeBenchmarkPlaygroundBFP81) {
+    unit_tests::compute::tilize::TestConfig test_config = {
+        .short_init = true,
+        .dst_full_sync_en = false,
+        .fp32_dest_acc_en = false,
+        .bfp8_output = true,
+
+        .input_single_tile_size = 16 * 16 * 4 * 2,
+        .output_single_tile_size = 16 * 16 * 4 + 16 * 4,
+
+        .num_tiles_r = 1,
+        .num_tiles_c = 1,
+        .num_faces_per_tile = 4,
+        .face_r_dim = 16,
+
+        .untilize_type = std::nullopt,
+        .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+
+        .golden_function = ::unit_tests::compute::gold_standard_tilize};
+    unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+}
+
 TEST_F(DeviceFixture, TensixComputeUnpackTilizeBenchmarkPlaygroundFP162) {
     unit_tests::compute::tilize::TestConfig test_config = {
         .short_init = true,

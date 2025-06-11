@@ -137,7 +137,7 @@ void MAIN {
 #ifdef PRE_TILIZE
             tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
 
-            mm_block_init_short_with_dt(
+            mm_block_init_short_with_both_dt(
                 in0_cb_id,
                 in1_cb_id,
                 in0_pretilize_cb_id,
@@ -164,7 +164,7 @@ void MAIN {
                 if (in0_block_w_i % in0_nblocks_w_tilize == 0) {
                     tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
 
-                    mm_block_init_short_with_dt(
+                    mm_block_init_short_with_both_dt(
                         in0_cb_id,
                         in1_cb_id,
                         in0_pretilize_cb_id,
@@ -197,7 +197,7 @@ void MAIN {
                         tilized_in0_cb_id);
 #endif
 
-                    mm_block_init_short_with_dt(
+                    mm_block_init_short_with_both_dt(
                         mm_in0_cb_id,
                         in1_cb_id,
                         in0_cb_id,
@@ -243,7 +243,6 @@ void MAIN {
                             mm_block_init_short_with_dt(
                                 mm_in0_cb_id,
                                 in1_cb_id,
-                                mm_in0_cb_id,
                                 matmul_partials_cb,
                                 false,
                                 out_subblock_w,
