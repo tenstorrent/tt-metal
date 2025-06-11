@@ -493,12 +493,6 @@ bool MeshDevice::close() {
 
     // TODO #20966: Remove these calls
     for (auto device : view_->get_devices()) {
-        if (parent_mesh_) {
-            log_info(
-                tt::LogMetal, "device id: {} setting mesh device to parent mesh {}", device->id(), parent_mesh_->id());
-        } else {
-            log_info(tt::LogMetal, "device id: {} setting mesh device to nullptr", device->id());
-        }
         dynamic_cast<Device*>(device)->set_mesh_device(parent_mesh_);
     }
 
