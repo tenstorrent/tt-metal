@@ -145,7 +145,7 @@ cached_program_t PointToPointOp::SendReceive::create_at(
         return detail::receive_program_factory(operation_attributes, tensor_return_value);
     }
 
-    TT_THROW("Bad coordinate in point_to_point");
+    TT_FATAL(false, "Bad coordinate in point_to_point");
     return cached_program_t{tt::tt_metal::Program{}, shared_variables_t{}};
 }
 }  // namespace ttnn::operations::point_to_point
