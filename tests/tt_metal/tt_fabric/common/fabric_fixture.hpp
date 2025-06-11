@@ -94,11 +94,11 @@ public:
 };
 
 class Fabric1DFixture : public BaseFabricFixture {
-    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_1D, 1); }
+    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_1D); }
 };
 
 class Fabric2DFixture : public BaseFabricFixture {
-    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D, 1); }
+    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D); }
 };
 
 class Fabric2DDynamicFixture : public BaseFabricFixture {

@@ -1210,6 +1210,7 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
     }
 
     // re-init sockets to reflect fabric routing
+    this->ethernet_sockets_.clear();
     this->initialize_ethernet_sockets();
 }
 

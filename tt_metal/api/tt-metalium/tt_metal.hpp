@@ -53,7 +53,7 @@ bool DispatchStateCheck(bool isFastDispatch);
  * | Argument           | Description                         | Data type         | Valid range | Required |
  * |--------------------|-------------------------------------|-------------------|-------------|----------|
  * | fabric_config      | Fabric config to set                | FabricConfig      |             | Yes      |
- * | num_routing_planes | Number of routing planes for fabric | optional<uint8_t> |             | Yes      |
+ * | num_routing_planes | Number of routing planes for fabric | optional<uint8_t> |             | No       |
  */
 void SetFabricConfig(FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
 

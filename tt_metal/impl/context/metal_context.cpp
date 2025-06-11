@@ -326,7 +326,9 @@ void MetalContext::initialize_fabric_config() {
     this->cluster_->configure_ethernet_cores_for_fabric_routers(
         this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& control_plane = this->get_control_plane();
-    control_plane.initialize_fabric_context(this->fabric_config_);
+    if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
+        control_plane.initialize_fabric_context(this->fabric_config_);
+    }
     control_plane.configure_routing_tables_for_fabric_ethernet_channels();
 }
 
