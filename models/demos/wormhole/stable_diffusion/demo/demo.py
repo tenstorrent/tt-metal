@@ -155,6 +155,8 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
     # COMPILE
     ttnn_scheduler.set_timesteps(num_inference_steps)
     ttnn.copy_host_to_device_tensor(encoder_hidden_states_rand, ttnn_text_embeddings_device, cq_id=0)
+    print(f"random latents shape: {rand_latents.shape}")
+    print(f"ttnn_text_embeddings_device shape: {ttnn_text_embeddings_device.shape}")
     output = ttnn.from_device(
         run(
             model,
@@ -233,8 +235,8 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
             # on blackhole, we use the original vae decoder until #20760 is fixed
             latents = ttnn.to_torch(output).to(torch.float32)
             image = vae.decode(latents).sample
-        profiler.end(f"inference_prompt_{i}")
         ttnn.synchronize_device(device)
+        profiler.end(f"inference_prompt_{i}")
 
         # Image post-processing
         image = (image / 2 + 0.5).clamp(0, 1)
