@@ -603,6 +603,11 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
             error_msg = get_noc_target_str(device_id, core, noc, san);
             error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " overwrites mailboxes).";
             break;
+        case DebugSanitizeNocLinkedTransactionViolation:
+            error_msg = get_noc_target_str(device_id, core, noc, san);
+            error_msg += fmt::format(
+                " (submitting a non-mcast transaction when there's a linked transaction in cmd_buf {}).", san->extra);
+            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",

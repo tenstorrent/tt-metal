@@ -220,7 +220,7 @@ struct debug_sanitize_noc_addr_msg_t {
     volatile uint8_t is_multicast;
     volatile uint8_t is_write;
     volatile uint8_t is_target;
-    volatile uint8_t pad;
+    volatile uint8_t extra;
 };
 
 // Host -> device. Populated with the information on where we want to insert delays.
@@ -244,6 +244,7 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeNocMixedVirtualandPhysical = 10,
     DebugSanitizeInlineWriteDramUnsupported = 11,
     DebugSanitizeNocAddrMailbox = 12,
+    DebugSanitizeNocLinkedTransactionViolation = 13,
 };
 
 struct debug_assert_msg_t {
