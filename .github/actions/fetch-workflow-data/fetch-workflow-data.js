@@ -599,16 +599,16 @@ async function run() {
     fs.writeFileSync(uploadPath, JSON.stringify(Array.from(groupedRequestedRuns.entries()), null, 2));
     core.info(`[Fetch] Saved filtered dataset to upload file: ${groupedRequestedRuns.size} workflows, ${requestedPeriodRuns.length} total runs`);
 
-    // Debug: Get earliest and latest data
-    const debugData = fetcher.getEarliestAndLatestData(requestedPeriodRuns);
-    core.info('[Debug] Data range information:');
-    core.info(JSON.stringify(debugData, null, 2));
+    // // Debug: Get earliest and latest data
+    // const debugData = fetcher.getEarliestAndLatestData(requestedPeriodRuns);
+    // core.info('[Debug] Data range information:');
+    // core.info(JSON.stringify(debugData, null, 2));
 
-    // Debug: Get earliest and latest data for all-post-commit
-    const postCommitRuns = requestedPeriodRuns.filter(run => run.name === 'All post-commit tests');
-    const postCommitDebugData = fetcher.getEarliestAndLatestData(postCommitRuns);
-    core.info('[Debug] all-post-commit data range information:');
-    core.info(JSON.stringify(postCommitDebugData, null, 2));
+    // // Debug: Get earliest and latest data for all-post-commit
+    // const postCommitRuns = requestedPeriodRuns.filter(run => run.name === 'All post-commit');
+    // const postCommitDebugData = fetcher.getEarliestAndLatestData(postCommitRuns);
+    // core.info('[Debug] all-post-commit data range information:');
+    // core.info(JSON.stringify(postCommitDebugData, null, 2));
 
     // Set outputs
     core.setOutput('total-runs', requestedPeriodRuns.length);
