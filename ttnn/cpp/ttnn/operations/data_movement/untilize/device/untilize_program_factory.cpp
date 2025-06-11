@@ -931,7 +931,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         }
     }
 
-    // TODO: This memory calculation is a) outdated/inaccurate and needs to be fixed and b) needs
+    // TODO (#23449): This memory calculation is a) outdated/inaccurate and needs to be fixed and b) needs
     // to be moved up a few layers as the available memory may be different upon a program cache hit
 
     // Determine how much L1 space we can use for input and output CBs,
