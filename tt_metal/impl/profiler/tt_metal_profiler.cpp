@@ -10,19 +10,14 @@
 #include <mesh_workload.hpp>
 #include <mesh_command_queue.hpp>
 #include <tt_metal.hpp>
-#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <exception>
 #include <filesystem>
-#include <functional>
-#include <iterator>
 #include <limits>
 #include <map>
-#include <memory>
 #include <mutex>
 #include <optional>
 #include <ostream>
@@ -38,7 +33,6 @@
 
 #include "assert.hpp"
 #include "buffer.hpp"
-#include "buffer_types.hpp"
 #include "core_coord.hpp"
 #include "data_types.hpp"
 #include "dev_msgs.h"
@@ -77,7 +71,6 @@ void DumpMeshDeviceProfileResults(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     for (IDevice* device : mesh_device.get_devices()) {
-        log_info(tt::LogMetal, "Dumping device profile results for device {} in mesh device", device->id());
         detail::DumpDeviceProfileResults(device, state, metadata);
     }
 #endif
@@ -595,10 +588,6 @@ void ProfilerSync(ProfilerSyncState state) {
                     std::tie(receiver_device_id, receiver_eth_core) =
                         sender_device->get_connected_ethernet_core(sender_eth_core);
 
-                    // std::cout << sender_device_id << ":" << sender_eth_core.x << "," << sender_eth_core.y;
-                    // std::cout << "->" << receiver_device_id << ":" << receiver_eth_core.x << ",";
-                    // std::cout << receiver_eth_core.y << std::endl;
-
                     if (visited_devices.find(sender_device_id) == visited_devices.end() or
                         visited_devices.find(receiver_device_id) == visited_devices.end()) {
                         visited_devices.insert(sender_device_id);
@@ -650,8 +639,7 @@ void ClearProfilerControlBuffer(IDevice* device) {
 void InitDeviceProfiler(IDevice* device) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-    const chip_id_t device_id = device->id();
-    CoreCoord logical_grid_size = device->logical_grid_size();
+
     TracySetCpuTime(TracyGetCpuTime());
 
     if (getDeviceProfilerState()) {
@@ -692,7 +680,7 @@ void DumpDeviceProfileResults(
     IDevice* device, ProfilerDumpState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-    log_info(tt::LogMetal, "Dumping device profile results for device {} state {}", device->id(), state);
+
     std::vector<CoreCoord> workerCores;
     const chip_id_t device_id = device->id();
     const uint8_t device_num_hw_cqs = device->num_hw_cqs();
@@ -717,15 +705,12 @@ void DumpDeviceProfileResults(
     const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-    const std::string name = fmt::format("Device Dump {}", device->id());
-    ZoneName(name.c_str(), name.size());
 
     std::scoped_lock<std::mutex> lock(device_mutex);
 
     if (getDeviceProfilerState()) {
         if (state != ProfilerDumpState::ONLY_DISPATCH_CORES) {
             if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
-                log_info(tt::LogMetal, "Finishing device {}", device->id());
                 if (auto mesh_device = device->get_mesh_device()) {
                     mesh_device->mesh_command_queue().finish();
                 } else {

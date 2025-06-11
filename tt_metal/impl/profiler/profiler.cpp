@@ -1121,8 +1121,6 @@ void DeviceProfiler::dumpResults(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    log_info(tt::LogMetal, "dumpResults for device {} state {} data_source {}", device->id(), state, data_source);
-
     const chip_id_t device_id = device->id();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     device_core_frequency = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
@@ -1137,22 +1135,19 @@ void DeviceProfiler::dumpResults(
     if (data_source == ProfilerDataBufferSource::DRAM) {
         for (const auto& worker_core : worker_cores) {
             readControlBuffers(device, worker_core, state);
-            // log_info(tt::LogMetal, "Read control buffer for device {} worker core {}", device_id, worker_core);
         }
+
         if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
             if (state == ProfilerDumpState::FORCE_UMD_READ || onlyProfileDispatchCores(state)) {
                 issueSlowDispatchReadFromProfilerBuffer(device);
             } else {
                 issueFastDispatchReadFromProfilerBuffer(device);
-                log_info(tt::LogMetal, "Issued fast dispatch read from profiler buffer for device {}", device_id);
             }
         } else {
             issueSlowDispatchReadFromProfilerBuffer(device);
-            log_info(tt::LogMetal, "Issued slow dispatch read from profiler buffer for device {}", device_id);
         }
         for (const auto& worker_core : worker_cores) {
             resetControlBuffers(device, worker_core, state);
-            // log_info(tt::LogMetal, "Reset control buffer for device {} worker core {}", device_id, worker_core);
         }
     }
 
@@ -1185,10 +1180,7 @@ void DeviceProfiler::dumpResults(
     } else {
         for (const auto& worker_core : worker_cores) {
             if (data_source == ProfilerDataBufferSource::L1) {
-                ZoneScopedN("Reading L1 profiler Data buffer");
                 readControlBuffers(device, worker_core, state);
-                // log_info(tt::LogMetal, "Read L1 control buffer for device {} worker core {}", device_id,
-                // worker_core);
                 resetControlBuffers(device, worker_core, state);
 
                 std::vector<uint32_t> core_l1_data_buffer;
@@ -1238,8 +1230,6 @@ void DeviceProfiler::dumpResults(
 
         log_file_ofs.close();
     }
-
-    log_info(tt::LogMetal, "FinisheddumpResults for device {} state {}", device->id(), state);
 #endif
 }
 

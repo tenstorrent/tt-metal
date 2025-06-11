@@ -6,11 +6,9 @@
 
 #include <nlohmann/json_fwd.hpp>
 #include <stdint.h>
-#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <map>
-#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -22,14 +20,11 @@
 #include <vector>
 
 #include "buffer.hpp"
-#include "mesh_buffer.hpp"
 #include "program.hpp"
 #include "common/TracyTTDeviceData.hpp"
 #include "core_coord.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "profiler_optional_metadata.hpp"
-#include "profiler_paths.hpp"
-#include "profiler_state.hpp"
 #include "profiler_types.hpp"
 #include "tt-metalium/program.hpp"
 #include "tracy/TracyTTDevice.hpp"
@@ -41,11 +36,6 @@ class IDevice;
 class Program;
 }  // namespace tt_metal
 }  // namespace tt
-
-using std::chrono::duration;
-using std::chrono::duration_cast;
-using std::chrono::nanoseconds;
-using std::chrono::steady_clock;
 
 namespace tt {
 

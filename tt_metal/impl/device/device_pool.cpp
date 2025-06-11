@@ -684,11 +684,11 @@ bool DevicePool::close_device(chip_id_t device_id) {
 }
 
 bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize) {
+    ZoneScoped;
+
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
     std::vector<chip_id_t> devices_to_close;
 
-    ZoneScoped;
-    log_info(tt::LogMetal, "close_devices for {} devices", devices.size());
     // Loop over all devices and add remote devices to devices_to_close
     // For Galaxy if an mmio device's tunnels are being closed, close the mmio device as well
     std::unordered_set<chip_id_t> mmio_devices_to_close;
@@ -793,7 +793,6 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
 
     bool pass = true;
     for (const auto& dev_id : devices_to_close) {
-        log_info(tt::LogMetal, "devicepool close_devices", dev_id);
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
         pass &= dev->close();
     }
@@ -802,7 +801,6 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
 }
 
 DevicePool::~DevicePool() {
-    log_info(tt::LogMetal, "DevicePool destructor");
     for (const auto& dev : this->devices) {
         if (dev != nullptr and dev->is_initialized()) {
             // TODO: #13876, Was encountering issues with the DispatchMemMap being destroyed before the DevicePool
