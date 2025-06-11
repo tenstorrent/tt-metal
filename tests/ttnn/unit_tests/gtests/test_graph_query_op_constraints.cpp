@@ -546,6 +546,7 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
             std::nullopt,
             std::nullopt,
             std::nullopt,
+            std::nullopt,
             output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
