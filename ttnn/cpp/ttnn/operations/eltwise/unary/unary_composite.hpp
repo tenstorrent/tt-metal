@@ -173,9 +173,6 @@ constexpr auto deg2rad = ttnn::register_operation<
 constexpr auto rad2deg = ttnn::register_operation<
     "ttnn::rad2deg",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::RAD2DEG>>();
-constexpr auto acosh = ttnn::register_operation<
-    "ttnn::acosh",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::ACOSH>>();
 constexpr auto asinh = ttnn::register_operation<
     "ttnn::asinh",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::ASINH>>();

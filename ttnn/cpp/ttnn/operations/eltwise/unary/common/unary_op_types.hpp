@@ -45,6 +45,7 @@ enum class UnaryOpType {
     SIGNBIT,
     ASIN,
     ACOS,
+    ACOSH,
     RSQRT,
     RELU6,
     ATAN,
