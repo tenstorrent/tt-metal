@@ -321,9 +321,9 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             }
         case SUB:
             if (dtype == DataType::INT32) {
-                return {"sub_int32_tile_init();", "sub_int32_tile"};
+                return {"sub_int_tile_init();", "sub_int32_tile"};
             } else if (dtype == DataType::UINT16) {
-                return {"sub_uint16_tile_init();", "sub_uint16_tile"};
+                return {"sub_int_tile_init();", "sub_uint16_tile"};
             } else {
                 return {"sub_binary_tile_init();", "sub_binary_tile"};
             }
