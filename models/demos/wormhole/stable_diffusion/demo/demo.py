@@ -155,8 +155,6 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
     # COMPILE
     ttnn_scheduler.set_timesteps(num_inference_steps)
     ttnn.copy_host_to_device_tensor(encoder_hidden_states_rand, ttnn_text_embeddings_device, cq_id=0)
-    print(f"random latents shape: {rand_latents.shape}")
-    print(f"ttnn_text_embeddings_device shape: {ttnn_text_embeddings_device.shape}")
     output = ttnn.from_device(
         run(
             model,
@@ -192,6 +190,7 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
     ttnn.end_trace_capture(device, tid, cq_id=0)
     ttnn.synchronize_device(device)
 
+    output_images = []
     # EXEC
     while i < num_prompts:
         ttnn_scheduler.set_timesteps(num_inference_steps)
@@ -242,6 +241,7 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
         image = (image / 2 + 0.5).clamp(0, 1)
         image = image.detach().cpu().float().permute(0, 2, 3, 1).numpy()
         images = (image * 255).round().astype("uint8")
+        output_images.append(torch.from_numpy(images))
         pil_images = [Image.fromarray(image) for image in images][0]
         ttnn_output_path = f"{experiment_name}_ttnn.png"
         pil_images.save(ttnn_output_path)
@@ -259,6 +259,7 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
         print(
             f"Average time per prompt: {avg_time}, FPS: {FPS}",
         )
+    return output_images
 
 
 def run_interactive_demo_inference(device, num_inference_steps, image_size=(256, 256)):
