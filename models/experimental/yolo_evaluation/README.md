@@ -11,6 +11,7 @@ The following model is evaluated(mAPval 50-95) for 500 samples.:-
 -   YOLOv8s_World(640x640 resolution) - **0.7288**
 -   YOLOv8x(640x640 resolution) - **0.7267**
 -   YOLOv10x(640x640 resolution) - **0.7675**
+-   YOLOv9c(640x640 resolution) - **0.7837**
 
 Currently, The number of samples is set to 500.
 
@@ -45,6 +46,12 @@ To run the test of ttnn vs ground truth, please follow the following commands:
  pytest models/experimental/yolo_evaluation/yolo_common_evaluation.py::test_yolov10x[res0-device_params0-tt_model]
  ```
 
+**YoloV9c:** <br>
+**_For 640x640,_**<br>
+ ```sh
+ pytest models/experimental/yolo_evaluation/yolo_common_evaluation.py::test_yolov9c[res0-device_params0-tt_model]
+ ```
+
 ### The below observations are for torch_model vs dataset(ground truth data):
 
 The following model is evaluated(mAPval 50-95) for 500 samples.:-
@@ -53,6 +60,7 @@ The following model is evaluated(mAPval 50-95) for 500 samples.:-
 -   YOLOv8s_World(640x640 resolution) - **0.7102**
 -   YOLOv8x(640x640 resolution) - **0.8116**
 -   YOLOv10x(640x640 resolution) - **KILLED**
+-   YOLOv9c(640x640 resolution) - **KILLED**
 
 To run the test of ttnn vs ground truth, please follow the following commands:
 
@@ -83,4 +91,10 @@ pytest models/experimental/yolo_evaluation/yolo_common_evaluation.py::test_run_y
 **_For 640x640,_**<br>
  ```sh
  pytest models/experimental/yolo_evaluation/yolo_common_evaluation.py::test_yolov10x[res0-device_params0-torch_model]
+ ```
+
+**YoloV9c:** <br>
+**_For 640x640,_**<br>
+ ```sh
+ pytest models/experimental/yolo_evaluation/yolo_common_evaluation.py::test_yolov9c[res0-device_params0-torch_model]
  ```
