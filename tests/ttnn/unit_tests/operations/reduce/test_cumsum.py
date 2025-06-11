@@ -107,7 +107,7 @@ def test_cumsum(size, dim, dtypes, device):
 
     # For now, int32 version only supports >3-D tensors and `dim` outher than x and y axes
     if not is_supported(size, dim, expected_output_dtype):
-        return
+        pytest.skip("Unsupported configuration by ttnn.experimental.cumsum")
 
     output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype)
 
@@ -185,10 +185,10 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
 
     # For now, test_cumsum_with_preallocated_output ony support bfloat16 and float32
     if expected_output_dtype == ttnn.int32 or expected_output_dtype == ttnn.uint32:
-        return
+        pytest.skip("ttnn.experimental.cumsum with preallocated output does not support integer types")
 
     if not is_supported(size, dim, expected_output_dtype):
-        return
+        pytest.skip("Unsupported configuration by ttnn.experimental.cumsum")
 
     preallocated_output_tensor = ttnn.zeros_like(input_tensor, dtype=ttnn_dtype, layout=ttnn.Layout.TILE)
 
@@ -244,7 +244,7 @@ def test_cumsum_callback(size, dim, dtypes, device, use_program_cache):
 
     # For now, int32 version only supports >3-D tensors and `dim` outher than x and y axes
     if not is_supported(size, dim, expected_output_dtype):
-        return
+        pytest.skip("Unsupported configuration by ttnn.experimental.cumsum")
 
     for _ in range(0, 2):  # Test with program cache
         output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype)

@@ -33,6 +33,8 @@ struct CumSumDeviceOperation {
             tt::tt_metal::KernelHandle cumsum_reader_kernel_id;
             tt::tt_metal::KernelHandle cumsum_writer_kernel_id;
 
+            // For multicore, define list of cores with `num_cores` and grid height (`num_cores_y`)
+            // For i=0 to num_cores, Core coordinates {core.x, core.y} = {i / num_cores_y, i % num_cores_y}
             std::size_t num_cores;
             std::size_t num_cores_y;
         };

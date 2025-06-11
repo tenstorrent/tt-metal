@@ -13,6 +13,8 @@ void kernel_main() {
     uint32_t output_dram_base_addr = get_arg_val<uint32_t>(0);  // output base addr (DRAM)
     uint32_t start_row = get_arg_val<uint32_t>(1);
     uint32_t num_rows = get_arg_val<uint32_t>(2);
+    uint32_t start_high_tile_index = get_arg_val<uint32_t>(3);
+    uint32_t start_low_tile_index = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t tiles_per_row = get_compile_time_arg_val(0);
     constexpr uint32_t HtWt = get_compile_time_arg_val(1);
@@ -34,6 +36,8 @@ void kernel_main() {
     InterleavedAddrGenFast<true> dram_output_addrg = {
         .bank_base_address = output_dram_base_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
 
+    uint32_t i0 = start_low_tile_index;
+    uint32_t i1 = start_high_tile_index;
     for (uint32_t i = start_row; i < start_row + num_rows; i++) {
         uint32_t i0 = i / (product_high_dims * HtWt);
         uint32_t i1 = i % (product_high_dims * HtWt);
@@ -54,6 +58,12 @@ void kernel_main() {
             noc_async_write_barrier();
 
             cb_pop_front(cb_in, 1);
+        }
+
+        i1++;
+        if (i1 >= product_high_dims * HtWt) {
+            i1 = 0;
+            i0++;
         }
     }
 }
