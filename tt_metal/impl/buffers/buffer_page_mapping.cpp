@@ -12,40 +12,40 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 std::vector<BufferCorePageMapping::ContiguousHostPages> to_host_page_ranges(
     tt::stl::Span<const uint32_t> host_page_indices) {
     std::vector<BufferCorePageMapping::ContiguousHostPages> result;
-    if (host_page_indices.empty()) {
-        return result;
-    }
 
     uint32_t start_host_page_idx = 0;
-    uint32_t end_host_page_idx = start_host_page_idx;
+    bool is_processing_range = false;
 
-    auto add_page = [&]() {
-        if (start_host_page_idx != end_host_page_idx) {
-            uint32_t start_host_page = host_page_indices[start_host_page_idx];
-            uint32_t end_host_page = host_page_indices[end_host_page_idx];
-            result.push_back({
-                .device_page_offset = start_host_page_idx,
-                .host_page_start = start_host_page,
-                .num_pages = end_host_page - start_host_page,
-            });
-        }
+    auto add_page = [&](uint32_t end_host_page_idx) {
+        uint32_t start_host_page = host_page_indices[start_host_page_idx];
+        uint32_t end_host_page = host_page_indices[end_host_page_idx - 1];
+        result.push_back({
+            .device_page_offset = start_host_page_idx,
+            .host_page_start = start_host_page,
+            .num_pages = end_host_page - start_host_page + 1,
+        });
     };
 
-    for (size_t i = 1; i < host_page_indices.size(); i++) {
+    for (size_t i = 0; i < host_page_indices.size(); i++) {
         uint32_t host_page = host_page_indices[i];
-        uint32_t end_host_page = host_page_indices[end_host_page_idx];
-        if (end_host_page == BufferPageMapping::PADDING) {
+        if (!is_processing_range) {
+            if (host_page != BufferPageMapping::PADDING) {
+                start_host_page_idx = i;
+                is_processing_range = true;
+            }
+        } else if (host_page == BufferPageMapping::PADDING) {
+            add_page(i);
+            start_host_page_idx = i + 1;
+            is_processing_range = false;
+        } else if (host_page_indices[i - 1] + 1 != host_page) {
+            add_page(i);
             start_host_page_idx = i;
-            end_host_page_idx = i;
-        } else if (host_page != BufferPageMapping::PADDING && end_host_page + 1 == host_page) {
-            end_host_page_idx = i;
-        } else {
-            add_page();
-            start_host_page_idx = i;
-            end_host_page_idx = i;
+            is_processing_range = true;
         }
     }
-    add_page();
+    if (is_processing_range) {
+        add_page(host_page_indices.size());
+    }
 
     return result;
 }
@@ -59,12 +59,18 @@ CompressedBufferPageMapping::CompressedBufferPageMapping(const BufferPageMapping
     for (size_t core_id = 0; core_id < num_cores; core_id++) {
         auto& core_page_mapping = core_page_mappings[core_id];
         const auto& core_host_page_indices = page_mapping.core_host_page_indices[core_id];
+        if (core_host_page_indices.empty()) {
+            continue;
+        }
         core_page_mapping.push_back(BufferCorePageMapping{
             .start_page = 0,
             .num_pages = static_cast<uint32_t>(core_host_page_indices.size()),
             .host_ranges = CMAKE_UNIQUE_NAMESPACE::to_host_page_ranges(core_host_page_indices),
         });
     }
+
+    // log_info(tt::LogAlways, "BufferPageMapping: {}", page_mapping);
+    // log_info(tt::LogAlways, "CompressedBufferPageMapping: {}", core_page_mappings);
 }
 
 CompressedBufferPageMapping CompressedBufferPageMapping::filter_by_host_range(
@@ -122,6 +128,10 @@ CompressedBufferPageMapping CompressedBufferPageMapping::filter_by_host_range(
             add_core_mapping(core_id);
         }
     }
+
+    // log_info(tt::LogAlways, "Filtering by host range {}-{}: {}", start_host_page, end_host_page,
+    // result.core_page_mappings);
+
     return result;
 }
 

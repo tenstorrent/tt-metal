@@ -855,7 +855,7 @@ void copy_completion_queue_data_into_user_space(
     const uint32_t padded_num_bytes = (num_pages_read * padded_page_size) + sizeof(CQDispatchCmd);
     uint32_t contig_dst_offset = dst_offset;
     uint32_t remaining_bytes_to_read = padded_num_bytes;
-    uint32_t dev_page_id = cur_dev_page_id;
+    // uint32_t dev_page_id = cur_dev_page_id;
 
     // track the amount of bytes read in the last non-aligned page
     uint32_t remaining_bytes_of_nonaligned_page = 0;
@@ -959,7 +959,7 @@ void copy_completion_queue_data_into_user_space(
             }
         } else {
             auto core_page_mapping_it = core_page_mapping->begin();
-            TT_FATAL(dev_page_id == 0, "dev_page_id is not 0");
+            // TT_FATAL(dev_page_id == 0, "dev_page_id is not 0");
 
             uint32_t src_offset_bytes = offset_in_completion_q_data;
             offset_in_completion_q_data = 0;
@@ -976,7 +976,7 @@ void copy_completion_queue_data_into_user_space(
                     src_offset_increment = num_bytes_to_copy;
                     // We finished copying the page
                     if (remaining_bytes_of_nonaligned_page == 0) {
-                        dev_page_id++;
+                        core_page_mapping_it.next();
                         uint32_t rem_bytes_in_cq = num_bytes_remaining - num_bytes_to_copy;
                         // There is more data after padding
                         if (rem_bytes_in_cq >= pad_size_bytes) {
