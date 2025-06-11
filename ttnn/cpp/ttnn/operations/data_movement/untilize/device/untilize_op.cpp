@@ -57,8 +57,14 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
         std::array<uint32_t, 2> input_shard_shape = input_tensor_a.shard_spec().value().shape;
         uint32_t input_shard_width = input_shard_shape[1];
         uint32_t input_shard_height = input_shard_shape[0];
-        TT_FATAL(input_shard_width % TILE_WIDTH == 0, "Input shard width must be a multiple of tile width");
-        TT_FATAL(input_shard_height % TILE_HEIGHT == 0, "Input shard height must be a multiple of tile height");
+        TT_FATAL(
+            input_shard_width % TILE_WIDTH == 0,
+            "Input shard width {} must be a multiple of tile width",
+            input_shard_width);
+        TT_FATAL(
+            input_shard_height % TILE_HEIGHT == 0,
+            "Input shard height {} must be a multiple of tile height",
+            input_shard_height);
     }
 
     // We don't support input or output uneven sharding for the single core implementation
@@ -70,10 +76,14 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
             uint32_t input_shard_height = input_shard_shape[0];
             TT_FATAL(
                 tensor_width % input_shard_width == 0,
-                "Uneven input shard shape not supported for single core implementation");
+                "Uneven input shard width {} for tensor width {} not supported for single core implementation",
+                input_shard_width,
+                tensor_width);
             TT_FATAL(
                 tensor_height % input_shard_height == 0,
-                "Uneven input shard shape not supported for single core implementation");
+                "Uneven input shard height {} for tensor height {} not supported for single core implementation",
+                input_shard_height,
+                tensor_height);
         }
         // Check for output uneven sharding
         if (output_is_sharded) {
@@ -82,10 +92,14 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
             uint32_t output_shard_height = output_shard_shape[0];
             TT_FATAL(
                 tensor_width % output_shard_width == 0,
-                "Uneven output shard shape not supported for single core implementation");
+                "Uneven output shard width {} for tensor width {} not supported for single core implementation",
+                output_shard_width,
+                tensor_width);
             TT_FATAL(
                 tensor_height % output_shard_height == 0,
-                "Uneven output shard shape not supported for single core implementation");
+                "Uneven output shard height {} for tensor height {} not supported for single core implementation",
+                output_shard_height,
+                tensor_height);
         }
     }
 
