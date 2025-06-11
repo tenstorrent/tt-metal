@@ -733,6 +733,7 @@ class YoloV9:
 
     def __call__(self, x):
         N, C, H, W = x.shape
+        ## Padding from image channels (3) to min channels (16)
         min_channels = 16
         if C < min_channels:
             channel_padding_needed = min_channels - C
