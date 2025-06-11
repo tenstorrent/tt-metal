@@ -25,7 +25,6 @@ target_sources(
     PRIVATE
         test_add.cpp
         test_graph_add.cpp
-        test_graph_basic.cpp
         test_matmul_benchmark.cpp
         test_multiprod_queue.cpp
         test_multi_cq_multi_dev.cpp
@@ -54,6 +53,7 @@ target_sources(
         test_async_runtime.cpp # TODO: Fix memory leak (LSan) then shift-left
         test_conv2d.cpp # TODO: Fix misaligned memory load (UBSan) then shift-left
         test_generic_op.cpp
+        test_graph_basic.cpp
         test_graph_query_op_constraints.cpp
         test_graph_query_op_runtime.cpp
         test_launch_operation.cpp # TODO: Fix data race (TSan) then shift-left
