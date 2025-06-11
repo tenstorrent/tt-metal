@@ -74,11 +74,29 @@ jobs:
       run-demo: ${{ steps.logic.outputs.run-demo }}
       run-model-perf: ${{ steps.logic.outputs.run-model-perf }}
       run-stress: ${{ steps.logic.outputs.run-stress }}
+      clean-extra-tag: ${{ steps.logic.outputs.clean-extra-tag }}
+      is-config-tg: ${{ steps.logic.outputs.is-config-tg }}
     steps:
       - name: Determine test execution
         id: logic
         # Skip all but tg-quick if trigger-type is not manual
         run: |
+          EXTRA_TAG="${{ inputs.extra-tag }}"
+          # (remove both config-tg and topology-6u) from EXTRA_TAG
+          # and clean up any extra commas
+          # e.g. "config-tg,in-service" -> "in-service"
+          CLEANED=$(echo "$EXTRA_TAG" | sed -e 's/\bconfig-tg\b//g' -e 's/\btopology-6u\b//g' -e 's/,,/,/g' -e 's/^,//' -e 's/,$//')
+
+          # Check which tag is present
+          if [[ "$EXTRA_TAG" == *"topology-6u"* ]]; then
+            IS_CONFIG_TG=false
+          else
+            IS_CONFIG_TG=true  # set config-tg if topology-6u is not present
+          fi
+
+          echo "clean-extra-tag=$CLEANED" >> $GITHUB_OUTPUT
+          echo "is-config-tg=$IS_CONFIG_TG" >> $GITHUB_OUTPUT
+
           case "${{ inputs.trigger_type }}" in
             "manual")
               echo "run-quick=${{ inputs.tg-quick }}" >> $GITHUB_OUTPUT
@@ -145,12 +163,12 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/tg-quick.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
+      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-4u: ${{ contains(inputs.extra-tag, 'config-tg') }}
-      topology-6u: ${{ contains(inputs.extra-tag, 'topology-6u') }}
+      topology-4u: ${{ needs.determine-tests.outputs.is-config-tg == 'true'}}
+      topology-6u: ${{ needs.determine-tests.outputs.is-config-tg == 'false'}}
 
   tg-unit-tests:
     if: ${{ inputs.tg-unit || needs.determine-tests.outputs.run-unit == 'true' }}
@@ -158,53 +176,53 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/tg-unit-tests-impl.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
+      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ contains(inputs.extra-tag, 'topology-6u') && 'topology-6u' || 'config-tg' }}
+      topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
   tg-frequent-tests:
     if: ${{ inputs.tg-frequent || needs.determine-tests.outputs.run-frequent == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-frequent-tests-impl.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
+      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ contains(inputs.extra-tag, 'topology-6u') && 'topology-6u' || 'config-tg' }}
+      topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
   tg-demo-tests:
     if: ${{ inputs.tg-demo || needs.determine-tests.outputs.run-demo == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-demo-tests-impl.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
+      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ contains(inputs.extra-tag, 'topology-6u') && 'topology-6u' || 'config-tg' }}
+      topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
   tg-model-perf-tests:
     if: ${{ inputs.tg-model-perf || needs.determine-tests.outputs.run-model-perf == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
+      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ contains(inputs.extra-tag, 'topology-6u') && 'topology-6u' || 'config-tg' }}
+      topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
   tg-stress-test:
     if: ${{ inputs.tg-stress || needs.determine-tests.outputs.run-stress == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-stress.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
+      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-4u: ${{ contains(inputs.extra-tag, 'config-tg') }}
-      topology-6u: ${{ contains(inputs.extra-tag, 'topology-6u') }}
+      topology-4u: ${{ needs.determine-tests.outputs.is-config-tg == 'true'}}
+      topology-6u: ${{ needs.determine-tests.outputs.is-config-tg == 'false'}}
