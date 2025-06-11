@@ -52,19 +52,15 @@ bool run_dm(IDevice* device, const OneFromAllConfig& test_config) {
         tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.master_core_coord);
 
     auto sub_core_list = corerange_to_cores(test_config.subordinate_core_set);
-    // since the version on main has the get_l1_address_and_size return vals hard-coded,
-    // could we just remove this check? or is the function WIP
-    /*
     for (auto& core : sub_core_list) {
         L1AddressInfo subordinate_l1_info = tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, core);
         // Checks that both master and subordinate cores have the same L1 base address and size
         if (master_l1_info.base_address != subordinate_l1_info.base_address ||
             master_l1_info.size != subordinate_l1_info.size) {
-            log_error("Mismatch in L1 address or size between master and subordinate cores");
+            log_error(tt::LogTest, "Mismatch in L1 address or size between master and subordinate cores");
             return false;
         }
     }
-        */
     // Check if the L1 size is sufficient for the test configuration
     if (master_l1_info.size < total_size_bytes) {
         log_error(tt::LogTest, "Insufficient L1 size for the test configuration");
