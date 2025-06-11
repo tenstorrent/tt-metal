@@ -316,6 +316,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     Program& program,
     const Tensor& input_tensor,
     const uint32_t pad_val,
+    const bool padding_exists,
     const uint32_t ncores_nhw,
     const uint32_t ncores_c,
     const uint32_t max_out_nsticks_per_core,
@@ -544,12 +545,21 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     if (out_stick_nbytes % input_tensor.buffer()->alignment() != 0) {
         aligned_input_nstick_nbytes = tt::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
     }
+
+    // create the NC/BR sync CBs
+    int32_t sync_cb_id1 = cb_indices.get_next_cb_id();
+    auto sync_cb1 = create_circular_buffer(program, all_cores, sync_cb_id1, tt::DataFormat::UInt16, 1, 2);
+    int32_t sync_cb_id2 = cb_indices.get_next_cb_id();
+    auto sync_cb2 = create_circular_buffer(program, all_cores, sync_cb_id2, tt::DataFormat::UInt16, 1, 2);
+
     // reader kernel
     std::vector<uint32_t> reader_ct_args = {
-        0,  // padding_config_cb_id
-        0,  // local_config_cb_id
-        0,  // remote_config_cb_id
-        0,  // remote_temp_cb_id
+        true,  // main thread
+        padding_exists,
+        cb_indices.padding_config_cb_id,
+        cb_indices.local_config_cb_id,
+        cb_indices.remote_config_cb_id,
+        remote_temp_cb_id,
         cb_indices.src_cb_id,
         input_to_writer_cb_id,
         cb_indices.out_cb_id,
@@ -574,12 +584,10 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
         in_out_buffer_start_delta,
         temp_cb_id,
         ntiles_per_block,
-        input_nblocks_per_core};
+        input_nblocks_per_core,
+        sync_cb_id1,
+        sync_cb_id2};
 
-    reader_ct_args[0] = 0;
-    reader_ct_args[1] = cb_indices.local_config_cb_id;
-    reader_ct_args[2] = cb_indices.remote_config_cb_id;
-    reader_ct_args[3] = remote_temp_cb_id;
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp",
@@ -587,10 +595,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
-    reader_ct_args[0] = cb_indices.padding_config_cb_id;
-    reader_ct_args[1] = 0;
-    reader_ct_args[2] = 0;
-    reader_ct_args[3] = 0;
+    reader_ct_args[0] = false;  // secondary thread
     KernelHandle reader_kernel_id1 = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp",
