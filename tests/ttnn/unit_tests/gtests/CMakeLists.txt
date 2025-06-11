@@ -28,7 +28,6 @@ target_sources(
         test_matmul_benchmark.cpp
         test_multiprod_queue.cpp
         test_multi_cq_multi_dev.cpp
-        test_graph_capture_arguments_morehdot.cpp
         test_graph_capture_arguments_transpose.cpp
         test_reflect.cpp
         test_to_and_from_json.cpp
@@ -54,6 +53,7 @@ target_sources(
         test_conv2d.cpp # TODO: Fix misaligned memory load (UBSan) then shift-left
         test_generic_op.cpp
         test_graph_basic.cpp
+        test_graph_capture_arguments_morehdot.cpp
         test_graph_query_op_constraints.cpp
         test_graph_query_op_runtime.cpp
         test_launch_operation.cpp # TODO: Fix data race (TSan) then shift-left
