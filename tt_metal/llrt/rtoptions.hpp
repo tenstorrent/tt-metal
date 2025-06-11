@@ -85,6 +85,7 @@ struct WatcherSettings {
     bool phys_coords = false;
     bool text_start = false;
     bool skip_logging = false;
+    bool noc_sanitize_linked_transaction = false;
     int interval_ms = 0;
 };
 
@@ -226,6 +227,12 @@ public:
     inline void set_watcher_text_start(bool text_start) { watcher_settings.text_start = text_start; }
     inline bool get_watcher_skip_logging() const { return watcher_settings.skip_logging; }
     inline void set_watcher_skip_logging(bool skip_logging) { watcher_settings.skip_logging = skip_logging; }
+    inline bool get_watcher_noc_sanitize_linked_transaction() const {
+        return watcher_settings.noc_sanitize_linked_transaction;
+    }
+    inline void set_watcher_noc_sanitize_linked_transaction(bool enabled) {
+        watcher_settings.noc_sanitize_linked_transaction = enabled;
+    }
     inline const std::set<std::string>& get_watcher_disabled_features() const { return watcher_disabled_features; }
     inline bool watcher_status_disabled() const { return watcher_feature_disabled(watcher_waypoint_str); }
     inline bool watcher_noc_sanitize_disabled() const { return watcher_feature_disabled(watcher_noc_sanitize_str); }
