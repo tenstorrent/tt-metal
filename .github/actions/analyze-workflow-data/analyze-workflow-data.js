@@ -7,6 +7,7 @@
 
 const core = require('@actions/core');
 const fs = require('fs');
+const { summary } = require('@actions/core');
 
 // Constants
 const DEFAULT_LOOKBACK_DAYS = 15;
@@ -102,28 +103,14 @@ function getWorkflowStats(runs) {
 }
 
 /**
- * Generates a GitHub Actions workflow URL.
- *
- * @param {object} context - GitHub Actions context
- * @param {string} workflowFile - Path to the workflow file relative to .github/workflows/
- * @returns {string} Full URL to the workflow in GitHub Actions
- */
-function getWorkflowLink(context, workflowFile) {
-  return workflowFile
-    ? `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/${workflowFile}?query=branch%3Amain`
-    : `https://github.com/${context.repo.owner}/${context.repo.repo}/actions`;
-}
-
-/**
  * Analyzes scheduled runs to find the last good and earliest bad commits.
  *
  * @param {Array<object>} scheduledMainRuns - Array of scheduled runs on main branch, sorted by date (newest first)
- * @param {object} context - GitHub Actions context
  * @returns {object} Object containing:
  *   - lastGoodSha: Short SHA of the last successful run (e.g., `a1b2c3d`)
  *   - earliestBadSha: Short SHA of the earliest failing run (e.g., `e4f5g6h`)
  */
-function findGoodBadCommits(scheduledMainRuns, context) {
+function findGoodBadCommits(scheduledMainRuns) {
   let lastGoodSha = EMPTY_VALUE;
   let earliestBadSha = EMPTY_VALUE;
   let foundGood = false;
@@ -132,12 +119,12 @@ function findGoodBadCommits(scheduledMainRuns, context) {
   for (const run of scheduledMainRuns) {
     if (!foundGood && run.conclusion === 'success') {
       const shortSha = run.head_sha.substring(0, SHA_SHORT_LENGTH);
-      lastGoodSha = `[\`${shortSha}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${run.head_sha})`;
+      lastGoodSha = shortSha;
       foundGood = true;
     }
     if (!foundBad && run.conclusion !== 'success') {
       const shortSha = run.head_sha.substring(0, SHA_SHORT_LENGTH);
-      earliestBadSha = `[\`${shortSha}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${run.head_sha})`;
+      earliestBadSha = shortSha;
       foundBad = true;
     }
     if (foundGood && foundBad) break;
@@ -150,10 +137,9 @@ function findGoodBadCommits(scheduledMainRuns, context) {
  * Gets information about the last run on main branch.
  *
  * @param {Array<object>} mainBranchRuns - Array of runs on main branch, sorted by date (newest first)
- * @param {object} context - GitHub Actions context
  * @returns {object} Object containing run information
  */
-function getLastRunInfo(mainBranchRuns, context) {
+function getLastRunInfo(mainBranchRuns) {
   const lastMainRun = mainBranchRuns[0];
   if (!lastMainRun) {
     return {
@@ -168,7 +154,7 @@ function getLastRunInfo(mainBranchRuns, context) {
   }
 
   const mainRuns = mainBranchRuns.filter(r => r.event === lastMainRun.event || r.event === 'workflow_dispatch');
-  const { lastGoodSha, earliestBadSha } = findGoodBadCommits(mainRuns, context);
+  const { lastGoodSha, earliestBadSha } = findGoodBadCommits(mainRuns);
 
   const prTitleWithAuthor = lastMainRun.pr_title ?
     `${lastMainRun.pr_title} - @${lastMainRun.pr_author}` :
@@ -176,8 +162,8 @@ function getLastRunInfo(mainBranchRuns, context) {
 
   return {
     status: lastMainRun.conclusion === 'success' ? SUCCESS_EMOJI : FAILURE_EMOJI,
-    sha: `[\`${lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH)}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${lastMainRun.head_sha})`,
-    run: `[Run](${lastMainRun.html_url})${lastMainRun.run_attempt > 1 ? ` (#${lastMainRun.run_attempt})` : ''}`,
+    sha: lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH),
+    run: lastMainRun.run_attempt > 1 ? `#${lastMainRun.run_attempt}` : '',
     pr: lastMainRun.pr_number || EMPTY_VALUE,
     title: prTitleWithAuthor,
     lastGoodSha,
@@ -188,11 +174,10 @@ function getLastRunInfo(mainBranchRuns, context) {
 /**
  * Generates summary tables for push and scheduled workflows.
  * @param {Map<string, Array<object>>} grouped - Map of workflow names to their runs
- * @param {object} context - GitHub Actions context
  * @param {Array<object>} workflowConfigs - Array of workflow config objects
  * @returns {string} Markdown table for all workflows
  */
-function generateSummaryBox(grouped, context, workflowConfigs) {
+function generateSummaryBox(grouped, workflowConfigs) {
   const rows = [];
 
   // Process workflows in the order they appear in the config
@@ -211,10 +196,9 @@ function generateSummaryBox(grouped, context, workflowConfigs) {
     // Process each matching workflow
     for (const [name, runs] of matchingWorkflows) {
       const stats = getWorkflowStats(runs);
-      const workflowLink = getWorkflowLink(context, runs[0]?.path);
-      const runInfo = getLastRunInfo(runs, context);
+      const runInfo = getLastRunInfo(runs);
 
-      const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${stats.uniqueSuccessRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
+      const row = `| ${name} | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${stats.uniqueSuccessRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
       rows.push(row);
     }
   }
@@ -229,11 +213,10 @@ function generateSummaryBox(grouped, context, workflowConfigs) {
 /**
  * Builds the complete markdown report.
  * @param {Map<string, Array<object>>} grouped - Map of workflow names to their runs
- * @param {object} context - GitHub Actions context
  * @param {Array<object>} workflowConfigs - Array of workflow config objects
  * @returns {string} Complete markdown report
  */
-function buildReport(grouped, context, workflowConfigs) {
+function buildReport(grouped, workflowConfigs) {
   const days = parseFloat(core.getInput('days') || DEFAULT_LOOKBACK_DAYS);
   const timestamp = new Date().toISOString();
 
@@ -246,7 +229,7 @@ function buildReport(grouped, context, workflowConfigs) {
 
   return [
     `# Workflow Summary (Last ${timeRange}) - Generated at ${timestamp}\n`,
-    generateSummaryBox(grouped, context, workflowConfigs),
+    generateSummaryBox(grouped, workflowConfigs),
     '\n## Column Descriptions\n',
     'A unique run represents a single workflow execution, which may have multiple retry attempts. For example, if a workflow fails and is retried twice, this counts as one unique run with three attempts (initial run + two retries).\n',
     '\n### Success Rate Calculations\n',
@@ -257,7 +240,7 @@ function buildReport(grouped, context, workflowConfigs) {
     '  - Example: 1 unique run succeeded on first try out of 5 total unique runs = 20% first try success rate\n',
     '\n| Column | Description |',
     '|--------|-------------|',
-    '| Workflow | Name of the workflow with link to its GitHub Actions page |',
+    '| Workflow | Name of the workflow |',
     '| Event Types | Types of events that trigger this workflow |',
     '| Total Runs | Total number of workflow runs, including all retry attempts |',
     '| Successful Runs | Number of unique workflow runs that eventually succeeded |',
@@ -265,8 +248,8 @@ function buildReport(grouped, context, workflowConfigs) {
     '| First Try Success | Percentage of unique workflow runs that succeeded on their first attempt |',
     '| Status | Status of the most recent run (✅ for success, ❌ for failure) |',
     '| SHA | Short SHA of the most recent run |',
-    '| Run | Link to the most recent run, with attempt number if applicable |',
-    '| PR | Link to the PR associated with the most recent run, if any |',
+    '| Run | Run attempt number if applicable |',
+    '| PR | PR number associated with the most recent run, if any |',
     '| Title | Title and author of the PR (e.g., "Fix bug - @username") |',
     '| Earliest Bad SHA | Short SHA of the earliest failing run (only shown if last run failed) |',
     '| Last Good SHA | Short SHA of the last successful run |'
@@ -311,7 +294,7 @@ async function run() {
       const sortedRuns = runs.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
       if (sortedRuns[0]?.conclusion !== 'success') {
         const lastRun = sortedRuns[0];
-        const { lastGoodSha, earliestBadSha } = findGoodBadCommits(sortedRuns, github.context);
+        const { lastGoodSha, earliestBadSha } = findGoodBadCommits(sortedRuns);
 
         failedWorkflows.push({
           name,
@@ -329,7 +312,7 @@ async function run() {
     ).join('\n');
 
     // Generate report
-    const report = buildReport(grouped, github.context, workflowConfigs);
+    const report = buildReport(grouped, workflowConfigs);
 
     // Set outputs
     core.setOutput('failed_workflows', failedWorkflowsStr);
