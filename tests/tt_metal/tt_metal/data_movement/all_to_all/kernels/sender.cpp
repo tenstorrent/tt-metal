@@ -53,6 +53,5 @@ void kernel_main() {
     DeviceTimestampedData("Test id", test_id);
     DeviceTimestampedData("Number of transactions", num_of_transactions);
     DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction_per_master * num_subordinates);
-    DeviceTimestampedData(
-        "Total bytes transferred", num_of_transactions * bytes_per_transaction_per_master * num_subordinates)
+    DeviceTimestampedData("Total bytes", num_of_transactions * bytes_per_transaction_per_master * num_subordinates)
 }

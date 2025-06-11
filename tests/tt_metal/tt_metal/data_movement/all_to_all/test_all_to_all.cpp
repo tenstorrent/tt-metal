@@ -7,7 +7,6 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
-
 namespace tt::tt_metal {
 
 using namespace std;

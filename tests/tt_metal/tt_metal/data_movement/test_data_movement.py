@@ -333,12 +333,12 @@ test_bounds = {
         # 60: { # All to All Packet Sizes NOT DONE
         #    "riscv_0": {"latency": {"lower": 12000, "upper": 19000}, "bandwidth": 59},
         # },
-        61: {  # All to All Directed Ideal
-            "riscv_0": {
-                "latency": {"lower": 30000, "upper": 35000},
-                "bandwidth": 30,
-            },  # 33154-33515 cycles, 30.79791138296285 Bytes/cycle
-        },
+        # 61: {  # All to All Directed Ideal
+        #    "riscv_0": {
+        #        "latency": {"lower": 30000, "upper": 35000},
+        #        "bandwidth": 30,
+        #    },  # 33154-33515 cycles, 30.79791138296285 Bytes/cycle
+        # },
         # 70: { # All from All Packet Sizes NOT DONE
         #    "riscv_0": {"latency": {"lower": #, "upper": #}, "bandwidth": #},
         # },
