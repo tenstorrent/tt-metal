@@ -411,9 +411,7 @@ void generate_sender_worker_kernels(
     bool src_is_dram,
     uint32_t dram_output_buffer_base_addr,
     bool dest_is_dram,
-    uint32_t worker_buffer_index_semaphore_id,
-    // farthest to closest
-    const std::vector<tt::tt_fabric::edm_termination_info_t>& edm_termination_infos) {
+    uint32_t worker_buffer_index_semaphore_id) {
     const auto& edm_noc_core = CoreCoord(worker_fabric_connection.edm_noc_x, worker_fabric_connection.edm_noc_y);
     std::vector<uint32_t> sender_worker_reader_compile_args{
         src_is_dram,      //
@@ -458,7 +456,6 @@ void generate_sender_worker_kernels(
         dram_output_buffer_base_addr,
         local_worker_last_message_semaphore_id,
         worker_buffer_index_semaphore_id,
-        worker_fabric_connection.persistent_fabric ? 1 : 0,
         worker_fabric_connection.buffer_index_semaphore_id};
 
     if (std::holds_alternative<mcast_send>(mode)) {
@@ -467,8 +464,6 @@ void generate_sender_worker_kernels(
     } else {
         sender_worker_writer_runtime_args.push_back(std::get<unicast_send>(mode).distance);
     }
-
-    get_runtime_args_for_edm_termination_infos(edm_termination_infos, sender_worker_writer_runtime_args);
 
     uint32_t src0_cb_index = CBIndex::c_0;
     log_trace(tt::LogTest, "\tSenderWriter CT Args");
@@ -521,8 +516,7 @@ bool RunLoopbackTest(
     bool dest_is_dram,
     std::vector<Program>& programs,
     tt::tt_fabric::FabricEriscDatamoverBuilder& chip_0_edm_builder,
-    std::optional<SubdeviceInfo>& subdevice_managers,
-    bool enable_persistent_fabric) {
+    std::optional<SubdeviceInfo>& subdevice_managers) {
     auto& sender_program = programs.at(0);
     std::size_t page_plus_header_size = page_size + sizeof(tt::tt_fabric::PacketHeader);
     std::size_t tensor_size_bytes = num_pages_total * page_size;
@@ -576,21 +570,7 @@ bool RunLoopbackTest(
     log_trace(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
 
     const auto& edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
-    const std::vector<tt::tt_fabric::edm_termination_info_t>& edm_termination_infos =
-        enable_persistent_fabric ? std::vector<tt::tt_fabric::edm_termination_info_t>{}
-                                 : std::vector<tt::tt_fabric::edm_termination_info_t>{
-                                       {1,
-                                        sender_device->ethernet_core_from_logical_core(eth_receiver_core).x,
-                                        sender_device->ethernet_core_from_logical_core(eth_receiver_core).y,
-                                        chip_0_edm_builder.config.termination_signal_address},
-                                       {0,
-                                        sender_device->ethernet_core_from_logical_core(eth_sender_core).x,
-                                        sender_device->ethernet_core_from_logical_core(eth_sender_core).y,
-                                        chip_0_edm_builder.config.termination_signal_address}};
 
-    TT_ASSERT(
-        (enable_persistent_fabric && edm_termination_infos.size() == 0) ||
-        (!enable_persistent_fabric && edm_termination_infos.size() > 0));
     generate_sender_worker_kernels(
         sender_program,
         sender_device,
@@ -608,16 +588,12 @@ bool RunLoopbackTest(
         src_is_dram,
         local_output_buffer_address,
         dest_is_dram,
-        worker_buffer_index_semaphore_id,
-        edm_termination_infos);
+        worker_buffer_index_semaphore_id);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
     std::vector<IDevice*> devices = {sender_device};
-    if (!enable_persistent_fabric) {
-        devices.push_back(receiver_device);
-    }
     log_trace(tt::LogTest, "{} programs, {} devices", programs.size(), devices.size());
     run_programs(programs, devices);
     log_info(tt::LogTest, "Reading back outputs");
@@ -842,8 +818,7 @@ bool RunLocalTestWithMultiInputReaders(
     const uint32_t page_size,
     TwoInputReaderKernelWriteMode test_mode,
     const ttnn::ccl::cmd::CclCommandDestArgs& dest_args,
-    std::optional<SubdeviceInfo>& subdevice_managers,
-    bool enable_persistent_fabric) {
+    std::optional<SubdeviceInfo>& subdevice_managers) {
     const bool fabric_enabled = test_mode != TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK;
     tt_metal::IDevice* device = devices.at(0);
     for (size_t i = 0; i < devices.size(); i++) {
@@ -919,37 +894,7 @@ bool RunLocalTestWithMultiInputReaders(
         fabric_enabled ? line_fabric->uniquely_connect_worker(devices[0], ttnn::ccl::EdmLineFabricOpInterface::FORWARD)
                        : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>{std::nullopt};
 
-    // always at start of line for now
-    std::optional<std::vector<tt::tt_fabric::edm_termination_info_t>> edm_termination_infos =
-        (!fabric_enabled || enable_persistent_fabric)
-            ? std::optional<std::vector<tt::tt_fabric::edm_termination_info_t>>{std::nullopt}
-            : line_fabric->generate_ordered_termination_info_farthest_to_nearest();
     std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> chip0_worker_backward_fabric_connection = std::nullopt;
-
-    std::optional<ttnn::ccl::SyncModeSpec> sync_details;
-    std::optional<CoreCoord> teardown_worker_core;
-    std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> teardown_command_stream;
-    if (fabric_enabled && !enable_persistent_fabric) {
-        teardown_worker_core = worker_core;
-
-        sync_details = ttnn::ccl::SyncModeSpec{};
-        sync_details->core = teardown_worker_core.value();
-        sync_details->add_signal(tt::tt_metal::CreateSemaphore(programs.at(0), teardown_worker_core.value(), 0), 1);
-        teardown_command_stream = {ttnn::ccl::cmd::uops::local_core_semaphore_inc(sync_details->sem_ids.at(0), 1)};
-        TT_FATAL(edm_termination_infos.has_value(), "EDM termination infos must be set if fabric is enabled");
-        ttnn::ccl::cmd::CclHostLowLevelCommandSequence teardown_commands;
-
-        teardown_commands = ttnn::ccl::worker_detail::build_ccl_cmd_proc_teardown_commands(
-            programs.at(0),
-            device,
-            nullptr,  // forward device - in this test, we have a single source doing all teardown
-            devices.size(),
-            0,
-            edm_termination_infos.value(),
-            sync_details.value(),
-            line_fabric.value());
-        std::ranges::copy(teardown_commands, std::back_inserter(teardown_command_stream.value()));
-    }
 
     generate_multi_input_test_worker_kernels_for_local_tensor_write(
         programs.at(0),
@@ -967,22 +912,16 @@ bool RunLocalTestWithMultiInputReaders(
         in1_tensor_slice,
         out0_tensor_slice,
         out1_tensor_slice,
-        teardown_command_stream,
+        std::nullopt,
         chip0_worker_forward_fabric_connection,
         chip0_worker_backward_fabric_connection,
         dest_args);
 
-    if (!enable_persistent_fabric) {
-        log_info(tt::LogTest, "Building EDM kernels");
-        line_fabric->build_kernels();
-    }
-
-    log_info(tt::LogTest, "persistent_fabric: {}", enable_persistent_fabric);
     log_info(tt::LogTest, "subdevice_managers.has_value(): {}", subdevice_managers.has_value());
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    run_programs(programs, enable_persistent_fabric ? std::vector<IDevice*>{devices[0]} : devices);
+    run_programs(programs, std::vector<IDevice*>{devices[0]});
     log_info(tt::LogTest, "Finished");
 
     bool pass = true;
@@ -1041,8 +980,7 @@ bool RunLineFabricTest(
     bool dest_is_dram,
 
     std::optional<SubdeviceInfo>& subdevice_managers,
-    ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
-    bool enable_persistent_fabric) {
+    ttnn::ccl::EdmLineFabricOpInterface& line_fabric) {
     std::size_t page_plus_header_size = page_size + sizeof(tt::tt_fabric::PacketHeader);
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
@@ -1072,13 +1010,6 @@ bool RunLineFabricTest(
     auto local_input_buffer_address = local_input_buffer->address();
 
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
-    // output buffers
-    TT_ASSERT(
-        enable_persistent_fabric || mcast_first_chip <= mcast_last_chip,
-        "mcast_first_chip must be less than or equal to mcast_last_chip");
-    TT_ASSERT(
-        enable_persistent_fabric || mcast_last_chip < devices.size(),
-        "mcast_last_chip must be less than the number of devices");
     std::vector<std::shared_ptr<Buffer>> output_buffers;
     output_buffers.reserve(devices.size());
     for (size_t i = 0; i < devices.size(); i++) {
@@ -1114,10 +1045,6 @@ bool RunLineFabricTest(
     const auto& worker_core = worker_cores.at(0);
     log_trace(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
 
-    const auto edm_termination_infos = enable_persistent_fabric
-                                           ? std::vector<tt::tt_fabric::edm_termination_info_t>{}
-                                           : line_fabric.generate_ordered_termination_info_farthest_to_nearest();
-
     auto chip0_worker_fabric_connection =
         line_fabric.uniquely_connect_worker(devices[0], ttnn::ccl::EdmLineFabricOpInterface::FORWARD);
 
@@ -1140,15 +1067,7 @@ bool RunLineFabricTest(
         src_is_dram,
         local_output_buffer_address,
         dest_is_dram,
-        worker_buffer_index_semaphore_id,
-        edm_termination_infos);
-
-    ////////////////////////////////////////////////////////////////////////////
-    // Build EDM Kernels
-    ////////////////////////////////////////////////////////////////////////////
-    if (!enable_persistent_fabric) {
-        line_fabric.build_kernels();
-    }
+        worker_buffer_index_semaphore_id);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
@@ -1197,12 +1116,10 @@ void persistent_fabric_teardown_sequence(
 
 void setup_test_with_persistent_fabric(
     const std::vector<IDevice*>& devices,
-    std::vector<Program>& programs,
     std::optional<SubdeviceInfo>& subdevice_managers,
     std::optional<std::vector<Program>>& fabric_programs,
     std::vector<Program*>& fabric_program_ptrs,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& line_fabric,
-    bool enable_persistent_fabric,
     std::optional<size_t> num_links = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     size_t switch_interval = 0,
@@ -1212,23 +1129,17 @@ void setup_test_with_persistent_fabric(
     bool en_dateline_receiver_extra_buffer = false,
     bool en_dateline_upstream_sender_extra_buffer = false,
     bool en_dateline_upstream_receiver_extra_buffer = false) {
-    if (enable_persistent_fabric) {
-        log_info(tt::LogTest, "Enabling persistent fabric");
-        fabric_programs = std::vector<Program>(devices.size());
-        subdevice_managers = create_subdevices(devices);
-        std::transform(
-            fabric_programs->begin(), fabric_programs->end(), std::back_inserter(fabric_program_ptrs), [](auto& p) {
-                return &p;
-            });
-    } else {
-        std::transform(
-            programs.begin(), programs.end(), std::back_inserter(fabric_program_ptrs), [](auto& p) { return &p; });
-    }
+    log_info(tt::LogTest, "Enabling persistent fabric");
+    fabric_programs = std::vector<Program>(devices.size());
+    subdevice_managers = create_subdevices(devices);
+    std::transform(
+        fabric_programs->begin(), fabric_programs->end(), std::back_inserter(fabric_program_ptrs), [](auto& p) {
+            return &p;
+        });
 
     line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
         devices,
         fabric_program_ptrs,
-        enable_persistent_fabric,
         num_links.value_or(1),
         false,
         topology,
@@ -1250,14 +1161,12 @@ void setup_test_with_persistent_fabric(
         }
     }
 
-    if (enable_persistent_fabric) {
-        TT_FATAL(fabric_programs.has_value(), "Fabric programs must be set if fabric is enabled");
-        TT_FATAL(devices.size() == fabric_programs->size(), "Number of devices must match number of programs");
+    TT_FATAL(fabric_programs.has_value(), "Fabric programs must be set if fabric is enabled");
+    TT_FATAL(devices.size() == fabric_programs->size(), "Number of devices must match number of programs");
 
-        log_info(tt::LogTest, "Building EDM kernels");
-        line_fabric->build_kernels();
-        build_and_enqueue(devices, *fabric_programs);
-    }
+    log_info(tt::LogTest, "Building EDM kernels");
+    line_fabric->build_kernels();
+    build_and_enqueue(devices, *fabric_programs);
 }
 
 // RESUME HERE AND IMPLEMENT MCAST TEST
@@ -1267,8 +1176,7 @@ int TestLineFabricEntrypoint(
     const uint32_t page_size,
     const uint32_t num_pages_total,
     const bool src_is_dram,
-    const bool dest_is_dram,
-    bool enable_persistent_fabric) {
+    const bool dest_is_dram) {
     // argv[0]: program
     // argv[1]: buffer_size_bytes
     // argv[2]: num_loops
@@ -1288,25 +1196,18 @@ int TestLineFabricEntrypoint(
         view.get_device(MeshCoordinate(0, 1)),
         view.get_device(MeshCoordinate(0, 2)),
         view.get_device(MeshCoordinate(0, 3))};
-    std::vector<Program> programs(enable_persistent_fabric ? 1 : devices.size());
+    std::vector<Program> programs(1);
     std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
     std::optional<std::vector<Program>> fabric_programs;
     std::vector<Program*> fabric_program_ptrs;
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> line_fabric;
-    setup_test_with_persistent_fabric(
-        devices,
-        programs,
-        subdevice_managers,
-        fabric_programs,
-        fabric_program_ptrs,
-        line_fabric,
-        enable_persistent_fabric);
+    setup_test_with_persistent_fabric(devices, subdevice_managers, fabric_programs, fabric_program_ptrs, line_fabric);
 
     auto launch_workers = [&](std::vector<Program>& _programs) -> bool {
         bool success = false;
         try {
             success = RunLineFabricTest(
-                enable_persistent_fabric ? std::vector<IDevice*>{devices[0]} : devices,
+                std::vector<IDevice*>{devices[0]},
                 _programs,
                 // fabric_hops,
 
@@ -1319,8 +1220,7 @@ int TestLineFabricEntrypoint(
                 dest_is_dram,
 
                 subdevice_managers,
-                line_fabric.value(),
-                enable_persistent_fabric);
+                line_fabric.value());
 
         } catch (std::exception& e) {
             log_error(tt::LogTest, "Caught exception: {}", e.what());
@@ -1331,12 +1231,10 @@ int TestLineFabricEntrypoint(
     };
     bool success = launch_workers(programs);
 
-    if (enable_persistent_fabric) {
-        std::vector<Program> second_run_programs(1);
-        success = launch_workers(second_run_programs);
-        persistent_fabric_teardown_sequence(
-            devices, subdevice_managers, line_fabric.value(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
-    }
+    std::vector<Program> second_run_programs(1);
+    success = launch_workers(second_run_programs);
+    persistent_fabric_teardown_sequence(
+        devices, subdevice_managers, line_fabric.value(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
 
     test_fixture.TearDown();
 
@@ -1344,11 +1242,7 @@ int TestLineFabricEntrypoint(
 }
 
 int TestLoopbackEntrypoint(
-    const uint32_t page_size,
-    const uint32_t num_pages_total,
-    const bool src_is_dram,
-    const bool dest_is_dram,
-    bool enable_persistent_fabric) {
+    const uint32_t page_size, const uint32_t num_pages_total, const bool src_is_dram, const bool dest_is_dram) {
     // argv[0]: program
     // argv[1]: buffer_size_bytes
     // argv[2]: num_loops
@@ -1382,17 +1276,16 @@ int TestLoopbackEntrypoint(
     TT_ASSERT(device_id == device_1->id());
     // const auto& device_1 = test_fixture.mesh_device_->get_device(device_id);
 
-    std::vector<Program> programs(enable_persistent_fabric ? 1 : 2);
+    std::vector<Program> programs(1);
     std::optional<std::vector<Program>> fabric_programs;
     auto& sender_program = programs.at(0);
-    if (enable_persistent_fabric) {
-        log_info(tt::LogTest, "Enabling persistent fabric");
-        fabric_programs = std::vector<Program>(2);
-        subdevice_managers = create_subdevices({device_0, device_1});
-    }
 
-    auto& fabric_sender_program = enable_persistent_fabric ? fabric_programs->at(0) : sender_program;
-    auto& fabric_receiver_program = enable_persistent_fabric ? fabric_programs->at(1) : programs.at(1);
+    log_info(tt::LogTest, "Enabling persistent fabric");
+    fabric_programs = std::vector<Program>(2);
+    subdevice_managers = create_subdevices({device_0, device_1});
+
+    auto& fabric_sender_program = fabric_programs->at(0);
+    auto& fabric_receiver_program = fabric_programs->at(1);
     IDevice* sender_device = device_0;
     IDevice* receiver_device = device_1;
 
@@ -1402,22 +1295,10 @@ int TestLoopbackEntrypoint(
     const chip_id_t remote_chip_id = 1;
     const auto& edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
     auto chip_0_edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
-        sender_device,
-        fabric_sender_program,
-        eth_sender_core,
-        local_chip_id,
-        remote_chip_id,
-        edm_config,
-        enable_persistent_fabric);
+        sender_device, fabric_sender_program, eth_sender_core, local_chip_id, remote_chip_id, edm_config);
     chip_0_edm_builder.set_firmware_context_switch_interval(0);
     auto chip_1_edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
-        receiver_device,
-        fabric_receiver_program,
-        eth_receiver_core,
-        remote_chip_id,
-        local_chip_id,
-        edm_config,
-        enable_persistent_fabric);
+        receiver_device, fabric_receiver_program, eth_receiver_core, remote_chip_id, local_chip_id, edm_config);
     chip_1_edm_builder.set_firmware_context_switch_interval(0);
     // Create the loopback connection on the second device
     chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
@@ -1436,12 +1317,10 @@ int TestLoopbackEntrypoint(
         DataMovementProcessor::RISCV_0,
         NOC::NOC_0);
 
-    if (enable_persistent_fabric) {
-        tt::tt_metal::detail::CompileProgram(sender_device, fabric_sender_program);
-        tt::tt_metal::detail::CompileProgram(receiver_device, fabric_receiver_program);
-        tt_metal::EnqueueProgram(sender_device->command_queue(), fabric_sender_program, false);
-        tt_metal::EnqueueProgram(receiver_device->command_queue(), fabric_receiver_program, false);
-    }
+    tt::tt_metal::detail::CompileProgram(sender_device, fabric_sender_program);
+    tt::tt_metal::detail::CompileProgram(receiver_device, fabric_receiver_program);
+    tt_metal::EnqueueProgram(sender_device->command_queue(), fabric_sender_program, false);
+    tt_metal::EnqueueProgram(receiver_device->command_queue(), fabric_receiver_program, false);
     log_trace(tt::LogTest, "{} programs ", programs.size());
     bool success = false;
     try {
@@ -1458,15 +1337,14 @@ int TestLoopbackEntrypoint(
             dest_is_dram,
             programs,
             chip_0_edm_builder,
-            subdevice_managers,
-            enable_persistent_fabric);
+            subdevice_managers);
     } catch (std::exception& e) {
         log_error(tt::LogTest, "Caught exception: {}", e.what());
         test_fixture.TearDown();
         return -1;
     }
 
-    if (enable_persistent_fabric) {
+    {
         // Run the test twice with a single fabric invocation
 
         std::vector<Program> second_programs(1);
@@ -1484,8 +1362,7 @@ int TestLoopbackEntrypoint(
                 dest_is_dram,
                 second_programs,
                 chip_0_edm_builder,
-                subdevice_managers,
-                enable_persistent_fabric);
+                subdevice_managers);
         } catch (std::exception& e) {
             log_error(tt::LogTest, "Caught exception: {}", e.what());
             test_fixture.TearDown();
@@ -1534,18 +1411,13 @@ inline bool TestMultiInputReaderKernel(
     const uint32_t page_size,
 
     TwoInputReaderKernelWriteMode test_mode,
-    const ttnn::ccl::cmd::CclCommandDestArgs& dest_args,
-    bool enable_persistent_fabric) {
+    const ttnn::ccl::cmd::CclCommandDestArgs& dest_args) {
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
         log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return true;
     }
     Fabric1DFixture test_fixture;
-
-    TT_FATAL(
-        !enable_persistent_fabric || test_mode != TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK,
-        "Test configuration issue. Set local writeback mode with persistent fabric");
 
     auto view = *(test_fixture.view_);
 
@@ -1555,19 +1427,16 @@ inline bool TestMultiInputReaderKernel(
         devices.push_back(view.get_device(MeshCoordinate(0, i)));
     }
 
-    std::vector<Program> programs(enable_persistent_fabric ? 1 : devices.size());
+    std::vector<Program> programs(1);
     std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
     std::optional<std::vector<Program>> fabric_programs;
     std::vector<Program*> fabric_program_ptrs;
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> line_fabric;
-    setup_test_with_persistent_fabric(
-        devices,
-        programs,
-        subdevice_managers,
-        fabric_programs,
-        fabric_program_ptrs,
-        line_fabric,
-        enable_persistent_fabric);
+    if (test_mode != TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK) {
+        setup_test_with_persistent_fabric(
+            devices, subdevice_managers, fabric_programs, fabric_program_ptrs, line_fabric);
+        TT_FATAL(subdevice_managers.has_value(), "Subdevice managers must be set if fabric is enabled");
+    }
 
     std::vector<Tensor> input0_tensors_device;
     std::vector<Tensor> input1_tensors_device;
@@ -1586,9 +1455,6 @@ inline bool TestMultiInputReaderKernel(
         output1_tensors_device.push_back(
             output_tensor1.to_device(devices.at(i), output_tensor1_mem_config, ttnn::DefaultQueueId));
     }
-    TT_FATAL(
-        !enable_persistent_fabric || subdevice_managers.has_value(),
-        "Subdevice managers must be set if fabric is enabled");
     auto launch_ccl_command_interpreter_workers = [&](std::vector<Program>& _programs) {
         return RunLocalTestWithMultiInputReaders(
             devices,
@@ -1613,31 +1479,31 @@ inline bool TestMultiInputReaderKernel(
             page_size,
             test_mode,
             dest_args,
-            subdevice_managers,
-            enable_persistent_fabric);
+            subdevice_managers);
     };
 
     auto pass = launch_ccl_command_interpreter_workers(programs);
-    if (enable_persistent_fabric) {
-        std::vector<Program> second_run_programs(1);
-        // It looks suspicious that we are dropping the first result but there are two reasons we do this
-        // 1) We really only care that we can run back to back safely
-        // 2) The first run will end up racing with host and copy-back because there is no
-        //    receiver on the destination that can signal to us when we are done. We need to add this
-        //    to the test to make it more robust but that is future work
-        pass = launch_ccl_command_interpreter_workers(second_run_programs);
-        pass = true;
 
-        // Due to race between host and device some packets are in flight by the time host sends shutdown signals so
-        // some get shutdown in between any packets in the pipeline. This can only be fixed by having a "drainer" op to
-        // make sure it receives all writes before exiting
+    std::vector<Program> second_run_programs(1);
+    // It looks suspicious that we are dropping the first result but there are two reasons we do this
+    // 1) We really only care that we can run back to back safely
+    // 2) The first run will end up racing with host and copy-back because there is no
+    //    receiver on the destination that can signal to us when we are done. We need to add this
+    //    to the test to make it more robust but that is future work
+    pass = launch_ccl_command_interpreter_workers(second_run_programs);
+    pass = true;
+
+    // Due to race between host and device some packets are in flight by the time host sends shutdown signals so
+    // some get shutdown in between any packets in the pipeline. This can only be fixed by having a "drainer" op to
+    // make sure it receives all writes before exiting
+    if (test_mode != TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK) {
         persistent_fabric_teardown_sequence(
             devices, subdevice_managers, line_fabric.value(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+    }
 
-        log_info(tt::LogTest, "Finished");
-        for (auto d : devices) {
-            tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
-        }
+    log_info(tt::LogTest, "Finished");
+    for (auto d : devices) {
+        tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
     }
     return pass;
 }
@@ -1713,8 +1579,7 @@ bool RunMultiInputReaderTestPropagateFullTensorIn(
 
         page_size,
         test_writeback_mode,
-        ttnn::ccl::cmd::LocalOnlyCommandDestArgs{},
-        false);
+        ttnn::ccl::cmd::LocalOnlyCommandDestArgs{});
 
     return pass;
 }
@@ -1726,7 +1591,7 @@ bool RunMultiInputReaderTestPropagateFullTensorIn(
 // ////////////////////////////////////////////////////////////////////
 
 void RunFabricMcastFullTensorPropagateTest(
-    const ttnn::Shape& tensor_shape, size_t distance_dest_device, size_t num_devices, bool enable_persistent_fabric) {
+    const ttnn::Shape& tensor_shape, size_t distance_dest_device, size_t num_devices) {
     const Layout layout = Layout::TILE;
     const MemoryConfig in0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     const MemoryConfig in1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
@@ -1785,8 +1650,7 @@ void RunFabricMcastFullTensorPropagateTest(
 
         page_size,
         TwoInputReaderKernelWriteMode::FABRIC_MULTICAST,
-        dest_args,
-        enable_persistent_fabric);
+        dest_args);
 
     ASSERT_TRUE(pass);
 }
@@ -2690,7 +2554,6 @@ void Run1DFabricPacketSendTest(
     static constexpr uint32_t packet_header_cb_index = tt::CB::c_in0;
     static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
     static constexpr size_t packet_header_cb_size_in_headers = 5;
-    static constexpr bool enable_persistent_fabric_mode = true;
     auto max_packet_payload_size_bytes =
         std::max_element(test_specs.begin(), test_specs.end(), [](const auto& a, const auto& b) {
             return a.packet_payload_size_bytes < b.packet_payload_size_bytes;
@@ -2713,18 +2576,15 @@ void Run1DFabricPacketSendTest(
     std::optional<std::vector<Program>> fabric_programs = std::nullopt;
     size_t packet_header_size_bytes = 0;
     if (!use_device_init_fabric) {
-        std::vector<Program> dummy_worker_programs;
         std::vector<Program*> fabric_program_ptrs;
         TT_FATAL(
             fabrics_under_test_devices.size() == 1, "Expected 1 fabric under test when device init fabric is not used");
         setup_test_with_persistent_fabric(
             fabrics_under_test_devices[0],
-            dummy_worker_programs,
             subdevice_managers,
             fabric_programs,
             fabric_program_ptrs,
             fabric_handle,
-            enable_persistent_fabric_mode,
             params.num_links,
             topology,
             fabric_context_switch_interval,
@@ -2854,7 +2714,6 @@ void Run1DFabricPacketSendTest(
                         worker_config.forward_device,
                         worker_config.backward_device,
                         &program,
-                        enable_persistent_fabric_mode,
                         params.num_links,
                         topology);
             }
@@ -3740,7 +3599,6 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     static constexpr uint32_t packet_header_cb_index = tt::CB::c_in0;
     static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
     static constexpr size_t packet_header_cb_size_in_headers = 5;
-    static constexpr bool enable_persistent_fabric_mode = true;
     size_t dest_buffer_size = packet_payload_size_bytes * 4;
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
 
@@ -3785,9 +3643,6 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
         devices.push_back(devices_[i]);
     }
     // build the mesh device
-
-    // Persistent Fabric Setup
-    std::vector<Program> dummy_worker_programs;
 
     // Other boiler plate setup
     CoreRangeSet worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_links - 1, 0)));

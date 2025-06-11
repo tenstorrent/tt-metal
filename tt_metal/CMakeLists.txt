@@ -61,6 +61,7 @@ target_sources(
             api/tt-metalium/global_circular_buffer.hpp
             api/tt-metalium/global_semaphore.hpp
             api/tt-metalium/graph_tracking.hpp
+            api/tt-metalium/fabric_types.hpp
             api/tt-metalium/hal.hpp
             api/tt-metalium/hal_types.hpp
             api/tt-metalium/hlk_desc.hpp
@@ -76,6 +77,8 @@ target_sources(
             api/tt-metalium/mesh_device_view.hpp
             api/tt-metalium/metal_soc_descriptor.h
             api/tt-metalium/persistent_kernel_cache.hpp
+            api/tt-metalium/profiler_optional_metadata.hpp
+            api/tt-metalium/profiler_types.hpp
             api/tt-metalium/program.hpp
             api/tt-metalium/program_cache.hpp
             api/tt-metalium/program_descriptors.hpp
@@ -86,16 +89,17 @@ target_sources(
             api/tt-metalium/shape.hpp
             api/tt-metalium/shape2d.hpp
             api/tt-metalium/shape_base.hpp
-            api/tt-metalium/small_vector.hpp
             api/tt-metalium/sub_device.hpp
             api/tt-metalium/sub_device_types.hpp
             api/tt-metalium/system_mesh.hpp
             api/tt-metalium/tile.hpp
+            api/tt-metalium/tilize_utils.hpp
             api/tt-metalium/tt_align.hpp
             api/tt-metalium/tt_backend_api_types.hpp
             api/tt-metalium/tt_metal.hpp
             api/tt-metalium/util.hpp
             api/tt-metalium/utils.hpp
+            api/tt-metalium/vector_aligned.hpp
             api/tt-metalium/work_split.hpp
             api/tt-metalium/distributed_context.hpp
 )
@@ -110,6 +114,7 @@ set_target_properties(
         VERIFY_INTERFACE_HEADER_SETS
             FALSE
 )
+
 target_sources(
     jitapi
     INTERFACE
@@ -342,8 +347,6 @@ target_link_libraries(
         umd::device
         magic_enum::magic_enum
         fmt::fmt-header-only
-        span
-        small_vector
         TracyClient
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon

@@ -46,7 +46,6 @@ std::vector<CoreCoord> reorder_connected_sockets(
 EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     const std::vector<tt::tt_metal::IDevice*>& device_sequence,
     const std::vector<tt::tt_metal::Program*>& program_sequence,
-    bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
     bool build_in_worker_connection_mode,
     Topology topology,
@@ -183,7 +182,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         src_device->id(),
                         dest_device->id(),
                         src_curr_edm_config,
-                        enable_persistent_mode,
                         build_in_worker_connection_mode,
                         dateline));
 
@@ -200,7 +198,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         dest_device->id(),
                         src_device->id(),
                         dest_curr_edm_config,
-                        enable_persistent_mode,
                         build_in_worker_connection_mode,
                         dateline));
             }
@@ -351,7 +348,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     std::optional<tt::tt_metal::IDevice*> forward_device,
     std::optional<tt::tt_metal::IDevice*> backward_device,
     tt::tt_metal::Program* program,
-    bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
     bool build_in_worker_connection_mode,
     Topology topology) :
@@ -425,7 +421,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 device_pairs[i].first->id(),
                 device_pairs[i].second.value()->id(),
                 config,
-                enable_persistent_mode,
                 build_in_worker_connection_mode));
         }
         if (!counted_num_links.has_value()) {
@@ -479,11 +474,9 @@ tt::tt_fabric::SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connec
 EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
     const std::vector<tt::tt_metal::IDevice*>& device_sequence,
     const std::vector<tt::tt_metal::Program*>& program_sequence,
-    bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
     Topology topology) {
-    return EdmLineFabricOpInterface(
-        device_sequence, program_sequence, enable_persistent_mode, desired_num_links, true, topology);
+    return EdmLineFabricOpInterface(device_sequence, program_sequence, desired_num_links, true, topology);
 }
 
 EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
@@ -491,7 +484,6 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
     tt::tt_metal::IDevice* forward_device,
     tt::tt_metal::IDevice* backward_device,
     tt::tt_metal::Program* program,
-    bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
     Topology topology) {
     return EdmLineFabricOpInterface(
@@ -499,7 +491,6 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
         forward_device == nullptr ? std::nullopt : std::optional<tt::tt_metal::IDevice*>(forward_device),
         backward_device == nullptr ? std::nullopt : std::optional<tt::tt_metal::IDevice*>(backward_device),
         program,
-        enable_persistent_mode,
         desired_num_links,
         true,
         topology);
@@ -659,7 +650,7 @@ void initialize_edm_fabric(
                 return &p;
             });
         EdmLineFabricOpInterface fabric_device_builders =
-            EdmLineFabricOpInterface(devices, program_ptrs, true, std::nullopt, false, topology);
+            EdmLineFabricOpInterface(devices, program_ptrs, std::nullopt, false, topology);
         if (context_switch_interval_override.has_value()) {
             fabric_device_builders.set_firmware_context_switch_interval(context_switch_interval_override.value());
         }
@@ -692,7 +683,7 @@ void initialize_edm_fabric(
                     return &p;
                 });
             row_fabric_lines.push_back(EdmLineFabricOpInterface(
-                mesh_device->get_view().get_row_views()[i], program_ptrs, true, std::nullopt, false, topology));
+                mesh_device->get_view().get_row_views()[i], program_ptrs, std::nullopt, false, topology));
             if (context_switch_interval_override.has_value()) {
                 row_fabric_lines.back().set_firmware_context_switch_interval(context_switch_interval_override.value());
             }
@@ -705,7 +696,7 @@ void initialize_edm_fabric(
                 program_ptrs.push_back(&programs[r][i]);
             }
             col_fabric_lines.push_back(EdmLineFabricOpInterface(
-                mesh_device->get_view().get_column_views()[i], program_ptrs, true, std::nullopt, false, topology));
+                mesh_device->get_view().get_column_views()[i], program_ptrs, std::nullopt, false, topology));
             if (context_switch_interval_override.has_value()) {
                 col_fabric_lines.back().set_firmware_context_switch_interval(context_switch_interval_override.value());
             }
@@ -733,7 +724,7 @@ void teardown_edm_fabric(distributed::MeshDevice* mesh_device, bool wrap_fabric_
         program_ptrs.reserve(programs.size());
         std::transform(
             programs.begin(), programs.end(), std::back_inserter(program_ptrs), [](Program& p) { return &p; });
-        EdmLineFabricOpInterface edm_fabric(line_view, program_ptrs, true, std::nullopt, false, topology);
+        EdmLineFabricOpInterface edm_fabric(line_view, program_ptrs, std::nullopt, false, topology);
         edm_fabric.teardown_from_host(tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
     };
     if (wrap_fabric_around_mesh) {
