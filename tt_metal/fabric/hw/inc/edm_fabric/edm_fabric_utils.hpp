@@ -50,8 +50,6 @@ FORCE_INLINE void send_chunk_from_address(
     const uint32_t& num_pages,
     const uint32_t& page_size,
     uint64_t remote_l1_write_addr) {
-    DPRINT << "Sending chunk from address " << (uint32_t)local_l1_address << " to " << (uint64_t)remote_l1_write_addr
-           << " with size " << (page_size * num_pages) << ENDL();
     noc_async_write(local_l1_address, remote_l1_write_addr, page_size * num_pages);
     if constexpr (blocking_mode == EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING) {
         noc_async_writes_flushed();

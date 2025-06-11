@@ -525,11 +525,6 @@ private:
                     BufferIndex{wrap_increment(this->buffer_slot_index.get(), this->num_buffers_per_channel)};
                 this->edm_buffer_addr =
                     this->edm_buffer_base_addr + (this->get_buffer_slot_index() * this->buffer_size_bytes);
-                ;
-                DPRINT << "\tAdvancing buffer slot write index to " << (uint32_t)this->get_buffer_slot_index()
-                       << ENDL();
-                DPRINT << "\tbuffer_size_bytes " << (uint32_t)this->buffer_size_bytes << ENDL();
-                DPRINT << "\tedm_buffer_addr " << (uint32_t)this->edm_buffer_addr << ENDL();
             } else {
                 this->buffer_slot_index = BufferIndex{wrap_increment(this->buffer_slot_index.get(), this->num_buffers_per_channel)};
                 this->edm_buffer_addr =
@@ -575,8 +570,6 @@ private:
         ASSERT(size_bytes <= this->buffer_size_bytes);
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
-        DPRINT << "Sending header " << (uint32_t)source_address << " to " << (uint64_t)buffer_address << " with size "
-               << (uint32_t)size_bytes << ENDL();
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
         post_send_payload_increment_pointers();
     }
