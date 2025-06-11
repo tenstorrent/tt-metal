@@ -151,7 +151,6 @@ def run(
     ttnn_scheduler,
     use_host_decoder=True,
 ):
-    ttnn.device.EnableMemoryReports()
     ttnn_latents = input_latents
     # Denoising loop
     for index in tqdm(range(len(time_step))):
