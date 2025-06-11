@@ -604,6 +604,12 @@ async function run() {
     core.info('[Debug] Data range information:');
     core.info(JSON.stringify(debugData, null, 2));
 
+    // Debug: Get earliest and latest data for all-post-commit
+    const postCommitRuns = requestedPeriodRuns.filter(run => run.name === 'All post-commit tests');
+    const postCommitDebugData = fetcher.getEarliestAndLatestData(postCommitRuns);
+    core.info('[Debug] all-post-commit data range information:');
+    core.info(JSON.stringify(postCommitDebugData, null, 2));
+
     // Set outputs
     core.setOutput('total-runs', requestedPeriodRuns.length);
     core.setOutput('workflow-count', groupedRequestedRuns.size);
