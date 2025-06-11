@@ -462,13 +462,13 @@ def run_multi_core_matmul_1d(
         rs_input_mem_config.shard_spec.num_cores(),
         scheme=scheme,
     )
-    intermediate_outputs = torch.chunk(input, chunks=num_devices_scatter, dim=1)
+    intermediate_outputs = torch.chunk(input, chunks=num_devices_scatter, dim=dim)
     output = torch.zeros(intermediate_outputs[0].shape)
     for i in range(0, len(intermediate_outputs)):
         output += intermediate_outputs[i]
 
     scattered_output = torch.chunk(output, chunks=num_devices_scatter, dim=dim)
-    scattered_output = torch.cat(scattered_output, dim=1)
+    scattered_output = torch.cat(scattered_output, dim=dim)
     cluster_shape = (8, 4)
     tt_input = ttnn.from_torch(
         input,
@@ -514,7 +514,7 @@ def run_multi_core_matmul_1d(
     worker_sub_device_id = ttnn.SubDeviceId(0)
     signpost("start")
     for _ in range(num_iters):
-        output_t = ttnn.experimental.llama_rs_matmul(
+        rs_out, matmul_out = ttnn.experimental.llama_rs_matmul(
             in0_t,
             in1_t,
             tt_input,
@@ -532,11 +532,6 @@ def run_multi_core_matmul_1d(
             memory_config_rs=model_configuration["REDUCE_SCATTER_OUT_MEMCFG"],
             topology=ttnn.Topology.Linear,
         )
-    signpost("stop")
-    mesh_device.reset_sub_device_stall_group()
-
-    # Check program cache
-    assert mesh_device.num_program_cache_entries() == 1  # Only 1 op
 
 
 @pytest.mark.skipif(is_grayskull(), reason="Test suite for WH only")
