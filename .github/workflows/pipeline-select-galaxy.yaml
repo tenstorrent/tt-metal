@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       model-selection:
-        description: "Select model to run tests on."
+        description: "Selection ignored for now. "
         required: true
         type: choice
         options:
@@ -33,7 +33,7 @@ on:
           - TSan
         default: "Release"
       extra-tag: # set in-service and topology-6u by default
-        description: "Extra tag to add to the build. Can specify topology 'topology-6u' or 'config-tg'."
+        description: "You can specify topology with 'topology-6u' or 'config-tg' and specific machine."
         required: true
         type: string
         default: "in-service,config-tg"
