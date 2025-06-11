@@ -125,13 +125,22 @@ jobs:
     if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
+
+      - name: Install post-slack-message dependencies
+        shell: bash
+        working-directory: .github/actions/post-slack-message
+        run: npm install
+
       - name: Send Slack Notification
-        uses: slackapi/slack-github-action@v2.1.0
+        uses: ./.github/actions/post-slack-message
         with:
-          method: chat.postMessage
-          token: ${{ secrets.SLACK_BOT_TOKEN }}
-          payload: |
+          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          message-title: "🚨 Workflow Failures Detected"
+          message-data: |
             {
-              "channel": "${{ secrets.SLACK_METAL_INFRA_PIPELINE_CHANNEL_ID }}",
-              "text": "Failed Workflows Report:\n${{ join(fromJSON(needs.analyze-data.outputs.failed_workflows), '\n') }}"
+              "failed_workflows": ${{ needs.analyze-data.outputs.failed_workflows }},
+              "repository": "${{ github.repository }}",
+              "branch": "${{ github.ref_name }}",
+              "workflow_run": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             }
