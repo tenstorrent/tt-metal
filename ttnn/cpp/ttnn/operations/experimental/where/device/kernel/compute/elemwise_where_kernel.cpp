@@ -15,6 +15,29 @@
 #include "compute_kernel_api/eltwise_binary_sfpu.h"
 
 template <typename binary_op_t>
+inline __attribute__((always_inline)) void fpu_binary_op(
+    tt::CBIndex cb_in0, tt::CBIndex cb_in1, tt::CBIndex cb_out, uint32_t per_core_block_size, binary_op_t&& binary_op) {
+    cb_wait_front(cb_in0, per_core_block_size);
+    cb_wait_front(cb_in1, per_core_block_size);
+    cb_reserve_back(cb_out, per_core_block_size);
+
+    tile_regs_acquire();
+    tile_regs_wait();
+
+    for (uint32_t i = 0; i < per_core_block_size; ++i) {
+        binary_op(cb_in0, cb_in1, i);
+        pack_tile(i, cb_out);
+    }
+
+    tile_regs_commit();
+    tile_regs_release();
+
+    cb_pop_front(cb_in0, per_core_block_size);
+    cb_pop_front(cb_in1, per_core_block_size);
+    cb_push_back(cb_out, per_core_block_size);
+}
+
+template <typename binary_op_t>
 inline __attribute__((always_inline)) void sfpu_binary_op(
     tt::CBIndex cb_in0, tt::CBIndex cb_in1, tt::CBIndex cb_out, uint32_t per_core_block_size, binary_op_t&& binary_op) {
     cb_wait_front(cb_in0, per_core_block_size);
@@ -90,21 +113,53 @@ void MAIN {
 
         cb_pop_front(cb_condition, 1);
 
-        sfpu_binary_op(cb_true_values, cb_positive_mask, cb_true_values_out, args.per_core_block_size, [](uint32_t i) {
-            ckernel::mul_binary_tile_init();
-            ckernel::mul_binary_tile(i * 2, i * 2 + 1);
-        });
-
-        sfpu_binary_op(
-            cb_false_values, cb_negative_mask, cb_false_values_out, args.per_core_block_size, [](uint32_t i) {
-                ckernel::mul_binary_tile_init();
-                ckernel::mul_binary_tile(i * 2, i * 2 + 1);
+        fpu_binary_op(
+            cb_true_values,
+            cb_positive_mask,
+            cb_true_values_out,
+            args.per_core_block_size,
+            [](uint32_t icb0, uint32_t icb1, uint32_t i) {
+                ckernel::mul_tiles_init(icb0, icb1);
+                ckernel::mul_tiles(icb0, icb1, i, i, i);
             });
 
-        sfpu_binary_op(cb_true_values_out, cb_false_values_out, cb_out, args.per_core_block_size, [](uint32_t i) {
-            ckernel::add_binary_tile_init();
-            ckernel::add_binary_tile(i * 2, i * 2 + 1);
-        });
+        fpu_binary_op(
+            cb_false_values,
+            cb_negative_mask,
+            cb_false_values_out,
+            args.per_core_block_size,
+            [](uint32_t icb0, uint32_t icb1, uint32_t i) {
+                ckernel::mul_tiles_init(icb0, icb1);
+                ckernel::mul_tiles(icb0, icb1, i, i, i);
+            });
+
+        fpu_binary_op(
+            cb_true_values_out,
+            cb_false_values_out,
+            cb_out,
+            args.per_core_block_size,
+            [](uint32_t icb0, uint32_t icb1, uint32_t i) {
+                ckernel::add_tiles_init(icb0, icb1, false);
+                ckernel::add_tiles(icb0, icb1, i, i, i);
+            });
+        // SFPU IMPLEMENTATION
+        // sfpu_binary_op(cb_true_values, cb_positive_mask, cb_true_values_out, args.per_core_block_size, [](uint32_t i)
+        // {
+        //     ckernel::mul_binary_tile_init();
+        //     ckernel::mul_binary_tile(i * 2, i * 2 + 1);
+        // });
+
+        // sfpu_binary_op(
+        //     cb_false_values, cb_negative_mask, cb_false_values_out, args.per_core_block_size, [](uint32_t i) {
+        //         ckernel::mul_binary_tile_init();
+        //         ckernel::mul_binary_tile(i * 2, i * 2 + 1);
+        //     });
+
+        // sfpu_binary_op(cb_true_values_out, cb_false_values_out, cb_out, args.per_core_block_size, [](uint32_t i) {
+        //     ckernel::add_binary_tile_init();
+        //     ckernel::add_binary_tile(i * 2, i * 2 + 1);
+        // });
     }
 }
+
 }  // namespace NAMESPACE
