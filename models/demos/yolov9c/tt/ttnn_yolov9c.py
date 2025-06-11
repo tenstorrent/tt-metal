@@ -787,6 +787,8 @@ class YoloV9:
 
         x = self.repncspelan4_8(x)  # 21
         x22 = x
+        x16 = ttnn.reallocate(x16)
+        x19 = ttnn.reallocate(x19)
         x = self.segment_detect([x16, x19, x22])  # 22
 
         ttnn.deallocate(x16)
