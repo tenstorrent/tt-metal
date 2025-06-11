@@ -40,7 +40,7 @@ CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create(
 
     const auto& input_tensor{tensor_args.input_tensor};
     auto& output_tensor{tensor_return_value};
-    const auto& input_shape{input_tensor.get_padded_shape()};
+    const auto& input_shape{input_tensor.padded_shape()};
 
     Program program{};
 
@@ -49,14 +49,14 @@ CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create(
     auto src_buffer{input_tensor.buffer()};
     auto dst_buffer{output_tensor.buffer()};
 
-    const auto dst_cb_data_format{datatype_to_dataformat_converter(output_tensor.get_dtype())};
+    const auto dst_cb_data_format{datatype_to_dataformat_converter(output_tensor.dtype())};
     const bool fp32_dest_acc_en{
         (dst_cb_data_format == DataFormat::Float32) || (dst_cb_data_format == DataFormat::Int32) ||
         (dst_cb_data_format == DataFormat::UInt32)};
     const uint32_t height_tiles{input_shape[2] / constants::TILE_HEIGHT};
     const uint32_t width_tiles{input_shape[3] / constants::TILE_WIDTH};
 
-    const uint32_t input_rank{input_tensor.get_padded_shape().rank()};
+    const uint32_t input_rank{input_tensor.padded_shape().rank()};
 
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
@@ -64,8 +64,8 @@ CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create(
     const int32_t dim{
         (operation_attributes.dim >= 0) ? operation_attributes.dim : (input_rank + operation_attributes.dim)};
 
-    const uint32_t tiles_per_row{input_tensor.get_padded_shape()[dim]};
-    const uint32_t num_rows_total{input_tensor.volume() / tt::constants::TILE_HW / tiles_per_row};
+    const uint32_t tiles_per_row{input_tensor.padded_shape()[dim]};
+    const uint32_t num_rows_total{input_tensor.physical_volume() / tt::constants::TILE_HW / tiles_per_row};
     const uint32_t input_tile_offset{calc_input_tile_offset(input_shape, dim)};
 
     const auto
@@ -77,10 +77,10 @@ CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create(
     constexpr uint32_t intermed_tiles = 1;
     constexpr uint32_t out_tiles = 1;
 
-    auto cb_src{create_cb(program, input_tensor.get_dtype(), CumprodCB::SRC, all_cores, in_tiles)};
-    auto cb_acc{create_cb(program, input_tensor.get_dtype(), CumprodCB::ACC, all_cores, one_tiles)};
-    auto cb_one{create_cb(program, input_tensor.get_dtype(), CumprodCB::ONE, all_cores, intermed_tiles)};
-    auto cb_dst{create_cb(program, input_tensor.get_dtype(), CumprodCB::DST, all_cores, out_tiles)};
+    auto cb_src{create_cb(program, input_tensor.dtype(), CumprodCB::SRC, all_cores, in_tiles)};
+    auto cb_acc{create_cb(program, input_tensor.dtype(), CumprodCB::ACC, all_cores, one_tiles)};
+    auto cb_one{create_cb(program, input_tensor.dtype(), CumprodCB::ONE, all_cores, intermed_tiles)};
+    auto cb_dst{create_cb(program, input_tensor.dtype(), CumprodCB::DST, all_cores, out_tiles)};
 
     const uint32_t src_is_dram{src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
     const uint32_t dst_is_dram{dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};

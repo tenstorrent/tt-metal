@@ -68,11 +68,11 @@ uint32_t get_sender_receiver_chip_fabric_encoding(
                std::abs(static_cast<int>(sender_global_coord[1]) - static_cast<int>(recv_global_coord[1]));
     } else {
         // 2D/Mesh Fabric requires looking up "logical" encodings from the control plane
-        auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+        auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
         if (is_sender) {
-            return control_plane->get_fabric_node_id_from_physical_chip_id(recv_physical_device_id).chip_id;
+            return control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id).chip_id;
         } else {
-            return control_plane->get_fabric_node_id_from_physical_chip_id(sender_physical_device_id).chip_id;
+            return control_plane.get_fabric_node_id_from_physical_chip_id(sender_physical_device_id).chip_id;
         }
     }
 }
@@ -173,13 +173,13 @@ void write_socket_configs(
     SocketEndpoint socket_endpoint) {
     auto mesh_device = config_buffer->device();
     auto peer_device = peer_config_buffer->device();
-    auto& core_to_core_id = config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
+    auto& core_to_core_id = config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
 
     auto grouped_connections = group_socket_connections(config, socket_endpoint);
     auto peer_addr = peer_config_buffer->address();
 
-    FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
+    FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
 
     if (is_sender) {
         std::vector<sender_socket_md> config_data(config_buffer->size() / sizeof(sender_socket_md), sender_socket_md());

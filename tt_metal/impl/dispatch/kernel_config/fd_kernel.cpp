@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -167,9 +167,6 @@ KernelHandle FDKernel::configure_kernel_variant(
     if (rt_options.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config() != FabricConfig::FABRIC_2D) {
-        defines["FVC_MODE_PULL"] = "1";
-    }
     if (!DPrintServerReadsDispatchCores(device_->id())) {
         defines["FORCE_DPRINT_OFF"] = "1";
     }
@@ -199,4 +196,10 @@ KernelHandle FDKernel::configure_kernel_variant(
                 .defines = defines,
                 .opt_level = opt_level});
     }
+}
+
+void FDKernel::create_edm_connection_sems(FDKernelEdmConnectionAttributes& attributes) {
+    attributes.worker_flow_control_sem = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+    attributes.worker_buffer_index_sem = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+    attributes.worker_teardown_sem = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
 }

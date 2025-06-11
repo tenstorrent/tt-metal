@@ -33,7 +33,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -148,7 +148,7 @@ void RunAsyncWriteTest(
     FabricNodeId end_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Find a device with a neighbour in the specified direction
     if (!find_device_with_neighbor_in_direction(
@@ -162,10 +162,10 @@ void RunAsyncWriteTest(
     }
 
     std::string test_type = is_raw_write ? "Raw Async Write" : "Async Write";
-    tt::log_info(tt::LogTest, "{} from {} to {}", test_type, start_fabric_node_id.chip_id, end_fabric_node_id.chip_id);
+    log_info(tt::LogTest, "{} from {} to {}", test_type, start_fabric_node_id.chip_id, end_fabric_node_id.chip_id);
 
     // Get the optimal channels (no internal hops) on the start chip that will forward in the direction of the end chip
-    auto router_chans = control_plane->get_forwarding_eth_chans_to_chip(start_fabric_node_id, end_fabric_node_id);
+    auto router_chans = control_plane.get_forwarding_eth_chans_to_chip(start_fabric_node_id, end_fabric_node_id);
 
     auto* sender_device = DevicePool::instance().get_active_device(physical_start_device_id);
     auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
@@ -211,7 +211,7 @@ void RunAsyncWriteTest(
     // Create the sender program
     std::vector<uint32_t> sender_compile_time_args = {
         (uint32_t)mode, (uint32_t)test_mode::TEST_ASYNC_WRITE, (uint32_t)is_raw_write};
-    auto outbound_eth_channels = control_plane->get_active_fabric_eth_channels(start_fabric_node_id);
+    auto outbound_eth_channels = control_plane.get_active_fabric_eth_channels(start_fabric_node_id);
     auto router_virtual_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
         physical_start_device_id, *router_chans.begin());
     std::vector<uint32_t> sender_runtime_args = {
@@ -265,7 +265,7 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
     FabricNodeId end_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     if (!find_device_with_neighbor_in_direction(
@@ -279,7 +279,7 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
     }
 
     // Get the optimal channels (no internal hops) on the start chip that will forward in the direction of the end chip
-    auto router_chans = control_plane->get_forwarding_eth_chans_to_chip(start_fabric_node_id, end_fabric_node_id);
+    auto router_chans = control_plane.get_forwarding_eth_chans_to_chip(start_fabric_node_id, end_fabric_node_id);
 
     auto* sender_device = DevicePool::instance().get_active_device(physical_start_device_id);
     auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
@@ -319,7 +319,7 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
     }
     defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
     std::vector<uint32_t> sender_compile_time_args = {(uint32_t)mode, (uint32_t)TEST_ATOMIC_INC, 0};
-    auto outbound_eth_channels = control_plane->get_active_fabric_eth_channels(start_fabric_node_id);
+    auto outbound_eth_channels = control_plane.get_active_fabric_eth_channels(start_fabric_node_id);
     auto router_virtual_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
         physical_start_device_id, *router_chans.begin());
     std::vector<uint32_t> sender_runtime_args = {
@@ -365,7 +365,7 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
     FabricNodeId end_fabric_node_id(MeshId{0}, 0);
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     if (!find_device_with_neighbor_in_direction(
@@ -379,7 +379,7 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
     }
 
     // Get the optimal channels (no internal hops) on the start chip that will forward in the direction of the end chip
-    auto router_chans = control_plane->get_forwarding_eth_chans_to_chip(start_fabric_node_id, end_fabric_node_id);
+    auto router_chans = control_plane.get_forwarding_eth_chans_to_chip(start_fabric_node_id, end_fabric_node_id);
 
     auto* sender_device = DevicePool::instance().get_active_device(physical_start_device_id);
     auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
@@ -438,7 +438,7 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
     defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
     std::vector<uint32_t> sender_compile_time_args = {
         (uint32_t)mode, (uint32_t)TEST_ASYNC_WRITE_ATOMIC_INC, (uint32_t)is_raw_write};
-    auto outbound_eth_channels = control_plane->get_active_fabric_eth_channels(start_fabric_node_id);
+    auto outbound_eth_channels = control_plane.get_active_fabric_eth_channels(start_fabric_node_id);
     auto router_virtual_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
         physical_start_device_id, *router_chans.begin());
     std::vector<uint32_t> sender_runtime_args = {
@@ -500,7 +500,7 @@ void RunAsyncWriteMulticastTest(
         mcast_hops[RoutingDirection::E] = 1;
     }
 
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Find a device with enough neighbours in the specified directions
     if (!find_device_with_neighbor_in_multi_direction(
@@ -516,7 +516,7 @@ void RunAsyncWriteMulticastTest(
     // Log test configuration
     std::string test_type = is_raw_write ? "Raw" : "";
     std::string direction_type = multidirectional ? "Multidirectional" : "";
-    tt::log_info(
+    log_info(
         tt::LogTest,
         "Async {} Write Mcast {} from {} to {}",
         test_type,
@@ -606,7 +606,7 @@ void RunAsyncWriteMulticastTest(
     std::unordered_map<RoutingDirection, uint32_t> sender_router_noc_xys;
     for (auto& [routing_direction, end_fabric_node_ids] : end_fabric_node_ids_by_dir) {
         auto router_chans =
-            control_plane->get_forwarding_eth_chans_to_chip(start_fabric_node_id, end_fabric_node_ids[0]);
+            control_plane.get_forwarding_eth_chans_to_chip(start_fabric_node_id, end_fabric_node_ids[0]);
         const auto& sender_virtual_router_coord =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                 physical_start_device_id, *router_chans.begin());
@@ -617,7 +617,7 @@ void RunAsyncWriteMulticastTest(
     }
 
     // Prepare runtime args based on whether it's multidirectional or not
-    auto outbound_eth_channels = control_plane->get_active_fabric_eth_channels(start_fabric_node_id);
+    auto outbound_eth_channels = control_plane.get_active_fabric_eth_channels(start_fabric_node_id);
     std::vector<uint32_t> sender_runtime_args;
 
     if (multidirectional) {

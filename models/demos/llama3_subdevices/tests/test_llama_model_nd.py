@@ -5,14 +5,18 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
+import os
 from models.demos.llama3_subdevices.tt.llama_common import (
     HostEmbedding,
     PagedAttentionConfig,
 )
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
+from models.demos.llama3_subdevices.tt.sampling import TTSampling
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import skip_for_blackhole
+
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 
 @torch.no_grad()
@@ -33,6 +37,10 @@ from models.utility_functions import skip_for_blackhole
         # "paged_attention",
         "default_attention",
     ),
+)
+@pytest.mark.parametrize(
+    "sampling_params",
+    [{"top_k": 1, "top_p": 0.00, "seed": 42}],
 )
 @pytest.mark.parametrize(
     "page_params",
@@ -66,7 +74,7 @@ from models.utility_functions import skip_for_blackhole
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,
@@ -76,6 +84,7 @@ def test_llama_model_inference(
     max_seq_len,
     batch_size,
     paged_attention,
+    sampling_params,
     page_params,
     optimizations,
     mesh_device,
@@ -148,6 +157,12 @@ def test_llama_model_inference(
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
     )
+    tt_sampling = TTSampling(
+        args=model_args,
+        mesh_device=mesh_device,
+        sampling_params=sampling_params,
+        tt_ccl=tt_model.tt_ccl,
+    )
     logger.info("Model and caches loaded.")
 
     seqlen = 1  # Generating one token per user at a time
@@ -192,21 +207,14 @@ def test_llama_model_inference(
                 mode="decode",
                 page_table=page_table_tt,
             )
+            # Sampling
+            tt_out_tok = tt_sampling(tt_out[0])
 
-            tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-                tt_out[0],
-                dim=3,
-                num_links=2,
-                cluster_axis=0,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                buffer_key="SAMPLING",
+            tt_out_tok_device0 = ttnn.get_device_tensors(tt_out_tok)[0]
+            tt_out_tok_cpu = tt_out_tok_device0.cpu(blocking=True, cq_id=0)
+            tt_output_torch = ttnn.to_torch(
+                tt_out_tok_cpu,
             )
-            tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=model_args.sub_core_grids)
-            tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
-                tt_out_rm, dim=3, keepdim=True, use_multicore=True, sub_core_grids=model_args.sub_core_grids
-            )
-
-            tt_output_torch = ttnn.to_torch(tt_out_tok, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
 
             # Only check user 0, see GH issue #16719
             tt_output_torch = tt_output_torch[..., :1, :]

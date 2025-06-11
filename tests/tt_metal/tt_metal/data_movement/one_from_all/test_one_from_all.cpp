@@ -118,7 +118,7 @@ bool run_dm(IDevice* device, const OneFromAllConfig& test_config) {
     SetRuntimeArgs(program, gatherer_kernel, master_core_set, master_runtime_args);
 
     // Assign unique id
-    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Input
@@ -145,10 +145,10 @@ bool run_dm(IDevice* device, const OneFromAllConfig& test_config) {
         packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
 
     if (!pcc) {
-        log_error("PCC Check failed");
-        log_info("Golden vector");
+        log_error(tt::LogTest, "PCC Check failed");
+        log_info(tt::LogTest, "Golden vector");
         print_vector<uint32_t>(packed_golden);
-        log_info("Output vector");
+        log_info(tt::LogTest, "Output vector");
         print_vector<uint32_t>(packed_output);
     }
 
@@ -194,6 +194,41 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
                 EXPECT_TRUE(run_dm(devices_.at(id), test_config));
             }
         }
+    }
+}
+
+/* ========== Test case for one from all data movement; Test id = 30 ========== */
+TEST_F(DeviceFixture, TensixDataMovementOneFromAllDirectedIdeal) {
+    // Parameters
+    uint32_t num_of_transactions, page_size_bytes;
+    uint32_t transaction_size_pages = 128;
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        page_size_bytes = 64;  // (=flit size): 64 bytes for BH
+        num_of_transactions = 5;
+    } else {
+        page_size_bytes = 32;  // (=flit size): 32 bytes for WH
+        num_of_transactions = 10;
+    }
+
+    // Cores
+    CoreCoord master_core_coord = {0, 0};
+    CoreRangeSet subordinate_core_set = {CoreRange(CoreCoord(1, 1), CoreCoord(4, 4))};
+    size_t total_subordinate_cores = subordinate_core_set.num_cores();
+
+    // Test config
+    unit_tests::dm::core_to_core::OneFromAllConfig test_config = {
+        .test_id = 30,
+        .master_core_coord = master_core_coord,
+        .subordinate_core_set = subordinate_core_set,
+        .num_of_transactions = num_of_transactions,
+        .transaction_size_pages = transaction_size_pages,
+        .page_size_bytes = page_size_bytes,
+        .l1_data_format = DataFormat::Float16_b,
+    };
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
     }
 }
 

@@ -147,12 +147,12 @@ public:
 
     void initialize_host_mapping();
 
-    tt::tt_fabric::ControlPlane* get_local_node_control_plane() { return control_plane_.get(); }
+    tt::tt_fabric::ControlPlane& get_local_node_control_plane() { return *control_plane_; }
 
 private:
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
     // Host rank to sub mesh shape
-    std::unordered_map<uint32_t, std::vector<MeshCoordinate>> host_rank_to_sub_mesh_shape_;
+    std::unordered_map<HostRankId, std::vector<MeshCoordinate>> host_rank_to_sub_mesh_shape_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
 
     std::string mesh_graph_desc_file_;

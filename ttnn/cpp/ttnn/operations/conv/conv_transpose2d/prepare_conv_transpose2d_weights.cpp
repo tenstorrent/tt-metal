@@ -6,7 +6,7 @@
 #include <optional>
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/buffer.hpp"
-#include "tt-metalium/logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/mesh_device.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -22,7 +22,7 @@ namespace conv_transpose2d {
 
 template <typename T>
 Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel = true) {
-    auto in_w_shape = conv_weight_tensor.get_padded_shape();
+    auto in_w_shape = conv_weight_tensor.padded_shape();
     auto dtype = conv_weight_tensor.dtype();
     // in_w_shape = {in_channels, out_channels, kernel_height, kernel_width}
     // out_w_shape = {out_channels, in_channels, kernel_height, kernel_width}
@@ -77,7 +77,7 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
                     TT_THROW("Unsupported storage type");
                 }
             },
-            conv_weight_tensor.get_storage());
+            conv_weight_tensor.storage());
     };
     TT_FATAL(
         !is_device_tensor(conv_weight_tensor), "transform_weights_for_conv_transpose2d only supports host tensors");
@@ -90,23 +90,22 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
 Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel) {
     Tensor to_mirror_tensor;
     if (tt::tt_metal::is_device_tensor(conv_weight_tensor)) {
-        tt::log_warning(
+        log_warning(
+            tt::LogOp,
             "Prepare Weights for ConvTranspose2D needs weights on host, but they are already on device. The op will "
             "move them back to host.");
         to_mirror_tensor = ttnn::operations::core::from_device(conv_weight_tensor);
     } else {
         to_mirror_tensor = conv_weight_tensor;
     }
-    switch (conv_weight_tensor.get_dtype()) {
+    switch (conv_weight_tensor.dtype()) {
         case DataType::BFLOAT16:
             return _transform_weights_for_conv_transpose2d<::bfloat16>(to_mirror_tensor, mirror_kernel);
         case DataType::FLOAT32:
             return _transform_weights_for_conv_transpose2d<float>(to_mirror_tensor, mirror_kernel);
         case DataType::UINT32:
             return _transform_weights_for_conv_transpose2d<uint32_t>(to_mirror_tensor, mirror_kernel);
-        default:
-            TT_THROW(
-                "Unsupported data type for transform_weights_for_conv_transpose2d", to_mirror_tensor.get_dtype());
+        default: TT_THROW("Unsupported data type for transform_weights_for_conv_transpose2d", to_mirror_tensor.dtype());
     }
 };
 

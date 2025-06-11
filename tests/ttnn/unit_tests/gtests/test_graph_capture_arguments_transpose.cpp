@@ -43,9 +43,7 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
     EXPECT_EQ(operation0.arguments.size(), 3);
     EXPECT_EQ(
         operation0.arguments[0],
-        "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_"
-        "type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)),tensor_"
-        "spec=TensorSpec(logical_shape=Shape([1, 1, 2048, "
+        "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 2048, "
         "512]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig("
         "tile=Tile(tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
@@ -59,9 +57,7 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
     EXPECT_EQ(operation1.arguments.size(), 5);
     EXPECT_EQ(
         operation1.arguments[0],
-        "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_"
-        "type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)),tensor_"
-        "spec=TensorSpec(logical_shape=Shape([1, 1, 2048, "
+        "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 2048, "
         "512]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig("
         "tile=Tile(tile_shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="

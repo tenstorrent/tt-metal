@@ -100,8 +100,8 @@ protected:
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
-        if (arch_ == tt::ARCH::WORMHOLE_B0 && num_devices_ != 1) {
-            tt::log_warning(tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
+        if (arch_ == tt::ARCH::WORMHOLE_B0 and num_devices_ != 1) {
+            log_warning(tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
             dispatch_core_type = DispatchCoreType::ETH;
         }
         device_ = tt::tt_metal::CreateDevice(

@@ -17,7 +17,7 @@ using namespace ttnn::operations::binary_ng;
 
 // For rank > 4 i.e. dims beyond NCHW will be collapsed into a single dim
 uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
-    const auto& shape = x.get_logical_shape();
+    const auto& shape = x.logical_shape();
     uint32_t nD_dim = 1;
     if (out_rank >= 5 && shape.rank() >= 5) {
         for (int i = -5; i >= -out_rank; --i) {
@@ -242,7 +242,7 @@ void set_or_update_runtime_arguments(
     const uint32_t tile_height = c.tensor_spec().tile().get_height();
     const uint32_t tile_width = c.tensor_spec().tile().get_width();
     const uint32_t tile_hw = tile_height * tile_width;
-    const uint32_t c_num_tiles = c.volume() / tile_hw;
+    const uint32_t c_num_tiles = c.physical_volume() / tile_hw;
     uint32_t c_shard_height{}, c_shard_width{}, num_shards_per_width{};
 
     ShardShapeGenerator a_shard_shape_generator;
@@ -294,9 +294,9 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             c_num_tiles = num_tiles_per_core_group_2;
         } else {
-            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 13>{0});
+            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 18>{0});
             handle_args(program, writer_kernel_id, core, std::array<uint32_t, 14>{0});
-            handle_args(program, compute_kernel_id, core, std::array<uint32_t, 3>{0});
+            handle_args(program, compute_kernel_id, core, std::array<uint32_t, 4>{0});
             continue;
         }
 
@@ -356,7 +356,7 @@ void set_or_update_runtime_arguments(
             // TODO: technically we should use the b_dtype deduced by ProgramFactory::create here, but currently only
             // quant ops have different dtypes for a & b and we want to force f32 for better accuracy when scale is
             // passed as a scalar, so we'll leave this here
-            const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.get_dtype(), is_quant_op);
+            const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), is_quant_op);
             std::array writer_runtime_args = {
                 packed_scalar,
                 c.buffer()->address(),
@@ -447,13 +447,13 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     uint32_t b_num_tiles_per_shard = has_sharding ? shard_specs->b_shard_spec.numel() / tile_hw : 0;
     uint32_t c_num_tiles_per_shard = has_sharding ? shard_specs->c_shard_spec.numel() / tile_hw : 0;
 
-    const auto a_dtype = a.get_dtype();
+    const auto a_dtype = a.dtype();
     // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
-    const auto b_dtype = b.has_value() ? b->get_dtype()
+    const auto b_dtype = b.has_value() ? b->dtype()
                          : is_quant_op ? DataType::FLOAT32
                          : is_sfpu_op  ? a_dtype
                                        : DataType::BFLOAT16;
-    const auto c_dtype = c.get_dtype();
+    const auto c_dtype = c.dtype();
     const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
     const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
@@ -513,10 +513,10 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
                 compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
                 unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
             } else {
-                add_activation_defines(compute_kernel_defines, post_activations, "POST", c.get_dtype());
+                add_activation_defines(compute_kernel_defines, post_activations, "POST", c.dtype());
             }
         } else {
-            add_activation_defines(compute_kernel_defines, post_activations, "POST", c.get_dtype());
+            add_activation_defines(compute_kernel_defines, post_activations, "POST", c.dtype());
         }
     }
 

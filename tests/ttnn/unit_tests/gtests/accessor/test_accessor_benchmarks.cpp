@@ -90,7 +90,7 @@ TEST_P(AccessorBenchmarks, Generic) {
     tt::tt_metal::detail::SetDeviceProfilerDir("accessor_benchmarks/" + params.test_name);
     tt::tt_metal::detail::FreshProfilerDeviceLog();
     {
-        tt::log_info("Creating single-core benchmarking program");
+        log_info(tt::LogTest, "Creating single-core benchmarking program");
         auto program = CreateProgram();
 
         constexpr CoreCoord grid = {0, 0};
@@ -135,9 +135,9 @@ TEST_P(AccessorBenchmarks, Generic) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_work_load, false);
 
         // Wait for program to finish
-        tt::log_info("Program launched!");
+        log_info(tt::LogTest, "Program launched!");
         Finish(mesh_device_->mesh_command_queue());
-        tt::log_info("Program finished!");
+        log_info(tt::LogTest, "Program finished!");
     }
     tt::tt_metal::detail::DumpDeviceProfileResults(local_device);
 }

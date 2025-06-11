@@ -48,6 +48,7 @@ def set_env_vars(**kwargs):
         "doDispatchCores": "TT_METAL_DEVICE_PROFILER_DISPATCH=1 ",
         "slowDispatch": "TT_METAL_SLOW_DISPATCH_MODE=1 ",
         "dispatchFromEth": "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ",
+        "enable_noc_tracing": "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1 ",
     }
     envVarsStr = " "
     for arg, argVal in kwargs.items():
@@ -56,16 +57,21 @@ def set_env_vars(**kwargs):
     return envVarsStr
 
 
-def run_gtest_profiler_test(testbin, testname, doSync=False):
+# returns True if test passed, False if test was SKIPPED
+def run_gtest_profiler_test(testbin, testname, doSync=False, enable_noc_tracing=False, skip_get_device_data=False):
     clear_profiler_runtime_artifacts()
-    envVars = set_env_vars(doSync=doSync)
+    envVars = set_env_vars(doSync=doSync, enable_noc_tracing=enable_noc_tracing)
     testCommand = f"cd {TT_METAL_HOME} && {envVars} {testbin} --gtest_filter={testname}"
     print()
     logger.info(f"Running: {testCommand}")
     output = subprocess.check_output(testCommand, stderr=subprocess.STDOUT, shell=True).decode("UTF-8")
     print(output)
     if "SKIPPED" not in output:
-        get_device_data()
+        if not skip_get_device_data:
+            get_device_data()
+        return True
+    else:
+        return False
 
 
 def run_device_profiler_test(
@@ -381,7 +387,7 @@ def test_timestamped_events():
     OP_COUNT = 2
     RISC_COUNT = 5
     ZONE_COUNT = 100
-    WH_ERISC_COUNTS = [0, 1, 5]
+    WH_ERISC_COUNTS = [0, 2, 5]  # N150, N300, T3K
     WH_TENSIX_COUNTS = [72, 64, 56]
     BH_ERISC_COUNTS = [0, 1, 6, 8]
     BH_TENSIX_COUNTS = [130, 120, 110]
@@ -424,6 +430,28 @@ def test_timestamped_events():
         assert eventCount in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong event count"
 
 
+def test_noc_event_profiler_linked_multicast_hang():
+    # test that we can avoid hangs with linked multicast
+    # see tt-metal issue #22578
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
+
+    testCommand = "build/test/tt_metal/perf_microbenchmark/dispatch/test_bw_and_latency"
+    # note: this runs a long series repeated multicasts from worker {1,1} to grid {2,2},{3,3}
+    # note: -m6 is multicast test mode, -link activates linked multicast
+    testCommandArgs = "-tx 3 -ty 3 -sx 2 -sy 2 -rx 1 -ry 1 -m 6 -link -profdump"
+    clear_profiler_runtime_artifacts()
+    nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
+    profilerRun = os.system(f"cd {TT_METAL_HOME} && {nocEventProfilerEnv} {testCommand} {testCommandArgs}")
+    assert profilerRun == 0
+
+    expected_trace_file = f"{PROFILER_LOGS_DIR}/noc_trace_dev0_ID0.json"
+    assert os.path.isfile(expected_trace_file)
+
+    with open(expected_trace_file, "r") as nocTraceJson:
+        noc_trace_data = json.load(nocTraceJson)
+
+
 def test_noc_event_profiler():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
@@ -440,6 +468,64 @@ def test_noc_event_profiler():
     with open(expected_trace_file, "r") as nocTraceJson:
         noc_trace_data = json.load(nocTraceJson)
         assert len(noc_trace_data) == 8
+
+
+@skip_for_blackhole()
+def test_fabric_event_profiler():
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
+
+    # test that current device has a valid fabric API connection
+    sanity_check_test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
+    sanity_check_test_name = "Fabric1DFixture.TestUnicastConnAPI"
+    sanity_check_succeeded = run_gtest_profiler_test(
+        sanity_check_test_bin, sanity_check_test_name, skip_get_device_data=True
+    )
+    if not sanity_check_succeeded:
+        logger.info("Device does not have testable fabric connections, skipping ...")
+        return
+
+    # if device supports fabric API, test fabric event profiler
+    test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
+    test_name = "Fabric1DFixture.TestUnicastRawWithTracing"
+    nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
+    try:
+        not_skipped = run_gtest_profiler_test(test_bin, test_name, False, True)
+        assert not_skipped, f"gtest command '{test_bin}' was skipped unexpectedly"
+    except subprocess.CalledProcessError as e:
+        ret_code = e.returncode
+        assert ret_code == 0, f"test command '{test_bin}' returned unsuccessfully"
+
+    expected_cluster_coords_file = f"{PROFILER_LOGS_DIR}/cluster_coordinates.json"
+    assert os.path.isfile(
+        expected_cluster_coords_file
+    ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
+
+    expected_trace_file = f"{PROFILER_LOGS_DIR}/noc_trace_dev0_ID0.json"
+    assert os.path.isfile(expected_trace_file), f"expected noc trace file '{expected_trace_file}' does not exist"
+
+    fabric_event_count = 0
+    with open(expected_trace_file, "r") as nocTraceJson:
+        try:
+            noc_trace_data = json.load(nocTraceJson)
+        except json.JSONDecodeError:
+            raise ValueError(f"noc trace file '{expected_trace_file}' is not a valid JSON file")
+
+        assert isinstance(noc_trace_data, list), f"noc trace file '{expected_trace_file}' format is incorrect"
+        assert len(noc_trace_data) > 0, f"noc trace file '{expected_trace_file}' is empty"
+        for event in noc_trace_data:
+            assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"
+            if event.get("type", "") == "FABRIC_UNICAST_WRITE":
+                fabric_event_count += 1
+                fabric_send_metadata = event.get("fabric_send", None)
+                if fabric_send_metadata is not None:
+                    assert fabric_send_metadata.get("eth_chan", None) is not None
+                    assert fabric_send_metadata.get("hops", None) is not None
+
+    EXPECTED_FABRIC_EVENT_COUNT = 10
+    assert (
+        fabric_event_count == EXPECTED_FABRIC_EVENT_COUNT
+    ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {EXPECTED_FABRIC_EVENT_COUNT}"
 
 
 def test_sub_device_profiler():

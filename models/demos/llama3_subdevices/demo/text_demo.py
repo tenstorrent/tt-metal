@@ -13,6 +13,8 @@ import pytest
 import os
 import ttnn
 
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
+
 from models.demos.llama3_subdevices.tt.generator import Generator, SamplingParams
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 from models.tt_transformers.tt.common import (
@@ -120,7 +122,7 @@ def create_tt_model(
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            tt_model_args.max_batch_size, paged_attention_config.max_num_blocks // tt_model_args.max_batch_size
+            max_batch_size, paged_attention_config.max_num_blocks // max_batch_size
         )
         paged_attention_config = PagedAttentionConfig(
             block_size=page_params["page_block_size"],
@@ -170,7 +172,7 @@ def create_tt_model(
             32,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -183,7 +185,7 @@ def create_tt_model(
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -196,12 +198,12 @@ def create_tt_model(
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
         ),
-        (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
+        (  # Long-context run - multiple users, long prompt (adapted to the model being used and architecture)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -209,7 +211,20 @@ def create_tt_model(
             32,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+        ),
+        (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -219,7 +234,8 @@ def create_tt_model(
         "batch-32",  # throughput
         "batch-1",  # latency
         "repeat2",  # latency with 5 repeat batches
-        "long-context",  # max-length
+        "long-context-batch32",  # max-length for 32 users
+        "long-context-32k",  # max-length
     ],
 )
 @pytest.mark.parametrize(
@@ -232,11 +248,11 @@ def create_tt_model(
     "device_params",
     [
         {
-            "trace_region_size": 92000000,
+            "trace_region_size": 102000000,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,
@@ -332,24 +348,14 @@ def test_demo_text(
         input_prompts = load_inputs(
             input_prompts,
             [
-                2,
-                111,
                 534,
                 1008,
                 1111 * 4,
                 3333 * 4,
-                4444 * 4,
-                5555 * 4,
-                6666 * 4,
-                7777 * 4,
-                8888 * 2,
-                9999 * 2,
-                10000 * 2,
-                11111 * 2,
-                12222 * 2,
-                15384 * 2,
             ]
-            * 2,
+            * 8
+            if batch_size == 32
+            else [15384 * 8],
             input_prompts,
         )
     profiler.end("loading_inputs")
@@ -440,12 +446,12 @@ def test_demo_text(
         assert (
             max_generated_tokens + max_encoded_prompt_len <= max_seq_len
         ), f"Prompt prefill tokens ({max_encoded_prompt_len}) + maximum number of decoded iterations ({max_generated_tokens}) needs to be <= than max_seq_len ({max_seq_len})"
-
+        batch_size_per_device_group = (
+            32 if batch_size == 32 else 1
+        )  # This is a workoaround until page table needs to know that attention is DP
         if paged_attention:
             paged_cache_max_seq_len = (
-                page_params["page_block_size"]
-                * page_params["page_max_num_blocks"]
-                / model_args.batch_size_per_device_group
+                page_params["page_block_size"] * page_params["page_max_num_blocks"] / batch_size_per_device_group
             )
             assert (
                 max_generated_tokens + max_encoded_prompt_len <= paged_cache_max_seq_len
@@ -510,19 +516,15 @@ def test_demo_text(
         # return True
         user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
-        # TODO Argmax on device is only supported for batch_size=1
-        argmax_on_device = batch_size == 1  # False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
-
-        if argmax_on_device:
-            device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
-        else:
-            device_sampling_params = None
+        device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
         if batch_size == 1:
-            # pad ito to 32 with -1s
+            # pad current_pos to 32 with -1s
             current_pos = torch.nn.functional.pad(current_pos, (0, 32 - current_pos.shape[0]), value=-1)
+            # pad page_table to 32 with 0s
+            page_table = torch.nn.functional.pad(page_table, (0, 0, 0, 32 - page_table.shape[0]), value=0)
         # Start decoding
         iteration = 0
         users_decoding = True
@@ -552,7 +554,6 @@ def test_demo_text(
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     sampling_params=device_sampling_params,
-                    reset_inputs=iteration == 0 or batch_size > 1,
                 )
             except Exception as e:
                 logger.error(f"Error during decoding: {str(e)}")
@@ -578,10 +579,8 @@ def test_demo_text(
 
             # Save output token to print out later
             for user in range(batch_size):
-                if batch_size == 1:
-                    user_tok = tt_output_torch.tolist()[0]
-                else:
-                    user_tok = tt_output_torch.tolist()[user][0]
+                user_tok = tt_output_torch.tolist()[user]
+
                 if (
                     user_tok not in tokenizer.stop_tokens and user_done[user] == False
                 ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
@@ -636,7 +635,7 @@ def test_demo_text(
                             f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
                 profiler.end(f"log_saving_file", iteration=batch_idx)
-            if not users_decoding and batch_size == 1:
+            if not users_decoding and batch_size == 1 and repeat_batches > 1:
                 # Compare to text in outputs_batch_1.json for the first user of the first batch
                 if batch_idx == 0 and expected_outputs_data:  # Only compare if data was loaded
                     if i == 0:  # Only for the first user of the batch (i.e., user 0)

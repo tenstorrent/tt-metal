@@ -11,7 +11,6 @@
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>
-#include <tt-metalium/tt_memory.h>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <compare>
@@ -45,7 +44,8 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel_impl.hpp"
-#include <tt-metalium/logger.hpp>
+#include "tt_memory.h"
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/detail/kernel_cache.hpp"

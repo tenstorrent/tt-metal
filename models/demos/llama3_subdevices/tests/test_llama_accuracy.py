@@ -11,9 +11,12 @@ from models.demos.llama3_subdevices.tt.llama_common import (
     PagedAttentionConfig,
 )
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
+from models.demos.llama3_subdevices.tt.sampling import TTSampling
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from tqdm import tqdm
+
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 
 @torch.no_grad()
@@ -24,6 +27,10 @@ from tqdm import tqdm
 @pytest.mark.parametrize(
     "prefill_len, decode_len, max_seq_len",  # Max seqlen should be at least prefill_len + decode_len
     ((512, 511, 128 * 1024),),
+)
+@pytest.mark.parametrize(
+    "sampling_params",
+    [{"top_k": 1, "top_p": 0.00, "seed": 42}],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -73,7 +80,7 @@ from tqdm import tqdm
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,
@@ -86,6 +93,7 @@ def test_tt_model_acc(
     min_top1_acc,
     min_top5_acc,
     paged_attention,
+    sampling_params,
     page_params,
     optimizations,
     mesh_device,
@@ -175,6 +183,12 @@ def test_tt_model_acc(
         paged_attention_config=paged_attention_config,
         enable_prefetcher_performance_mode=True,
     )
+    tt_sampling = TTSampling(
+        args=model_args,
+        mesh_device=mesh_device,
+        sampling_params=sampling_params,
+        tt_ccl=tt_model.tt_ccl,
+    )
     # Initialize embedding
     embd = HostEmbedding(model_args)
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
@@ -220,18 +234,8 @@ def test_tt_model_acc(
             page_table=page_table_tt,
         )
 
-        tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-            tt_out[0],
-            dim=3,
-            num_links=2,
-            cluster_axis=0,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            buffer_key="SAMPLING",
-        )
-        tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
-        tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
-            tt_out_rm, dim=3, keepdim=True, use_multicore=True, sub_core_grids=sub_core_grids
-        )
+        # Sampling
+        tt_out_tok = tt_sampling(tt_out[0])
 
         # Update the idxs
         ttnn.plus_one(
@@ -243,11 +247,11 @@ def test_tt_model_acc(
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
 
-        return tt_out_tok, tt_out_rm
+        return tt_out_tok, tt_out[0]
 
     # Compile the model
     logger.info("Compiling model...")
-    tt_out_tok, tt_out_rm = run_model()
+    tt_out_tok, tt_out = run_model()
 
     # Capturing trace
     logger.info("Capturing trace...")
@@ -256,7 +260,7 @@ def test_tt_model_acc(
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
-    tt_out_tok, tt_out_rm = run_model()
+    tt_out_tok, tt_out = run_model()
 
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -332,14 +336,11 @@ def test_tt_model_acc(
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
 
         if not use_reference_file:
+            # Convert ttnn tensor to torch tensor
             tt_logits = ttnn.to_torch(
-                tt_out_rm,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device,
-                    dims=(2, 1),
-                    mesh_shape=model_args.cluster_shape,
-                ),
-            )[0, 0, 0, :]
+                tt_out,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape),
+            )[0, 0, 0, : model_args.vocab_size]
 
         tt_argmax_token = ttnn.to_torch(
             tt_out_tok,

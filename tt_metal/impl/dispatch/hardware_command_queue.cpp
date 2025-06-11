@@ -22,6 +22,7 @@
 
 #include "assert.hpp"
 #include "buffers/dispatch.hpp"
+#include "cq_shared_state.hpp"
 #include "device/dispatch.hpp"
 #include "dispatch/device_command.hpp"
 #include "dispatch_settings.hpp"
@@ -30,7 +31,7 @@
 #include "dprint_server.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "program/program_device_map.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
@@ -75,7 +76,7 @@ void set_device_thread_affinity(std::thread& thread_, int cpu_core_for_worker) {
 
 HWCommandQueue::HWCommandQueue(
     IDevice* device,
-    std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>>& worker_launch_message_buffer_state,
+    std::shared_ptr<CQSharedState> cq_shared_state,
     uint32_t id,
     NOC noc_index,
     uint32_t completion_queue_reader_core) :
@@ -84,7 +85,7 @@ HWCommandQueue::HWCommandQueue(
     completion_queue_reader_core_(completion_queue_reader_core) {
     ZoneScopedN("CommandQueue_constructor");
     this->device_ = device;
-    this->worker_launch_message_buffer_state_ = worker_launch_message_buffer_state;
+    this->cq_shared_state_ = std::move(cq_shared_state);
     this->id_ = id;
     this->noc_index_ = noc_index;
     this->num_entries_in_completion_q_ = 0;
@@ -147,6 +148,8 @@ SystemMemoryManager& HWCommandQueue::sysmem_manager() { return this->manager_; }
 void HWCommandQueue::reset_worker_state(
     bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) {
     TT_FATAL(!this->manager_.get_bypass_mode(), "Cannot reset worker state during trace capture");
+    cq_shared_state_->sub_device_cq_owner.clear();
+    cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
     // TODO: This could be further optimized by combining all of these into a single prefetch entry
     // Currently each one will be pushed into its own prefetch entry
     program_dispatch::reset_worker_dispatch_state_on_device(
@@ -168,8 +171,8 @@ void HWCommandQueue::reset_worker_state(
         device_->allocator()->get_config().l1_unreserved_base);
     if (reset_launch_msg_state) {
         std::for_each(
-            this->worker_launch_message_buffer_state_->begin(),
-            this->worker_launch_message_buffer_state_->begin() + num_sub_devices,
+            this->cq_shared_state_->worker_launch_message_buffer_state.begin(),
+            this->cq_shared_state_->worker_launch_message_buffer_state.begin() + num_sub_devices,
             std::mem_fn(&LaunchMessageRingBufferState::reset));
     }
 }
@@ -238,22 +241,7 @@ void HWCommandQueue::enqueue_read_buffer(
     // TODO: enqueue_read_from_core will call select_sub_device_ids every loop which will have minor overhead
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
-    if (buffer_obj.is_nd_sharded()) {
-        const auto& [banks, bank_mapping_in_bytes] = buffer_obj.get_bank_data_mapping();
-        for (size_t i = 0; i < banks.size(); i++) {
-            const auto virtual_core =
-                buffer_obj.device()->virtual_core_from_logical_core(banks[i], buffer_obj.core_type());
-            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                enqueue_read_from_core(
-                    virtual_core,
-                    (char*)dst + chunk_mapping_in_bytes.src,
-                    buffer_obj.address() + chunk_mapping_in_bytes.dst,
-                    chunk_mapping_in_bytes.size,
-                    false,
-                    sub_device_ids);
-            }
-        }
-    } else if (is_sharded(buffer_obj.buffer_layout())) {
+    if (is_sharded(buffer_obj.buffer_layout())) {
         // Forward data from each core to the completion queue.
         // Then have the completion queue reader thread copy this data to user space.
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
@@ -322,32 +310,9 @@ void HWCommandQueue::enqueue_write_buffer(
     // TODO: enqueue_write_to_core will call select_sub_device_ids every loop which will have minor overhead
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
-    if (buffer_obj.is_nd_sharded()) {
-        const auto& [banks, bank_mapping_in_bytes] = buffer_obj.get_bank_data_mapping();
-        for (size_t i = 0; i < banks.size(); i++) {
-            const auto virtual_core =
-                buffer_obj.device()->virtual_core_from_logical_core(banks[i], buffer_obj.core_type());
-            for (const auto& chunk_mapping_in_bytes : bank_mapping_in_bytes[i]) {
-                enqueue_write_to_core(
-                    virtual_core,
-                    (char*)data + chunk_mapping_in_bytes.src,
-                    buffer_obj.address() + chunk_mapping_in_bytes.dst,
-                    chunk_mapping_in_bytes.size,
-                    false,
-                    sub_device_ids);
-            }
-        }
-    } else {
-        auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-        buffer_dispatch::write_to_device_buffer(
-            data,
-            buffer_obj,
-            region,
-            this->id_,
-            this->expected_num_workers_completed_,
-            dispatch_core_type,
-            sub_device_ids);
-    }
+    auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+    buffer_dispatch::write_to_device_buffer(
+        data, buffer_obj, region, this->id_, this->expected_num_workers_completed_, dispatch_core_type, sub_device_ids);
 
     if (blocking) {
         this->finish(sub_device_ids);
@@ -427,6 +392,13 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
     std::vector<SubDeviceId> sub_device_ids = {program.determine_sub_device_ids(device_)};
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
+
+    if (!this->manager_.get_bypass_mode()) {
+        auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
+        auto& sub_device = sub_device_cq_owner[*sub_device_ids[0]];
+        sub_device.take_ownership(sub_device_ids[0], this->id_);
+    }
+
     // Finalize Program: Compute relative offsets for data structures (semaphores, kernel binaries, etc) in L1
     program.finalize_offsets(device_);
 
@@ -481,7 +453,8 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
             device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
     }
 
-    auto& worker_launch_message_buffer_state = (*this->worker_launch_message_buffer_state_)[*sub_device_id];
+    auto& worker_launch_message_buffer_state =
+        this->cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id];
     auto command = EnqueueProgramCommand(
         this->id_,
         this->device_,
@@ -552,11 +525,21 @@ void HWCommandQueue::enqueue_record_event(
     this->issued_completion_q_reads_.push(
         std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadEventDescriptor>, event->event_id));
     this->increment_num_entries_in_completion_q();
+
+    auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
+    for (const auto& sub_device_id : sub_device_ids) {
+        auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
+        sub_device_entry.recorded_event(event->event_id, event->cq_id);
+    }
 }
 
 void HWCommandQueue::enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event) {
     ZoneScopedN("HWCommandQueue_enqueue_wait_for_event");
     event_dispatch::issue_wait_for_event_commands(id_, sync_event->cq_id, this->manager_, sync_event->event_id);
+    auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
+    for (auto& sub_device : sub_device_cq_owner) {
+        sub_device.waited_for_event(sync_event->event_id, sync_event->cq_id, this->id_);
+    }
 }
 
 void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
@@ -566,6 +549,12 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
     auto descriptor = trace_inst->desc;
     auto buffer = trace_inst->buffer;
     uint32_t num_sub_devices = descriptor->sub_device_ids.size();
+
+    auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
+    for (auto sub_device_id : descriptor->sub_device_ids) {
+        auto& sub_device = sub_device_cq_owner[*sub_device_id];
+        sub_device.take_ownership(sub_device_id, this->id_);
+    }
 
     auto cmd_sequence_sizeB = trace_dispatch::compute_trace_cmd_size(num_sub_devices);
 
@@ -587,7 +576,7 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
 
     trace_dispatch::update_worker_state_post_trace_execution(
         trace_inst->desc->descriptors,
-        *this->worker_launch_message_buffer_state_,
+        this->cq_shared_state_->worker_launch_message_buffer_state,
         this->config_buffer_mgr_,
         this->expected_num_workers_completed_);
 
@@ -669,7 +658,7 @@ void HWCommandQueue::read_completion_queue() {
 
 void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_finish");
-    tt::log_debug(tt::LogDispatch, "Finish for command queue {}", this->id_);
+    log_debug(tt::LogDispatch, "Finish for command queue {}", this->id_);
     std::shared_ptr<Event> event = std::make_shared<Event>();
     this->enqueue_record_event(event, sub_device_ids);
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled()) {
@@ -689,6 +678,11 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
         this->reads_processed_cv_.wait(
             lock, [this] { return this->num_entries_in_completion_q_ == this->num_completed_completion_q_reads_; });
     }
+    auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
+    for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids)) {
+        auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
+        sub_device_entry.finished(this->id_);
+    }
 }
 
 const CoreCoord& HWCommandQueue::virtual_enqueue_program_dispatch_core() const {
@@ -700,7 +694,7 @@ void HWCommandQueue::record_begin(const uint32_t tid, const std::shared_ptr<Trac
     // worker_config_buffer, etc.
     trace_dispatch::reset_host_dispatch_state_for_trace(
         device_->num_sub_devices(),
-        *this->worker_launch_message_buffer_state_,
+        this->cq_shared_state_->worker_launch_message_buffer_state,
         this->expected_num_workers_completed_,
         this->config_buffer_mgr_,
         this->worker_launch_message_buffer_state_reset_,
@@ -779,7 +773,8 @@ void HWCommandQueue::record_end() {
         // Access the program dispatch-command cache
         uint64_t command_hash = *device_->get_active_sub_device_manager_id();
         auto& cached_program_command_sequence = program.get_trace_cached_program_command_sequences().at(command_hash);
-        auto& worker_launch_message_buffer_state = (*this->worker_launch_message_buffer_state_)[*sub_device_id];
+        auto& worker_launch_message_buffer_state =
+            this->cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id];
         // Update the generated dispatch commands based on the state of the CQ and the ring buffer
         program_dispatch::update_traced_program_dispatch_commands(
             node,
@@ -836,7 +831,7 @@ void HWCommandQueue::record_end() {
     // host, even though device doesn't run any programs.
     trace_dispatch::load_host_dispatch_state(
         device_->num_sub_devices(),
-        *this->worker_launch_message_buffer_state_,
+        this->cq_shared_state_->worker_launch_message_buffer_state,
         this->expected_num_workers_completed_,
         this->config_buffer_mgr_,
         this->worker_launch_message_buffer_state_reset_,
@@ -848,7 +843,7 @@ void HWCommandQueue::record_end() {
 void HWCommandQueue::terminate() {
     ZoneScopedN("HWCommandQueue_terminate");
     TT_FATAL(!this->manager_.get_bypass_mode(), "Terminate cannot be used with tracing");
-    tt::log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
+    log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
     auto command = EnqueueTerminateCommand(this->id_, this->device_, this->manager_);
     this->enqueue_command(command, false, {});
 }

@@ -12,6 +12,11 @@ on:
       build-artifact-name:
         required: true
         type: string
+      vllm-commit:
+        description: "vLLM branch or sha"
+        required: false
+        default: dev
+        type: string
 
 jobs:
   vllm-tests:
@@ -65,7 +70,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -84,12 +89,12 @@ jobs:
         with:
           repository: tenstorrent/vllm
           path: docker-job/vllm
-          ref: dev
-          fetch-depth: 1
+          ref: ${{ inputs.vllm-commit }}
+          fetch-depth: 0
 
       - name: 📀 Install vLLM
         run: |
-          pip3 install vllm/
+          pip3 install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: 📂 Create output directory
         run: |

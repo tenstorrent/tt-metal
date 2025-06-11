@@ -41,7 +41,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
@@ -172,7 +172,7 @@ struct test_board_t {
         tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::CUSTOM);
 
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
-        control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+        control_plane = &tt::tt_metal::MetalContext::instance().get_control_plane();
         control_plane->write_routing_tables_to_all_chips();
 
         if (num_chips_to_use != available_chip_ids.size()) {
@@ -218,7 +218,7 @@ struct test_board_t {
             cp_owning_ptr = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
             control_plane = cp_owning_ptr.get();
         } catch (const std::exception& e) {
-            log_fatal(e.what());
+            log_fatal(tt::LogTest, "{}", e.what());
         }
     }
 
@@ -1838,7 +1838,7 @@ int main(int argc, char **argv) {
 
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);

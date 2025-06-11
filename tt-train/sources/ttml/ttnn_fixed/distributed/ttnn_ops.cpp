@@ -11,7 +11,6 @@
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "tt-metalium/logger.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 
 namespace ttml::ttnn_fixed::distributed {
@@ -110,7 +109,7 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
         ttnn::slice(tensor_shard, start, end, stride, std::nullopt, scattered_tensors[idx]);
         ++idx;
     }
-    return ttnn::distributed::aggregate_as_tensor(scattered_tensors, tt::tt_metal::AllGatherTensor{});
+    return ttnn::distributed::combine_device_tensors(scattered_tensors);
 }
 
 }  // namespace ttml::ttnn_fixed::distributed

@@ -21,8 +21,9 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     COMPLETION_Q0_LAST_EVENT = 4,
     COMPLETION_Q1_LAST_EVENT = 5,
     DISPATCH_S_SYNC_SEM = 6,
-    FABRIC_INTERFACE = 7,
-    UNRESERVED = 8
+    FABRIC_HEADER_RB = 7,
+    FABRIC_SYNC_STATUS = 8,
+    UNRESERVED = 9,
 };
 
 // likely only used in impl

@@ -7,7 +7,6 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/distribution_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_distribution_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer.cpp
@@ -34,6 +33,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_device_map.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/tt_metal_profiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/cq_shared_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/debug_tools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/host_runtime_commands.cpp
@@ -61,6 +61,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/relay_mux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/util/dispatch_settings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_server.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_logging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/watcher_device_reader.cpp
