@@ -10,7 +10,7 @@
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/small_vector.hpp>
+#include <tt_stl/small_vector.hpp>
 
 #include <umd/device/tt_core_coordinates.h>
 
