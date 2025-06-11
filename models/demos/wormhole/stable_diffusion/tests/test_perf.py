@@ -339,8 +339,6 @@ def test_stable_diffusion_perf(
     # COMPILE
     ttnn_scheduler.set_timesteps(num_inference_steps)
     ttnn.copy_host_to_device_tensor(encoder_hidden_states, ttnn_text_embeddings_device, cq_id=0)
-    print(f"random latents shape: {input.shape}")
-    print(f"ttnn_text_embeddings_device shape: {ttnn_text_embeddings_device.shape}")
     output = ttnn.from_device(
         run(
             model,
