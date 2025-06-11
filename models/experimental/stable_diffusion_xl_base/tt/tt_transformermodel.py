@@ -66,6 +66,11 @@ class TtTransformer2DModel(nn.Module):
         bias = state_dict[f"{module_path}.proj_out.bias"]
         self.tt_weights_out, self.tt_bias_out = prepare_linear_params(device, weights, bias, weights_dtype)
 
+        self.program_config_in = model_config.get_matmul_config(matmul_path=f"{module_path}.proj_in")
+        self.compute_config_in = model_config.get_mm_compute_config(f"{module_path}.proj_in")
+        self.program_config_out = model_config.get_matmul_config(matmul_path=f"{module_path}.proj_out")
+        self.compute_config_out = model_config.get_mm_compute_config(f"{module_path}.proj_out")
+
     def forward(self, input_tensor, input_shape, attention_mask=None, encoder_hidden_states=None):
         B, C, H, W = input_shape
         hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
@@ -97,6 +102,8 @@ class TtTransformer2DModel(nn.Module):
             hidden_states,
             self.tt_weights_in,
             bias=self.tt_bias_in,
+            program_config=self.program_config_in,
+            compute_kernel_config=self.compute_config_in,
         )
 
         for i, transformer_block in enumerate(self.transformer_blocks):
@@ -106,6 +113,8 @@ class TtTransformer2DModel(nn.Module):
             hidden_states,
             self.tt_weights_out,
             bias=self.tt_bias_out,
+            program_config=self.program_config_out,
+            compute_kernel_config=self.compute_config_out,
         )
 
         hidden_states = ttnn.add(hidden_states, input_tensor)
