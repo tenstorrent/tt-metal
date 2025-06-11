@@ -263,7 +263,7 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
     };
   }
 
-  async fetchAllWorkflowRuns(days, sinceDate, oldestCachedDate) {
+  async fetchAllWorkflowRuns(days, mostRecentCachedDate, oldestCachedDate) {
     const allRuns = [];
     const cutoffDate = this.getCutoffDate(days);
     const startTime = Date.now();
@@ -282,9 +282,9 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
     const needHistoricalData = cutoffDate < oldestCachedDate;
     core.info(`[Fetch] Cache status: ${needHistoricalData ? 'Need historical data' : 'Using cached data'} (oldest cache: ${oldestCachedDate.toISOString()})`);
 
-    // If we don't need historical data and we have a valid sinceDate, we can optimize our fetch
-    if (!needHistoricalData && sinceDate && !isNaN(sinceDate.getTime())) {
-      core.info(`[Fetch] Optimized fetch: collecting runs after ${sinceDate.toISOString()}`);
+    // If we don't need historical data and we have a valid mostRecentCachedDate, we can optimize our fetch
+    if (!needHistoricalData && mostRecentCachedDate && !isNaN(mostRecentCachedDate.getTime())) {
+      core.info(`[Fetch] Optimized fetch: collecting runs after ${mostRecentCachedDate.toISOString()}`);
       try {
         for (let page = 1; page <= this.maxPages; page++) {
           apiCallCount++;
@@ -293,7 +293,7 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
             repo: this.context.repo.repo,
             per_page: this.runsPerPage,
             page,
-            created: `>=${sinceDate.toISOString()}`,
+            created: `>=${mostRecentCachedDate.toISOString()}`,
             branch: MAIN_BRANCH
           });
 
