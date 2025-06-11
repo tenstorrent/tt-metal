@@ -87,7 +87,7 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
     const auto& tile = input_tensor.tensor_spec().tile();
     uint32_t num_tiles = output_tensor.physical_volume() / tile.get_tile_hw();
 
-    const uint32_t xy_volume = tensor_shape[tensor_rank - 1] * tensor_shape[tensor_rank - 2];  // W * H
+    const uint32_t xy_volume = tensor_shape[-1] * tensor_shape[-2];  // W * H
     const uint32_t num_tiles_per_row = tensor_shape[dim];      // each row contains N independent tiles
     const uint32_t num_rows = num_tiles / num_tiles_per_row;   // total number of rows in tensor
     const uint32_t HtWt = xy_volume / tile.get_tile_hw();      // padded shape => xy_volume is multiple of tile_size
@@ -214,10 +214,20 @@ CumSumDeviceOperation::ProgramFactory::cached_program_t CumSumDeviceOperation::P
             TT_THROW("Core outside specified core ranges");
         }
 
-        SetRuntimeArgs(program, cumsum_reader_handle_id, core, {input_tensor.buffer()->address(), start_row});
+        uint32_t start_low_tile_index = start_row / (product_high_dims * HtWt);
+        uint32_t start_high_tile_index = start_row % (product_high_dims * HtWt);
 
         SetRuntimeArgs(
-            program, cumsum_writer_handle_id, core, {output_tensor.buffer()->address(), start_row, rows_per_core});
+            program,
+            cumsum_reader_handle_id,
+            core,
+            {input_tensor.buffer()->address(), start_row, rows_per_core, start_high_tile_index, start_low_tile_index});
+
+        SetRuntimeArgs(
+            program,
+            cumsum_writer_handle_id,
+            core,
+            {output_tensor.buffer()->address(), start_row, rows_per_core, start_high_tile_index, start_low_tile_index});
 
         SetRuntimeArgs(
             program,
@@ -254,9 +264,6 @@ void CumSumDeviceOperation::ProgramFactory::override_runtime_arguments(
     auto input_buffer_addr = input_tensor.buffer()->address();
     auto output_buffer_addr = tensor_return_value.buffer()->address();
 
-    // Note: do not use full grid => we can't override program if we are not running
-    // program on the specified core
-    // This is why we must specify where the program is running
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 

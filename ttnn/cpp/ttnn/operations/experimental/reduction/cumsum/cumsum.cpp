@@ -29,13 +29,13 @@ uint64_t compute_padded_volume(const Shape& logical_shape, const tt::tt_metal::T
     unsigned width = 1;
     unsigned height = 1;
 
-    unsigned rank = logical_shape.rank();
+    int rank = logical_shape.rank();
 
     if (rank >= 1) {
-        width = logical_shape[rank - 1];
+        width = logical_shape[-1];
     }
     if (rank >= 2) {
-        height = logical_shape[rank - 2];
+        height = logical_shape[-2];
     }
 
     // Round up width to the next multiple of tile_width
@@ -46,7 +46,7 @@ uint64_t compute_padded_volume(const Shape& logical_shape, const tt::tt_metal::T
 
     // Compute new padded volume: padded_width * padded_height * old_channels * old_batches * ...
     uint64_t volume = padded_width * padded_height;
-    for (unsigned i = 0; i < rank - 2; i++) {
+    for (int i = 0; i < rank - 2; i++) {
         volume *= logical_shape[i];
     }
 
@@ -140,7 +140,7 @@ Tensor CumSumOperation::invoke(
             constexpr uint64_t EIGHT_KB = (1024 * 4);
             constexpr uint64_t MAX_ALLOWED_GROWTH = 800 * ONE_MB;  // 800 MiB
 
-            TT_ASSERT(old_volume > 0, "Can not compute permuted tensor for cumsum operation if input is empty");
+            TT_FATAL(old_volume > 0, "Can not compute permuted tensor for cumsum operation if input is empty");
             if (new_volume >= 2 * old_volume && growth >= EIGHT_KB) {
                 log_warning(
                     tt::LogOp,
