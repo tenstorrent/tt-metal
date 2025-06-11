@@ -8,8 +8,9 @@ namespace ttnn::operations::point_to_point::detail {
 ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> receive_program_factory(
     const PointToPointOp::operation_attributes_t& operation_attributes,
     PointToPointOp::tensor_return_value_t& output_tensors) {
-    auto mesh_device = operation_attributes.mesh_device();
+    auto mesh_device = dynamic_cast<MeshDevice*>(output_tensors.at(0).device());
 
+    const auto& receive_coord = operation_attributes.receive_coord;
     const auto& intermediate_tensor = output_tensors.at(0);
     const auto& output_tensor = output_tensors.at(1);
 
@@ -65,15 +66,11 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const bool output_is_dram = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // And the writer
-    std::map<std::string, std::string> writer_defines;
-    if (output_tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        writer_defines["ROWMAJOR"] = "1";
-    }
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/writer_unary_interleaved_start_id_gen.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig({output_is_dram, receiver_cb_id}, writer_defines));
+        tt::tt_metal::WriterDataMovementConfig({output_is_dram, receiver_cb_id}));
 
     uint32_t page_idx_start = 0, page_idx_end = 0;
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
@@ -92,7 +89,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             page_idx_start,
             page_idx_end,
             num_pages_per_packet,
-            intermediate_tensor.buffer()->address(),
+            intermediate_tensor.mesh_buffer()->get_device_buffer(receive_coord)->address(),
             packet_size_bytes,
             output_page_size_bytes,
             num_page_segments,
@@ -101,7 +98,10 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
 
         const std::vector<uint32_t> writer_runtime_args = {
-            output_tensor.buffer()->address(), increment, page_idx_start, output_page_size_bytes};
+            output_tensor.mesh_buffer()->get_device_buffer(receive_coord)->address(),
+            increment,
+            page_idx_start,
+            output_page_size_bytes};
 
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, c, writer_runtime_args);
 
