@@ -47,7 +47,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const MeshCoordinate& send_coord,
     const MeshCoordinate& receive_coord,
     PointToPointOp::tensor_return_value_t& output_tensors) {
-    auto mesh_device = operation_attributes.mesh_device();
+    auto mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor.device());
     const auto& topology = operation_attributes.topology;
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& receiver_semaphore = operation_attributes.receiver_semaphore;
@@ -103,16 +103,12 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
 
     const bool input_is_dram = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    std::map<std::string, std::string> reader_defines;
-    if (input_tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        reader_defines["ROWMAJOR"] = "1";
-    }
     // basic reader kernel set up
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/reader_unary_interleaved_start_id_gen.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig({input_is_dram}, reader_defines));
+        tt::tt_metal::ReaderDataMovementConfig({input_is_dram}));
 
     auto this_device = mesh_device->get_device(send_coord);
 
@@ -146,11 +142,14 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         page_idx_end += increment;
 
         const std::vector<uint32_t> reader_runtime_args = {
-            input_tensor.buffer()->address(), increment, page_idx_start, input_page_size_bytes};
+            input_tensor.mesh_buffer()->get_device_buffer(send_coord)->address(),
+            increment,
+            page_idx_start,
+            input_page_size_bytes};
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
 
         std::vector<uint32_t> writer_runtime_args = {
-            output_tensors.at(0).buffer()->address(),
+            output_tensors.at(0).mesh_buffer()->get_device_buffer(receive_coord)->address(),
             page_idx_start,
             page_idx_end,
             num_hops,

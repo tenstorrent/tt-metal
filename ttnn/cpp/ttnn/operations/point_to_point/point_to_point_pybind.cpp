@@ -25,27 +25,15 @@ void py_bind_point_to_point(py::module& module) {
                const ttnn::Tensor& input_tensor,
                const MeshCoordinate& send_coord,
                const MeshCoordinate& receive_coord,
-               MeshDevice& receive_device,
                const ccl::Topology topology,
-               MeshDevice& mesh_device,
                const GlobalSemaphore& receiver_semaphore,
                QueueId queue_id) {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    send_coord,
-                    receive_coord,
-                    receive_device,
-                    topology,
-                    mesh_device,
-                    receiver_semaphore);
+                return self(queue_id, input_tensor, send_coord, receive_coord, topology, receiver_semaphore);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("send_coord"),
             py::arg("receive_coord"),
-            py::arg("receive_device"),
             py::arg("topology"),
-            py::arg("mesh_device"),
             py::arg("receiver_semaphore"),
             py::kw_only(),
             py::arg("queue_id") = DefaultQueueId,
