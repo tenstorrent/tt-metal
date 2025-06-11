@@ -350,7 +350,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             fused_op_signaler_forward->push_all_gather_fused_op_rt_args(reader_forward_rt_args, 1, 0, 1);
         }
         tt::tt_metal::SetRuntimeArgs(
-            program, worker_sender_reader_forward_kernel_id, {sender_worker_cores[1]}, reader_forward_rt_args);
+            program,
+            worker_sender_reader_forward_kernel_id,
+            {sender_worker_cores[link * 2 + 1]},
+            reader_forward_rt_args);
 
         std::vector<uint32_t> reader_backward_rt_args = {
             input_tensor_Wt,            // width in tiles of the input shard
@@ -372,11 +375,12 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             fused_op_signaler_backward->push_all_gather_fused_op_rt_args(reader_backward_rt_args, 1, 0, 0);
         }
         tt::tt_metal::SetRuntimeArgs(
-            program, worker_sender_reader_backward_kernel_id, {sender_worker_cores[0]}, reader_backward_rt_args);
+            program, worker_sender_reader_backward_kernel_id, {sender_worker_cores[link * 2]}, reader_backward_rt_args);
 
-        const CoreCoord sender_forward_worker_core = mesh_device->worker_core_from_logical_core(sender_worker_cores[1]);
+        const CoreCoord sender_forward_worker_core =
+            mesh_device->worker_core_from_logical_core(sender_worker_cores[link * 2 + 1]);
         const CoreCoord sender_backward_worker_core =
-            mesh_device->worker_core_from_logical_core(sender_worker_cores[0]);
+            mesh_device->worker_core_from_logical_core(sender_worker_cores[link * 2]);
 
         // Writer
         std::vector<uint32_t> writer_forward_rt_args = {
@@ -405,14 +409,14 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
                 backward_device.value()->id(),
                 link,
                 program,
-                sender_worker_cores[1],
+                sender_worker_cores[link * 2 + 1],
                 writer_forward_rt_args);
         }
         if (fuse_op) {
             fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_forward_rt_args, 1, 0, 1);
         }
         tt::tt_metal::SetRuntimeArgs(
-            program, worker_sender_writer_forward_kernel_id, sender_worker_cores[1], writer_forward_rt_args);
+            program, worker_sender_writer_forward_kernel_id, sender_worker_cores[link * 2 + 1], writer_forward_rt_args);
 
         std::vector<uint32_t> writer_backward_rt_args = {
             input_tensor_Wt,                // width in tiles of the input shard
@@ -438,7 +442,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
                 forward_device.value()->id(),
                 link,
                 program,
-                sender_worker_cores[0],
+                sender_worker_cores[link * 2],
                 writer_backward_rt_args);
         }
         writer_backward_rt_args.push_back(false);
@@ -446,7 +450,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_backward_rt_args, 1, 0, 0);
         }
         tt::tt_metal::SetRuntimeArgs(
-            program, worker_sender_writer_backward_kernel_id, sender_worker_cores[0], writer_backward_rt_args);
+            program, worker_sender_writer_backward_kernel_id, sender_worker_cores[link * 2], writer_backward_rt_args);
     }
 
     auto override_runtime_arguments_callback =
