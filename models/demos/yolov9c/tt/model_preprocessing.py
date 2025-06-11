@@ -48,9 +48,15 @@ def create_yolov9c_input_tensors(
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
-        ttnn_input_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        ttnn_input_tensor = ttnn.to_device(ttnn_input_host, device)
-    return torch_input_tensor, ttnn_input_tensor
+        ttnn_input_host = ttnn.from_torch(
+            torch_input_tensor,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=input_mem_config,
+        )
+        # ttnn_input_tensor = ttnn.to_device(ttnn_input_host, device, memory_config=input_mem_config)
+    return torch_input_tensor, ttnn_input_host
 
 
 def make_anchors(device, feats, strides, grid_cell_offset=0.5):
