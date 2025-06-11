@@ -35,7 +35,7 @@ struct PointToPointOp {
     using tensor_return_value_t = std::array<ttnn::Tensor, 2>;
 
     struct SendReceive {
-        // !TODO
+        // !TODO #23425
         struct shared_variables_t {};
 
         // AdaptedCachedMeshWorkload this maps device coordinates to sets of shared variables.
@@ -56,7 +56,7 @@ struct PointToPointOp {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
-        // ! TODO
+        // ! TODO #23425
         static void override_runtime_arguments(
             cached_mesh_workload_t& cached_program,
             const operation_attributes_t& operation_attributes,
