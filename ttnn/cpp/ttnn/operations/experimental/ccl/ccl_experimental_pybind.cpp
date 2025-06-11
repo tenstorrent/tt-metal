@@ -12,6 +12,7 @@
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce/all_reduce_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_pybind.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_replicate_async/all_gather_replicate_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_broadcast_async/all_broadcast_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat_pybind.hpp"
@@ -30,6 +31,7 @@ void py_module(pybind11::module& module) {
     ccl::py_bind_all_gather_matmul_async(module);
     ccl::py_bind_all_reduce(module);
     ccl::py_bind_all_gather_async(module);
+    ccl::py_bind_all_gather_replicate_async(module);
     ccl::py_bind_all_broadcast_async(module);
     ccl::py_bind_all_to_all_async(module);
     ccl::py_bind_all_gather_concat(module);
