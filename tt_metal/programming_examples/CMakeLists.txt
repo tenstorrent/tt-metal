@@ -34,55 +34,52 @@ add_custom_target(
     programming_examples
     DEPENDS
         profiler_examples
-        contributed
         ${PROGRAMMING_EXAMPLES_TEST_TARGETS}
 )
-
+# cmake-format: sortable
 install(
     DIRECTORY
-        hello_world_compute_kernel
-        hello_world_datatypes_kernel
-        hello_world_datamovement_kernel
-        add_2_integers_in_riscv
         add_2_integers_in_compute
+        add_2_integers_in_riscv
         eltwise_binary
-        matmul_multi_core
         eltwise_sfpu
+        hello_world_compute_kernel
+        hello_world_datamovement_kernel
+        hello_world_datatypes_kernel
         loopback
-        matmul_multicore_reuse
         matmul_common
+        matmul_multi_core
+        matmul_multicore_reuse
         matmul_single_core
         pad_multi_core
         shard_data_rm
-        contributed
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
-    # FIXME(afuller): Something funky is happening when installing files into /usr/share/doc on a default Docker image.
-    #                 Speculation: some dependency for magic doc handling is missing.
-    #                 For now keep it out of 'doc'.
+    # FIXME(afuller): Something funky is happening when installing files into
+    # /usr/share/doc on a default Docker image. Speculation: some dependency for
+    # magic doc handling is missing. For now keep it out of 'doc'.
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tt-metalium/examples"
     COMPONENT metalium-examples
     REGEX
     "/kernels/"
         EXCLUDE
 )
-
+# cmake-format: sortable
 install(
     DIRECTORY
-        hello_world_compute_kernel
-        hello_world_datatypes_kernel
-        hello_world_datamovement_kernel
-        add_2_integers_in_riscv
         add_2_integers_in_compute
+        add_2_integers_in_riscv
         eltwise_binary
-        matmul_multi_core
         eltwise_sfpu
+        hello_world_compute_kernel
+        hello_world_datamovement_kernel
+        hello_world_datatypes_kernel
         loopback
-        matmul_multicore_reuse
         matmul_common
+        matmul_multi_core
+        matmul_multicore_reuse
         matmul_single_core
         pad_multi_core
         shard_data_rm
-        contributed
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples
     FILES_MATCHING
