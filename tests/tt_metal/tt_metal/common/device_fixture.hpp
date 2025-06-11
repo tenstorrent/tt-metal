@@ -60,7 +60,7 @@ protected:
     size_t num_devices_;
 
 public:
-    std::pair<unsigned, unsigned> worker_grid_minimum_dims(void) {
+    std::pair<unsigned, unsigned> worker_grid_minimum_dims() {
         constexpr size_t UMAX = std::numeric_limits<unsigned>::max();
         std::pair<size_t, size_t> min_dims = {UMAX, UMAX};
         for (auto device : devices_) {

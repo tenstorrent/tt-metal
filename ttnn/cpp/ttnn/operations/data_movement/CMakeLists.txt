@@ -1,8 +1,14 @@
 add_library(ttnn_op_data_movement ${LIB_TYPE})
-add_library(TT::NN::Ops::DataMovement ALIAS ttnn_op_data_movement)
+add_library(TTNN::Ops::DataMovement ALIAS ttnn_op_data_movement)
 
 target_precompile_headers(ttnn_op_data_movement REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_data_movement)
+set_target_properties(
+    ttnn_op_data_movement
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 
 target_sources(
     ttnn_op_data_movement
@@ -106,12 +112,43 @@ target_sources(
         view/view.cpp
 )
 
+file(
+    GLOB_RECURSE kernels
+    common/kernels/*
+    move/device/kernels/*
+    permute/device/kernels/*
+    sharded/device/kernels/*
+    transpose/device/kernels/*
+)
+target_sources(
+    ttnn_op_data_movement
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            ${kernels}
+            reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
+            reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
+            reshape_view/device/device/rm_reshape_interleaved.cpp
+            reshape_view/device/hostdevcommon/common.hpp
+)
+
 target_include_directories(ttnn_op_data_movement PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
     ttnn_op_data_movement
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_data_movement
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/data_movement
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_data_movement LIBRARY COMPONENT tar)

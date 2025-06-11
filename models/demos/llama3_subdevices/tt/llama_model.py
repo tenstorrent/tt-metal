@@ -179,7 +179,6 @@ class TtTransformer(LightweightModule):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
-        TODO: Debate whether this function is responsible for padding
         """
 
         tokens = tokens.reshape(1, 1, 1, -1)
@@ -371,9 +370,7 @@ class TtTransformer(LightweightModule):
             ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
         )
 
-        tt_out = ttnn.argmax(
-            tt_logits, dim=3, keepdim=True, use_multicore=True
-        )  # TODO Add multicore support to batch > 1
+        tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
         if isinstance(tt_out, list):
             tt_out = tt_out[0]
 

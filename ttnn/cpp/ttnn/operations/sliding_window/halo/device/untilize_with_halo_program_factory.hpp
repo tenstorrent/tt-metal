@@ -29,6 +29,7 @@ tt::tt_metal::operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_c
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     uint32_t pad_val,
+    bool padding_exists,
     uint32_t ncores_nhw,
     uint32_t ncores_c,
     uint32_t max_out_nsticks_per_core,
