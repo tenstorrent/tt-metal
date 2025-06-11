@@ -195,7 +195,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  smoke-tests:
+  metalium-smoke-tests:
     needs: build-artifact
     strategy:
       fail-fast: false
@@ -209,6 +209,22 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
+      product: tt-metalium
+  ttnn-smoke-tests:
+    needs: build-artifact
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "P100",
+          "P150",
+        ]
+    uses: ./.github/workflows/smoke.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}
+      product: tt-nn
 #   build-and-test-wheels:
 #     uses: Check all-post-commit yaml for directions
 #     secrets: inherit
