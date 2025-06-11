@@ -17,11 +17,12 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     const Tensor& input_indices_tensor,
     const std::vector<uint16_t>& k,
     const std::vector<float>& p,
-    const uint32_t seed,
+    const std::optional<uint32_t>& seed,
     const std::optional<CoreRangeSet>& sub_core_grids,
     Tensor& output_tensor) {
     using namespace tt::constants;
     tt::tt_metal::Program program{};
+    uint32_t random_seed = 0;
 
     tt::DataFormat input_values_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.dtype());
@@ -59,6 +60,10 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
         core_grid = sub_core_grids.value();
     }
     auto cores = corerange_to_cores(core_grid, num_cores, true);
+
+    if (seed.has_value()) {
+        random_seed = seed.value();
+    }
 
     // for streaming in input
     uint32_t num_cb_unit = 2;
@@ -265,7 +270,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
             round_up_to_mul32(k[i]),
             (std::uint32_t)std::log2(round_up_to_mul32(k[i])),
             rand_tile_index,
-            seed,
+            random_seed,
             cb_local_vals_index};
 
         tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(

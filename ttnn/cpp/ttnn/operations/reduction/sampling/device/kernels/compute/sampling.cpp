@@ -34,7 +34,9 @@ void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
     rand_scale.f = 1;
     uint32_t rand_from = 0;
 
-    rand_tile_init(seed);
+    if (seed != 0) {
+        rand_tile_init(seed);
+    }
     cb_reserve_back(cb_id, 1);
 
     tile_regs_acquire();
