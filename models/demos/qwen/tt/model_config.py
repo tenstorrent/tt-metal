@@ -21,7 +21,7 @@ from models.demos.qwen.tt.qwen_common import (
     num_to_core_range_set,
     precompute_freqs,
 )
-from models.utility_functions import nearest_32
+from models.utility_functions import nearest_32, wormhole_dict_device_names
 
 
 class TtModelArgs:
@@ -66,7 +66,7 @@ class TtModelArgs:
         # Add this near the top of the class, with other class attributes
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
-        self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
+        self.device_name = wormhole_dict_device_names[self.num_devices]
         self.is_large_model = False
         self.model_name = "Unknown"  # Qwen model name will be dependent on the checkpoint directory
 

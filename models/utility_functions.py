@@ -16,6 +16,15 @@ from typing_extensions import deprecated
 
 import ttnn
 
+wormhole_dict_device_names = {
+    0: "CPU",
+    1: "N150",
+    2: "N300",
+    4: "N150x4",
+    8: "T3K",
+    32: "TG",
+}
+
 
 ### Math operations ###
 def _nearest_32(x):
