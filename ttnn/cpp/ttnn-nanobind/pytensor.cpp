@@ -896,7 +896,7 @@ void pytensor_module(nb::module_& mod) {
                std::optional<float> pad_value) {
                 if (nb::isinstance<nb::list>(tensor)) {
                     new (t) Tensor(detail::convert_python_tensors_to_tt_tensors(
-                        static_cast<const nb::list&>(tensor),
+                        nb::cast<nb::list>(tensor),
                         data_type,
                         optional_layout,
                         optional_tile,

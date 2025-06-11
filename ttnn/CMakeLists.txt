@@ -527,17 +527,22 @@ if(WITH_PYTHON_BINDINGS)
         # nanobind requires this to be invoked before nanobind is included
         if(CMAKE_VERSION VERSION_LESS 3.18)
             set(DEV_MODULE Development)
-            set(DEV_EMBED "")
         else()
-            # Without .Embed, find_package was erroring out.
             set(DEV_MODULE Development.Module)
-            set(DEV_EMBED Development.Embed)
         endif()
 
         # This is what pybind11 does in its cmake under the hood, so it should be fine
         # with the manylinux wheel.
         set(Python3_FIND_STRATEGY LOCATION)
-        find_package(Python3 REQUIRED COMPONENTS ${DEV_MODULE} OPTIONAL_COMPONENTS ${DEV_EMBED})
+        find_package(
+            Python3
+            REQUIRED
+            COMPONENTS
+                Interpreter
+                ${DEV_MODULE}
+            OPTIONAL_COMPONENTS
+                Development.SABIModule
+        )
         message(STATUS "Python3 include dirs: ${Python3_INCLUDE_DIRS}")
 
         # https://nanobind.readthedocs.io/en/latest/api_cmake.html#low-level-interface
@@ -570,10 +575,10 @@ if(WITH_PYTHON_BINDINGS)
         nanobind_lto(ttnn)
 
         # .. set the default symbol visibility to 'hidden'
-        nanobind_set_visibility(ttnn)
+        #nanobind_set_visibility(ttnn)
 
         # .. strip unneeded symbols and debug info from the binary (only active in release builds)
-        nanobind_strip(ttnn)
+        #nanobind_strip(ttnn)
 
         # .. disable the stack protector
         #nanobind_disable_stack_protector(ttnn)
