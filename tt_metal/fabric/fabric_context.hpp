@@ -68,6 +68,7 @@ private:
     static constexpr size_t MAX_DEVICES = 256;
     static constexpr chan_id_t UNINITIALIZED_MASTER_ROUTER_CHAN = std::numeric_limits<chan_id_t>::max();
     static constexpr uint32_t UNINITIALIZED_ROUTERS = std::numeric_limits<uint32_t>::max();
+    // Use vector instead of unordered_map to be thread safe
     std::vector<chan_id_t> master_router_chans_;
     std::vector<uint32_t> num_initialized_routers_;
 };

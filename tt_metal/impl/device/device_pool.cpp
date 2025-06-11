@@ -336,13 +336,13 @@ void DevicePool::init_fabric(const std::vector<IDevice*>& active_devices) const 
     //       dut to lack of validation HW. So currently this is "best effort" as the compilation
     //       part is the heaviest in this init_fabric.
     for (uint32_t i = 0; i < active_devices.size(); i++) {
-        auto fabric_programs = futures[i].get();
+        auto fabric_program = futures[i].get();
         auto& dev = active_devices[i];
-        if (!fabric_programs) {
+        if (!fabric_program) {
             log_warning(tt::LogMetal, "Fabric program is not valid for device {}", dev->id());
             continue;
         }
-        dev->init_fabric(std::move(fabric_programs));
+        dev->init_fabric(std::move(fabric_program));
     }
 }
 
