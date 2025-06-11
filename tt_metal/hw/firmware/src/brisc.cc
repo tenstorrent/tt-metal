@@ -249,7 +249,7 @@ void device_setup() {
 
 inline void deassert_ncrisc_trisc() {
     // Below sets ncrisc to go so we can wait until it is cleared on first iteration
-    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_INIT;
 
     // Bring ncrisc/triscs out of reset
     deassert_all_reset();
