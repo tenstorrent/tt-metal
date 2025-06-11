@@ -1296,11 +1296,9 @@ tt::tt_fabric::FabricEriscDatamoverType get_fabric_edm_type(
         // Wrap around dateline
         if (smaller_chip_id == 0 && larger_chip_id == mesh_num_columns) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline;
-        }
-        if ((chip0 == 0 || chip0 == mesh_num_columns) && chip1 == chip0 + 1) {
+        } else if ((chip0 == 0 || chip0 == mesh_num_columns) && chip1 == chip0 + 1) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
-        }
-        if ((chip1 == 0 || chip1 == mesh_num_columns) && chip0 == chip1 + 1) {
+        } else if ((chip1 == 0 || chip1 == mesh_num_columns) && chip0 == chip1 + 1) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
         }
     } else {
@@ -1309,27 +1307,32 @@ tt::tt_fabric::FabricEriscDatamoverType get_fabric_edm_type(
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline;
         }
         // Row dateline
-        if (smaller_chip_id < mesh_num_columns && larger_chip_id >= (mesh_num_columns * (mesh_num_rows - 1)) &&
+        else if (
+            smaller_chip_id < mesh_num_columns && larger_chip_id >= (mesh_num_columns * (mesh_num_rows - 1)) &&
             smaller_chip_id == larger_chip_id % mesh_num_columns) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline;
         }
         // Column dateline upstream
-        if ((chip0 % mesh_num_columns == 0 && chip1 == chip0 + 1) ||
+        else if (
+            (chip0 % mesh_num_columns == 0 && chip1 == chip0 + 1) ||
             (chip0 % mesh_num_columns == mesh_num_columns - 1 && chip1 == chip0 - 1)) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
         }
         // Row dateline upstream
-        if ((chip0 < mesh_num_columns && chip1 == chip0 + mesh_num_columns) ||
+        else if (
+            (chip0 < mesh_num_columns && chip1 == chip0 + mesh_num_columns) ||
             (chip0 >= (mesh_num_columns * (mesh_num_rows - 1)) && chip1 == chip0 - mesh_num_columns)) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
         }
         // Column dateline upstream adjacent
-        if ((chip1 % mesh_num_columns == 0 && chip0 == chip1 + 1) ||
+        else if (
+            (chip1 % mesh_num_columns == 0 && chip0 == chip1 + 1) ||
             (chip1 % mesh_num_columns == mesh_num_columns - 1 && chip0 == chip1 - 1)) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
         }
         // Row dateline upstream adjacent
-        if ((chip1 < mesh_num_columns && chip0 == chip1 + mesh_num_columns) ||
+        else if (
+            (chip1 < mesh_num_columns && chip0 == chip1 + mesh_num_columns) ||
             (chip1 >= (mesh_num_columns * (mesh_num_rows - 1)) && chip0 == chip1 - mesh_num_columns)) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
         }

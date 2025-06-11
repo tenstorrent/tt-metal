@@ -174,7 +174,7 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
                 this->dateline_upstream_adjcent_router_config_ != nullptr,
                 "Error, fabric dateline upstream adjacent device router config is uninitialized");
             return *this->dateline_upstream_adjcent_router_config_.get();
-        case tt::tt_fabric::FabricEriscDatamoverType::Invalid: TT_FATAL(false, "Error, invalid fabric edm type");
+        default: TT_FATAL(false, "Error, invalid fabric edm type");
     }
 };
 
