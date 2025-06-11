@@ -144,11 +144,25 @@ void kernel_main() {
                     uint32_t l1_write_addr_gamma = get_write_ptr(cb_gamma);
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
                         uint32_t tile_id = gamma_tile_start_id + w;
+
                         uint64_t gamma_noc_addr = get_noc_addr(tile_id, gamma);
-                        noc_async_read(gamma_noc_addr, l1_write_addr_gamma, 32);
-                        gamma_noc_addr += 32;
-                        noc_async_read(gamma_noc_addr, l1_write_addr_gamma + 512, 32);
+
+                        // This is the original code
+                        //  noc_async_read(gamma_noc_addr, l1_write_addr_gamma, 32);
+                        //  gamma_noc_addr += 32;
+                        //  noc_async_read(gamma_noc_addr, l1_write_addr_gamma + 512, 32);
+                        //  l1_write_addr_gamma += gamma_tile_bytes;
+
+                        // Maybe we can manually read a full tile
+                        noc_async_read(gamma_noc_addr, l1_write_addr_gamma, gamma_tile_bytes);
                         l1_write_addr_gamma += gamma_tile_bytes;
+                        // Trying to see if reading a full tile works
+                        //  const InterleavedAddrGenFast<src0_is_dram> src_a = {
+                        //                              .bank_base_address = src_addr,
+                        //                              .page_size = src0_tile_bytes,
+                        //                              .data_format = src0_data_format};
+                        //      noc_async_read_tile(tile_id, gamma_noc_addr, l1_write_addr_gamma);
+                        //      l1_write_addr_gamma += gamma_tile_bytes;
                     }
                     noc_async_read_barrier();
                     cb_push_back(cb_gamma, num_cols_tile_gamma_beta);
@@ -163,9 +177,15 @@ void kernel_main() {
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
                         uint32_t tile_id = beta_tile_start_id + w;
                         uint64_t beta_noc_addr = get_noc_addr(tile_id, beta);
-                        noc_async_read(beta_noc_addr, l1_write_addr_beta, 32);
-                        beta_noc_addr += 32;
-                        noc_async_read(beta_noc_addr, l1_write_addr_beta + 512, 32);
+
+                        // This is the original code
+                        //  noc_async_read(beta_noc_addr, l1_write_addr_beta, 32);
+                        //  beta_noc_addr += 32;
+                        //  noc_async_read(beta_noc_addr, l1_write_addr_beta + 512, 32);
+                        //  l1_write_addr_beta += beta_tile_bytes;
+
+                        // Let's read a full tile manually
+                        noc_async_read(beta_noc_addr, l1_write_addr_beta, beta_tile_bytes);
                         l1_write_addr_beta += beta_tile_bytes;
                     }
                     noc_async_read_barrier();
