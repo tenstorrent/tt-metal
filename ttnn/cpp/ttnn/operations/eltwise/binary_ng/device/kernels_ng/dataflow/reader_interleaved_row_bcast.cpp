@@ -109,7 +109,7 @@ void kernel_main() {
                         FILL_TILE_WITH_FIRST_ROW(cb_id_src);
 #endif
 #if SRC_BCAST_B  // no sharding support for row bcast yet
-                        FILL_TILE_WITH_FIRST_ROW(cb_id_src_b);
+                        FILL_TILE_WITH_FIRST_ROW_B(cb_id_src_b);
 #endif
 #if !SRC_SHARDED
                         cb_push_back(cb_id_src, onetile);

@@ -98,7 +98,7 @@ void kernel_main() {
                 noc_async_read_tile(tile_offset_b, src_b, l1_write_addr_src_b);
                 noc_async_read_barrier();
 #endif
-                FILL_TILE_WITH_FIRST_ELEMENT(cb_id_src_b);
+                FILL_TILE_WITH_FIRST_ELEMENT_B(cb_id_src_b);
                 cb_push_back(cb_id_src_b, onetile);
 #endif
                 for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
