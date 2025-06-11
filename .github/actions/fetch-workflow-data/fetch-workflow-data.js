@@ -233,7 +233,7 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
   async enrichRunWithPRInfo(run) {
     const prInfo = await this.fetchPRInfo(run.head_sha);
     const baseUrl = `https://github.com/${this.context.repo.owner}/${this.context.repo.repo}`;
-    const workflowUrl = `${baseUrl}/actions/workflows/${run.path}?query=branch%3Amain`;
+    const workflowUrl = `${baseUrl}/actions/workflows/${encodeURIComponent(run.path)}`;
     const runUrl = `${baseUrl}/actions/runs/${run.id}`;
 
     if (prInfo) {

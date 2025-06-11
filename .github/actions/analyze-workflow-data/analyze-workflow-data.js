@@ -119,15 +119,15 @@ function findGoodBadCommits(scheduledMainRuns) {
   for (const run of scheduledMainRuns) {
     if (!foundGood && run.conclusion === 'success') {
       const shortSha = run.head_sha.substring(0, SHA_SHORT_LENGTH);
-      lastGoodSha = run.repository ?
-        `[\`${shortSha}\`](https://github.com/${run.repository.owner}/${run.repository.name}/actions/runs/${run.id})` :
+      lastGoodSha = run.run_url ?
+        `[\`${shortSha}\`](${run.run_url})` :
         shortSha;
       foundGood = true;
     }
     if (!foundBad && run.conclusion !== 'success') {
       const shortSha = run.head_sha.substring(0, SHA_SHORT_LENGTH);
-      earliestBadSha = run.repository ?
-        `[\`${shortSha}\`](https://github.com/${run.repository.owner}/${run.repository.name}/actions/runs/${run.id})` :
+      earliestBadSha = run.run_url ?
+        `[\`${shortSha}\`](${run.run_url})` :
         shortSha;
       foundBad = true;
     }
@@ -166,8 +166,8 @@ function getLastRunInfo(mainBranchRuns) {
     EMPTY_VALUE;
 
   // Create GitHub Actions run link using repository info from enriched data
-  const runLink = lastMainRun.repository ?
-    `[\`${lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH)}\`](https://github.com/${lastMainRun.repository.owner}/${lastMainRun.repository.name}/actions/runs/${lastMainRun.id})` :
+  const runLink = lastMainRun.run_url ?
+    `[\`${lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH)}\`](${lastMainRun.run_url})` :
     lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH);
 
   // Create workflow link
