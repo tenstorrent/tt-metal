@@ -505,12 +505,12 @@ int main(int argc, char **argv) {
         enable_wandb = false;
     }
 
-    // needs more validation for TP
-    if (config.enable_ddp) {
-        fmt::println("Distributed data parallel is enabled");
-    }
-    if (config.enable_tp) {
-        fmt::println("Tensor parallel is enabled");
+    if (config.enable_ddp || config.enable_tp) {
+        fmt::println("Multidevice config:");
+        fmt::println("  Tensor parallel enabled: {}", config.enable_tp);
+        fmt::println("  Distributed data-parallel enabled: {}", config.enable_ddp);
+        fmt::println("  Mesh shape: {}", config.mesh_shape);
+        fmt::println("  Device IDs: {}", config.device_ids);
     }
 
     if (config.enable_mpi) {
@@ -644,9 +644,6 @@ int main(int argc, char **argv) {
     fmt::print("Dataset size: {}\n", dataset.get_size());
     fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
-
-    fmt::println("Mesh shape: {}", config.mesh_shape);
-    fmt::println("Device IDs: {}", config.device_ids);
 
     initialize_device(config.mesh_shape, config.device_ids);
 

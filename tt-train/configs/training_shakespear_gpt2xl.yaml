@@ -12,6 +12,8 @@ training_config:
   use_kahan_summation: false
   gradient_accumulation_steps: 32
   tokenizer_type: bpe
+  enable_tp: true
+  mesh_shape: [1,2]
 
   transformer_config:
     runner_type: memory_efficient
