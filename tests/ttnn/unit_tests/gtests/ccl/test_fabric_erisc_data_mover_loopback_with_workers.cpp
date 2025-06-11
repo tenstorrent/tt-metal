@@ -67,63 +67,6 @@
 ///  MESSAGE COUNT TERMINATION MODE
 ////////////////////////////////////////////////////////////////////
 
-// Disabled non persistent fabric tests - non-persistent fabric mode not supported
-TEST(WorkerFabricEdmDatapath, DISABLED_FabricEDMLoopback_With_Workers_SingleMessage) {
-    const uint32_t page_size = 2048;
-    const uint32_t num_pages_total = 1;
-    const bool src_is_dram = true;
-    const bool dest_is_dram = true;
-
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, false);
-    ASSERT_EQ(result, 0);
-}
-
-// Will wrapp sender but not receiver buffers
-// Disabled non persistent fabric tests - non-persistent fabric mode not supported
-TEST(WorkerFabricEdmDatapath, DISABLED_FabricEDMLoopback_With_Workers_2_messages) {
-    const uint32_t page_size = 2048;
-    const uint32_t num_pages_total = 2;
-    const bool src_is_dram = true;
-    const bool dest_is_dram = true;
-
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, false);
-    ASSERT_EQ(result, 0);
-}
-// Will wrapp sender but not receiver buffers
-// Disabled non persistent fabric tests - non-persistent fabric mode not supported
-TEST(WorkerFabricEdmDatapath, DISABLED_FabricEDMLoopback_With_Workers_10_messages) {
-    const uint32_t page_size = 2048;
-    const uint32_t num_pages_total = 10;
-    const bool src_is_dram = true;
-    const bool dest_is_dram = true;
-
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, false);
-    ASSERT_EQ(result, 0);
-}
-
-// Will wrapp sender and receiver buffers
-// Disabled non persistent fabric tests - non-persistent fabric mode not supported
-TEST(WorkerFabricEdmDatapath, DISABLED_FabricEDMLoopback_With_Workers_20_messages) {
-    const uint32_t page_size = 2048;
-    const uint32_t num_pages_total = 20;
-    const bool src_is_dram = true;
-    const bool dest_is_dram = true;
-
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, false);
-    ASSERT_EQ(result, 0);
-}
-
-// Disabled non persistent fabric tests - non-persistent fabric mode not supported
-TEST(WorkerFabricEdmDatapath, DISABLED_FabricEDMLoopback_With_Workers) {
-    const uint32_t page_size = 2048;
-    const uint32_t num_pages_total = 10000;
-    const bool src_is_dram = true;
-    const bool dest_is_dram = true;
-
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, false);
-    ASSERT_EQ(result, 0);
-}
-
 // -------------------------
 // Persistent Fabric
 // -------------------------
@@ -134,7 +77,7 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_SingleMessage_Persi
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
 
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, true);
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram);
     ASSERT_EQ(result, 0);
 }
 
@@ -145,7 +88,7 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_2_messages_Persiste
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
 
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, true);
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram);
     ASSERT_EQ(result, 0);
 }
 // Will wrapp sender but not receiver buffers
@@ -155,7 +98,7 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_10_messages_Persist
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
 
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, true);
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram);
     ASSERT_EQ(result, 0);
 }
 
@@ -166,7 +109,7 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_20_messages_Persist
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
 
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, true);
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram);
     ASSERT_EQ(result, 0);
 }
 
@@ -176,42 +119,11 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_PersistentFabric) {
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
 
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, true);
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram);
     ASSERT_EQ(result, 0);
 }
 
 ////////////////////////////////
-
-// Disabled non persistent fabric tests - non-persistent fabric mode not supported
-TEST(WorkerFabricEdmDatapath, DISABLED_LineFabricMcast_SingleMessage_SingleSource) {
-    const uint32_t page_size = 2048;
-    const uint32_t num_pages_total = 1;
-    const bool src_is_dram = true;
-    const bool dest_is_dram = true;
-    const size_t mcast_first_chip = 1;
-    const size_t mcast_last_chip = 3;
-
-    auto result = TestLineFabricEntrypoint(
-        mcast_first_chip, mcast_last_chip, page_size, num_pages_total, src_is_dram, dest_is_dram, false);
-
-    ASSERT_EQ(result, 0);
-}
-
-// Non-functional on harvested parts. Needs testing on unharvested parts.
-// Disabled non persistent fabric tests - non-persistent fabric mode not supported
-TEST(WorkerFabricEdmDatapath, DISABLED_LineFabricMcast_ManyMessages_SingleSource) {
-    const uint32_t page_size = 2048;
-    const uint32_t num_pages_total = 10000;
-    const bool src_is_dram = true;
-    const bool dest_is_dram = true;
-    const size_t mcast_first_chip = 1;
-    const size_t mcast_last_chip = 3;
-
-    auto result = TestLineFabricEntrypoint(
-        mcast_first_chip, mcast_last_chip, page_size, num_pages_total, src_is_dram, dest_is_dram, false);
-
-    ASSERT_EQ(result, 0);
-}
 
 TEST(WorkerFabricEdmDatapath, LineFabricMcast_SingleMessage_SingleSource_PersistentFabric) {
     const uint32_t page_size = 2048;
@@ -222,7 +134,7 @@ TEST(WorkerFabricEdmDatapath, LineFabricMcast_SingleMessage_SingleSource_Persist
     const size_t mcast_last_chip = 3;
 
     auto result = TestLineFabricEntrypoint(
-        mcast_first_chip, mcast_last_chip, page_size, num_pages_total, src_is_dram, dest_is_dram, true);
+        mcast_first_chip, mcast_last_chip, page_size, num_pages_total, src_is_dram, dest_is_dram);
 
     ASSERT_EQ(result, 0);
 }
@@ -237,7 +149,7 @@ TEST(WorkerFabricEdmDatapath, LineFabricMcast_ManyMessages_SingleSource_Persiste
     const size_t mcast_last_chip = 3;
 
     auto result = TestLineFabricEntrypoint(
-        mcast_first_chip, mcast_last_chip, page_size, num_pages_total, src_is_dram, dest_is_dram, true);
+        mcast_first_chip, mcast_last_chip, page_size, num_pages_total, src_is_dram, dest_is_dram);
 
     ASSERT_EQ(result, 0);
 }
@@ -527,8 +439,7 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
 
         page_size,
         TwoInputReaderKernelWriteMode::FABRIC_UNICAST,
-        dest_args,
-        true);
+        dest_args);
 
     ASSERT_TRUE(pass);
 }
@@ -543,45 +454,45 @@ TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_Singl
     ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
-    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_TwoHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
-    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_ThreeHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
-    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_SingleHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 32, 128});
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
-    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, DMultiInputReader_4PageTile_TwoHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 128, 32});
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
-    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_ThreeHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 64, 64});
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
-    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_lotsPageTile_ThreeHop_PersistentFabric) {
     ttnn::Shape tensor_shape({1, 1, 64, 16384});
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
-    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
+    RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices);
 }
 
 TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly0) {

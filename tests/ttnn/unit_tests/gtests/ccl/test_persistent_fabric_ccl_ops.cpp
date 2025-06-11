@@ -81,8 +81,6 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     // Need to make it a mesh tensor for use with the op
     const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{})
                                          .to_device(test_fixture.mesh_device_.get());
-    // FABRIC setup
-    const bool enable_persistent_fabric = true;
 
     std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
 
