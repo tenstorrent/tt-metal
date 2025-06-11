@@ -40,14 +40,6 @@ class TtAttention(nn.Module):
             exp_approx_mode=False,
         )
 
-        # Todo: In a separate PR, make this use HiFi2 (move it to default compute kernel config)
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
-
         q_weights = state_dict[f"{module_path}.to_q.weight"].unsqueeze(0).unsqueeze(0)
         k_weights = state_dict[f"{module_path}.to_k.weight"].unsqueeze(0).unsqueeze(0)
         v_weights = state_dict[f"{module_path}.to_v.weight"].unsqueeze(0).unsqueeze(0)
@@ -79,7 +71,15 @@ class TtAttention(nn.Module):
         self.tt_out_weights, self.tt_out_bias = prepare_linear_params(device, out_weights, out_bias, weights_dtype)
         self.dense_out_program_config = model_config.get_matmul_config(module_path + ".dense_out")
         self.default_compute_kernel_config = model_config.get_mm_compute_config(module_path)
+
+        self.sdpa_program_config = None
+        if self.is_self_attention:
+            self.sdpa_program_config = model_config.get_sdpa_config(module_path + ".self_attention")
+        else:
+            self.sdpa_program_config = model_config.get_sdpa_config(module_path + ".cross_attention")
+
         assert self.dense_out_program_config is not None, "dense_out_program_config should not be None"
+        assert self.sdpa_program_config is not None, "sdpa_program_config should not be None"
 
     def forward(self, hidden_states, attention_mask, encoder_hidden_states=None):
         if encoder_hidden_states is None:
@@ -143,7 +143,7 @@ class TtAttention(nn.Module):
             is_causal=False,
             attn_mask=attention_mask,
             program_config=self.sdpa_program_config,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.default_compute_kernel_config,
         )
 
         hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states)
