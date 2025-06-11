@@ -540,7 +540,7 @@ def run_llama3_demo(
             ml_model_name="llama70b-tg",
         )
 
-    if not stress_test:
+    if not stress_test and len(all_tokens_per_second_per_user) > 0:
         logger.info(f"Min tsu throughput: {min(all_tokens_per_second_per_user)}")
         logger.info(f"Max tsu throughput: {max(all_tokens_per_second_per_user)}")
         logger.info(f"Avg tsu throughput: {sum(all_tokens_per_second_per_user) / len(all_tokens_per_second_per_user)}")

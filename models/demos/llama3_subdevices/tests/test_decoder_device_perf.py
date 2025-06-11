@@ -40,7 +40,7 @@ MAX_TYPE = "max"
     "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
     [
         (  # 10 layers for devive perf measurements
-            "random",
+            "instruct",
             10,
             "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
             True,  # instruct mode
