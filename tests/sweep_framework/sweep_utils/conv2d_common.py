@@ -379,6 +379,7 @@ def run_conv1d_short_sweep(
         batch_size=batch_size,
         input_length=input_length,
         groups=groups,
+        dtype=ttnn.bfloat16,
         return_output_dim=True,
         return_weights_and_bias=True,
     )

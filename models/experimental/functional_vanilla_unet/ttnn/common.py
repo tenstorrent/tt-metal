@@ -126,7 +126,6 @@ class ConvTranspose:
             packer_l1_acc=False,
         )
         conv_config = ttnn.Conv2dConfig(
-            dtype=self.dtype,
             weights_dtype=ttnn.bfloat16,
             shard_layout=self.shard_layout,
             reshard_if_not_optimal=self.reshard,
@@ -157,6 +156,7 @@ class ConvTranspose:
             output_padding=(0, 0),
             dilation=(1, 1),
             mirror_kernel=True,
+            dtype=self.dtype,
         )
 
         output_tensor = ttnn.reshape(

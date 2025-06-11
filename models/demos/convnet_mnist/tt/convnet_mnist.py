@@ -60,6 +60,8 @@ def convnet_mnist(
             input_layout=x.get_layout(),
             has_bias=True,
             **conv_kwargs,
+            input_dtype=ttnn.bfloat16,
+            output_dtype=ttnn.bfloat16,
         )
         tt_weight = ttnn.to_device(tt_weight, device)
 
@@ -116,6 +118,8 @@ def convnet_mnist(
             input_layout=x.get_layout(),
             has_bias=True,
             **conv_kwargs,
+            input_dtype=ttnn.bfloat16,
+            output_dtype=ttnn.bfloat16,
         )
         tt_weight = ttnn.to_device(tt_weight, device)
 
