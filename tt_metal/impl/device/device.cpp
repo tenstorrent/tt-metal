@@ -653,7 +653,7 @@ void Device::initialize_and_launch_firmware() {
     bool skip_physical = this->arch() == ARCH::BLACKHOLE and hal.is_coordinate_virtualization_enabled();
     if (not skip_physical) {
         for (tt::umd::CoreCoord core : pcie_cores) {
-            [[maybe_unused]] tt::umd::CoreCoord translated_coord =
+            tt::umd::CoreCoord translated_coord =
                 soc_d.translate_coord_to(tt_xy_pair(core.x, core.y), CoordSystem::PHYSICAL, CoordSystem::VIRTUAL);
             core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::PCIE};
         }
