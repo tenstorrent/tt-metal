@@ -200,9 +200,8 @@ ttnn.attach_golden_function(ttnn.acos, golden_function=_golden_function_acos)
 def _golden_function_acosh(input_tensor_a, *args, device, **kwargs):
     import torch
 
-    return torch.nan_to_num(
-        torch.acosh(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
-    )
+    result = torch.acosh(input_tensor_a)
+    return result.masked_fill_(input_tensor_a < 1, float("inf")) if input_tensor_a.dtype == torch.bfloat16 else result
 
 
 ttnn.attach_golden_function(ttnn.acosh, golden_function=_golden_function_acosh)
