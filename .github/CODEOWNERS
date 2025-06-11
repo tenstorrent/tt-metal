@@ -239,6 +239,7 @@ models/experimental/grok @yieldthought @uaydonat
 models/demos/wormhole/vit @mbahnasTT @dvartaniansTT @uaydonat
 models/demos/vit  @mbahnasTT @dvartaniansTT @uaydonat
 models/experimental/*yolo*/ @mbahnasTT @uaydonat
+models/experimental/yolo_evaluation @mbahnasTT @tenstorrent/metalium-developers-convolutions
 models/demos/segformer @mbahnasTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/perf/ @yieldthought @uaydonat
 models/perf/benchmarking_utils.py @skhorasganiTT @williamlyTT @uaydonat
