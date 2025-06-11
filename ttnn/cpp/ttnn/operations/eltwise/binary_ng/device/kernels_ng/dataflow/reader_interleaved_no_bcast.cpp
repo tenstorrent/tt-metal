@@ -70,13 +70,13 @@ void kernel_main() {
 
     // this is the INPUT tile offset
     uint32_t tile_offset = start_d * nD_stride + start_n * n_stride + start_c * c_stride;
-    tile_offset += +start_th * Wt;
+    tile_offset += start_th * Wt;
     uint32_t next_channel_shift = c_stride - HtWt;
     uint32_t next_batch_shift = n_stride - c_stride * C;
     uint32_t next_depth_shift = nD_stride - (n_stride * N);
 
     uint32_t tile_offset_b = start_d * nD_stride_b + start_n * n_stride_b + start_c * c_stride_b;
-    tile_offset_b += +start_th * Wt;
+    tile_offset_b += start_th * Wt;
     uint32_t next_channel_shift_b = c_stride_b - HtWt;
     uint32_t next_batch_shift_b = n_stride_b - c_stride_b * C;
     uint32_t next_depth_shift_b = nD_stride_b - (n_stride_b * N);
