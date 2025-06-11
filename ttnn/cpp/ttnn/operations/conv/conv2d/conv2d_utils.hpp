@@ -162,6 +162,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     const CoreCoord& compute_grid_size,
     Layout input_layout,
     tt::tt_metal::DataType input_datatype,
+    tt::tt_metal::DataType output_datatype,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
     uint32_t groups,

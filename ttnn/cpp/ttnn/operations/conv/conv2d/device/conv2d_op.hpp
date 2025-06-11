@@ -18,7 +18,7 @@ namespace conv2d {
 
 constexpr uint32_t l1_scratchpad_CB_size = 64;
 struct Conv2dConfig {
-    tt::tt_metal::DataType dtype = tt::tt_metal::DataType::BFLOAT16;
+    // tt::tt_metal::DataType dtype = tt::tt_metal::DataType::BFLOAT16;
 
     // If set, the weights & bias tensors will be converted to this dtype after preprocessing.
     // prepare_conv_bias needs this to always be set to the same dtype as the weights.
@@ -100,7 +100,6 @@ struct Conv2dConfig {
     // ===============================================================
 
     static constexpr auto attribute_names = std::make_tuple(
-        "dtype",
         "weights_dtype",
         "activation",
         "deallocate_activation",
@@ -122,7 +121,6 @@ struct Conv2dConfig {
         "enable_kernel_stride_folding");
     auto attribute_values() const {
         return std::make_tuple(
-            std::cref(this->dtype),
             std::cref(this->weights_dtype),
             std::cref(this->activation),
             std::cref(this->deallocate_activation),
@@ -344,6 +342,7 @@ conv_op_l1_usage calculate_L1_usage(
     std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config,
     tt::tt_metal::DataType input_datatype,
+    tt::tt_metal::DataType output_datatype,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     bool enable_bias,
     bool is_1d_depthwise_conv);

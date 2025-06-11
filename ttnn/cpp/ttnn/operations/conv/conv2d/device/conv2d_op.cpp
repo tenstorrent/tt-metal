@@ -276,7 +276,6 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         weights_shape,
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
         Conv2dConfig{
-            .dtype = output_tensor.dtype(),
             .weights_dtype = input_tensor_b.dtype(),
             .shard_layout = this->memory_config.memory_layout(),
             .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
@@ -285,6 +284,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             .enable_split_reader = enable_split_reader,
             .enable_subblock_padding = enable_subblock_padding},
         input_tensor_a.dtype(),
+        output_tensor.dtype(),  // TODO check if dtype from the parent struct should be used instead?
         this->memory_config,
         has_bias,
         is_1d_deptwise_conv(

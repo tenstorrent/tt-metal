@@ -803,6 +803,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     const CoreCoord& compute_grid_size,
     Layout input_layout,
     tt_metal::DataType input_datatype,
+    tt_metal::DataType output_datatype,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
     const uint32_t groups,
@@ -902,6 +903,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             kernel_size,
             conv_config,
             input_datatype,
+            output_datatype,
             conv_out_memory_config,
             enable_bias,
             conv_is_1d_deptwise);
@@ -911,7 +913,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         uint32_t input_nhw = tt::div_up(batch_size * input_height * input_width, tt::constants::TILE_HEIGHT);
         uint32_t input_c = tt::div_up(in_channels_aligned, tt::constants::TILE_WIDTH);
         uint32_t approx_input_size =
-            input_nhw * input_c * tt::tile_size(datatype_to_dataformat_converter(conv_config.dtype));
+            input_nhw * input_c * tt::tile_size(datatype_to_dataformat_converter(output_datatype));
         uint32_t approx_input_size_per_core = approx_input_size / input_parallel_config.grid.num_cores();
 
         l1_usage.tensor_allocation_size += approx_input_size_per_core;
@@ -1007,6 +1009,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config,
     const DataType input_datatype,
+    const DataType output_datatype,
     const MemoryConfig& output_memory_config,
     const bool enable_bias,
     bool is_1d_depthwise_conv) {
@@ -1025,7 +1028,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     if (enable_bias) {
         bias_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_config.weights_dtype.value()));
     }
-    uint32_t output_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_config.dtype));
+    uint32_t output_tile_size = tt::tile_size(datatype_to_dataformat_converter(output_datatype));
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), compute_kernel_config);
@@ -1051,7 +1054,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         uint32_t conv_output_c_per_core = per_core_out_matrix_width_ntiles * tt::constants::TILE_WIDTH;
 
         uint32_t output_size_per_core_in_bytes = per_core_out_matrix_width_ntiles * per_core_out_matrix_height_ntiles *
-                                                 tt::tile_size(datatype_to_dataformat_converter(conv_config.dtype));
+                                                 tt::tile_size(datatype_to_dataformat_converter(output_datatype));
 
         uint32_t tilized_act_block_num_bytes = act_block_num_tiles * output_tile_size;
 
@@ -1072,7 +1075,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         packer_l1_acc = packer_l1_acc && ((enable_bias && num_blocks_act_w > 1) || (num_blocks_act_w > 2));
 
         auto interm_dtype =
-            packer_l1_acc ? (fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16) : conv_config.dtype;
+            packer_l1_acc ? (fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16) : output_datatype;
 
         uint32_t partial_tile_size = tt::tile_size(datatype_to_dataformat_converter(interm_dtype));
 
@@ -1103,7 +1106,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
 
         // MATMUL PARTIALs CB
         uint32_t matmul_partials_cb_size = partials_block_num_bytes;
-        if (!untilize_out && interm_dtype == conv_config.dtype) {
+        if (!untilize_out && interm_dtype == output_datatype) {
             matmul_partials_cb_size = 0;
         } else {
             log_debug(tt::LogOp, "Matmul partial CB Size: {}", matmul_partials_cb_size);
@@ -1145,7 +1148,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         packer_l1_acc = packer_l1_acc && ((enable_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
 
         auto interm_dtype =
-            packer_l1_acc ? (fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16) : conv_config.dtype;
+            packer_l1_acc ? (fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16) : output_datatype;
 
         uint32_t partial_tile_size = tt::tile_size(datatype_to_dataformat_converter(interm_dtype));
 
@@ -1189,7 +1192,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
 
         // MATMUL PARTIALS CB
         uint32_t matmul_partials_cb_size = output_block_ntiles * partial_tile_size;
-        if (!untilize_out && interm_dtype == conv_config.dtype) {
+        if (!untilize_out && interm_dtype == output_datatype) {
             matmul_partials_cb_size = 0;
         }
         if (is_1d_depthwise_conv) {
@@ -1218,9 +1221,9 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         uint32_t output_size = 0;
         if (untilize_out) {
             uint32_t per_core_out_width_aligned = pconfig.per_core_out_matrix_width_ntile * tt::constants::TILE_WIDTH;
-            if (conv_config.dtype == DataType::BFLOAT16) {
+            if (output_datatype == DataType::BFLOAT16) {
                 per_core_out_width_aligned *= 2;
-            } else if (conv_config.dtype == DataType::FLOAT32) {
+            } else if (output_datatype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
             output_size = tt::round_up(per_core_out_width_aligned, tt::tt_metal::hal::get_l1_alignment()) *
@@ -1250,7 +1253,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         packer_l1_acc = packer_l1_acc && ((enable_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
 
         auto interm_dtype =
-            packer_l1_acc ? (fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16) : conv_config.dtype;
+            packer_l1_acc ? (fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16) : output_datatype;
 
         uint32_t partial_tile_size = tt::tile_size(datatype_to_dataformat_converter(interm_dtype));
 
@@ -1281,7 +1284,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
 
         // MATMUL PARTIALS CB
         uint32_t matmul_partials_cb_size = output_block_ntiles * partial_tile_size;
-        if (!untilize_out && interm_dtype == conv_config.dtype) {
+        if (!untilize_out && interm_dtype == output_datatype) {
             matmul_partials_cb_size = 0;
         } else {
             log_debug(tt::LogOp, "Matmul partials CB Size: {}", matmul_partials_cb_size);
