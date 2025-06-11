@@ -118,7 +118,9 @@ int main() {
     risc_init();
 
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+#ifdef ARCH_BLACKHOLE
     mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
+#endif
     set_deassert_addresses();
     //device_setup();
 
