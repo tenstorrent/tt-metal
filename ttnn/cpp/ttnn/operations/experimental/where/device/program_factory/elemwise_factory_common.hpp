@@ -75,22 +75,19 @@ inline void set_eltwise_ternary_runtime_args(
     auto& cached_eltwise_args = GetRuntimeArgs(program, compute_kernel_id);
     auto& cached_writer_args = GetRuntimeArgs(program, writer_kernel_id);
 
-    uint32_t block_size_per_core_group_1 = 1, block_size_per_core_group_2 = 1;
     for (uint32_t i = 0, tile_ofs = 0; i < num_cores_total; ++i) {
         const CoreCoord& core = cores.at(i);
 
         uint32_t block_cnt_per_core = 0;
-        uint32_t block_size_per_core = 0;
+        uint32_t block_size_per_core = 1;
         uint32_t num_tiles_per_core = 0;
 
         if (i < core_group_1.num_cores()) {
             num_tiles_per_core = num_tiles_per_core_group_1;
             block_cnt_per_core = num_tiles_per_core_group_1;
-            block_size_per_core = block_size_per_core_group_1;
         } else if (i < num_cores) {
             num_tiles_per_core = num_tiles_per_core_group_2;
             block_cnt_per_core = num_tiles_per_core_group_2;
-            block_size_per_core = block_size_per_core_group_2;
         } else {
             // Zero out non-working cores RT args. Only necessary in override
             // since initialization pushes zero vectors to unused cores.
