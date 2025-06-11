@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
 #include "padded_slice_op.hpp"
 #include "padded_slice_program_factory.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -17,7 +19,6 @@ void PaddedSliceDeviceOperation::validate_with_output_tensors(
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Input to padded_slice must be in row major layout");
     TT_FATAL(input_tensor_a.padded_shape().rank() == 4, "Only 4D tensors are supported for padded_slice");
     TT_FATAL(
         input_tensor_a.padded_shape().rank() == this->padded_slice_start.rank() &&
@@ -77,7 +78,8 @@ std::vector<ttnn::TensorSpec> PaddedSliceDeviceOperation::compute_output_specs(
     }
 
     ttnn::Shape output_tensor_shape(std::move(out_shape));
-    auto tensor_layout = TensorLayout(input_tensor.dtype(), PageConfig(Layout::ROW_MAJOR), this->output_mem_config);
+    auto output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
+    auto tensor_layout = TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), this->output_mem_config);
     return {ttnn::TensorSpec(output_tensor_shape, tensor_layout)};
 }
 

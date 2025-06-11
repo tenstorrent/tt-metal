@@ -194,11 +194,7 @@ Result conv2d_DRAM(
     TT_FATAL(!memory_config_.has_value(), "Setting Memory config for Conv2D with DRAM Slicing is not supported.");
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
     TT_FATAL(conv_config.dtype != tt::tt_metal::DataType::BFLOAT8_B, "Conv DRAM currently doesn't support BFLOAT8_B");
-    TT_FATAL(
-        input_tensor_on_device.dtype() == tt_metal::DataType::BFLOAT16, "Input Tensor to Conv DRAM should be BFLOAT16");
-    TT_FATAL(
-        input_tensor_on_device.layout() == tt_metal::Layout::ROW_MAJOR,
-        "Input Tensor to Conv DRAM should be in Row Major Layout");
+
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input Tensor to Conv DRAM should be in Interleaved Memory Layout");
