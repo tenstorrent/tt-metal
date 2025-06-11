@@ -1,39 +1,52 @@
 # Test Infrastructure Guide
 
-To run the test infrastructure, ensure you have one of the following devices installed on your system:
+To run the test infrastructure, ensure your system has one of the following devices installed:
 
-- **Blackhole** (any derivative)
-- **Wormhole** (any derivative)
+- **Blackhole** (or any derivative)
+- **Wormhole** (or any derivative)
 
-Device must be flashed with the original firmware.
+> ⚠️ The device must be flashed with the original firmware.
 
-Testing environment, when properly initialized, can detect the underlying hardware.
+When the testing environment is correctly initialized, it will auto-detect the underlying hardware.
+
+---
 
 ## Steps to Run Tests
 
-1. Execute the environment setup script:
-    - If you are using `tt-llk` docker image, run:
+### 1. Set Up the Environment
+
+- **If using the `tt-llk` Docker image**, run:
 
     ```bash
     ./setup_testing_env.sh
     ```
 
-    - If you are an external developer, or don't use `tt-llk` docker image, run:
+- **If you are an external developer or not using the Docker image**, run:
 
     ```bash
-    ./setup_external_testing_env.sh
+    source ./setup_external_testing_env.sh
     ```
 
-2. Navigate to the `python_tests` directory:
+> 🔄 **Note**: Always use `source` to ensure the environment is activated in your current shell session.
 
-    ```bash
-    cd python_tests
-    ```
+---
 
-3. Run any test using `pytest`:
+### 2. Navigate to the Python Test Directory
 
-    ```bash
-    pytest <test_file_name>
-    ```
+```bash
+cd python_tests
+```
 
-Replace `<test_file_name>` with the name of the test file you wish to execute.
+### 3. Run any test using `pytest`
+
+```bash
+pytest <test_file_name>
+```
+
+Replace <test_file_name> with the specific test script you want to execute, e.g., test_sfpu_binary.py.
+
+### 4. Run all tests using `pytest`
+
+```bash
+pytest
+```
