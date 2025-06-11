@@ -27,7 +27,7 @@ using std::size_t;
 
 /**
  * @brief Encapsulates the locations of arguments in compile-time and common runtime and calculates offsets
- * for CTA in compile time, and CRTA in compile time if possible,
+ * for CTA in compile time, and CRTA in compile time if possible.
  *
  * @tparam CTA_OFFSET_  Starting offset for compile-time arguments.
  * @tparam CRTA_OFFSET_ Starting offset for common runtime arguments. If set to -1, it means that there are no common

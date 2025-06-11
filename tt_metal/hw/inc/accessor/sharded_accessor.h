@@ -16,18 +16,36 @@ namespace nd_sharding {
 template <size_t CTA_BASE, size_t CRTA_BASE = detail::UNKNOWN>
 using distribution_spec_t = typename detail::BuildDistributionSpec<CTA_BASE, CRTA_BASE>::dspec;
 
-// compile_time_args_skip is required to be constexpr since cta argument index must be constexpr
+/**
+ * @brief Calculates the number of compile-time arguments used when building a DistributionSpec. Note that
+ * compile_time_args_skip is required to be constexpr since cta argument index must be constexpr
+ *
+ * @tparam DSpec                DistributionSpec type
+ * @return constexpr size_t     Number of compile-time arguments used by the DistributionSpec.
+ */
 template <typename DSpec>
 constexpr size_t compile_time_args_skip() {
     return DSpec::ArgsLoc::NumArgsCT;
 }
 
+/**
+ * @brief Callculated number of common runtime arguments used when building a DistributionSpec.
+ *
+ * @tparam DSpec                DistributionSpec type
+ * @return constexpr size_t     Number of common runtime arguments used by the DistributionSpec.
+ */
 template <typename DSpec>
 constexpr size_t runtime_args_skip() {
     // Note: can be evaluated at compile time only if rank and num_banks are static
     return DSpec::ArgsLoc::num_args_crta();
 }
 
+/**
+ * @brief Accessor that encapsulates the logic for accessing sharded tensors pages.
+ *
+ * @tparam DSpec
+ * @tparam PageSize
+ */
 template <typename DSpec, size_t PageSize = detail::UNKNOWN>
 struct ShardedAccessor {
     static constexpr auto page_size_ct = PageSize;
@@ -78,8 +96,8 @@ struct ShardedAccessor {
 
     // NOC APIs
     FORCE_INLINE
-    std::uint64_t get_noc_addr(const uint32_t id, uint8_t noc = noc_index) const {
-        const auto [bank_id, bank_offset] = this->get_bank_and_offset(id);
+    std::uint64_t get_noc_addr(const uint32_t page_id, uint8_t noc = noc_index) const {
+        const auto [bank_id, bank_offset] = this->get_bank_and_offset(page_id);
         const auto& packed_xy_coords = get_dspec().get_packed_xy_coords();
         return NOC_XY_ADDR(
             DYNAMIC_NOC_X(noc, (packed_xy_coords[bank_id] >> 16) & 0xFFFF),
@@ -88,13 +106,13 @@ struct ShardedAccessor {
     }
 
     FORCE_INLINE
-    void noc_async_read_page(const uint32_t id, const uint32_t dest_addr, uint8_t noc = noc_index) const {
-        noc_async_read(get_noc_addr(id, noc), dest_addr, get_page_size(), noc);
+    void noc_async_read_page(const uint32_t page_id, const uint32_t dest_addr, uint8_t noc = noc_index) const {
+        noc_async_read(get_noc_addr(page_id, noc), dest_addr, get_page_size(), noc);
     }
 
     FORCE_INLINE
-    void noc_async_write_page(const uint32_t id, const uint32_t src_addr, uint8_t noc = noc_index) const {
-        noc_async_write(src_addr, get_noc_addr(id, noc), get_page_size(), noc);
+    void noc_async_write_page(const uint32_t page_id, const uint32_t src_addr, uint8_t noc = noc_index) const {
+        noc_async_write(src_addr, get_noc_addr(page_id, noc), get_page_size(), noc);
     }
 
     // Helpers

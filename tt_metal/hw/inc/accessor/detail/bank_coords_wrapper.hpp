@@ -9,8 +9,6 @@ namespace nd_sharding {
 namespace detail {
 template <uint32_t... PackedCoords>
 struct BankCoordWrapperStaticNBanksStaticCoords {
-    static constexpr bool is_static = true;
-    static constexpr bool has_static_num_banks = true;
     static constexpr uint32_t num_banks = sizeof...(PackedCoords);
     // TODO: Each bank coord is packed as one uint32_t (ie. (16 bits) <x> | (16 bits) <y>)
     // This can be optimized to be 8 bits per coord, so we pack two bank coords in one uint32_t compile time arg
@@ -23,8 +21,6 @@ struct BankCoordWrapperStaticNBanksStaticCoords {
 
 template <uint32_t NumBanks>
 struct BankCoordWrapperDynamicStaticNBanksDynamicCoords {
-    static constexpr bool is_static = false;
-    static constexpr bool has_static_num_banks = true;
     static constexpr uint32_t num_banks = NumBanks;
     using PackedCoordsBase = std::array<uint32_t, num_banks>;
     PackedCoordsBase packed_xy_coords;
@@ -36,16 +32,13 @@ struct BankCoordWrapperDynamicStaticNBanksDynamicCoords {
 };
 
 struct BankCoordWrapperDynamicsNBanks {
-    static constexpr bool is_static = false;
-    static constexpr bool has_static_num_banks = false;
-    static constexpr uint32_t num_banks = static_cast<uint32_t>(-1);
     using PackedCoordsBase = Span<uint32_t>;
-
-    uint32_t num_banks_rt;              // Number of banks is dynamic
     PackedCoordsBase packed_xy_coords;  // Runtime packed coordinates
 
+    explicit BankCoordWrapperDynamicsNBanks() = default;
+    explicit BankCoordWrapperDynamicsNBanks(const PackedCoordsBase& bank_coords) : packed_xy_coords(bank_coords) {}
     explicit BankCoordWrapperDynamicsNBanks(PackedCoordsBase&& bank_coords) :
-        num_banks_rt(bank_coords.size()), packed_xy_coords(std::move(bank_coords)) {}
+        packed_xy_coords(std::move(bank_coords)) {}
 };
 
 template <bool NumBanksStatic, bool BankCoordsStatic, size_t StartIdx, uint32_t NumBanks>

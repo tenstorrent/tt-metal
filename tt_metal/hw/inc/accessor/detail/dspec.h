@@ -27,16 +27,16 @@ constexpr size_t UNKNOWN = static_cast<size_t>(-1);
  * @tparam BankCoords_
  * @tparam ArgsLoc_
  */
-template <typename TensorShape_, typename ShardShape_, typename BankCoords_, typename ArgsLoc_>
+template <typename TensorShapeWrapper_, typename ShardShapeWrapper_, typename BankCoordsWrapper_, typename ArgsLoc_>
 struct DistributionSpec {
     using ArgsLoc = ArgsLoc_;
-    using TensorShape = TensorShape_;
-    using ShardShape = ShardShape_;
-    using BankCoords = BankCoords_;
+    using TensorShapeWrapper = TensorShapeWrapper_;
+    using ShardShapeWrapper = ShardShapeWrapper_;
+    using BankCoordsWrapper = BankCoordsWrapper_;
 
     // std::array if rank/num_banks are static, Span otherwise
-    using ShapeBase = typename TensorShape::ShapeBase;
-    using PackedCoordsBase = typename BankCoords::PackedCoordsBase;
+    using ShapeBase = typename TensorShapeWrapper::ShapeBase;
+    using PackedCoordsBase = typename BankCoordsWrapper::PackedCoordsBase;
 
     static constexpr bool has_static_rank = ArgsLoc::RankStatic;
     static constexpr bool has_static_num_banks = ArgsLoc::NumBanksStatic;
@@ -69,111 +69,76 @@ struct DistributionSpec {
         bank_coords_rt(std::forward<BankCoordsArr>(bank_coords_arr)) {
         if constexpr (!has_static_rank) {
             // Rank is not known at compile time, use runtime rank
-            rank_rt = tensor_shape_rt.rank_rt;
+            rank_rt = tensor_shape_rt.shape.size();
             // !has_static_rank means ShapeBase is span<uint32_t>
             shard_grid_rt = ShapeBase(shard_grid_rt_buf.value, rank_rt);
             shard_grid_strides_rt = ShapeBase(shard_grid_strides_rt_buf.value, rank_rt);
+
+            tensor_strides_rt = ShapeBase(tensor_strides_rt_buf.value, rank_rt);
+            shard_strides_rt = ShapeBase(shard_strides_rt_buf.value, rank_rt);
         }
         if constexpr (!has_static_num_banks) {
             // Number of banks is not known at compile time, use runtime number of banks
-            num_banks_rt = bank_coords_rt.num_banks_rt;
+            num_banks_rt = bank_coords_rt.packed_xy_coords.size();
+        }
+        if constexpr (!tensor_shape_static) {
+            // If tensor shape is not static, we need to compute strides and volume at runtime
+            compute_strides_volume_rt(tensor_shape_rt.shape, tensor_strides_rt, tensor_volume_rt);
+        }
+        if constexpr (!shard_shape_static) {
+            // If shard shape is not static, we need to compute strides and volume at runtime
+            compute_strides_volume_rt(shard_shape_rt.shape, shard_strides_rt, shard_volume_rt);
         }
         if constexpr (!shapes_static) {
             compute_shard_grid_and_strides_rt(get_tensor_shape(), get_shard_shape());
         }
     }
 
+// Helper macro to avoid code duplication in getters
+#define getter_helper(is_static, val_ct, val_rt) \
+    if constexpr (is_static) {                   \
+        return val_ct;                           \
+    } else {                                     \
+        return val_rt;                           \
+    }
     // Getters
-    constexpr const uint32_t get_rank() const {
-        if constexpr (has_static_rank) {
-            return rank_ct;
-        } else {
-            return rank_rt;
-        }
-    }
+    constexpr const uint32_t get_rank() const { getter_helper(has_static_rank, rank_ct, rank_rt); }
 
-    constexpr const uint32_t get_num_banks() const {
-        if constexpr (has_static_num_banks) {
-            return num_banks_ct;
-        } else {
-            return num_banks_rt;
-        }
-    }
+    constexpr const uint32_t get_num_banks() const { getter_helper(has_static_num_banks, num_banks_ct, num_banks_rt) }
 
-    constexpr const ShapeBase& get_shard_grid() const {
-        if constexpr (shapes_static) {
-            return shard_grid_ct;
-        } else {
-            return shard_grid_rt;
-        }
-    }
+    constexpr const ShapeBase& get_shard_grid() const { getter_helper(shapes_static, shard_grid_ct, shard_grid_rt) }
 
     constexpr const ShapeBase& get_shard_grid_strides() const {
-        if constexpr (shapes_static) {
-            return shard_grid_strides_ct;
-        } else {
-            return shard_grid_strides_rt;
-        }
+        getter_helper(shapes_static, shard_grid_strides_ct, shard_grid_strides_rt)
     }
 
     constexpr const ShapeBase& get_tensor_shape() const {
-        if constexpr (tensor_shape_static) {
-            return TensorShape::shape;
-        } else {
-            return tensor_shape_rt.shape;
-        }
+        getter_helper(tensor_shape_static, TensorShapeWrapper::shape, tensor_shape_rt.shape)
     }
 
     constexpr const ShapeBase& get_tensor_strides() const {
-        if constexpr (tensor_shape_static) {
-            return TensorShape::strides;
-        } else {
-            return tensor_shape_rt.strides;
-        }
+        getter_helper(tensor_shape_static, tensor_strides_ct, tensor_strides_rt)
     }
 
     constexpr size_t get_tensor_volume() const {
-        if constexpr (tensor_shape_static) {
-            return TensorShape::volume;
-        } else {
-            return tensor_shape_rt.volume;
-        }
+        getter_helper(tensor_shape_static, tensor_volume_ct, tensor_volume_rt)
     }
 
     constexpr const ShapeBase& get_shard_shape() const {
-        if constexpr (shard_shape_static) {
-            return ShardShape::shape;
-        } else {
-            return shard_shape_rt.shape;
-        }
+        getter_helper(shard_shape_static, ShardShapeWrapper::shape, shard_shape_rt.shape)
     }
 
     constexpr const ShapeBase& get_shard_strides() const {
-        if constexpr (shard_shape_static) {
-            return ShardShape::strides;
-        } else {
-            return shard_shape_rt.strides;
-        }
+        getter_helper(shard_shape_static, shard_strides_ct, shard_strides_rt)
     }
 
-    constexpr size_t get_shard_volume() const {
-        if constexpr (shard_shape_static) {
-            return ShardShape::volume;
-        } else {
-            return shard_shape_rt.volume;
-        }
-    }
+    constexpr size_t get_shard_volume() const { getter_helper(shard_shape_static, shard_volume_ct, shard_volume_rt) }
 
     constexpr const PackedCoordsBase& get_packed_xy_coords() const {
-        if constexpr (bank_coords_static) {
-            return BankCoords::packed_xy_coords;
-        } else {
-            return bank_coords_rt.packed_xy_coords;
-        }
+        getter_helper(bank_coords_static, BankCoordsWrapper::packed_xy_coords, bank_coords_rt.packed_xy_coords)
     }
 
-    // Compute shard grid and shard grid strides at compile time
-    static constexpr ShapeBase calc_shard_grid_ct(const ShapeBase& tensor_shape, const ShapeBase& shard_shape) {
+    static constexpr ShapeBase precompute_shard_grid_ct(const ShapeBase& tensor_shape, const ShapeBase& shard_shape) {
         // If shapes are dynamic, we cannot compute shard grid at compile time
         if (!shapes_static) {
             return {};
@@ -185,7 +150,8 @@ struct DistributionSpec {
         return shard_grid;
     }
 
-    static constexpr ShapeBase calc_shard_grid_strides_ct(const ShapeBase& tensor_shape, const ShapeBase& shard_shape) {
+    static constexpr ShapeBase precompute_shard_grid_strides_ct(
+        const ShapeBase& tensor_shape, const ShapeBase& shard_shape) {
         ShapeBase shard_grid_strides = {};
         uint32_t stride = 1;
         for (int i = rank_ct - 1; i >= 0; --i) {
@@ -193,6 +159,34 @@ struct DistributionSpec {
             stride *= (tensor_shape[i] - 1) / shard_shape[i] + 1;  // div_up
         }
         return shard_grid_strides;
+    }
+
+    static constexpr size_t precompute_volume_ct(const ShapeBase& shape) {
+        size_t volume = 1;
+        for (size_t i = 0; i < shape.size(); ++i) {
+            volume *= shape[i];
+        }
+        return volume;
+    }
+
+    static constexpr ShapeBase precompute_strides_ct(const ShapeBase& shape) {
+        ShapeBase strides = {};
+        uint32_t stride = 1;
+        for (int i = static_cast<int>(shape.size()) - 1; i >= 0; --i) {
+            strides[i] = stride;
+            stride *= shape[i];
+        }
+        return strides;
+    }
+
+    void compute_strides_volume_rt(const ShapeBase& shape, ShapeBase& strides, size_t& volume) const {
+        uint32_t stride = 1;
+        volume = 1;
+        for (int i = static_cast<int>(shape.size()) - 1; i >= 0; --i) {
+            strides[i] = stride;
+            stride *= shape[i];
+            volume *= shape[i];
+        }
     }
 
     void compute_shard_grid_and_strides_rt(const ShapeBase& tensor_shape, const ShapeBase& shard_shape) {
@@ -211,9 +205,9 @@ struct DistributionSpec {
     uint32_t rank_rt = 0;
     uint32_t num_banks_rt = 0;
 
-    TensorShape tensor_shape_rt;
-    ShardShape shard_shape_rt;
-    BankCoords bank_coords_rt;
+    TensorShapeWrapper tensor_shape_rt;
+    ShardShapeWrapper shard_shape_rt;
+    BankCoordsWrapper bank_coords_rt;
 
     std::conditional_t<shapes_static, std::monostate, ShapeBase> shard_grid_rt{};
     std::conditional_t<shapes_static, std::monostate, ShapeBase> shard_grid_strides_rt{};
@@ -222,12 +216,30 @@ struct DistributionSpec {
     mutable detail::ConditionalBuffer<!has_static_rank, uint32_t, MAX_RANK> shard_grid_rt_buf;
     mutable detail::ConditionalBuffer<!has_static_rank, uint32_t, MAX_RANK> shard_grid_strides_rt_buf;
 
-    static constexpr ShapeBase shard_grid_ct = calc_shard_grid_ct(TensorShape::shape, ShardShape::shape);
+    static constexpr ShapeBase shard_grid_ct =
+        precompute_shard_grid_ct(TensorShapeWrapper::shape, ShardShapeWrapper::shape);
     static constexpr ShapeBase shard_grid_strides_ct =
-        calc_shard_grid_strides_ct(TensorShape::shape, ShardShape::shape);
+        precompute_shard_grid_strides_ct(TensorShapeWrapper::shape, ShardShapeWrapper::shape);
+
+    mutable detail::ConditionalBuffer<!has_static_rank, uint32_t, MAX_RANK> tensor_strides_rt_buf;
+    mutable detail::ConditionalBuffer<!has_static_rank, uint32_t, MAX_RANK> shard_strides_rt_buf;
+    ShapeBase tensor_strides_rt = {};
+    ShapeBase shard_strides_rt = {};
+    static constexpr ShapeBase tensor_strides_ct = precompute_strides_ct(TensorShapeWrapper::shape);
+    static constexpr ShapeBase shard_strides_ct = precompute_strides_ct(ShardShapeWrapper::shape);
+
+    size_t tensor_volume_rt = 0;
+    size_t shard_volume_rt = 0;
+    static constexpr size_t tensor_volume_ct = precompute_volume_ct(TensorShapeWrapper::shape);
+    static constexpr size_t shard_volume_ct = precompute_volume_ct(ShardShapeWrapper::shape);
 };
 
-// Helper to properly build a DistributionSpec type from compile-time arguments
+/**
+ * @brief Helper to properly build a DistributionSpec type from compile-time arguments
+ *
+ * @tparam CTA_OFFSET   First index of compile-time arguments
+ * @tparam CRTA_OFFSET  First index of common runtime arguments
+ */
 template <size_t CTA_OFFSET, size_t CRTA_OFFSET>
 struct BuildDistributionSpec {
     // Fetch configuration of arguments, i.e. which are CTA which are CRTA
@@ -253,6 +265,13 @@ struct BuildDistributionSpec {
     using dspec = DistributionSpec<TensorShapeType, ShardShapeType, BankCoordsType, ArgsLoc>;
 };
 
+/**
+ * @brief Helper function to build a DistributionSpec from commom runtime arguments. Parses tensor shape, shard shape,
+ * bank coordinates if needed, and passes to DSpec constructor.
+ *
+ * @tparam DSpec DistributionSpec type
+ * @return auto DistributionSpec instance built from common runtime arguments.
+ */
 template <typename DSpec>
 auto build_dspec_from_args() {
     using Loc = typename DSpec::ArgsLoc;
@@ -278,12 +297,14 @@ auto build_dspec_from_args() {
             auto tensor_shape_crta_offset = Loc::tensor_shape_crta_offset();
             for (size_t i = 0; i < rank; ++i) {
                 tensor_shape_array[i] = get_common_arg_val<uint32_t>(tensor_shape_crta_offset + i);
+                ASSERT(tensor_shape_array[i] > 0);
             }
         }
         if constexpr (ShardShapeCRTA) {
             auto shard_shape_crta_offset = Loc::shard_shape_crta_offset();
             for (size_t i = 0; i < rank; ++i) {
                 shard_shape_array[i] = get_common_arg_val<uint32_t>(shard_shape_crta_offset + i);
+                ASSERT(shard_shape_array[i] > 0);
             }
         }
     } else {
@@ -291,7 +312,7 @@ auto build_dspec_from_args() {
         static_assert(TensorShapeCRTA, "Tensor shape must be CRTA if rank is not known at compile time!");
         static_assert(ShardShapeCRTA, "Shard shape must be CRTA if rank is not known at compile time!");
 
-        // (C)RTA are contiguous in memory, so we can do 0-copy construction
+        // (C)RTA are contiguous in memory, so we can do 0-copy construction from pointer to first value
         if constexpr (TensorShapeCRTA) {
             auto* tensor_shape_ptr = (uint32_t*)(get_common_arg_addr(Loc::tensor_shape_crta_offset()));
             tensor_shape_array = typename DSpec::ShapeBase(tensor_shape_ptr, rank);
