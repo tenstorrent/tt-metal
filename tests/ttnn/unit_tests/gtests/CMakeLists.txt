@@ -23,14 +23,12 @@ TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_smoke)
 target_sources(
     unit_tests_ttnn_smoke
     PRIVATE
-        test_add.cpp
         test_graph_add.cpp
         test_matmul_benchmark.cpp
         test_multiprod_queue.cpp
         test_multi_cq_multi_dev.cpp
         test_reflect.cpp
         test_to_and_from_json.cpp
-        test_broadcast_to.cpp
         test_sliding_window_infra.cpp
 )
 target_include_directories(unit_tests_ttnn_smoke PRIVATE ${PROJECT_SOURCE_DIR}/tests)
@@ -48,7 +46,9 @@ target_sources(
     unit_tests_ttnn_basic
     PRIVATE
         common_test_utils.cpp
+        test_add.cpp
         test_async_runtime.cpp # TODO: Fix memory leak (LSan) then shift-left
+        test_broadcast_to.cpp
         test_conv2d.cpp # TODO: Fix misaligned memory load (UBSan) then shift-left
         test_generic_op.cpp
         test_graph_basic.cpp
