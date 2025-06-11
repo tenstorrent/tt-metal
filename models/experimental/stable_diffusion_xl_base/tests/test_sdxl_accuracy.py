@@ -13,6 +13,8 @@ import statistics
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 import json
+from models.utility_functions import wormhole_dict_device_names
+import ttnn
 
 test_demo.__test__ = False
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
@@ -105,9 +107,11 @@ def test_accuracy_sdxl(
     print(f"Average CLIP Score: {average_clip_score}")
     print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
 
+    num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
+
     data = {
         "metadata": {
-            "device": "N150",
+            "device": wormhole_dict_device_names[num_devices],
             "device_vae": vae_on_device,
             "start_from": start_from,
             "num_prompts": num_prompts,
