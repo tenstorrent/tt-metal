@@ -46,12 +46,16 @@ class TtConv2dParameters:
             if not bias == None:
                 bias = torch.nn.functional.pad(bias, pad=(0, hidden_dim_padding), mode="constant", value=0)
 
+        weight_dims = [None, None]
+        weight_dims[parallel_config.tensor_parallel.mesh_axis] = 1  # output channels
+        bias_dims = [None, None]
+        bias_dims[parallel_config.tensor_parallel.mesh_axis] = 3  # output channels
         return cls(
             weight=from_torch_fast_2d(
                 weight,
                 mesh_device=device,
                 mesh_shape=tuple(device.shape),
-                dims=[None, parallel_config.tensor_parallel.mesh_axis],
+                dims=weight_dims,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=dtype,
             ),
@@ -60,7 +64,7 @@ class TtConv2dParameters:
                     bias.reshape((1, 1, 1, -1)),
                     mesh_device=device,
                     mesh_shape=tuple(device.shape),
-                    dims=[None, parallel_config.tensor_parallel.mesh_axis + 2],
+                    dims=bias_dims,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=dtype,
                 )

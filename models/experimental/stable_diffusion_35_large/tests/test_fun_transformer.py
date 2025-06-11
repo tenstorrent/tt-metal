@@ -33,11 +33,15 @@ TILE_SIZE = 32
     "mesh_device, cfg, sp, tp, topology",
     [
         [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear],
+        [(2, 4), (1, 0), (2, 0), (4, 1), ttnn.Topology.Linear],
+        [(2, 4), (1, 0), (4, 1), (2, 0), ttnn.Topology.Linear],
         [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear],
     ],
     ids=[
         "t3k_cfg2_sp2_tp2",
-        "tg_cfg2_sp4_tp4",
+        "t3k_cfg1_sp2_tp4",
+        "t3k_cfg1_sp4_tp2",
+        "tg_cfg4_sp2_tp4",
     ],
     indirect=["mesh_device"],
 )
