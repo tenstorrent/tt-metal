@@ -154,6 +154,8 @@ MeshDevice::ScopedDevices::ScopedDevices(
 }
 
 MeshDevice::ScopedDevices::~ScopedDevices() {
+    ZoneScopedN("ScopedDevices destructor");
+    log_info(tt::LogMetal, "ScopedDevices destructor");
     if (!opened_devices_.empty()) {
         std::vector<IDevice*> devices_to_close;
         for (auto& [id, device] : opened_devices_) {
@@ -213,6 +215,8 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
+    ZoneScopedN("MeshDevice::create");
+    log_info(tt::LogMetal, "MeshDevice::create");
     auto scoped_devices = std::make_shared<ScopedDevices>(
         l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config, config);
     auto root_devices = scoped_devices->root_devices();
@@ -402,8 +406,6 @@ MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
     return *(mesh_command_queues_[cq_id]);
 }
 
-bool MeshDevice::are_mesh_command_queues_initialized() const { return are_mesh_command_queues_initialized_; }
-
 DeviceIds MeshDevice::get_device_ids() const {
     DeviceIds device_ids;
     for (auto device : this->get_devices()) {
@@ -488,24 +490,33 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
     view_ = std::move(new_view);
 }
 
-// confirm with Aditya whether the HWCommandQueue API will be completely removed (ex: Finish(),
-// enqueue_read_from_core(), etc)
-
 bool MeshDevice::close() {
     ZoneScoped;
     const std::string zone_name = fmt::format("MeshDevice::close {}", this->id());
     ZoneName(zone_name.c_str(), zone_name.size());
-    log_info(tt::LogMetal, "Closing mesh device {}", this->build_id());
-    if (this->is_initialized() && this->is_parent_mesh()) {
+    log_info(tt::LogMetal, "Closing mesh device {}", this->id());
+    log_info(tt::LogMetal, "mesh cq size: {}", mesh_command_queues_.size());
+
+    // We skip dumping profile results for the parent mesh device because parent mesh devices don't
+    // have any active mesh command queues.
+    if (!this->is_parent_mesh()) {
         DumpMeshDeviceProfileResults(*this, ProfilerDumpState::LAST_CLOSE_DEVICE);
     }
-    // are_mesh_command_queues_initialized_ = false;
+
+    // TODO #20966: Remove these calls
+    for (auto device : view_->get_devices()) {
+        if (parent_mesh_) {
+            log_info(
+                tt::LogMetal, "device id: {} setting mesh device to parent mesh {}", device->id(), parent_mesh_->id());
+        } else {
+            log_info(tt::LogMetal, "device id: {} setting mesh device to nullptr", device->id());
+        }
+        dynamic_cast<Device*>(device)->set_mesh_device(parent_mesh_);
+    }
+
     mesh_command_queues_.clear();
     sub_device_manager_tracker_.reset();
     scoped_devices_.reset();
-    // if (parent_mesh_) {
-    //     log_info(tt::LogMetal, "Resetting parent mesh");
-    // }
     parent_mesh_.reset();
     return true;
 }
@@ -807,6 +818,7 @@ bool MeshDevice::initialize(
     size_t /*worker_l1_size*/,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     bool /*minimal*/) {
+    ZoneScopedN("MeshDevice::initialize");
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
     auto sub_devices = {
@@ -822,6 +834,7 @@ bool MeshDevice::initialize(
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
     // as the number of virtual ethernet cores seen by the MeshDevice
     num_virtual_eth_cores_ = DevicePool::instance().get_max_num_eth_cores_across_all_devices();
+    log_info(tt::LogMetal, "num_hw_cqs: {} when initializing mesh device {}", this->num_hw_cqs(), this->id());
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (this->using_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
@@ -833,7 +846,6 @@ bool MeshDevice::initialize(
             mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(this, cq_id));
         }
     }
-    are_mesh_command_queues_initialized_ = true;
     return true;
 }
 

@@ -725,8 +725,8 @@ void DumpDeviceProfileResults(
     if (getDeviceProfilerState()) {
         if (state != ProfilerDumpState::ONLY_DISPATCH_CORES) {
             if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
-                auto mesh_device = device->get_mesh_device();
-                if (mesh_device && mesh_device->are_mesh_command_queues_initialized()) {
+                log_info(tt::LogMetal, "Finishing device {}", device->id());
+                if (auto mesh_device = device->get_mesh_device()) {
                     mesh_device->mesh_command_queue().finish();
                 } else {
                     Finish(device->command_queue());
