@@ -155,8 +155,8 @@ def test_gather_long_tensor(input_shape, index_shape, dim, device):
     torch.manual_seed(0)
 
     torch_dtype = torch.bfloat16
-    max_uint16 = np.iinfo(np.uint32).max
-    max_idx_val = min(input_shape[dim], max_uint16)
+    max_uint32 = np.iinfo(np.uint32).max
+    max_idx_val = min(input_shape[dim], max_uint32)
     input = torch.randn(input_shape, dtype=torch_dtype)
     index = torch.randint(0, max_idx_val, index_shape, dtype=torch.int64)  # torch.int64 is required for torch.gather
 
