@@ -69,7 +69,7 @@ def test_perf(device, model_task, use_weights_from_ultralytics):
 
     for i in range(2):
         start = time.time()
-        ttnn_model_output = ttnn_model(ttnn_input)
+        ttnn_model_output = ttnn_model(ttnn.reallocate(ttnn_input))
         end = time.time()
         durations.append(end - start)
         dealloc_output(ttnn_model_output)
