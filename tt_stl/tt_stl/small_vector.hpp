@@ -33,9 +33,9 @@ std::ostream& operator<<(std::ostream& os, const SmallVector<T, PREALLOCATED_SIZ
 
 }  // namespace tt::stl
 
-// TODO: remove this.
 namespace ttnn {
-using tt::stl::SmallVector;
+template <typename T, size_t PREALLOCATED_SIZE = tt::stl::SMALL_VECTOR_SIZE>
+using SmallVector [[deprecated("Use tt::stl::SmallVector instead")]] = tt::stl::SmallVector<T, PREALLOCATED_SIZE>;
 }
 
 template <typename T, size_t PREALLOCATED_SIZE>
