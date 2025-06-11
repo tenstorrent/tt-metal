@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       model-selection:
-        description: "Selection ignored for now. "
+        description: "Model selection ignored for now. "
         required: true
         type: choice
         options:
@@ -152,9 +152,10 @@ jobs:
     permissions:
       packages: write
     secrets: inherit
+    needs: determine-tests
     with:
       build-type: ${{ inputs.build-type }}
-      tracy: ${{ inputs.tg-model-perf }}
+      tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
       build-wheel: true
       version: 22.04
   tg-quick:
