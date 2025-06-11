@@ -39,6 +39,7 @@
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
+#include "tt_metal/common/executor.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
 using namespace tt::tt_metal;
@@ -313,15 +314,11 @@ void DevicePool::initialize_host(IDevice* dev) const {
 }
 
 void DevicePool::init_fabric(const std::vector<IDevice*>& active_devices) const {
-    std::vector<std::unique_ptr<Program>> fabric_programs(active_devices.size());
-
     // Parallel compilation of fabric programs
-    std::vector<std::future<std::unique_ptr<Program>>> futures;
-    futures.reserve(active_devices.size());
-
+    std::vector<std::shared_future<std::unique_ptr<Program>>> futures;
     for (uint32_t i = 0; i < active_devices.size(); i++) {
         auto& dev = active_devices[i];
-        futures.emplace_back(std::async(std::launch::async, [dev]() -> std::unique_ptr<Program> {
+        futures.emplace_back(detail::async([dev]() -> std::unique_ptr<Program> {
             auto fabric_program = create_and_compile_fabric_program(dev);
             if (!fabric_program) {
                 log_warning(tt::LogMetal, "Fabric program is not created for device {}", dev->id());
@@ -336,7 +333,7 @@ void DevicePool::init_fabric(const std::vector<IDevice*>& active_devices) const 
     //       dut to lack of validation HW. So currently this is "best effort" as the compilation
     //       part is the heaviest in this init_fabric.
     for (uint32_t i = 0; i < active_devices.size(); i++) {
-        auto fabric_program = futures[i].get();
+        auto fabric_program = std::move(const_cast<std::unique_ptr<Program>&>(futures[i].get()));
         auto& dev = active_devices[i];
         if (!fabric_program) {
             log_warning(tt::LogMetal, "Fabric program is not valid for device {}", dev->id());
