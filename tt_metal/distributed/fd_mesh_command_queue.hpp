@@ -9,6 +9,7 @@
 #include <tt-metalium/command_queue.hpp>
 
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
+#include "dispatch/cq_shared_state.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "dispatch/worker_config_buffer.hpp"
@@ -104,7 +105,7 @@ private:
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
     // Shared across all MeshCommandQueue instances for a MeshDevice.
-    std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>> worker_launch_message_buffer_state_;
+    std::shared_ptr<CQSharedState> cq_shared_state_;
 
     DispatchArray<uint32_t> expected_num_workers_completed_;
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
@@ -174,7 +175,7 @@ public:
         uint32_t id,
         std::shared_ptr<ThreadPool>& dispatch_thread_pool,
         std::shared_ptr<ThreadPool>& reader_thread_pool,
-        std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>>& worker_launch_message_buffer_state);
+        std::shared_ptr<CQSharedState>& cq_shared_state);
 
     ~FDMeshCommandQueue() override;
 

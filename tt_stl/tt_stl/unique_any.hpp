@@ -17,7 +17,7 @@ struct unique_any final {
 
     template <typename Type, typename BaseType = std::decay_t<Type>>
     unique_any(Type&& object) :
-        pointer{new(&type_erased_storage) BaseType{std::move(object)}},
+        pointer{new(&type_erased_storage) BaseType{std::forward<Type>(object)}},
         delete_storage{[](storage_t& self) { reinterpret_cast<BaseType*>(&self)->~BaseType(); }},
         move_storage{[](storage_t& self, void* other) -> void* {
             if constexpr (std::is_move_constructible_v<BaseType>) {
