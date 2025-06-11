@@ -273,14 +273,14 @@ def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_devic
             logger.info("Compile Llama Sampling")
 
             for i in range(1):
-                tt_outputs = tt_sampling(tt_input)
+                tt_outputs = tt_sampling(tt_input, seed=sampling_params["seed"])
             logger.info("Done comiling Llama Sampling Trace")
 
             logger.info("Capture Llama Sampling Trace")
 
             trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
-            tt_outputs = tt_sampling(tt_input)
+            tt_outputs = tt_sampling(tt_input)  # Seed set to default 0 -> will not set a new seed
 
             ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
 
@@ -322,7 +322,11 @@ def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_devic
     else:  # No tracing
         tt_outputs_torch = []
         for i in range(num_samples):
-            tt_outputs = tt_sampling(tt_input)
+            if i == 0:
+                tt_outputs = tt_sampling(tt_input, seed=sampling_params["seed"])
+            else:
+                tt_outputs = tt_sampling(tt_input, seed=0)  # Seed set to default 0 -> will not set a new seed
+                # tt_outputs = tt_sampling(tt_input, seed=np.random.randint(0, 2**32 - 1))
             tt_output = ttnn.get_device_tensors(tt_outputs)[0]
             tt_output_torch = ttnn.to_torch(
                 tt_output,
