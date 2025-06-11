@@ -55,7 +55,7 @@ static string noc_address(CoreCoord core, uint64_t a, uint32_t l) {
     return ss.str();
 }
 
-static void print_stack_trace(void) {
+static void print_stack_trace() {
     void* array[15];
 
     int size = backtrace(array, 15);
