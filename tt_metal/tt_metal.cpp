@@ -452,7 +452,8 @@ void print_page(
 }
 
 void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
-    TT_FATAL(
+    TT_THROW("Not implemented");
+    /*TT_FATAL(
         host_buffer.size() <= buffer.size(),
         "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
         host_buffer.size(),
@@ -482,7 +483,7 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
         } else {
             WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
         }
-    }
+    }*/
 }
 
 DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uint32_t bank_index, uint32_t page_index) {
@@ -618,6 +619,8 @@ void read_pages_to_host_helper(
 }
 
 void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
+    TT_THROW("Not implemented");
+    /*
     TensorMemoryLayout buffer_layout = buffer.buffer_layout();
 
     auto device = buffer.device();
@@ -639,6 +642,7 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_orde
             }
         }
     }
+    */
 }
 
 void ReadFromDevice(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
@@ -679,6 +683,8 @@ void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer, bool shard_order) {
 }
 
 void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
+    TT_THROW("Not implemented");
+    /*
     IDevice* device = buffer.device();
     TT_ASSERT(is_sharded(buffer.buffer_layout()));
 
@@ -697,6 +703,7 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
         read_pages_to_host_helper(device, buffer, host_buffer, buffer.page_size(), host_page_id, dev_page_id, bank_id);
         host_page_id++;
     }
+    */
 }
 
 void LaunchProgram(

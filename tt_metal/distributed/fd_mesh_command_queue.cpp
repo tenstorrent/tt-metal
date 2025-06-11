@@ -403,18 +403,14 @@ void FDMeshCommandQueue::write_shard_to_device(
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
 
-    const auto shard_view = buffer.get_device_buffer(device_coord);
-    const auto region_value = region.value_or(BufferRegion(0, shard_view->size()));
+    auto shard_view = buffer.get_device_buffer(device_coord)->shared_from_this();
+    if (region) {
+        shard_view = shard_view->view(*region);
+    }
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     buffer_dispatch::write_to_device_buffer(
-        src,
-        *shard_view,
-        region_value,
-        id_,
-        expected_num_workers_completed_,
-        this->dispatch_core_type(),
-        sub_device_ids);
+        src, *shard_view, id_, expected_num_workers_completed_, this->dispatch_core_type(), sub_device_ids);
 }
 
 void FDMeshCommandQueue::read_shard_from_device(
@@ -427,32 +423,40 @@ void FDMeshCommandQueue::read_shard_from_device(
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
-    const auto shard_view = buffer.get_device_buffer(device_coord);
-    const auto region_value = region.value_or(BufferRegion(0, shard_view->size()));
+    auto shard_view = buffer.get_device_buffer(device_coord)->shared_from_this();
+    if (region) {
+        shard_view = shard_view->view(*region);
+    }
 
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
 
     if (is_sharded(shard_view->buffer_layout())) {
-        auto view_shard_view = shard_view->view(region_value);
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
-            *view_shard_view, id_, expected_num_workers_completed_);
-        auto cores = buffer_dispatch::get_cores_for_sharded_buffer(
-            dispatch_params.width_split, dispatch_params.buffer_page_mapping, *view_shard_view);
-        for (uint32_t core_id = 0; core_id < view_shard_view->num_cores(); ++core_id) {
-            buffer_dispatch::copy_sharded_buffer_from_core_to_completion_queue(
-                core_id, *view_shard_view, dispatch_params, sub_device_ids, cores[core_id], this->dispatch_core_type());
-            if (dispatch_params.pages_per_txn > 0) {
-                num_txns_per_device[device]++;
-                auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
-                read_descriptor_queue.push(
-                    buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, *view_shard_view));
+            *shard_view, id_, expected_num_workers_completed_);
+        const auto& cores = dispatch_params.buffer_page_mapping->all_cores;
+        for (uint32_t core_id = 0; core_id < shard_view->num_cores(); ++core_id) {
+            for (const auto& core_page_mapping : dispatch_params.buffer_page_mapping->core_page_mappings[core_id]) {
+                buffer_dispatch::copy_sharded_buffer_from_core_to_completion_queue(
+                    core_id,
+                    core_page_mapping,
+                    *shard_view,
+                    dispatch_params,
+                    sub_device_ids,
+                    cores[core_id],
+                    this->dispatch_core_type());
+                if (dispatch_params.pages_per_txn > 0) {
+                    num_txns_per_device[device]++;
+                    auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
+                    read_descriptor_queue.push(
+                        buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, *shard_view));
+                }
             }
         }
     } else {
         buffer_dispatch::BufferReadDispatchParamsVariant dispatch_params_variant =
             buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
-                *shard_view, id_, expected_num_workers_completed_, region_value);
+                *shard_view, id_, expected_num_workers_completed_);
 
         buffer_dispatch::BufferReadDispatchParams* dispatch_params = std::visit(
             [](auto& val) { return static_cast<buffer_dispatch::BufferReadDispatchParams*>(&val); },

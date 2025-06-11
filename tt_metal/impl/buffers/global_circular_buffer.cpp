@@ -59,6 +59,8 @@ GlobalCircularBuffer::GlobalCircularBuffer(
 }
 
 void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender) {
+    TT_THROW("Not implemented");
+    /*
     TT_FATAL(
         buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL,
         "Global circular buffer can only be created for L1 buffer types");
@@ -145,6 +147,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
                 device_->command_queue(), *cb_config_buffer_.get_buffer(), cb_config_host_buffer.data(), false);
         }
     }
+    */
 }
 
 const Buffer& GlobalCircularBuffer::cb_buffer() const { return *cb_buffer_.get_buffer(); }

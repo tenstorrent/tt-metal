@@ -20,6 +20,8 @@ namespace ttnn::operations::data_movement::detail {
 
 std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
     Buffer* input_buffer, Buffer* output_buffer) {
+    TT_THROW("Not implemented");
+    /*
     const auto& output_buffer_page_mapping = *output_buffer->get_buffer_page_mapping();
     const auto& input_buffer_page_mapping = *input_buffer->get_buffer_page_mapping();
 
@@ -241,6 +243,7 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
     }
 
     return ret_map;
+    */
 }
 
 enum class ReshardStridesInRange { ALL_STRIDES, FIRST_HALF, SECOND_HALF };

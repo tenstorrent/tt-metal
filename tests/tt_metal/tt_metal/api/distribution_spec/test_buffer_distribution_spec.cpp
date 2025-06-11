@@ -299,7 +299,9 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         }
         for (size_t empty_core_idx = expected_page_mapping.size(); empty_core_idx < page_mapping.size();
              empty_core_idx++) {
-            EXPECT_EQ(page_mapping[empty_core_idx], std::vector<uint32_t>(page_mapping[empty_core_idx].size()));
+            EXPECT_EQ(
+                page_mapping[empty_core_idx],
+                std::vector<uint32_t>(page_mapping[empty_core_idx].size(), BufferPageMapping::PADDING));
         }
 
         for (size_t i = 0; i < cores.size(); i++) {
@@ -313,7 +315,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
 
             const auto* result_per_core_ptr = reinterpret_cast<const uint8_t*>(result_per_core.data());
             for (size_t core_page = 0; core_page < page_mapping[i].size(); core_page++) {
-                if (!page_mapping[i][core_page]) {
+                if (page_mapping[i][core_page] == BufferPageMapping::PADDING) {
                     continue;
                 }
                 const auto host_page = page_mapping[i][core_page];

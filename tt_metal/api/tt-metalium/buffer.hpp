@@ -208,7 +208,7 @@ public:
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
-    std::shared_ptr<Buffer> view(const BufferRegion& region) const;
+    std::shared_ptr<Buffer> view(const BufferRegion& region);
 
     Buffer(const Buffer& other) = delete;
     Buffer& operator=(const Buffer& other) = delete;
@@ -269,6 +269,10 @@ public:
     std::optional<uint32_t> num_cores() const;
 
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
+    const std::shared_ptr<const CompressedBufferPageMapping>& get_compressed_buffer_page_mapping();
+
+    std::shared_ptr<Buffer> root_buffer();
+    BufferRegion root_buffer_region() const { return BufferRegion(root_buffer_offset_, size_); }
 
     std::optional<SubDeviceId> sub_device_id() const { return sub_device_id_; }
 
@@ -287,8 +291,6 @@ public:
         std::optional<bool> bottom_up,
         std::optional<SubDeviceId> sub_device_id,
         bool owns_data,
-        std::shared_ptr<const BufferPageMapping> buffer_page_mapping,
-        std::shared_ptr<const Buffer> parent_buffer,
         Private);
 
 private:
@@ -326,10 +328,12 @@ private:
     DeviceAddr page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     std::optional<ShardSpecBuffer> shard_parameters_;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
+    std::shared_ptr<const CompressedBufferPageMapping> compressed_buffer_page_mapping_;
 
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
 
-    std::shared_ptr<const Buffer> parent_buffer_;
+    std::shared_ptr<Buffer> root_buffer_;
+    DeviceAddr root_buffer_offset_ = 0;
 
     size_t unique_id_ = 0;
     static std::atomic<size_t> next_unique_id;

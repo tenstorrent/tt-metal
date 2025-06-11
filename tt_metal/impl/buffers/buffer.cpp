@@ -160,63 +160,6 @@ std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 
     return {ret_vec, ret_shard_shape};
 }
 
-struct PageMappingView {
-    std::shared_ptr<BufferPageMapping> page_mapping;
-    size_t core_page_start = 0;
-};
-
-PageMappingView generate_page_mapping_for_view(
-    const BufferPageMapping& page_mapping, size_t start_page, size_t end_page) {
-    std::shared_ptr<BufferPageMapping> result = std::make_shared<BufferPageMapping>();
-
-    size_t dev_page_start = 0;
-    size_t dev_page_end = std::numeric_limits<size_t>::max();
-    for (size_t host_page = start_page; host_page < end_page; host_page++) {
-        size_t dev_page = page_mapping.host_page_to_dev_page_mapping[host_page];
-        dev_page_start = std::min(dev_page_start, dev_page);
-        dev_page_end = std::max(dev_page_end, dev_page + 1);
-    }
-    size_t core_page_start = dev_page_start / page_mapping.all_cores.size();
-    dev_page_start = core_page_start * page_mapping.all_cores.size();
-
-    result->all_cores = page_mapping.all_cores;
-    result->core_to_core_id = page_mapping.core_to_core_id;
-    result->core_shard_shape = page_mapping.core_shard_shape;
-
-    result->host_page_to_local_shard_page_mapping.reserve(end_page - start_page);
-    result->host_page_to_dev_page_mapping.reserve(end_page - start_page);
-    result->dev_page_to_host_page_mapping.resize(dev_page_end - dev_page_start);
-
-    for (size_t host_page = start_page; host_page < end_page; host_page++) {
-        auto dev_page = page_mapping.host_page_to_dev_page_mapping[host_page];
-        auto local_shard_page = page_mapping.host_page_to_local_shard_page_mapping[host_page];
-
-        result->dev_page_to_host_page_mapping[dev_page - dev_page_start] = host_page;
-        result->host_page_to_dev_page_mapping.push_back(dev_page - dev_page_start);
-        result->host_page_to_local_shard_page_mapping.push_back(local_shard_page - core_page_start);
-    }
-
-    result->core_host_page_indices.resize(page_mapping.core_host_page_indices.size());
-    for (size_t core_id = 0; core_id < page_mapping.core_host_page_indices.size(); core_id++) {
-        result->core_host_page_indices[core_id].reserve(
-            page_mapping.core_host_page_indices[core_id].size() - core_page_start);
-        for (size_t host_page_idx = core_page_start;
-             host_page_idx < page_mapping.core_host_page_indices[core_id].size();
-             host_page_idx++) {
-            auto host_page = page_mapping.core_host_page_indices[core_id][host_page_idx];
-            auto result_host_page = (host_page >= start_page && host_page < end_page) ? host_page - start_page : 0;
-            result->core_host_page_indices[core_id].push_back(result_host_page);
-        }
-    }
-
-    result->dev_page_to_core_mapping.reserve(dev_page_end - dev_page_start);
-    for (size_t dev_page = dev_page_start; dev_page < dev_page_end; dev_page++) {
-        result->dev_page_to_core_mapping.push_back(page_mapping.dev_page_to_core_mapping[dev_page]);
-    }
-
-    return {result, core_page_start};
-}
-
 void validate_sub_device_id(
     std::optional<SubDeviceId> sub_device_id,
     IDevice* device,
@@ -283,11 +226,6 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
         "Buffer has {} cores, but page mapping expects {} cores",
         num_cores,
         buffer_page_mapping.all_cores.size());
-    uint32_t core_id = 0;
-    for (const auto& core : buffer_page_mapping.all_cores) {
-        buffer_page_mapping.core_to_core_id.insert({core, core_id});
-        core_id++;
-    }
 
     uint32_t num_dev_pages = buffer.num_dev_pages();
     auto [core_host_page_indices, shard_shape] = core_to_host_pages(
@@ -301,34 +239,17 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
 
     buffer_page_mapping.core_host_page_indices = std::vector<std::vector<uint32_t>>(num_cores);
 
-    buffer_page_mapping.dev_page_to_host_page_mapping =
-        std::vector<std::optional<uint32_t>>(num_dev_pages, std::nullopt);
-    buffer_page_mapping.dev_page_to_core_mapping = std::vector<uint32_t>(num_dev_pages);
-
-    buffer_page_mapping.host_page_to_local_shard_page_mapping = std::vector<uint32_t>(buffer.num_pages());
-    buffer_page_mapping.host_page_to_dev_page_mapping = std::vector<uint32_t>(buffer.num_pages());
-    buffer_page_mapping.core_shard_shape = std::move(shard_shape);
-    uint32_t dev_page_index = 0;
-
     auto shape_in_pages = shard_spec.shape_in_pages();
     for (uint32_t core_index = 0; core_index < core_host_page_indices.size(); core_index++) {
         uint32_t valid_shard_page = 0;
         buffer_page_mapping.core_host_page_indices[core_index].reserve(shard_spec.num_pages());
-        uint32_t shard_page_id = 0;
         for (uint32_t shard_page_x = 0; shard_page_x < shape_in_pages[0]; shard_page_x++) {
             for (uint32_t shard_page_y = 0; shard_page_y < shape_in_pages[1]; shard_page_y++) {
-                buffer_page_mapping.dev_page_to_core_mapping[dev_page_index] = core_index;
-                if (shard_page_x < buffer_page_mapping.core_shard_shape[core_index][0] and
-                    shard_page_y < buffer_page_mapping.core_shard_shape[core_index][1]) {
+                if (shard_page_x < shard_shape[core_index][0] && shard_page_y < shard_shape[core_index][1]) {
                     uint32_t host_page = core_host_page_indices[core_index][valid_shard_page];
-                    buffer_page_mapping.dev_page_to_host_page_mapping[dev_page_index] = host_page;
                     buffer_page_mapping.core_host_page_indices[core_index].push_back(host_page);
-                    buffer_page_mapping.host_page_to_local_shard_page_mapping[host_page] = shard_page_id;
-                    buffer_page_mapping.host_page_to_dev_page_mapping[host_page] = dev_page_index;
                     valid_shard_page++;
                 }
-                dev_page_index++;
-                shard_page_id++;
             }
         }
     }
@@ -346,8 +267,6 @@ Buffer::Buffer(
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id,
     const bool owns_data,
-    std::shared_ptr<const BufferPageMapping> buffer_page_mapping,
-    std::shared_ptr<const Buffer> parent_buffer,
     Private) :
     device_(device),
     size_(size),
@@ -356,9 +275,7 @@ Buffer::Buffer(
     buffer_layout_(buffer_layout),
     bottom_up_(bottom_up.value_or(this->is_dram())),
     sub_device_id_(sub_device_id),
-    owns_data_(owns_data),
-    buffer_page_mapping_(std::move(buffer_page_mapping)),
-    parent_buffer_(std::move(parent_buffer)) {
+    owns_data_(owns_data) {
     if (shard_parameters) {
         std::visit(
             tt::stl::overloaded{
@@ -402,8 +319,6 @@ std::shared_ptr<Buffer> Buffer::create(
         bottom_up,
         sub_device_id,
         true /* owns data */,
-        nullptr /* buffer_page_mapping */,
-        nullptr /* parent_buffer */,
         Private());
 
     if (buffer->size_ == 0) {
@@ -450,8 +365,6 @@ std::shared_ptr<Buffer> Buffer::create(
         bottom_up,
         sub_device_id,
         false /* owns data */,
-        nullptr /* buffer_page_mapping */,
-        nullptr /* parent_buffer */,
         Private());
 
     buffer->address_ = address;
@@ -473,18 +386,13 @@ std::shared_ptr<Buffer> Buffer::create(
     return buffer;
 }
 
-std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) const {
+std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
     TT_FATAL(region.offset % page_size() == 0, "Region offset must be a multiple of page size");
     TT_FATAL(region.size % page_size() == 0, "Region size must be a multiple of page size");
     TT_FATAL(region.offset + region.size <= size(), "Region must be within buffer");
 
-    std::shared_ptr<const BufferPageMapping> new_page_mapping = buffer_page_mapping_;
-    size_t address_offset = 0;
-    if (buffer_page_mapping_ && is_valid_partial_region(region)) {
-        auto page_mapping_view = generate_page_mapping_for_view(
-            *buffer_page_mapping_, region.offset / page_size(), (region.offset + region.size) / page_size());
-        new_page_mapping = std::move(page_mapping_view.page_mapping);
-        address_offset = page_mapping_view.core_page_start * aligned_page_size();
+    if (region.offset == 0 && region.size == size()) {
+        return shared_from_this();
     }
 
     auto buffer = std::make_shared<Buffer>(
@@ -497,12 +405,30 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) const {
         bottom_up_,
         sub_device_id_,
         false /* owns data */,
-        std::move(new_page_mapping) /* buffer_page_mapping */,
-        shared_from_this() /* parent_buffer */,
         Private());
 
-    buffer->address_ = address_ + address_offset;
+    std::shared_ptr<const CompressedBufferPageMapping> new_page_mapping;
+    if (is_sharded(buffer_layout_)) {
+        new_page_mapping = std::make_shared<const CompressedBufferPageMapping>(
+            get_compressed_buffer_page_mapping()->filter_by_host_range(
+                region.offset / page_size(), (region.offset + region.size) / page_size()));
+    }
+
+    std::shared_ptr<Buffer> new_root_buffer;
+    size_t new_root_buffer_offset = 0;
+    if (root_buffer_) {
+        new_root_buffer = root_buffer_;
+        new_root_buffer_offset = root_buffer_offset_ + region.offset;
+    } else {
+        new_root_buffer = shared_from_this();
+        new_root_buffer_offset = region.offset;
+    }
+
+    buffer->address_ = address_;
     buffer->allocation_status_ = AllocationStatus::ALLOCATED;
+    buffer->root_buffer_ = new_root_buffer;
+    buffer->root_buffer_offset_ = new_root_buffer_offset;
+    buffer->compressed_buffer_page_mapping_ = new_page_mapping;
 
     return buffer;
 }
@@ -729,6 +655,22 @@ const std::shared_ptr<const BufferPageMapping>& Buffer::get_buffer_page_mapping(
         this->buffer_page_mapping_ = std::make_shared<const BufferPageMapping>(generate_buffer_page_mapping(*this));
     }
     return this->buffer_page_mapping_;
+}
+
+const std::shared_ptr<const CompressedBufferPageMapping>& Buffer::get_compressed_buffer_page_mapping() {
+    TT_FATAL(is_sharded(this->buffer_layout_), "Buffer not sharded");
+    if (!this->compressed_buffer_page_mapping_) {
+        this->compressed_buffer_page_mapping_ =
+            std::make_shared<const CompressedBufferPageMapping>(*get_buffer_page_mapping());
+    }
+    return this->compressed_buffer_page_mapping_;
+}
+
+std::shared_ptr<Buffer> Buffer::root_buffer() {
+    if (root_buffer_) {
+        return root_buffer_;
+    }
+    return shared_from_this();
 }
 
 bool Buffer::is_nd_sharded() const { return this->buffer_distribution_spec_.has_value(); }

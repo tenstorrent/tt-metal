@@ -36,12 +36,6 @@ void iterate_within_shard(
     size_t dst_offset) {
     if (dim == params.rank) {
         params.page_mapping->core_host_page_indices[core_id][dst_offset] = src_offset;
-
-        size_t dev_page = core_offset + dst_offset;
-        params.page_mapping->dev_page_to_core_mapping[dev_page] = core_id;
-        params.page_mapping->dev_page_to_host_page_mapping[dev_page] = src_offset;
-        params.page_mapping->host_page_to_dev_page_mapping[src_offset] = dev_page;
-        params.page_mapping->host_page_to_local_shard_page_mapping[src_offset] = dst_offset;
         return;
     }
 
@@ -160,9 +154,6 @@ size_t BufferDistributionSpec::num_dev_pages_per_core() const {
 BufferPageMapping BufferDistributionSpec::compute_page_mapping() const {
     BufferPageMapping page_mapping;
     page_mapping.all_cores = cores_;
-    for (size_t i = 0; i < cores_.size(); i++) {
-        page_mapping.core_to_core_id[cores_[i]] = i;
-    }
 
     if (tensor_shape_in_pages_.volume() == 0) {
         return page_mapping;
@@ -175,12 +166,8 @@ BufferPageMapping BufferDistributionSpec::compute_page_mapping() const {
 
     page_mapping.core_host_page_indices.resize(cores_.size());
     for (size_t i = 0; i < cores_.size(); i++) {
-        page_mapping.core_host_page_indices[i].resize(num_shards_per_core * shard_pages);
+        page_mapping.core_host_page_indices[i].resize(num_shards_per_core * shard_pages, BufferPageMapping::PADDING);
     }
-    page_mapping.dev_page_to_core_mapping.resize(dev_pages);
-    page_mapping.dev_page_to_host_page_mapping.resize(dev_pages);
-    page_mapping.host_page_to_dev_page_mapping.resize(host_pages);
-    page_mapping.host_page_to_local_shard_page_mapping.resize(host_pages);
 
     tt::stl::SmallVector<uint32_t> shard_grid(tensor_shape_in_pages_.rank());
     for (size_t i = 0; i < tensor_shape_in_pages_.rank(); i++) {
