@@ -1,4 +1,7 @@
-
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+///
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "point_to_point_device_op.hpp"
@@ -25,7 +28,6 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         compute_aligned_packet_dims(output_tensor.get_dtype(), output_page_size_bytes, output_num_pages, l1_alignment);
 
     // distribute work
-    // const auto use_cores = mesh_device->compute_with_storage_grid_size();
     const CoreCoord use_cores = {1, 1};
 
     const auto
