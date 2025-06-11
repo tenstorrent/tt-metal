@@ -12,7 +12,7 @@
 namespace ttnn {
 
 void AllGatherReplicateAsync::validate(const std::vector<Tensor>& input_tensors) const {
-    // TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
+    TT_FATAL(input_tensors.size() == 2, "Error, Input tensor size should be 2 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].layout();
     const auto& dtype = input_tensors[0].dtype();
@@ -47,40 +47,36 @@ void AllGatherReplicateAsync::validate(const std::vector<Tensor>& input_tensors)
             "Operands to all_gather_replicate need to be on device!");
         TT_FATAL(
             intermediate_tensor.layout() == layout,
-            "Error, Output tensor layout should be same as input tensor layout but has {}",
+            "Error, intermediate tensor layout should be same as input tensor layout but has {}",
             intermediate_tensor.layout());
         TT_FATAL(
             intermediate_tensor.dtype() == dtype,
-            "Error, Output tensor dtype should be same as input tensor dtype but has {}",
+            "Error, intermediate tensor dtype should be same as input tensor dtype but has {}",
             intermediate_tensor.dtype());
         TT_FATAL(
             intermediate_tensor.tensor_spec().page_config() == input_tensor.tensor_spec().page_config(),
-            "Error, Output tensor page config should be same as input tensor page config but has {}",
+            "Error, intermediate tensor page config should be same as input tensor page config but has {}",
             intermediate_tensor.tensor_spec().page_config());
-        TT_FATAL(
-            intermediate_tensor.memory_config() == this->output_mem_config,
-            "Error, Output tensor memory config should be same as output_mem_config but has {}",
-            intermediate_tensor.memory_config());
 
-        // check the output tensor size
+        // check the intermediate tensor size
         auto intermediate_shape = intermediate_tensor.padded_shape();
         auto input_shape = input_tensor.padded_shape();
         TT_FATAL(
             intermediate_shape.size() == input_shape.size(),
-            "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
+            "Error, intermediate tensor shape should have same number of dimensions as input tensor but has {}",
             intermediate_shape.size());
         for (size_t i = 0; i < input_shape.size(); ++i) {
             if (i == this->dim) {
                 TT_FATAL(
                     intermediate_shape[i] <= input_shape[i] * this->ring_size,
-                    "Error, Output tensor shape at dimension {} should be {} but has {}",
+                    "Error, intermediate tensor shape at dimension {} should be {} but has {}",
                     i,
                     input_shape[i] * this->ring_size,
                     intermediate_shape[i]);
             } else {
                 TT_FATAL(
                     intermediate_shape[i] == input_shape[i],
-                    "Error, Output tensor shape at dimension {} should be {} but has {}",
+                    "Error, intermediate tensor shape at dimension {} should be {} but has {}",
                     i,
                     input_shape[i],
                     intermediate_shape[i]);
@@ -90,18 +86,24 @@ void AllGatherReplicateAsync::validate(const std::vector<Tensor>& input_tensors)
         // check memory layout
         TT_FATAL(
             intermediate_tensor.memory_config().memory_layout() == input_tensor.memory_config().memory_layout(),
-            "Error, Output tensor memory layout should be same as input tensor memory layout but has {}",
+            "Error, intermediate tensor memory layout should be same as input tensor memory layout but has {}",
             intermediate_tensor.memory_config().memory_layout());
     }
+
+    // TODO: Add validation for output_mem_config
 }
 
 std::vector<ttnn::TensorSpec> AllGatherReplicateAsync::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.padded_shape();  // TODO: Replace with logical_shape()
-    shape[this->dim] *= this->ring_size;
+    const auto& intermediate_tensor = input_tensors[1];
+    auto shape = intermediate_tensor.padded_shape();  // TODO: Replace with logical_shape()
+
+    // Replicate output on all the cores in the shard spec
+    shape[1] = this->output_mem_config.shard_spec()->grid.num_cores();
+
     return {TensorSpec(
-        shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config))};
+        shape,
+        TensorLayout(intermediate_tensor.dtype(), intermediate_tensor.tensor_spec().page_config(), output_mem_config))};
 }
 
 std::vector<Tensor> AllGatherReplicateAsync::create_output_tensors(
@@ -148,7 +150,7 @@ AllGatherReplicateAsyncVersion AllGatherReplicateAsync::select_version(const Ten
             input_tensor_shape[3] == 960 && input_tensor_memory_config.buffer_type() == BufferType::L1 &&
             output_mem_config.buffer_type() == BufferType::L1 &&
             input_tensor_memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
-            output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+            output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
             input_tensor_memory_config.shard_spec()->shape[0] == 32 &&
             input_tensor_memory_config.shard_spec()->shape[1] == 32 && output_mem_config.shard_spec()->shape[0] == 32) {
             log_trace(
@@ -264,25 +266,20 @@ tt::tt_metal::operation::Hash AllGatherReplicateAsync::compute_program_hash(
     log_trace(tt::LogOp, "compute_program_hash is called");
     AllGatherReplicateAsyncVersion version = select_version(input_tensors[0]);
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
+
+    // Input tensor
     auto input_shape = input_tensors[0].padded_shape();
     auto input_memory_layout = input_tensors[0].layout();
     auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
+
+    // Intermediate tensor
+    auto intermediate_shape = input_tensors[1].padded_shape();
+    auto intermediate_memory_layout = input_tensors[1].layout();
+    auto intermediate_dtype = input_tensors[1].dtype();
+    auto intermediate_memory_config = input_tensors[1].memory_config();
+
     uint32_t semaphore_address = this->semaphore.address();
-    if (version == AllGatherReplicateAsyncVersion::GENERIC) {
-        return tt::tt_metal::operation::hash_operation<AllGatherReplicateAsync>(
-            this->dim,
-            this->num_links,
-            this->ring_size,
-            this->output_mem_config,
-            this->topology,
-            this->cluster_axis,
-            input_shape,
-            input_memory_layout,
-            input_dtype,
-            input_memory_config,
-            semaphore_address);
-    }
     return tt::tt_metal::operation::hash_operation<AllGatherReplicateAsync>(
         this->dim,
         this->num_links,
@@ -293,7 +290,11 @@ tt::tt_metal::operation::Hash AllGatherReplicateAsync::compute_program_hash(
         input_shape,
         input_memory_layout,
         input_dtype,
-        input_memory_config);
+        input_memory_config,
+        intermediate_shape,
+        intermediate_memory_layout,
+        intermediate_dtype,
+        intermediate_memory_config);
 }
 
 namespace operations {

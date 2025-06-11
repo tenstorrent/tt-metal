@@ -110,7 +110,7 @@ def run_all_gather_replicate_impl(
 
     # Output shapes
     output_shape = intermediate_shape.copy()
-    output_shape[-1] *= output_num_cores
+    output_shape[1] *= output_num_cores
     output_N_per_shard = intermediate_shape[-1]
 
     input_mem_config = ttnn.MemoryConfig(
@@ -132,7 +132,7 @@ def run_all_gather_replicate_impl(
         ),
     )
     output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
             output_core_range_set,
@@ -192,7 +192,7 @@ def run_all_gather_replicate_impl(
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
                 multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
-                memory_config=intermediate_mem_config,
+                memory_config=output_mem_config,
                 topology=all_gather_replicate_topology,
                 num_links=num_links,
                 subdevice_id=worker_sub_device_id,
@@ -263,9 +263,9 @@ def run_all_gather_replicate_impl(
         output_tensor = output_tensor_goldens_list[-1]
         validate(tt_out_tensor, output_tensor)
 
-    # assert (
-    #     mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
-    # ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
+    assert (
+        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
+    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
 
     mesh_device.reset_sub_device_stall_group()
 
