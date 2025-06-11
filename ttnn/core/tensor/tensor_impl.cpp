@@ -429,7 +429,7 @@ std::string to_string(
 template <typename T>
 std::string to_string(
     const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout) {
-    const auto tile = tensor.tensor_spec().tile();
+    [[maybe_unused]] const auto tile = tensor.tensor_spec().tile();
     const auto shape = tensor.logical_shape();
     const auto dtype = original_dtype.value_or(tensor.dtype());
     const auto layout = original_layout.value_or(tensor.layout());

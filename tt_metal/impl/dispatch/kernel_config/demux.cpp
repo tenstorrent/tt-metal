@@ -174,7 +174,7 @@ void DemuxKernel::CreateKernel() {
     }
     TT_ASSERT(compile_args.size() == 30);
     const auto& grid_size = device_->grid_size();
-    tt_cxy_pair my_virtual_core =
+    [[maybe_unused]] tt_cxy_pair my_virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
             logical_core_, GetCoreType());
     const auto& hal = MetalContext::instance().hal();
