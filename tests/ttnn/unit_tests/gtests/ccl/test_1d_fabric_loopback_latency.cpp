@@ -108,7 +108,6 @@ inline void RunPersistent1dFabricLatencyTest(
     static constexpr uint32_t packet_header_cb_index = tt::CB::c_in0;
     static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
     static constexpr size_t packet_header_cb_size_in_headers = 4;
-    static constexpr bool enable_persistent_fabric_mode = true;
     std::vector<size_t> dest_buffer_addresses(writer_specs.size(), 0);
 
     for (size_t i = 0; i < writer_specs.size(); i++) {
@@ -154,12 +153,10 @@ inline void RunPersistent1dFabricLatencyTest(
         std::vector<Program> dummy_worker_programs;
         setup_test_with_persistent_fabric(
             devices,
-            dummy_worker_programs,
             subdevice_managers,
             fabric_programs,
             fabric_program_ptrs,
             fabric_handle,
-            enable_persistent_fabric_mode,
             num_links,
             topology,
             tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval,
@@ -260,13 +257,7 @@ inline void RunPersistent1dFabricLatencyTest(
         if (!use_device_init_fabric) {
             local_device_fabric_handle =
                 ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-                    device,
-                    forward_device,
-                    backward_device,
-                    &program,
-                    enable_persistent_fabric_mode,
-                    num_links,
-                    topology);
+                    device, forward_device, backward_device, &program, num_links, topology);
         }
 
         // reserve CB

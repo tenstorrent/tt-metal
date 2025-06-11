@@ -101,7 +101,6 @@ struct AllGatherAsync {
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
-    bool persistent_fabric_mode,
     IDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const CoreCoord core_grid_offset = CoreCoord(0, 0));
