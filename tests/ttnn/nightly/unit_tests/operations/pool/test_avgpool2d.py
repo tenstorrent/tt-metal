@@ -34,6 +34,7 @@ def run_avg_pool2d(
     padding,
     ceil_mode,
     divisor_override,
+    count_include_pad,
     shard_scheme,
     run_twice=False,
 ):
@@ -54,7 +55,7 @@ def run_avg_pool2d(
         stride,
         padding,
         ceil_mode=ceil_mode,
-        count_include_pad=True,
+        count_include_pad=count_include_pad,
         divisor_override=divisor_override,
     )
 
@@ -70,6 +71,7 @@ def run_avg_pool2d(
         padding=padding,
         ceil_mode=ceil_mode,
         divisor_override=divisor_override,
+        count_include_pad=count_include_pad,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         applied_shard_scheme=shard_scheme,
     )
@@ -85,6 +87,7 @@ def run_avg_pool2d(
             padding=padding,
             ceil_mode=ceil_mode,
             divisor_override=divisor_override,
+            count_include_pad=count_include_pad,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             applied_shard_scheme=shard_scheme,
         )
@@ -143,13 +146,20 @@ def run_avg_pool2d(
     "padding",
     (
         (0, 0),
-        (1, 1),
-        (2, 2),
+        (1, 2),
+        (2, 3),
         (4, 4),
     ),
 )
 @pytest.mark.parametrize(
     "ceil_mode",
+    [
+        False,
+        True,
+    ],
+)
+@pytest.mark.parametrize(
+    "count_include_pad",
     [
         False,
         True,
@@ -184,13 +194,14 @@ def test_run_avg_pool2d(
     padding,
     ceil_mode,
     divisor_override,
+    count_include_pad,
     shard_scheme,
 ):
     if (
         shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED
-        and tuple(input_shape) == (2, 512, 112, 32)
+        and (tuple(input_shape) == (2, 512, 112, 32) or tuple(input_shape) == (1, 512, 112, 32))
         and divisor_override == None
-        and ceil_mode == True
+        and (ceil_mode == True or count_include_pad == False)
     ):
         pytest.skip("Not enough L1 space for the correct calculation of the elements, use different kind of sharding")
 
@@ -208,6 +219,7 @@ def test_run_avg_pool2d(
         padding,
         ceil_mode=ceil_mode,
         divisor_override=divisor_override,
+        count_include_pad=count_include_pad,
         shard_scheme=shard_scheme,
         run_twice=True,
     )
