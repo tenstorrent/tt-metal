@@ -119,12 +119,16 @@ function findGoodBadCommits(scheduledMainRuns) {
   for (const run of scheduledMainRuns) {
     if (!foundGood && run.conclusion === 'success') {
       const shortSha = run.head_sha.substring(0, SHA_SHORT_LENGTH);
-      lastGoodSha = shortSha;
+      lastGoodSha = run.repository ?
+        `[\`${shortSha}\`](https://github.com/${run.repository.owner}/${run.repository.name}/actions/runs/${run.id})` :
+        shortSha;
       foundGood = true;
     }
     if (!foundBad && run.conclusion !== 'success') {
       const shortSha = run.head_sha.substring(0, SHA_SHORT_LENGTH);
-      earliestBadSha = shortSha;
+      earliestBadSha = run.repository ?
+        `[\`${shortSha}\`](https://github.com/${run.repository.owner}/${run.repository.name}/actions/runs/${run.id})` :
+        shortSha;
       foundBad = true;
     }
     if (foundGood && foundBad) break;
@@ -149,7 +153,8 @@ function getLastRunInfo(mainBranchRuns) {
       pr: EMPTY_VALUE,
       title: EMPTY_VALUE,
       lastGoodSha: EMPTY_VALUE,
-      earliestBadSha: EMPTY_VALUE
+      earliestBadSha: EMPTY_VALUE,
+      workflow: EMPTY_VALUE
     };
   }
 
@@ -160,14 +165,25 @@ function getLastRunInfo(mainBranchRuns) {
     `${lastMainRun.pr_title} - @${lastMainRun.pr_author}` :
     EMPTY_VALUE;
 
+  // Create GitHub Actions run link using repository info from enriched data
+  const runLink = lastMainRun.repository ?
+    `[\`${lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH)}\`](https://github.com/${lastMainRun.repository.owner}/${lastMainRun.repository.name}/actions/runs/${lastMainRun.id})` :
+    lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH);
+
+  // Create workflow link
+  const workflowLink = lastMainRun.workflow_url ?
+    `[${lastMainRun.name}](${lastMainRun.workflow_url})` :
+    lastMainRun.name;
+
   return {
     status: lastMainRun.conclusion === 'success' ? SUCCESS_EMOJI : FAILURE_EMOJI,
-    sha: lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH),
+    sha: runLink,
     run: lastMainRun.run_attempt > 1 ? `#${lastMainRun.run_attempt}` : '',
     pr: lastMainRun.pr_number || EMPTY_VALUE,
     title: prTitleWithAuthor,
     lastGoodSha,
-    earliestBadSha: lastMainRun.conclusion !== 'success' ? earliestBadSha : EMPTY_VALUE
+    earliestBadSha: lastMainRun.conclusion !== 'success' ? earliestBadSha : EMPTY_VALUE,
+    workflow: workflowLink
   };
 }
 
@@ -198,7 +214,7 @@ function generateSummaryBox(grouped, workflowConfigs) {
       const stats = getWorkflowStats(runs);
       const runInfo = getLastRunInfo(runs);
 
-      const row = `| ${name} | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${stats.uniqueSuccessRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
+      const row = `| ${runInfo.workflow} | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${stats.uniqueSuccessRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
       rows.push(row);
     }
   }
@@ -240,14 +256,14 @@ function buildReport(grouped, workflowConfigs) {
     '  - Example: 1 unique run succeeded on first try out of 5 total unique runs = 20% first try success rate\n',
     '\n| Column | Description |',
     '|--------|-------------|',
-    '| Workflow | Name of the workflow |',
+    '| Workflow | Name of the workflow with link to its GitHub Actions page |',
     '| Event Types | Types of events that trigger this workflow |',
     '| Total Runs | Total number of workflow runs, including all retry attempts |',
     '| Successful Runs | Number of unique workflow runs that eventually succeeded |',
     '| Success Rate | Percentage of unique workflow runs that eventually succeeded |',
     '| First Try Success | Percentage of unique workflow runs that succeeded on their first attempt |',
     '| Status | Status of the most recent run (✅ for success, ❌ for failure) |',
-    '| SHA | Short SHA of the most recent run |',
+    '| SHA | Short SHA of the most recent run with link to the run |',
     '| Run | Run attempt number if applicable |',
     '| PR | PR number associated with the most recent run, if any |',
     '| Title | Title and author of the PR (e.g., "Fix bug - @username") |',
