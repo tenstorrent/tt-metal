@@ -41,7 +41,7 @@ show_help() {
     echo "  --configure-only                 Only configure the project, do not build."
     echo "  --enable-coverage                Instrument the binaries for code coverage."
     echo "  --enable-distributed             Enable distributed compute support (OpenMPI)."
-    echo "  --enable-tcmalloc                Enable TCMalloc memory allocator."
+    echo "  --enable-tcmalloc                Build with TCMalloc enabled as the default memory allocator. Provides better performance for host-intensive applications."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
 }
 
