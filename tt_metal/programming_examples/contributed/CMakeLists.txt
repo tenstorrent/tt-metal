@@ -1,9 +1,5 @@
-cmake_minimum_required(VERSION 3.22...3.30)
-project(metal_examples_contributed)
+set(VECADD_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/vecadd/vecadd.cpp)
 
-# Build the vecadd example directly at root level
-add_executable(metal_example_vecadd)
-target_sources(metal_example_vecadd PRIVATE vecadd/vecadd.cpp)
+CREATE_PGM_EXAMPLES_EXE("${VECADD_SRCS}" "contributed") # output binaries to build/programming_examples/contributed
 
-find_package(TT-Metalium REQUIRED)
-target_link_libraries(metal_example_vecadd PUBLIC TT::Metalium)
+add_custom_target(contributed DEPENDS ${PROGRAMMING_EXAMPLES_TEST_TARGETS})
