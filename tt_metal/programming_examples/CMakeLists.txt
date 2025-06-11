@@ -45,8 +45,7 @@ install(
         hello_world_compute_kernel
         hello_world_datamovement_kernel
         hello_world_datatypes_kernel
-        loopback
-        matmul_common
+        loopback   
         matmul_multi_core
         matmul_multicore_reuse
         matmul_single_core
@@ -73,7 +72,6 @@ install(
         hello_world_datamovement_kernel
         hello_world_datatypes_kernel
         loopback
-        matmul_common
         matmul_multi_core
         matmul_multicore_reuse
         matmul_single_core
