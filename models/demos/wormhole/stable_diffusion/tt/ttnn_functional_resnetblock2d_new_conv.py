@@ -481,12 +481,16 @@ class resnetBlock2D:
                     input_layout=hidden_states.get_layout(),
                     has_bias=True,
                     **conv_kwargs_1,
+                    input_dtype=ttnn.bfloat8_b,
+                    output_dtype=ttnn.bfloat8_b,
                 )
                 self.conv1s_bias[0] = ttnn.prepare_conv_bias(
                     bias_tensor=self.conv1s_bias[0],
                     input_memory_config=hidden_states.memory_config(),
                     input_layout=hidden_states.get_layout(),
                     **conv_kwargs_1,
+                    input_dtype=ttnn.bfloat8_b,
+                    output_dtype=ttnn.bfloat8_b,
                 )
                 self.conv1s_weights[0] = ttnn.to_device(self.conv1s_weights[0], self.device)
                 self.conv1s_bias[0] = ttnn.to_device(self.conv1s_bias[0], self.device)
@@ -577,12 +581,16 @@ class resnetBlock2D:
                         input_layout=split_hidden_states[i].get_layout(),
                         has_bias=True,
                         **conv_kwargs_2,
+                        input_dtype=ttnn.bfloat8_b,
+                        output_dtype=ttnn.bfloat8_b,
                     )
                     self.conv1s_bias[i] = ttnn.prepare_conv_bias(
                         bias_tensor=self.conv1s_bias[i],
                         input_memory_config=split_hidden_states[i].memory_config(),
                         input_layout=split_hidden_states[i].get_layout(),
                         **conv_kwargs_2,
+                        input_dtype=ttnn.bfloat8_b,
+                        output_dtype=ttnn.bfloat8_b,
                     )
 
                     self.conv1s_weights[i] = ttnn.to_device(self.conv1s_weights[i], self.device)
@@ -724,12 +732,16 @@ class resnetBlock2D:
                 input_layout=hidden_states.get_layout(),
                 has_bias=True,
                 **conv_kwargs_3,
+                input_dtype=ttnn.bfloat8_b,
+                output_dtype=ttnn.bfloat8_b,
             )
             self.conv2_bias = ttnn.prepare_conv_bias(
                 bias_tensor=self.conv2_bias,
                 input_memory_config=hidden_states.memory_config(),
                 input_layout=hidden_states.get_layout(),
                 **conv_kwargs_3,
+                input_dtype=ttnn.bfloat8_b,
+                output_dtype=ttnn.bfloat8_b,
             )
 
             self.conv2_weights = ttnn.to_device(self.conv2_weights, self.device)
@@ -794,12 +806,16 @@ class resnetBlock2D:
                     input_layout=input_tensor.get_layout(),
                     has_bias=True,
                     **conv_kwargs_4,
+                    input_dtype=ttnn.bfloat8_b,
+                    output_dtype=ttnn.bfloat8_b,
                 )
                 self.conv_shortcut_bias = ttnn.prepare_conv_bias(
                     bias_tensor=self.conv_shortcut_bias,
                     input_memory_config=input_tensor.memory_config(),
                     input_layout=input_tensor.get_layout(),
                     **conv_kwargs_4,
+                    input_dtype=ttnn.bfloat8_b,
+                    output_dtype=ttnn.bfloat8_b,
                 )
                 self.conv_shortcut_weights = ttnn.to_device(self.conv_shortcut_weights, self.device)
                 self.conv_shortcut_bias = ttnn.to_device(self.conv_shortcut_bias, self.device)

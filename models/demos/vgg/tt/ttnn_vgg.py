@@ -136,6 +136,8 @@ def ttnn_vgg16(
                     input_layout=tt_x.get_layout(),
                     has_bias=True,
                     **conv_kwargs,
+                    input_dtype=model_config["ACTIVATIONS_DTYPE"],
+                    output_dtype=model_config["ACTIVATIONS_DTYPE"],
                 )
 
                 tt_bias = ttnn.prepare_conv_bias(
@@ -143,6 +145,8 @@ def ttnn_vgg16(
                     input_memory_config=ttnn.L1_MEMORY_CONFIG,
                     input_layout=tt_x.get_layout(),
                     **conv_kwargs,
+                    input_dtype=model_config["ACTIVATIONS_DTYPE"],
+                    output_dtype=model_config["ACTIVATIONS_DTYPE"],
                 )
 
                 tt_weight = ttnn.to_device(tt_weight, device)
@@ -285,6 +289,8 @@ def ttnn_vgg11(
                     input_layout=tt_x.get_layout(),
                     has_bias=True,
                     **conv_kwargs,
+                    input_dtype=model_config["ACTIVATIONS_DTYPE"],
+                    output_dtype=model_config["ACTIVATIONS_DTYPE"],
                 )
 
                 tt_bias = ttnn.prepare_conv_bias(
@@ -292,6 +298,8 @@ def ttnn_vgg11(
                     input_memory_config=ttnn.L1_MEMORY_CONFIG,
                     input_layout=tt_x.get_layout(),
                     **conv_kwargs,
+                    input_dtype=model_config["ACTIVATIONS_DTYPE"],
+                    output_dtype=model_config["ACTIVATIONS_DTYPE"],
                 )
 
                 tt_weight = ttnn.to_device(tt_weight, device)
