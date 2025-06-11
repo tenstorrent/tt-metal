@@ -105,7 +105,6 @@ private:
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
 
     tt::stl::SmallVector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
-    bool are_mesh_command_queues_initialized_ = false;
 
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
     std::unordered_map<MeshTraceId, std::shared_ptr<MeshTraceBuffer>> trace_buffer_pool_;
@@ -307,7 +306,6 @@ public:
     // This method will get removed once in favour of the ones in IDevice* and TT-Mesh bringup
     // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods
     MeshCommandQueue& mesh_command_queue(std::size_t cq_id = 0) const;
-    bool are_mesh_command_queues_initialized() const;
 
     // Currently expose users to the dispatch thread pool through the MeshDevice
     void enqueue_to_thread_pool(std::function<void()>&& f);
