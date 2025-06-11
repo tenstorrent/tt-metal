@@ -236,7 +236,7 @@ void generate(
     uint32_t max_sequence_length,
     uint32_t num_heads,
     uint32_t tokens_to_generate = 1024U,
-    bool tp = false,
+    bool enable_tp = false,
     // Additional sampling params:
     float temperature = 1.0F,
     float repetition_penalty = 1.0F,
@@ -262,7 +262,7 @@ void generate(
     auto *device = &ttml::autograd::ctx().get_device();
     auto num_devices = static_cast<uint32_t>(device->num_devices());
     // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
-    auto vocab_size = round_up_to_tile(original_vocab_size, (tp ? num_devices : 1U) * 32U);
+    auto vocab_size = round_up_to_tile(original_vocab_size, (enable_tp ? num_devices : 1U) * 32U);
 
     // Build mask (causal) for attention
     std::vector<float> mask;
@@ -399,8 +399,8 @@ struct TrainingConfig {
     tt::tt_metal::distributed::MeshShape mesh_shape{1, 1};
     std::vector<int> device_ids{};
 
-    bool ddp = false;
-    bool tp = false;
+    bool enable_ddp = false;
+    bool enable_tp = false;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -427,15 +427,15 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
-    config.ddp = training_config["ddp"].as<bool>(false);
-    config.tp = training_config["tp"].as<bool>(false);
+    config.enable_ddp = training_config["enable_ddp"].as<bool>(false);
+    config.enable_tp = training_config["enable_tp"].as<bool>(false);
 
-    if (config.ddp && config.tp) {
+    if (config.enable_ddp && config.enable_tp) {
         throw std::runtime_error("DDP and TP cannot be enabled at the same time. Disable DDP or TP.");
     }
 
     auto mesh_shape_node = training_config["mesh_shape"];
-    bool multidevice = config.ddp || config.tp;
+    bool multidevice = config.enable_ddp || config.enable_tp;
     if (multidevice && !mesh_shape_node) {
         throw std::runtime_error("Mesh shape is required for multidevice training");
     }
@@ -506,10 +506,10 @@ int main(int argc, char **argv) {
     }
 
     // needs more validation for TP
-    if (config.ddp) {
+    if (config.enable_ddp) {
         fmt::println("Distributed data parallel is enabled");
     }
-    if (config.tp) {
+    if (config.enable_tp) {
         fmt::println("Tensor parallel is enabled");
     }
 
@@ -529,7 +529,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (config.tp) {
+    if (config.enable_tp) {
         if (!config.model_path.empty()) {
             throw std::runtime_error("Save and load is not supported with Tensor Parallel model");
         }
@@ -691,7 +691,7 @@ int main(int argc, char **argv) {
             fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
 
             auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
-                if (config.ddp) {
+                if (config.enable_ddp) {
                     auto data_xtensor = xt::adapt(data, {batch_size, 1U, 1U, sequence_length});
                     auto data_composer = ttml::core::ShardXTensorToMesh<uint32_t>(device->shape(), 0);
                     auto data_tensor =
@@ -735,7 +735,7 @@ int main(int argc, char **argv) {
     std::visit(
         [&](auto &&arg) {
             if constexpr (requires { arg.vocab_size; }) {
-                arg.vocab_size = round_up_to_tile(tokenizer->get_vocab_size(), (config.tp ? num_devices : 1U) * 32U);
+                arg.vocab_size = round_up_to_tile(tokenizer->get_vocab_size(), (config.enable_tp ? num_devices : 1U) * 32U);
             } else {
                 throw std::runtime_error(
                     "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
@@ -746,13 +746,13 @@ int main(int argc, char **argv) {
     Model model = std::visit(
         [&config](auto &&arg) -> Model {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
-                if (config.tp) {
+                if (config.enable_tp) {
                     return ttml::models::distributed::llama::create(arg);
                 } else {
                     return ttml::models::llama::create(arg);
                 }
             } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>) {
-                if (config.tp) {
+                if (config.enable_tp) {
                     return ttml::models::distributed::gpt2::create(arg);
                 } else {
                     return ttml::models::gpt2::create(arg);
@@ -795,7 +795,7 @@ int main(int argc, char **argv) {
                 std::visit([](auto &&arg) { return arg.max_sequence_length; }, config.transformer_config),
                 num_heads,
                 sequence_length,
-                config.tp,
+                config.enable_tp,
                 eval_config.temperature,
                 eval_config.repetition_penalty,
                 eval_config.top_k,
@@ -818,7 +818,7 @@ int main(int argc, char **argv) {
         fmt::println("Remote optimizer configured!");
     }
 
-    fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, config.tp));
+    fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, config.enable_tp));
 
     auto select_optimizer =
         [&model, &adamw_params, &config](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
@@ -900,12 +900,12 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
-                if (!config.tp) {
+                if (!config.enable_tp) {
                     ttml::core::distributed::synchronize_parameters(parameters);
                 }
 
                 if (config.use_clip_grad_norm) {
-                    if (config.tp) {
+                    if (config.enable_tp) {
                         throw std::logic_error("Clip grad norm is not supported with TP");
                     }
                     ttml::core::clip_grad_norm(parameters, config.clip_grad_norm_max_norm);
