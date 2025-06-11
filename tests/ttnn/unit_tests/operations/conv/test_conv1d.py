@@ -74,7 +74,6 @@ def run_conv(
         shard_layout = None
 
     conv_config = ttnn.Conv1dConfig(
-        dtype=output_dtype,
         weights_dtype=weights_dtype,
         shard_layout=shard_layout,
         deallocate_activation=deallocate_activation,
@@ -109,6 +108,7 @@ def run_conv(
         conv_config=conv_config,
         compute_config=compute_config,
         groups=groups,
+        dtype=output_dtype,
         return_output_dim=True,
         return_weights_and_bias=True,
     )
@@ -414,10 +414,11 @@ def test_with_prepare_weights(
             has_bias=False,
             groups=1,
             device=device,
+            input_dtype=ttnn.bfloat16,
+            output_dtype=ttnn.bfloat16,
         )
 
     conv_config = ttnn.Conv1dConfig(
-        dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         shard_layout=None,
         deallocate_activation=False,
@@ -437,6 +438,7 @@ def test_with_prepare_weights(
         input_length=input_length,
         conv_config=conv_config,
         groups=groups,
+        dtype=ttnn.bfloat16,
         return_output_dim=True,
     )
 

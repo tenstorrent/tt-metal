@@ -127,7 +127,6 @@ class Conv_transpose:
             math_approx_mode=True,
         )
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=conv_param.dtype,
             weights_dtype=ttnn.bfloat8_b,
             shard_layout=conv_param.shard_layout,
             reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
@@ -186,6 +185,7 @@ class Conv_transpose:
             return_output_dim=True,
             return_weights_and_bias=True,
             mirror_kernel=True,
+            dtype=self.conv_param.dtype,
         )
         return x
 
