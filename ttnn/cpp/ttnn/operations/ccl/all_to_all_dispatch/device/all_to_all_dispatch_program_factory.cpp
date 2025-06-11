@@ -69,9 +69,15 @@ uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) {
     return tt::round_up(get_page_size(tensor), BUFFER_ALIGNMENT);
 }
 
-std::vector<tt::tt_metal::IDevice*> get_neighbors(
+std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbors(
     const MeshDeviceView& mesh_view, const MeshCoordinate& mesh_coordinate, tt::tt_fabric::Topology& topology) {
     std::vector<tt::tt_metal::IDevice*> neighbors;
+    std::array<bool, 4> directions;  // east, west, north, south
+    if (topology == tt::tt_fabric::Topology::Ring) {
+        directions = {true, true, true, true};
+    } else {
+        directions = {false, false, false, false};
+    }
     auto src_device = mesh_view.get_device(mesh_coordinate);
     for (uint8_t axis = 0; axis < 2; axis++) {
         std::vector<tt::tt_metal::IDevice*> axis_neighbors;
@@ -84,18 +90,20 @@ std::vector<tt::tt_metal::IDevice*> get_neighbors(
             if (axis_neighbors.at(i) == src_device) {
                 if (i != 0) {
                     neighbors.push_back(axis_neighbors.at(i - 1));
+                    directions[axis] = true;
                 } else if (topology == ttnn::ccl::Topology::Ring) {
                     neighbors.push_back(axis_neighbors.at(axis_neighbors.size() - 1));
                 }
                 if (i != axis_neighbors.size() - 1) {
                     neighbors.push_back(axis_neighbors.at(i + 1));
+                    directions[2 + axis] = true;
                 } else if (topology == ttnn::ccl::Topology::Ring) {
                     neighbors.push_back(axis_neighbors.at(0));
                 }
             }
         }
     }
-    return neighbors;
+    return {neighbors, directions};
 }
 
 uint32_t select_link(
@@ -269,7 +277,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto src_device = mesh_device->get_device(mesh_coordinate);
     auto src_physical_device_id = src_device->id();
 
-    auto neighbors = detail::get_neighbors(mesh_view, mesh_coordinate, topology);
+    const auto [neighbors, directions] = detail::get_neighbors(mesh_view, mesh_coordinate, topology);
 
     auto input_shape = input_tensor.get_tensor_spec().logical_shape();
     auto indices_shape = indices_tensor.get_tensor_spec().logical_shape();
@@ -322,8 +330,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     uint32_t send_preparation_buffer_id = tt::CBIndex::c_4;
 
     tt::tt_metal::CircularBufferConfig cb_input_tensor_config =
-        tt::tt_metal::CircularBufferConfig(
-            batches_per_device * input_pages * input_page_size, {{input_tensor_cb_id, input_data_format}})
+        tt::tt_metal::CircularBufferConfig(input_pages * input_page_size, {{input_tensor_cb_id, input_data_format}})
             .set_page_size(input_tensor_cb_id, input_page_size);
 
     tt::tt_metal::CircularBufferConfig cb_indices_tensor_config =
@@ -434,10 +441,14 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         num_links,
         topology == tt::tt_fabric::Topology::Ring ? 1u : 0u,
 
-        *src_mesh_id,
+        src_mesh_id,
         (uint32_t)src_chip_id,
         mesh_view.num_rows(),
-        mesh_view.num_cols()
+        mesh_view.num_cols(),
+        directions[0],  // north
+        directions[1],  // east
+        directions[2],  // south
+        directions[3]   // west
 
     };
 

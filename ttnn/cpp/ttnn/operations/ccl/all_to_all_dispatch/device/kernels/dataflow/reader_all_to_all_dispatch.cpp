@@ -68,17 +68,15 @@ void kernel_main() {
         l1_write_addr += mapping_page_size;
     }
 
-    cb_reserve_back(input_tensor_cb_id, batches_per_device * input_pages);
+    cb_reserve_back(input_tensor_cb_id, input_pages);
     l1_write_addr = get_write_ptr(input_tensor_cb_id);
-    for (uint32_t b = 0; b < batches_per_device; b++) {
-        for (uint32_t i = 0; i < input_pages; i++) {
-            noc_async_read_page(i, input_addr_gen, l1_write_addr);
-            l1_write_addr += input_page_size;
-        }
+    for (uint32_t i = 0; i < input_pages; i++) {
+        noc_async_read_page(i, input_addr_gen, l1_write_addr);
+        l1_write_addr += input_page_size;
     }
 
     noc_async_read_barrier();
     cb_push_back(indices_tensor_cb_id, indices_pages);
     cb_push_back(mapping_tensor_cb_id, mapping_pages);
-    cb_push_back(input_tensor_cb_id, batches_per_device * input_pages);
+    cb_push_back(input_tensor_cb_id, input_pages);
 }
