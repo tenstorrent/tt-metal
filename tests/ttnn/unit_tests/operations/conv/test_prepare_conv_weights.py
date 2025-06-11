@@ -120,10 +120,16 @@ def prepare_conv_weights_func(
         input_memory_config=ttnn.L1_MEMORY_CONFIG,
         has_bias=has_bias,
         **conv_kwargs,
+        input_dtype=ttnn.bfloat16,
+        output_dtype=ttnn.bfloat16,
     )
     tt_bias_tensor_formatted = (
         ttnn.prepare_conv_bias(
-            bias_tensor=tt_bias_tensor, input_memory_config=tt_input_tensor.memory_config(), **conv_kwargs
+            bias_tensor=tt_bias_tensor,
+            input_memory_config=tt_input_tensor.memory_config(),
+            **conv_kwargs,
+            input_dtype=ttnn.bfloat16,
+            output_dtype=ttnn.bfloat16,
         )
         if has_bias
         else None
@@ -394,7 +400,11 @@ def test_prepare_bias(
     tt_bias_tensor = ttnn.to_device(tt_bias_tensor, device)
     tt_bias_tensor_formatted = (
         ttnn.prepare_conv_bias(
-            bias_tensor=tt_bias_tensor, input_memory_config=tt_input_tensor.memory_config(), **conv_kwargs
+            bias_tensor=tt_bias_tensor,
+            input_memory_config=tt_input_tensor.memory_config(),
+            **conv_kwargs,
+            input_dtype=ttnn.bfloat16,
+            output_dtype=ttnn.bfloat16,
         )
         if has_bias
         else None

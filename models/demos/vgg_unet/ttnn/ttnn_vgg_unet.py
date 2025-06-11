@@ -109,6 +109,8 @@ class Conv:
                 input_layout=input_tensor_layout,
                 has_bias=True,
                 **self.conv_kwargs,
+                input_dtype=conv_param.dtype,
+                output_dtype=conv_param.dtype,
             )
 
             self.bias = ttnn.prepare_conv_bias(
@@ -116,6 +118,8 @@ class Conv:
                 input_memory_config=self.input_memory_config,
                 input_layout=ttnn.TILE_LAYOUT,
                 **self.conv_kwargs,
+                input_dtype=conv_param.dtype,
+                output_dtype=conv_param.dtype,
             )
             self.weight = ttnn.to_device(self.weight, device)
             self.bias = ttnn.to_device(self.bias, device)
@@ -157,7 +161,6 @@ class Conv_transpose:
             math_approx_mode=True,
         )
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=conv_param.dtype,
             weights_dtype=ttnn.bfloat8_b,
             shard_layout=conv_param.shard_layout,
             reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
@@ -216,6 +219,7 @@ class Conv_transpose:
             return_output_dim=True,
             return_weights_and_bias=True,
             mirror_kernel=True,
+            dtype=self.conv_param.dtype,
         )
         return x
 
