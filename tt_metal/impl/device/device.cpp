@@ -1090,7 +1090,6 @@ bool Device::initialize(
 }
 
 bool Device::close() {
-    ZoneScopedN("Device::close");
     log_info(tt::LogMetal, "Closing device {}", this->id_);
     if (not this->initialized_) {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);

@@ -154,8 +154,6 @@ MeshDevice::ScopedDevices::ScopedDevices(
 }
 
 MeshDevice::ScopedDevices::~ScopedDevices() {
-    ZoneScopedN("ScopedDevices destructor");
-    log_info(tt::LogMetal, "ScopedDevices destructor");
     if (!opened_devices_.empty()) {
         std::vector<IDevice*> devices_to_close;
         for (auto& [id, device] : opened_devices_) {
@@ -202,10 +200,7 @@ MeshDevice::MeshDevice(
     parent_mesh_(std::move(parent_mesh)),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
     dispatch_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())),
-    reader_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())) {
-    log_info(tt::LogMetal, "MeshDevice constructor {}", mesh_id_);
-    ZoneScopedN("MeshDevice constructor");
-}
+    reader_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())) {}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
@@ -215,8 +210,6 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
-    ZoneScopedN("MeshDevice::create");
-    log_info(tt::LogMetal, "MeshDevice::create");
     auto scoped_devices = std::make_shared<ScopedDevices>(
         l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config, config);
     auto root_devices = scoped_devices->root_devices();
@@ -247,7 +240,6 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
-    ZoneScopedN("MeshDevice::create_unit_meshes");
     auto scoped_devices = std::make_shared<ScopedDevices>(
         device_ids, l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config);
     MeshContainer<IDevice*> devices(MeshShape(1, device_ids.size()), scoped_devices->root_devices());
@@ -354,7 +346,6 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
 }
 
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const MeshShape& submesh_shape) {
-    ZoneScopedN("MeshDevice::create_submeshes");
     // Calculate how many submeshes fit in each dimension.
     tt::stl::SmallVector<uint32_t> steps;
     for (size_t dim = 0; dim < shape().dims(); dim++) {
@@ -492,10 +483,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 
 bool MeshDevice::close() {
     ZoneScoped;
-    const std::string zone_name = fmt::format("MeshDevice::close {}", this->id());
-    ZoneName(zone_name.c_str(), zone_name.size());
     log_info(tt::LogMetal, "Closing mesh device {}", this->id());
-    log_info(tt::LogMetal, "mesh cq size: {}", mesh_command_queues_.size());
 
     // We skip dumping profile results for the parent mesh device because parent mesh devices don't
     // have any active mesh command queues.
@@ -818,7 +806,6 @@ bool MeshDevice::initialize(
     size_t /*worker_l1_size*/,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     bool /*minimal*/) {
-    ZoneScopedN("MeshDevice::initialize");
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
     auto sub_devices = {
@@ -834,7 +821,6 @@ bool MeshDevice::initialize(
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
     // as the number of virtual ethernet cores seen by the MeshDevice
     num_virtual_eth_cores_ = DevicePool::instance().get_max_num_eth_cores_across_all_devices();
-    log_info(tt::LogMetal, "num_hw_cqs: {} when initializing mesh device {}", this->num_hw_cqs(), this->id());
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (this->using_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
