@@ -7,6 +7,7 @@
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
+#include <string>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
@@ -67,123 +68,12 @@ using namespace tt::tt_metal;
 
 class AccessorBenchmarks : public GenericMeshDeviceFixture, public ::testing::WithParamInterface<InputBufferParams> {};
 
-TEST_P(AccessorBenchmarks, GetNocAddr) {
-    const auto& params = GetParam();
-
-    // Create input and output replicated mesh buffers across generic mesh device; tests will only use first device
-    const auto input_mesh_buffer = create_replicated_input_mesh_buffer_from_inputs(params, mesh_device_.get());
-
-    // Extract local single-device buffer (ie. shard_view) concepts for testing
-    const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
-    const auto input_shard_view = input_mesh_buffer->get_device_buffer(mesh_coordinate);
-    const auto local_device = input_shard_view->device();
-
-    const auto input_bank_base_address = input_mesh_buffer->address();
-
-    /* CREATE AND LAUNCH PROGRAM ON DEVICE
-     * - This program uses a single reader kernel to measure get_noc_addr overhead with different accessors
-     * - It does not actually do any reads, so no CBs are needed
-     * - Input buffers are set up with actual ND ShardSpec, but for interleaved we use same buffer
-     *   -  ie. Calculations are definitely wrong/nonsense for interleaved, but it's ok to use for benchmarking
-     *   - TODO: We can properly setup the input buffers and try reading from them as well
-     */
-    tt::tt_metal::detail::SetDeviceProfilerDir("accessor_benchmarks/" + params.test_name);
-    tt::tt_metal::detail::FreshProfilerDeviceLog();
-    {
-        log_info(tt::LogTest, "Creating single-core benchmarking program");
-        auto program = CreateProgram();
-
-        constexpr CoreCoord grid = {0, 0};
-        const auto data_format = params.data_format;
-        const auto aligned_page_size = input_shard_view->aligned_page_size();
-
-        // Set up sharded accessor compile-time args for reader kernel
-        using tt::tt_metal::sharded_accessor_utils::ArgConfig;
-        const auto& input_buffer_distribution_spec =
-            std::get<BufferDistributionSpec>(input_mesh_buffer->device_local_config().shard_parameters.value());
-        const auto input_sharded_accessor_args_cta = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
-            *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type(), ArgConfig::CTA);
-        const auto input_sharded_accessor_args_rta_DDS =
-            tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
-                *mesh_device_,
-                input_buffer_distribution_spec,
-                input_shard_view->core_type(),
-                ArgConfig::TensorShapeCRTA | ArgConfig::ShardShapeCRTA);
-        auto input_sharded_accessor_args_rta_SSD = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
-            *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type(), ArgConfig::BankCoordsCRTA);
-        auto input_sharded_accessor_args_rta_DDD = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
-            *mesh_device_,
-            input_buffer_distribution_spec,
-            input_shard_view->core_type(),
-            ArgConfig::TensorShapeCRTA | ArgConfig::ShardShapeCRTA | ArgConfig::BankCoordsCRTA);
-        std::vector<uint32_t> input_compile_time_args = {(uint32_t)data_format, aligned_page_size};
-        input_compile_time_args.insert(
-            input_compile_time_args.end(),
-            input_sharded_accessor_args_cta.compile_time_args.cbegin(),
-            input_sharded_accessor_args_cta.compile_time_args.cend());
-        input_compile_time_args.insert(
-            input_compile_time_args.end(),
-            input_sharded_accessor_args_rta_DDS.compile_time_args.cbegin(),
-            input_sharded_accessor_args_rta_DDS.compile_time_args.cend());
-        input_compile_time_args.insert(
-            input_compile_time_args.end(),
-            input_sharded_accessor_args_rta_SSD.compile_time_args.cbegin(),
-            input_sharded_accessor_args_rta_SSD.compile_time_args.cend());
-        input_compile_time_args.insert(
-            input_compile_time_args.end(),
-            input_sharded_accessor_args_rta_DDD.compile_time_args.cbegin(),
-            input_sharded_accessor_args_rta_DDD.compile_time_args.cend());
-
-        // Create reader kernel
-        KernelHandle reader_kernel_id = CreateKernel(
-            program,
-            "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_benchmark.cpp",
-            grid,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
-                .compile_args = input_compile_time_args});
-
-        // Set up runtime args for reader kernel
-        std::vector<uint32_t> input_runtime_args = {
-            input_bank_base_address,
-        };
-        input_runtime_args.insert(
-            input_runtime_args.end(),
-            input_sharded_accessor_args_cta.runtime_args.cbegin(),
-            input_sharded_accessor_args_cta.runtime_args.cend());
-        input_runtime_args.insert(
-            input_runtime_args.end(),
-            input_sharded_accessor_args_rta_DDS.runtime_args.cbegin(),
-            input_sharded_accessor_args_rta_DDS.runtime_args.cend());
-        input_runtime_args.insert(
-            input_runtime_args.end(),
-            input_sharded_accessor_args_rta_SSD.runtime_args.cbegin(),
-            input_sharded_accessor_args_rta_SSD.runtime_args.cend());
-        input_runtime_args.insert(
-            input_runtime_args.end(),
-            input_sharded_accessor_args_rta_DDD.runtime_args.cbegin(),
-            input_sharded_accessor_args_rta_DDD.runtime_args.cend());
-        SetCommonRuntimeArgs(program, reader_kernel_id, input_runtime_args);
-
-        // Launch program
-        auto mesh_work_load = tt::tt_metal::distributed::CreateMeshWorkload();
-        AddProgramToMeshWorkload(
-            mesh_work_load, std::move(program), (tt::tt_metal::distributed::MeshCoordinateRange)mesh_coordinate);
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_work_load, false);
-
-        // Wait for program to finish
-        log_info(tt::LogTest, "Program launched!");
-        Finish(mesh_device_->mesh_command_queue());
-        log_info(tt::LogTest, "Program finished!");
-    }
-    tt::tt_metal::detail::DumpDeviceProfileResults(local_device);
-}
-
-TEST_P(AccessorBenchmarks, Constructor) {
+void benchmark_all_args_combinations_single_core(
+    const InputBufferParams& params,
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_,
+    const std::string& kernel_path) {
     using tt::tt_metal::sharded_accessor_utils::ArgConfig;
     using tt::tt_metal::sharded_accessor_utils::ArgsConfig;
-    const auto& params = GetParam();
 
     // Create input and output replicated mesh buffers across generic mesh device; tests will only use first device
     const auto input_mesh_buffer = create_replicated_input_mesh_buffer_from_inputs(params, mesh_device_.get());
@@ -229,7 +119,7 @@ TEST_P(AccessorBenchmarks, Constructor) {
         // Create reader kernel
         KernelHandle reader_kernel_id = CreateKernel(
             program,
-            "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_constructor_benchmark.cpp",
+            kernel_path,
             grid,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
@@ -252,6 +142,18 @@ TEST_P(AccessorBenchmarks, Constructor) {
         tt::log_info("Program finished!");
     }
     tt::tt_metal::detail::DumpDeviceProfileResults(local_device);
+}
+
+TEST_P(AccessorBenchmarks, GetNocAddr) {
+    benchmark_all_args_combinations_single_core(
+        GetParam(),
+        mesh_device_,
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_get_noc_addr_page_id_benchmark.cpp");
+}
+
+TEST_P(AccessorBenchmarks, Constructor) {
+    benchmark_all_args_combinations_single_core(
+        GetParam(), mesh_device_, "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_constructor_benchmark.cpp");
 }
 
 INSTANTIATE_TEST_SUITE_P(
