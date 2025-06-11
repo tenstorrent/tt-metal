@@ -105,7 +105,7 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
     /* Use the add_tiles operation in the compute kernel */
     KernelHandle compute_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/where/device/kernel/compute/elemwise_where_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/where/device/kernel/compute/elemwise_where_kernel_opt.cpp",
         all_device_cores,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
