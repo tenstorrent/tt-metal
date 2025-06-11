@@ -48,6 +48,9 @@ struct DistributionSpec {
     static constexpr bool shapes_static = has_static_rank && tensor_shape_static && shard_shape_static;
     static constexpr bool is_static = shapes_static && bank_coords_static;
 
+    static constexpr auto rank_ct = ArgsLoc::RankCT;
+    static constexpr uint32_t num_banks_ct = ArgsLoc::NumBanksCT;
+
     // This constructor is only used for completely static DistributionSpec
     template <typename T = void, typename = std::enable_if_t<is_static, T>>
     constexpr DistributionSpec() {
@@ -91,6 +94,7 @@ struct DistributionSpec {
         }
         if constexpr (!shapes_static) {
             compute_shard_grid_and_strides_rt(get_tensor_shape(), get_shard_shape());
+            ASSERT(shard_grid_rt[0] * shard_grid_strides_rt[0] >= get_num_banks());
         }
     }
 
@@ -138,6 +142,9 @@ struct DistributionSpec {
         getter_helper(bank_coords_static, BankCoordsWrapper::packed_xy_coords, bank_coords_rt.packed_xy_coords)
     }
 
+#undef getter_helper
+
+private:
     static constexpr ShapeBase precompute_shard_grid_ct(const ShapeBase& tensor_shape, const ShapeBase& shard_shape) {
         // If shapes are dynamic, we cannot compute shard grid at compile time
         if (!shapes_static) {
@@ -200,8 +207,6 @@ struct DistributionSpec {
         ASSERT(shard_grid_rt[0] * shard_grid_strides_rt[0] >= get_num_banks());
     }
 
-    static constexpr auto rank_ct = ArgsLoc::RankCT;
-    static constexpr uint32_t num_banks_ct = ArgsLoc::NumBanksCT;
     uint32_t rank_rt = 0;
     uint32_t num_banks_rt = 0;
 

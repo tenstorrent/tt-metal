@@ -48,6 +48,7 @@ constexpr size_t runtime_args_skip() {
  */
 template <typename DSpec, size_t PageSize = detail::UNKNOWN>
 struct ShardedAccessor {
+private:
     // DSpec can be static or dynamic, so we use a conditional instance
     using StaticDspec = detail::ConditionalStaticInstance<DSpec, DSpec::is_static>;
     detail::ConditionalField<!DSpec::is_static, DSpec> dspec_instance;
@@ -59,6 +60,7 @@ struct ShardedAccessor {
     static constexpr auto page_size_ct = PageSize;
     const detail::ConditionalField<PageSize == detail::UNKNOWN, uint32_t> page_size_rt;
 
+public:
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
     constexpr explicit ShardedAccessor(DSpec_&& dspec, const size_t bank_base_address_in, uint32_t page_size_in = 0) :
         dspec_instance(std::forward<DSpec_>(dspec)),
@@ -124,21 +126,16 @@ struct ShardedAccessor {
         ASSERT(page_id < get_dspec().get_tensor_volume());
         // TODO: Should be possible to directly implement get_bank_and_offset logic with page_id and skip computing the
         // page_coord
+        typename DSpec::ShapeBase page_coord;
         if constexpr (!DSpec::has_static_rank) {
-            // If rank is not known at compile time, we need to compute the page coordinates dynamically
-            for (int i = get_dspec().get_rank() - 1; i >= 0; --i) {
-                _page_coord.value[i] = page_id % get_dspec().get_tensor_shape()[i];
-                page_id /= get_dspec().get_tensor_shape()[i];
-            }
-            return get_bank_and_offset(_page_coord.value);
-        } else {
-            std::array<uint32_t, DSpec::rank_ct> page_coord;
-            for (int i = DSpec::rank_ct - 1; i >= 0; --i) {
-                page_coord[i] = page_id % get_dspec().get_tensor_shape()[i];
-                page_id /= get_dspec().get_tensor_shape()[i];
-            }
-            return get_bank_and_offset(page_coord);
+            // If rank is not known at compile time, we need to use the _page_coord buffer for span
+            page_coord = typename DSpec::ShapeBase(_page_coord.value, get_dspec().get_rank());
         }
+        for (int i = get_dspec().get_rank() - 1; i >= 0; --i) {
+            page_coord[i] = page_id % get_dspec().get_tensor_shape()[i];
+            page_id /= get_dspec().get_tensor_shape()[i];
+        }
+        return get_bank_and_offset(page_coord);
     }
 
     template <typename ArrType, std::enable_if_t<detail::has_subscript_operator_v<ArrType>, int> = 0>
