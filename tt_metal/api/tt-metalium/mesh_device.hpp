@@ -226,7 +226,7 @@ public:
     void initialize_and_launch_firmware() override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
-    void init_fabric(std::unique_ptr<Program> fabric_program) override;
+    void init_fabric() override;
     bool close() override;
     void enable_program_cache() override;
     void disable_and_clear_program_cache() override;

@@ -313,33 +313,15 @@ void DevicePool::initialize_host(IDevice* dev) const {
     watcher_attach(dev->id());
 }
 
-void DevicePool::init_fabric(const std::vector<IDevice*>& active_devices) const {
-    // Parallel compilation of fabric programs
-    std::vector<std::shared_future<std::unique_ptr<Program>>> futures;
+void DevicePool::init_fabric(const std::vector<tt_metal::IDevice*>& active_devices) const {
+    std::vector<std::shared_future<void>> events;
     for (uint32_t i = 0; i < active_devices.size(); i++) {
         auto& dev = active_devices[i];
-        futures.emplace_back(detail::async([dev]() -> std::unique_ptr<Program> {
-            auto fabric_program = create_and_compile_fabric_program(dev);
-            if (!fabric_program) {
-                log_warning(tt::LogMetal, "Fabric program is not created for device {}", dev->id());
-            }
-            return fabric_program;
-        }));
+        events.emplace_back(detail::async([dev]() { dev->init_fabric(); }));
     }
-
-    // Sequential initialization of fabric programs
-    // TODO: https://github.com/tenstorrent/tt-metal/issues/23387
-    //       This might be able to be parallelized, but this cannot be fully validated
-    //       dut to lack of validation HW. So currently this is "best effort" as the compilation
-    //       part is the heaviest in this init_fabric.
-    for (uint32_t i = 0; i < active_devices.size(); i++) {
-        auto fabric_program = std::move(const_cast<std::unique_ptr<Program>&>(futures[i].get()));
-        auto& dev = active_devices[i];
-        if (!fabric_program) {
-            log_warning(tt::LogMetal, "Fabric program is not valid for device {}", dev->id());
-            continue;
-        }
-        dev->init_fabric(std::move(fabric_program));
+    for (const auto& event : events) {
+        // Wait for all fabric programs to be initialized
+        event.get();
     }
 }
 

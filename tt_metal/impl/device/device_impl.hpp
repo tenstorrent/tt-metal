@@ -152,7 +152,7 @@ public:
     void init_command_queue_host() override;
     void init_command_queue_device() override;
 
-    void init_fabric(std::unique_ptr<Program> fabric_program) override;
+    void init_fabric() override;
     // Puts device into reset
     bool close() override;
 
