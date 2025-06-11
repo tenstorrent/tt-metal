@@ -100,9 +100,6 @@ def test_unet_trace_perf(
         test_unet_trace_2cq,
     )
 
-    # https://github.com/tenstorrent/tt-metal/issues/23272
-    device.disable_and_clear_program_cache()
-
     logger.info(f"Invoking underlying model test for {iterations} iterations...")
     result = test_unet_trace_2cq(batch, groups, iterations, device, use_program_cache, reset_seeds)
 
@@ -148,14 +145,13 @@ def test_unet_trace_perf_multi_device(
     use_program_cache,
     reset_seeds,
 ):
-    # https://github.com/tenstorrent/tt-metal/issues/23272
-    mesh_device.disable_and_clear_program_cache()
-
     from models.experimental.functional_unet.tests.test_unet_trace import (
         test_unet_trace_2cq_multi_device,
     )
 
     model_name = "unet_shallow-trace_2cq_same_io-multi_device"
+    # todo: add ticket if this is the actual issue
+    mesh_device.disable_and_clear_program_cache()
 
     logger.info(f"Invoking underlying model test for {iterations} iterations...")
     result = test_unet_trace_2cq_multi_device(batch, groups, iterations, mesh_device, use_program_cache, reset_seeds)

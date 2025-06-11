@@ -375,6 +375,8 @@ def run_demo_whisper_for_audio_classification_dataset(ttnn_model, device):
 def run_demo_whisper_for_conditional_generation_inference(input_path, ttnn_model, device, num_inputs):
     torch.manual_seed(0)
 
+    # todo: add ticket if this is the actual issue
+    device.disable_and_clear_program_cache()
     # instantiate model inference pipeline
     model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device)
 
