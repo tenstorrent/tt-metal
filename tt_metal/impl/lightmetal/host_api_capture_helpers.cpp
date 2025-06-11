@@ -16,6 +16,7 @@
 #include "flatbuffer/base_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
+#include "dispatch/hardware_command_queue.hpp"
 
 namespace tt::tt_metal {
 
@@ -291,7 +292,7 @@ void CaptureEnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     auto& ctx = LightMetalCaptureContext::get();
 
     // When Metal Trace is enabled, skip EnqueueProgram capture (replaced with LoadTrace + ReplayTrace)
-    if (cq.sysmem_manager().get_bypass_mode()) {
+    if (HWCommandQueue::from(cq).sysmem_manager().get_bypass_mode()) {
         return;
     }
 

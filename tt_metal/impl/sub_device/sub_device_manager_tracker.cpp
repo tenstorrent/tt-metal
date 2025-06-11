@@ -30,6 +30,7 @@
 #include <tt_stl/strong_type.hpp>
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
+#include "dispatch/hardware_command_queue.hpp"
 
 namespace tt::tt_metal {
 
@@ -81,7 +82,7 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
             true, num_sub_devices, sub_device_manager->noc_mcast_unicast_data());
     } else {
         for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
-            auto& hw_cq = device_->command_queue(cq_id);
+            auto& hw_cq = HWCommandQueue::from(device_->command_queue(cq_id));
             // Only need to reset launch messages once, so reset on cq 0
             hw_cq.reset_worker_state(cq_id == 0, num_sub_devices, sub_device_manager->noc_mcast_unicast_data());
         }

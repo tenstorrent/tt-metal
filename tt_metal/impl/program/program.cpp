@@ -1491,19 +1491,13 @@ uint32_t Program::get_cb_base_addr(IDevice* device, CoreCoord /*logical_core*/, 
                            .cb_offset;
 }
 
-void detail::ProgramImpl::set_last_used_command_queue_for_testing(CommandQueue* queue) {
+void detail::ProgramImpl::set_last_used_command_queue_for_testing(HWCommandQueue* queue) {
     this->last_used_command_queue_for_testing = queue;
 }
 
-CommandQueue* detail::ProgramImpl::get_last_used_command_queue() const {
+HWCommandQueue* detail::ProgramImpl::get_last_used_command_queue() const {
     return this->last_used_command_queue_for_testing;
 }
-
-void Program::set_last_used_command_queue_for_testing(CommandQueue* queue) {
-    internal_->set_last_used_command_queue_for_testing(queue);
-}
-
-CommandQueue* Program::get_last_used_command_queue() const { return internal_->get_last_used_command_queue(); }
 
 uint32_t detail::ProgramImpl::get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);

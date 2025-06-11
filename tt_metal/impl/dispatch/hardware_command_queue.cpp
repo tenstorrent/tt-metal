@@ -447,7 +447,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     // Values in these commands will get updated based on kernel config ring
     // buffer state at runtime.
     program.generate_dispatch_commands(device_);
-    program.set_last_used_command_queue_for_testing(this);
+    program.impl().set_last_used_command_queue_for_testing(this);
 
     if (this->manager_.get_bypass_mode()) {
         this->trace_nodes_.push_back(program_dispatch::create_trace_node(program.impl(), device_));

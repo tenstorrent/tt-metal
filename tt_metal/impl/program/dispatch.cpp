@@ -63,6 +63,7 @@
 #include "dispatch/worker_config_buffer.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
 #include "kernels/kernel_impl.hpp"
+#include "dispatch/hardware_command_queue.hpp"
 
 namespace tt {
 namespace tt_metal {

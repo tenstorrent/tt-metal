@@ -55,7 +55,7 @@ public:
 
     ~HWCommandQueue() override;
 
-    const CoreCoord& virtual_enqueue_program_dispatch_core() const override;
+    const CoreCoord& virtual_enqueue_program_dispatch_core() const;
 
     void record_begin(const uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) override;
     void record_end() override;
@@ -63,20 +63,19 @@ public:
     void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
-        const vector_aligned<uint32_t>& go_signal_noc_data) override;
+        const vector_aligned<uint32_t>& go_signal_noc_data);
 
     void set_go_signal_noc_data_and_dispatch_sems(
-        uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data) override;
+        uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data);
 
     uint32_t id() const override;
-    std::optional<uint32_t> tid() const override;
+    std::optional<uint32_t> tid() const;
 
-    SystemMemoryManager& sysmem_manager() override;
+    SystemMemoryManager& sysmem_manager();
 
-    void terminate() override;
+    void terminate();
 
-    // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
-    WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
+    WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index);
 
     void enqueue_trace(const uint32_t trace_id, bool blocking) override;
     void enqueue_program(Program& program, bool blocking) override;
@@ -117,6 +116,18 @@ public:
     void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
 
     IDevice* device() override;
+
+    static HWCommandQueue& from(CommandQueue& command_queue) {
+        // HWCommandQueue is the only implementation of CommandQueue.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+        return static_cast<HWCommandQueue&>(command_queue);
+    }
+
+    static const HWCommandQueue& from(const CommandQueue& command_queue) {
+        // HWCommandQueue is the only implementation of CommandQueue.
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+        return static_cast<const HWCommandQueue&>(command_queue);
+    }
 
 private:
     uint32_t id_;

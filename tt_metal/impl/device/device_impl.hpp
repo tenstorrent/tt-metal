@@ -24,6 +24,7 @@ class go_msg_t;
 class launch_msg_t;
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
+class HWCommandQueue;
 
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
@@ -244,7 +245,7 @@ private:
     uint8_t num_hw_cqs_ = 1;
 
     // SystemMemoryManager is the interface to the hardware command queue
-    std::vector<std::unique_ptr<CommandQueue>> command_queues_;
+    std::vector<std::unique_ptr<HWCommandQueue>> command_queues_;
 
     std::set<CoreCoord> compute_cores_;
     std::set<CoreCoord> storage_only_cores_;
