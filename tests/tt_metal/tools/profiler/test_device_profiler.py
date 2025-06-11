@@ -84,7 +84,6 @@ def run_device_profiler_test(
 ):
     name = inspect.stack()[1].function
     testCommand = f"build/{PROG_EXMP_DIR}/{name}"
-    print(f"testCommand: {testCommand}")
     if testName:
         testCommand = testName
     clear_profiler_runtime_artifacts()
@@ -312,7 +311,6 @@ def test_ethernet_dispatch_cores():
                     if count - allowedRange < readCount < count + allowedRange:
                         res = True
                         break
-                print(f"read {readCount} ethernet zones for {ref}")
                 assert (
                     res
                 ), f"Wrong ethernet dispatch zone count, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
@@ -333,7 +331,6 @@ def test_ethernet_dispatch_cores():
                     if count - allowedRange < readCount < count + allowedRange:
                         res = True
                         break
-                print(f"read {readCount} ethernet zones for {ref}")
                 assert (
                     res
                 ), f"Wrong ethernet dispatch zone count, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
