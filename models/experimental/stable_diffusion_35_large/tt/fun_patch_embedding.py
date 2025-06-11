@@ -61,13 +61,16 @@ class TtPatchEmbedParameters:
         out_height = height // sd_conv.kernel_size[0]
         out_width = width // sd_conv.kernel_size[0]
         cropped_pos_embed_param = _cropped_pos_embed(out_height, out_width)
+        dims = [None, None]
+        dims[parallel_config.sequence_parallel.mesh_axis] = -2
+        dims[parallel_config.tensor_parallel.mesh_axis] = -1
         return cls(
             proj=sd_conv,
             pos_embed=from_torch_fast_2d(
                 cropped_pos_embed_param,
                 mesh_device=device,
                 mesh_shape=parallel_config.cfg_parallel.mesh_shape,
-                dims=[-2, -1],
+                dims=dims,
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
             ),

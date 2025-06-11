@@ -92,7 +92,11 @@ class TtSD3Transformer2DModelParameters:
                 parallel_config=parallel_config,
             ),
             norm_out=TtLayerNormParameters.from_torch(
-                substate(state, "norm_out.norm"), dtype=dtype, device=device, distributed=False
+                substate(state, "norm_out.norm"),
+                dtype=dtype,
+                device=device,
+                distributed=False,
+                parallel_config=parallel_config,
             ),
             proj_out=TtLinearParameters.from_torch(
                 substate(state, "proj_out"),

@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import os
 
 import pytest
 
@@ -16,22 +15,25 @@ from .tt.parallel_config import StableDiffusionParallelManager
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "model_name, image_w, image_h, guidance_scale, num_inference_steps, cfg_factor, sp_factor, tp_factor, rp_factor, up_factor, topology",  # "prompt_sequence_length", "spatial_sequence_length",
+    "model_name, image_w, image_h, guidance_scale, num_inference_steps",  # "prompt_sequence_length", "spatial_sequence_length",
     [
         #        ("medium", 512, 512, 4.5, 40, 333, 1024),
         #        ("medium", 1024, 1024, 4.5, 40, 333, 4096),
         #        ("large", 512, 512, 3.5, 28, 333, 1024),
-        ("large", 1024, 1024, 3.5, 28, 2, 2, 2, 2, 2, ttnn.Topology.Linear),  # , 333, 4096),
+        ("large", 1024, 1024, 3.5, 28),  # , 333, 4096),
     ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, cfg, sp, tp, topology",
+    [
+        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear],
+        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear],
+    ],
+    ids=[
+        "t3k_cfg2_sp2_tp2",
+        "tg_cfg2_sp4_tp4",
+    ],
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -47,15 +49,25 @@ def test_sd3(
     image_h,
     guidance_scale,
     num_inference_steps,
-    cfg_factor,
-    sp_factor,
-    tp_factor,
-    rp_factor,
-    up_factor,
+    cfg,
+    sp,
+    tp,
     topology,
-) -> None:  # , prompt_sequence_length, spatial_sequence_length,) -> None:
+) -> None:
+    cfg_factor, cfg_axis = cfg
+    sp_factor, sp_axis = sp
+    tp_factor, tp_axis = tp
     parallel_manager = StableDiffusionParallelManager(
-        mesh_device, cfg_factor, sp_factor, tp_factor, rp_factor, up_factor, topology
+        mesh_device,
+        cfg_factor,
+        sp_factor,
+        tp_factor,
+        sp_factor,
+        tp_factor,
+        topology,
+        cfg_axis=cfg_axis,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
     )
 
     if guidance_scale > 1 and cfg_factor == 1:
