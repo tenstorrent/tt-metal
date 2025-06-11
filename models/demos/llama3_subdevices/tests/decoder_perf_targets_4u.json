@@ -35,7 +35,7 @@
         },
         "AllGatherAsync_0": {
             "op_name": "AllGatherAsync_Binary_Mult",
-            "kernel_duration": 9575.690972222223,
+            "kernel_duration": 11328.694444444445,
             "op_to_op": 959.5555,
             "first_to_last_start": 96.77777777777777,
             "non-overlapped-dispatch-time": 4351.1,
