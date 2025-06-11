@@ -1191,8 +1191,9 @@ operation::ProgramWithCallbacks untilize_multi_core(
             dst_buffer->address(),
             num_input_blocks_to_process,
             height_wise_input_block_start_index,
-            width_wise_input_block_index,
-            num_unpadded_cols_per_input_block};
+            num_unpadded_cols_per_input_block,
+            (width_wise_input_block_index * num_cols_per_input_block) / num_cols_per_output_block,
+            (width_wise_input_block_index * num_cols_per_input_block) % num_cols_per_output_block};
         if (output_is_sharded) {
             shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
         }
@@ -1233,8 +1234,9 @@ operation::ProgramWithCallbacks untilize_multi_core(
             dst_buffer->address(),
             num_input_blocks_to_process,
             height_wise_input_block_start_index,
-            width_wise_input_block_index,
-            num_unpadded_cols_per_input_block};
+            num_unpadded_cols_per_input_block,
+            (width_wise_input_block_index * num_cols_per_input_block) / num_cols_per_output_block,
+            (width_wise_input_block_index * num_cols_per_input_block) % num_cols_per_output_block};
         if (output_is_sharded) {
             shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
         }
