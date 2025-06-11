@@ -14,7 +14,11 @@ namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
+#if defined(DST_ACCUM_MODE) && DST_ACCUM_MODE == 1
+    constexpr uint32_t fast = 0;
+#else
     constexpr uint32_t fast = 1;
+#endif
     // constexpr uint32_t block_count = per_core_block_tile_cnt >= 8 ? 8 : per_core_block_tile_cnt;
     // constexpr uint32_t block_count = per_core_block_tile_cnt % 8 == 0   ? 8
     //                                  : per_core_block_tile_cnt % 4 == 0 ? 4
