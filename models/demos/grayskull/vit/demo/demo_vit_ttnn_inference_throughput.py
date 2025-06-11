@@ -2,32 +2,31 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-
-import torch
-import transformers
-from transformers import AutoImageProcessor
-from loguru import logger
 import time
 
-import ttnn
+import pytest
+import torch
+import transformers
+from loguru import logger
+from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit
-from models.utility_functions import is_wormhole_b0, torch2tt_tensor, is_blackhole
-from models.experimental.vit.vit_helper_funcs import get_data_loader, get_batch
-
-from models.utility_functions import (
-    is_wormhole_b0,
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
-)
+import ttnn
+from models.demos.vit.tt import ttnn_optimized_sharded_vit_gs
+from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
 from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    is_blackhole,
+    is_wormhole_b0,
+    torch2tt_tensor,
+)
 
 
 def get_expected_times(functional_vit):
     return {
-        ttnn_optimized_sharded_vit: (11, 0.02),
+        ttnn_optimized_sharded_vit_gs: (11, 0.02),
     }[functional_vit]
 
 
@@ -51,13 +50,13 @@ def test_vit(device, use_program_cache):
     config = transformers.ViTConfig.from_pretrained(model_name)
     config.num_hidden_layers = 12
     model = transformers.ViTForImageClassification.from_pretrained(model_name, config=config)
-    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
+    config = ttnn_optimized_sharded_vit_gs.update_model_config(config, batch_size)
     image_processor = AutoImageProcessor.from_pretrained(model_name)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         device=device,
-        custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
+        custom_preprocessor=ttnn_optimized_sharded_vit_gs.custom_preprocessor,
     )
 
     # cls_token & position embeddings expand to batch_size
@@ -129,7 +128,7 @@ def test_vit(device, use_program_cache):
             tt_dtype=ttnn.bfloat16,
         )
 
-        output = ttnn_optimized_sharded_vit.vit(
+        output = ttnn_optimized_sharded_vit_gs.vit(
             config,
             pixel_values,
             head_masks,
@@ -145,7 +144,7 @@ def test_vit(device, use_program_cache):
 
     inference_and_compile_time, inference_time, *_ = durations
 
-    expected_compile_time, expected_inference_time = get_expected_times(ttnn_optimized_sharded_vit)
+    expected_compile_time, expected_inference_time = get_expected_times(ttnn_optimized_sharded_vit_gs)
     prep_perf_report(
         model_name="vit_ttnn_optim_sharded",
         batch_size=batch_size,

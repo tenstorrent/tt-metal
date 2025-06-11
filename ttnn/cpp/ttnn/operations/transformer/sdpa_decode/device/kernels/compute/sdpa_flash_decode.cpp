@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
+#include "compute_kernel_api/tilize.h"
 
 #include "cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "compute_common.hpp"
@@ -39,16 +40,13 @@ void MAIN {
     constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(13);
     constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(14);
     constexpr uint32_t out_num_blocks = get_compile_time_arg_val(15);
-    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(16);
-    constexpr uint32_t k_chunk_size = get_compile_time_arg_val(17);
     constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(18);
     constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(19);
     constexpr bool is_causal = get_compile_time_arg_val(20) == 1;
     constexpr bool use_attention_mask = get_compile_time_arg_val(21) == 1;
-
+    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(22);
+    constexpr bool tilize_q = get_compile_time_arg_val(23) == 1;
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
-    constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
-    constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * DHt;
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;  // reuse it also for reduce input o
@@ -59,6 +57,7 @@ void MAIN {
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
     constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
+    constexpr uint32_t cb_q_rm = tt::CBIndex::c_10;
 
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
     constexpr uint32_t cb_out_im = tt::CBIndex::c_25;
@@ -116,19 +115,54 @@ void MAIN {
             return;
         }
     }
+
+    auto Sk_chunk_t_dynamic = get_dynamic_Sk_chunk_t<Sk_chunk_t, max_dynamic_chunk_size>(cur_pos);
+    auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
+
     // Sequence length assignment
     auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] =
-        get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size);
+        get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size_dynamic);
     if (k_chunk_start == k_chunk_end) {
         return;  // early exit because no computes needs to be done
     }
+
     uint32_t num_cores_to_wait = num_cores_per_head - 1;
     if (num_cores_per_head > k_num_chunks) {
         num_cores_to_wait = k_num_chunks - 1;
     }
 
-    mm_init(cb_q_in, cb_k_in, cb_out_final);
-    cb_wait_front(cb_q_in, q_chunk_tiles);
+    if constexpr (tilize_q) {
+        tilize_init(cb_q_rm, q_chunk_tiles, cb_q_in);
+        cb_wait_front(cb_q_rm, q_chunk_tiles);
+        cb_reserve_back(cb_q_in, q_chunk_tiles);
+        tilize_block(cb_q_rm, q_chunk_tiles, cb_q_in);
+        cb_push_back(cb_q_in, q_chunk_tiles);
+        mm_init(cb_q_in, cb_k_in, cb_out_final);
+        cb_pop_front(cb_q_rm, q_chunk_tiles);
+    } else {
+        mm_init(cb_q_in, cb_k_in, cb_out_final);
+        cb_wait_front(cb_q_in, q_chunk_tiles);
+    }
+
+#ifdef DYNAMIC_CHUNK_SIZE
+    const uint32_t qk_subblock_h_dynamic = 1;
+    const uint32_t qk_subblock_w_dynamic = Sk_chunk_t_dynamic;  // Guaranteed < DST
+    const uint32_t qk_in0_num_subblocks_dynamic = 1;
+    const uint32_t qk_in1_num_subblocks_dynamic = 1;
+    const uint32_t out_in0_block_w_dynamic = Sk_chunk_t_dynamic;
+    const uint32_t out_num_blocks_dynamic = 1;
+
+    const uint32_t qk_chunk_tiles_dynamic = Sq_chunk_t * Sk_chunk_t_dynamic;
+#else
+    constexpr uint32_t qk_subblock_h_dynamic = qk_subblock_h;
+    constexpr uint32_t qk_subblock_w_dynamic = qk_subblock_w;
+    constexpr uint32_t qk_in0_num_subblocks_dynamic = qk_in0_num_subblocks;
+    constexpr uint32_t qk_in1_num_subblocks_dynamic = qk_in1_num_subblocks;
+    constexpr uint32_t out_in0_block_w_dynamic = out_in0_block_w;
+    constexpr uint32_t out_num_blocks_dynamic = out_num_blocks;
+
+    constexpr uint32_t qk_chunk_tiles_dynamic = Sq_chunk_t * Sk_chunk_t;
+#endif
 
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
         flash_attention_loop<
@@ -136,23 +170,15 @@ void MAIN {
             St,
             DHt,
             Sq_chunk_t,
-            Sk_chunk_t,
-            qk_chunk_tiles,
             out_chunk_tiles,
             // QK matmul block parameters
             qk_in0_block_w,
-            qk_subblock_w,
-            qk_subblock_h,
-            qk_in0_num_subblocks,
-            qk_in1_num_subblocks,
             qk_num_blocks,
             // Output matmul block parameters
-            out_in0_block_w,
             out_subblock_w,
             out_subblock_h,
             out_in0_num_subblocks,
             out_in1_num_subblocks,
-            out_num_blocks,
             // Attention parameters
             is_causal,
             use_attention_mask,
@@ -173,7 +199,19 @@ void MAIN {
             cb_exp_max_diff,
             cb_out_o,
             cb_out_m,
-            cb_out_l>(k_chunk_start, k_chunk_end, do_reduce, apply_mask_at_last_chunk);
+            cb_out_l>(
+            k_chunk_start,
+            k_chunk_end,
+            Sk_chunk_t_dynamic,
+            qk_subblock_h_dynamic,
+            qk_subblock_w_dynamic,
+            qk_in0_num_subblocks_dynamic,
+            qk_in1_num_subblocks_dynamic,
+            out_in0_block_w_dynamic,
+            out_num_blocks_dynamic,
+            qk_chunk_tiles_dynamic,
+            do_reduce,
+            apply_mask_at_last_chunk);
 
         // do reduction across intermediates from other cores if this is the reduction core
         if (do_reduce) {
@@ -224,6 +262,7 @@ void MAIN {
                     copy_block(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 }
             }
+
             /* cb_cur_sum = 1.0 / cb_cur_sum */
             cb_push_back(cb_cur_sum, Sq_chunk_t);
 

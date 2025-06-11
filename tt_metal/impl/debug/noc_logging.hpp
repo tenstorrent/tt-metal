@@ -5,6 +5,7 @@
 #pragma once
 
 #include <host_api.hpp>
+#include <vector>
 
 namespace tt {
 void ClearNocData(chip_id_t device_id);

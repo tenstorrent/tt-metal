@@ -28,28 +28,28 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
 
     Program program{};
 
-    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
 
-    tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.get_dtype());
+    tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.dtype());
     uint32_t cos_single_tile_size = tt_metal::detail::TileSize(cos_cb_data_format);
 
-    tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.get_dtype());
+    tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.dtype());
     uint32_t sin_single_tile_size = tt_metal::detail::TileSize(sin_cb_data_format);
 
     tt::DataFormat scalar_cb_data_format = DataFormat::Float16_b;
     uint32_t scalar_single_tile_size = tt_metal::detail::TileSize(scalar_cb_data_format);
 
-    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
-    uint32_t num_tiles = input.volume() / TILE_HW;
-    uint32_t num_rows = input.volume() / input.get_padded_shape()[-1] / TILE_HEIGHT;
-    uint32_t Ht = input.get_padded_shape()[-2] / TILE_HEIGHT;
-    uint32_t Wt = input.get_padded_shape()[-1] / TILE_WIDTH;
+    uint32_t num_tiles = input.physical_volume() / TILE_HW;
+    uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
+    uint32_t Ht = input.padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t Wt = input.padded_shape()[-1] / TILE_WIDTH;
     uint32_t half_Wt = Wt / 2;
     uint32_t HtWt = Ht * Wt;
-    uint32_t Wbytes = input.get_padded_shape()[-1] * sizeof(bfloat16);
+    uint32_t Wbytes = input.padded_shape()[-1] * sizeof(bfloat16);
 
     tt_metal::IDevice* device = input.device();
 
@@ -214,9 +214,9 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     auto sin_buffer = sin.buffer();
     auto dst_buffer = output.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool cos_is_dram = cos_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool sin_is_dram = sin_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool cos_is_dram = cos_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool sin_is_dram = sin_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args;
     if (in_sharded) {
         reader_compile_time_args = {
@@ -250,7 +250,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
             (std::uint32_t)half_Wt,
         };
     }
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
     if (token_idx.has_value()) {

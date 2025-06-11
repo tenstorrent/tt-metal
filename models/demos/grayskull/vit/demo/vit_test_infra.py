@@ -3,19 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
-import ttnn
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-)
-from models.utility_functions import (
-    divup,
-)
-
-from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit
-from models.experimental.vit.vit_helper_funcs import get_data_loader, get_batch
 import transformers
 from transformers import AutoImageProcessor
+from ttnn.model_preprocessing import preprocess_model_parameters
+
+import ttnn
+from models.demos.vit.tt import ttnn_optimized_sharded_vit_gs
+from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
+from models.utility_functions import divup
 
 
 class VitTestInfra:
@@ -43,13 +38,13 @@ class VitTestInfra:
         config = transformers.ViTConfig.from_pretrained(model_name)
         config.num_hidden_layers = 12
         model = transformers.ViTForImageClassification.from_pretrained(model_name, config=config)
-        self.config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
+        self.config = ttnn_optimized_sharded_vit_gs.update_model_config(config, batch_size)
         image_processor = AutoImageProcessor.from_pretrained(model_name)
 
         self.parameters = preprocess_model_parameters(
             initialize_model=lambda: model,
             device=device,
-            custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
+            custom_preprocessor=ttnn_optimized_sharded_vit_gs.custom_preprocessor,
         )
 
         # cls_token & position embeddings expand to batch_size
@@ -137,7 +132,7 @@ class VitTestInfra:
 
     def run(self, tt_input_tensor=None):
         self.output_tensor = None
-        self.output_tensor = ttnn_optimized_sharded_vit.vit(
+        self.output_tensor = ttnn_optimized_sharded_vit_gs.vit(
             self.config,
             self.input_tensor,
             self.head_masks,

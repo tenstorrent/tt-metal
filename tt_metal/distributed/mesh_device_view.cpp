@@ -2,14 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <stdexcept>
-
+#include <boost/move/utility_core.hpp>
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
-#include "buffer.hpp"
+#include <cstddef>
+#include <optional>
+#include <unordered_map>
+#include <vector>
+
+#include "assert.hpp"
+#include "device.hpp"
+#include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "shape2d.hpp"
+#include "shape_base.hpp"
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -136,13 +142,13 @@ chip_id_t MeshDeviceView::find_device_id(const MeshCoordinate& coord) const {
 
 bool MeshDeviceView::is_mesh_2d() const { return shape_2d_.has_value(); }
 
-std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(size_t length, const Shape2D& mesh_shape) {
-    // Iterate in a zigzag pattern from top-left to bottom-right.
+std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(
+    size_t length, const Shape2D& mesh_shape, const Shape2D& mesh_offset) {
+    // Iterate in a zigzag pattern from top-left to bottom-right, starting at the offset.
     std::vector<MeshCoordinate> line_coords;
     line_coords.reserve(length);
     const auto [num_rows, num_cols] = mesh_shape;
-    int row_index = 0;
-    int col_index = 0;
+    auto [row_index, col_index] = mesh_offset;
     bool left_to_right = true;
 
     for (size_t i = 0; i < length && row_index < num_rows && col_index < num_cols; ++i) {
@@ -164,14 +170,17 @@ std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(size_t length, 
 
 std::vector<MeshCoordinate> MeshDeviceView::get_ring_coordinates(const Shape2D& ring_shape, const Shape2D& mesh_shape) {
     const auto [ring_rows, ring_cols] = ring_shape;
+    TT_FATAL(ring_rows > 0 && ring_cols > 0, "Ring shape must not be empty along either dimension. Got {}", ring_shape);
+    TT_FATAL(
+        ring_rows <= mesh_shape.height() && ring_cols <= mesh_shape.width(),
+        "Subgrid {} is out of mesh bounds {}",
+        ring_shape,
+        mesh_shape);
+
     const auto end_row = ring_rows - 1;
     const auto end_col = ring_cols - 1;
 
-    // Validate the specified subgrid
     std::vector<MeshCoordinate> boundary_coords;
-    if (ring_rows > mesh_shape.height() || ring_cols > mesh_shape.width()) {
-        TT_THROW("Subgrid is out of mesh bounds.");
-    }
 
     // Traverse the top row from left to right
     for (size_t col = 0; col <= end_col; ++col) {
@@ -201,7 +210,8 @@ std::vector<MeshCoordinate> MeshDeviceView::get_ring_coordinates(const Shape2D& 
 
 std::vector<IDevice*> MeshDeviceView::get_line_devices() const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
-    auto boundary_coords = get_line_coordinates(devices_.shape().mesh_size(), *shape_2d_);
+    auto boundary_coords =
+        get_line_coordinates(devices_.shape().mesh_size(), *shape_2d_, /*mesh_offset=*/Shape2D(0, 0));
     return get_devices_from_coordinates(*this, boundary_coords);
 }
 

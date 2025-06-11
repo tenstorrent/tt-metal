@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include <tt-metalium/buffer_constants.hpp>
-#include "cpp/ttnn/tensor/tensor.hpp"
+#include <tt-metalium/buffer_types.hpp>
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/device.hpp>
 #include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
@@ -178,12 +178,12 @@ std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_ct_args(Tensor const& t) {
     auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(t.shard_spec().value());
     bool shard_grid_transposed = shard_grid_is_transposed(t);
     TT_FATAL(
-        t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-            t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-            t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+            t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+            t.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "ShardedAddrGenArgBuilder::emit_ct_args was invoked with a tensor containing an unsupported (Sharded) Tensor "
         "Memory Layout: {}",
-        t.memory_config().memory_layout);
+        t.memory_config().memory_layout());
     // shard_grid_height (cores)
     args.push_back(shard_grid_end.y - shard_grid_start.y + 1);
     TT_FATAL(args.back() > 0, "Passed shard_grid height == 0 to sharded addrgen, which is invalid");
@@ -208,17 +208,17 @@ std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_ct_args(Tensor const& t) {
 
 bool ShardedAddrGenArgBuilder::shard_grid_is_transposed(Tensor const& t) {
     TT_FATAL(
-        t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-            t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-            t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+            t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+            t.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "ShardedAddrGenArgBuilder::emit_ct_args was invoked with a tensor containing an unsupported (Sharded) Tensor "
         "Memory Layout: {}",
-        t.memory_config().memory_layout);
+        t.memory_config().memory_layout());
     bool shard_grid_transposed =
-        ((t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+        ((t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
           t.shard_spec()->orientation == ShardOrientation::ROW_MAJOR) ||
-         ((t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-           t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) &&
+         ((t.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+           t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) &&
           t.shard_spec()->orientation == ShardOrientation::COL_MAJOR));
     return shard_grid_transposed;
 }

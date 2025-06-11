@@ -24,12 +24,10 @@ enum class UnaryCompositeOpType {
     COSH,
     DIGAMMA,
     LGAMMA,
-    LOG1P,
     MULTIGAMMALN,
     SINH,
     SOFTSIGN,
     SWISH,
-    TANHSHRINK,
     VAR_HW,
     STD_HW,
     NORMALIZE_HW,
@@ -54,7 +52,6 @@ enum class UnaryCompositeOpType {
     NORMALIZE_GLOBAL,
     FRAC,
 };
-Tensor _tanhshrink(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _acosh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _asinh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _atanh(const Tensor&, const std::optional<MemoryConfig>&);
@@ -62,7 +59,6 @@ Tensor _cbrt(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _cosh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _digamma(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _lgamma(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _log1p(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _multigammaln(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _sinh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _softsign(const Tensor&, const std::optional<MemoryConfig>&);
@@ -126,13 +122,6 @@ struct OpHandler<UnaryCompositeOpType::RAD2DEG> {
 };
 
 template <>
-struct OpHandler<UnaryCompositeOpType::TANHSHRINK> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) {
-        return _tanhshrink(t1, mem_cfg);
-    }
-};
-
-template <>
 struct OpHandler<UnaryCompositeOpType::ACOSH> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _acosh(t1, mem_cfg); }
 };
@@ -172,11 +161,6 @@ struct OpHandler<UnaryCompositeOpType::DIGAMMA> {
 template <>
 struct OpHandler<UnaryCompositeOpType::LGAMMA> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _lgamma(t1, mem_cfg); }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::LOG1P> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _log1p(t1, mem_cfg); }
 };
 
 template <>

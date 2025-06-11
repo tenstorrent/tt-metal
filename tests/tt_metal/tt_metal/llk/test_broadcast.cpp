@@ -2,13 +2,49 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <fmt/base.h>
 #include <gtest/gtest.h>
+#include <stdint.h>
+#include <bit>
+#include <functional>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "test_golden_impls.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/df/float32.hpp"
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/test_utils/packing.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -30,6 +66,8 @@ enum EltwiseOp : uint8_t { ADD = 0, SUB = 1, MUL = 2 };
 
 enum BroadcastDim : uint8_t { ROW = 0, COL = 1, SCALAR = 2 };
 
+enum TileShape : uint8_t { FULL_TILE = 0, TINY_TILE_16x32 = 1 };
+
 const map<EltwiseOp, string> eltwise_op_to_type = {
     {EltwiseOp::ADD, "EltwiseBinaryType::ELWADD"},
     {EltwiseOp::SUB, "EltwiseBinaryType::ELWSUB"},
@@ -50,10 +88,16 @@ const map<BroadcastDim, string> broadcast_dim_to_api_suffix = {
     {BroadcastDim::SCALAR, "scalar"},
 };
 
+const map<TileShape, tt_metal::Tile> tile_shape_to_tile = {
+    {TileShape::FULL_TILE, tt_metal::Tile({constants::TILE_HEIGHT, constants::TILE_WIDTH})},
+    {TileShape::TINY_TILE_16x32, tt_metal::Tile({constants::TILE_HEIGHT / 2, constants::TILE_WIDTH})},
+};
+
 struct BroadcastConfig {
     ApiConvention api_convention;
     EltwiseOp eltwise_op;
     BroadcastDim broadcast_dim;
+    TileShape tile_shape = TileShape::FULL_TILE;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 };
 
@@ -166,10 +210,14 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
 
     CoreCoord core = {0, 0};
 
-    constexpr uint32_t tile_width = 32;
-    constexpr uint32_t tile_height = 32;
+    tt_metal::Tile tile_dims = tile_shape_to_tile.at(test_config.tile_shape);
+    uint32_t tile_width = tile_dims.get_tile_shape()[1];
+    uint32_t tile_height = tile_dims.get_tile_shape()[0];
+    if (test_config.tile_shape != TileShape::FULL_TILE) {
+        log_info(tt::LogTest, "Tile shape is {{{}, {}}}", tile_height, tile_width);
+    }
 
-    constexpr uint32_t single_tile_size = tile_width * tile_height * bfloat16::SIZEOF;
+    uint32_t single_tile_size = tile_width * tile_height * bfloat16::SIZEOF;
 
     tt_metal::InterleavedBufferConfig dram_config{
         .device = device,
@@ -179,20 +227,26 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
 
     auto src_a_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_src_a_addr = src_a_dram_buffer->address();
-    tt_metal::CircularBufferConfig l1_src_a_cb_config = tt_metal::CircularBufferConfig(single_tile_size, {{0, tt::DataFormat::Float16_b}})
-        .set_page_size(0, single_tile_size);
+    tt_metal::CircularBufferConfig l1_src_a_cb_config =
+        tt_metal::CircularBufferConfig(single_tile_size, {{0, tt::DataFormat::Float16_b}})
+            .set_page_size(0, single_tile_size)
+            .set_tile_dims(0, tile_dims);
     auto l1_src_a_cb = tt_metal::CreateCircularBuffer(program, core, l1_src_a_cb_config);
 
     auto src_b_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_src_b_addr = src_b_dram_buffer->address();
-    tt_metal::CircularBufferConfig l1_src_b_cb_config = tt_metal::CircularBufferConfig(single_tile_size, {{1, tt::DataFormat::Float16_b}})
-        .set_page_size(1, single_tile_size);
+    tt_metal::CircularBufferConfig l1_src_b_cb_config =
+        tt_metal::CircularBufferConfig(single_tile_size, {{1, tt::DataFormat::Float16_b}})
+            .set_page_size(1, single_tile_size)
+            .set_tile_dims(1, tile_dims);
     auto l1_src_b_cb = tt_metal::CreateCircularBuffer(program, core, l1_src_b_cb_config);
 
     auto dst_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-    tt_metal::CircularBufferConfig l1_dst_cb_config = tt_metal::CircularBufferConfig(single_tile_size, {{16, tt::DataFormat::Float16_b}})
-        .set_page_size(16, single_tile_size);
+    tt_metal::CircularBufferConfig l1_dst_cb_config =
+        tt_metal::CircularBufferConfig(single_tile_size, {{16, tt::DataFormat::Float16_b}})
+            .set_page_size(16, single_tile_size)
+            .set_tile_dims(16, tile_dims);
     auto l1_dst_cb = tt_metal::CreateCircularBuffer(program, core, l1_dst_cb_config);
 
     std::map<string, string> defines = {
@@ -200,7 +254,7 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
         {"BCAST_DIM", broadcast_dim_to_type.at(test_config.broadcast_dim)},
         {"BCAST_OP", eltwise_op_to_api_prefix.at(test_config.eltwise_op) + "_tiles_bcast"}};
 
-    log_info("Testing BCAST_LLKOP={} BCAST_DIM={}", defines["BCAST_LLKOP"], defines["BCAST_DIM"]);
+    log_info(tt::LogTest, "Testing BCAST_LLKOP={} BCAST_DIM={}", defines["BCAST_LLKOP"], defines["BCAST_DIM"]);
 
     if (test_config.api_convention == ApiConvention::SHORT_INIT ||
         test_config.api_convention == ApiConvention::SHORT_BOTH) {
@@ -215,9 +269,9 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
                                        broadcast_dim_to_api_suffix.at(test_config.broadcast_dim) + "_init_short";
         }
 
-        log_info("Init function is {}", defines["BCAST_OP_INIT"]);
+        log_info(tt::LogTest, "Init function is {}", defines["BCAST_OP_INIT"]);
     } else {
-        log_info("Init function is init_bcast");
+        log_info(tt::LogTest, "Init function is init_bcast");
     }
 
     if (test_config.api_convention == ApiConvention::SHORT_CALL ||
@@ -226,7 +280,7 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
         defines["BCAST_OP"] = defines["BCAST_OP"] + "_" + broadcast_dim_to_api_suffix.at(test_config.broadcast_dim);
     }
 
-    log_info("Compute function is {}", defines["BCAST_OP"]);
+    log_info(tt::LogTest, "Compute function is {}", defines["BCAST_OP"]);
 
     auto reader_kernel = tt_metal::CreateKernel(
         program,
@@ -276,12 +330,12 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
     std::vector<bfloat16> input1 = generate_uniform_random_vector<bfloat16>(
         -1.0f, 1.0f, single_tile_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
 
-    mask_src_b_for_broadcast(input1, {tile_width, tile_height}, test_config.broadcast_dim);
+    mask_src_b_for_broadcast(input1, {tile_height, tile_width}, test_config.broadcast_dim);
 
     std::vector<bfloat16> golden = gold_broadcast(
         input0,
         input1,
-        {tile_width, tile_height},
+        {tile_height, tile_width},
         test_config.eltwise_op,
         test_config.broadcast_dim,
         test_config.math_fidelity);
@@ -290,7 +344,10 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
     auto packed_input1 = pack_vector<uint32_t, bfloat16>(input1);
     auto packed_golden = pack_vector<uint32_t, bfloat16>(golden);
     ::unit_tests::compute::GoldenConfig config = {
-        .num_tiles_r_dim = tile_width / 32, .num_tiles_c_dim = tile_height / 32};
+        .num_tiles_r_dim = 1,
+        .num_tiles_c_dim = 1,
+        .num_faces = tile_width / 16 * tile_height / 16,
+        .tiny_tile = test_config.tile_shape != TileShape::FULL_TILE};
     auto tilized_input0 = ::unit_tests::compute::gold_standard_tilize(packed_input0, config);
     auto tilized_input1 = ::unit_tests::compute::gold_standard_tilize(packed_input1, config);
 
@@ -321,7 +378,7 @@ TEST_P(BroadcastParameterizedDeviceFixture, TensixComputeSingleTileBroadcast) {
         if (i == 1) {
             continue;
         }
-        log_info("Math Fidelity = {}", i);
+        log_info(tt::LogTest, "Math Fidelity = {}", i);
         test_config.math_fidelity = MathFidelity(i);
         unit_tests::compute::broadcast::run_single_core_broadcast(this->devices_.at(0), test_config);
     }
@@ -368,6 +425,18 @@ INSTANTIATE_TEST_SUITE_P(
         (BroadcastConfig){ApiConvention::SHORT_BOTH, EltwiseOp::SUB, BroadcastDim::SCALAR},
         (BroadcastConfig){ApiConvention::SHORT_BOTH, EltwiseOp::MUL, BroadcastDim::ROW},
         (BroadcastConfig){ApiConvention::SHORT_BOTH, EltwiseOp::MUL, BroadcastDim::COL},
-        (BroadcastConfig){ApiConvention::SHORT_BOTH, EltwiseOp::MUL, BroadcastDim::SCALAR}));
+        (BroadcastConfig){ApiConvention::SHORT_BOTH, EltwiseOp::MUL, BroadcastDim::SCALAR},
+        (BroadcastConfig){ApiConvention::DEFAULT, EltwiseOp::ADD, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
+        (BroadcastConfig){ApiConvention::DEFAULT, EltwiseOp::SUB, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
+        (BroadcastConfig){ApiConvention::DEFAULT, EltwiseOp::MUL, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
+        (BroadcastConfig){ApiConvention::SHORT_INIT, EltwiseOp::ADD, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
+        (BroadcastConfig){ApiConvention::SHORT_INIT, EltwiseOp::SUB, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
+        (BroadcastConfig){ApiConvention::SHORT_INIT, EltwiseOp::MUL, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
+        (BroadcastConfig){ApiConvention::SHORT_INIT, EltwiseOp::ADD, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
+        (BroadcastConfig){ApiConvention::SHORT_INIT, EltwiseOp::SUB, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
+        (BroadcastConfig){ApiConvention::SHORT_INIT, EltwiseOp::MUL, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
+        (BroadcastConfig){ApiConvention::SHORT_BOTH, EltwiseOp::ADD, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
+        (BroadcastConfig){ApiConvention::SHORT_BOTH, EltwiseOp::SUB, BroadcastDim::COL, TileShape::TINY_TILE_16x32},
+        (BroadcastConfig){ApiConvention::SHORT_BOTH, EltwiseOp::MUL, BroadcastDim::COL, TileShape::TINY_TILE_16x32}));
 
 }  // namespace tt::tt_metal

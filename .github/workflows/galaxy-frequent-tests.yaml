@@ -1,0 +1,25 @@
+name: "Galaxy frequent tests"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 5'  # Runs every Friday at 12am UTC
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: true
+      version: 22.04
+  tg-frequent-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tg-frequent-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      topology: topology-6u

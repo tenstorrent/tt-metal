@@ -68,15 +68,8 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
     cb_push_back(out_cb, num_tiles);
 }
 
-template <
-    PoolType pool_type,
-    ReduceDim reduce_dim,
-    uint32_t in0_cb,
-    uint32_t scale_cb,
-    uint32_t out_cb,
-    uint32_t rows,
-    uint32_t cols>
-void reduce_c() {
+template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in0_cb, uint32_t scale_cb, uint32_t out_cb, uint32_t rows>
+void reduce_c(uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
     // Precondition: out_cb has rows free
@@ -138,8 +131,13 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t
     cb_wait_front(in0_cb, rows * cols);
     cb_wait_front(in1_cb, rows);
 
+#ifdef SUB_EXP_GRANULARITY
     constexpr uint32_t dst_tiles = SUB_EXP_GRANULARITY;
     uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
+#else
+    uint32_t dst_tiles = cols;
+    uint32_t granularity = 1;
+#endif
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
@@ -190,8 +188,14 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb, uint32_t in1_scalar_cb, uin
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_scalar_cb has 1 produced
 
+#ifdef MUL_BCAST_GRANULARITY
     constexpr uint32_t dst_tiles = MUL_BCAST_GRANULARITY;
     uint32_t granularity = num_tiles >> LOG2_MUL_BCAST_GRANULARITY;
+#else
+    uint32_t dst_tiles = num_tiles;
+    uint32_t granularity = 1;
+#endif
+
     reconfig_data_format(in0_cb, in1_scalar_cb);
     mul_tiles_bcast_scalar_init_short(in0_cb, in1_scalar_cb);
     cb_wait_front(in0_cb, num_tiles);
@@ -264,6 +268,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
+        invalidate_l1_cache();
         acquire_dst();
         mul_tiles(in0_cb, in1_cb, 0, i, 0);
         cb_pop_front(in0_cb, 1);
@@ -285,6 +290,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     cb_reserve_back(out_cb, num_tiles);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
+        invalidate_l1_cache();
         acquire_dst();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
         exp_tile<EXP_APPROX_MODE>(0);
@@ -436,23 +442,15 @@ template <
     uint32_t St,
     uint32_t DHt,
     uint32_t Sq_chunk_t,
-    uint32_t Sk_chunk_t,
-    uint32_t qk_chunk_tiles,
     uint32_t out_chunk_tiles,
     // QK matmul block parameters
     uint32_t qk_in0_block_w,
-    uint32_t qk_subblock_w,
-    uint32_t qk_subblock_h,
-    uint32_t qk_in0_num_subblocks,
-    uint32_t qk_in1_num_subblocks,
     uint32_t qk_num_blocks,
     // Output matmul block parameters
-    uint32_t out_in0_block_w,
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t out_in0_num_subblocks,
     uint32_t out_in1_num_subblocks,
-    uint32_t out_num_blocks,
     // Attention parameters
     bool is_causal,
     bool use_attention_mask,
@@ -478,6 +476,14 @@ void flash_attention_loop(
     // Runtime parameters
     uint32_t k_chunk_start,
     uint32_t k_chunk_end,
+    uint32_t Sk_chunk_t,
+    uint32_t qk_subblock_h,
+    uint32_t qk_subblock_w,
+    uint32_t qk_in0_num_subblocks,
+    uint32_t qk_in1_num_subblocks,
+    uint32_t out_in0_block_w,
+    uint32_t out_num_blocks,
+    uint32_t qk_chunk_tiles,
     bool do_reduce,
     bool apply_mask_at_last_chunk  // for causal mode, optionally apply mask at the last chunk
 ) {
@@ -485,6 +491,7 @@ void flash_attention_loop(
         /* QK = Q_CHUNK @ K_CHUNK */
         reconfig_data_format(cb_q_in, cb_k_in);  // DEBUG
         pack_reconfig_data_format(cb_qk_im);
+
         cb_matmul_blocks(
             cb_q_in,
             cb_k_in,
@@ -519,14 +526,8 @@ void flash_attention_loop(
 
         reconfig_data_format(cb_qk_im, cb_identity_scale_in);
         pack_reconfig_data_format(cb_cur_max);
-        reduce_c<
-            PoolType::MAX,
-            ReduceDim::REDUCE_ROW,
-            cb_qk_im,
-            cb_identity_scale_in,
-            cb_cur_max,
-            Sq_chunk_t,
-            Sk_chunk_t>();
+        reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_max, Sq_chunk_t>(
+            Sk_chunk_t);
 
         if (k_chunk > k_chunk_start) {
             reconfig_data_format(cb_cur_max, cb_prev_max);
@@ -541,14 +542,8 @@ void flash_attention_loop(
         /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
         reconfig_data_format(cb_qk_im, cb_identity_scale_in);
         pack_reconfig_data_format(cb_cur_sum);
-        reduce_c<
-            PoolType::SUM,
-            ReduceDim::REDUCE_ROW,
-            cb_qk_im,
-            cb_identity_scale_in,
-            cb_cur_sum,
-            Sq_chunk_t,
-            Sk_chunk_t>();
+        reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_sum, Sq_chunk_t>(
+            Sk_chunk_t);
 
         /* OUT_IM = QK @ V_CHUNK */
         reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG

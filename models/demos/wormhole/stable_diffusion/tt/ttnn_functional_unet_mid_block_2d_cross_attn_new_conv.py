@@ -3,21 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_new_conv import (
-    transformer_2d_model,
-)
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_new_conv import transformer_2d_model
 
 
 class unet_mid_block_2d_cross_attn:
-    def __init__(
-        self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
-    ):
+    def __init__(self, device, parameters, batch_size, input_height, input_width, compute_kernel_config):
         self.device = device
         self.parameters = parameters
         self.resnets = [
-            resnetBlock2D(
-                device, resnet, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
-            )
+            resnetBlock2D(device, resnet, batch_size, input_height, input_width, compute_kernel_config)
             for resnet in parameters.resnets
         ]
         self.attentions = [

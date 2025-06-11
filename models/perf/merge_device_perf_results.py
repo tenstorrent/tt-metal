@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.perf.perf_utils import today, merge_perf_files
 from models.perf.device_perf_utils import check_device_perf_results
+from models.perf.perf_utils import merge_perf_files, today
 
 expected_cols = [
     "Model",
@@ -12,14 +12,23 @@ expected_cols = [
     "AVG DEVICE FW SAMPLES/S",
     "MIN DEVICE FW SAMPLES/S",
     "MAX DEVICE FW SAMPLES/S",
+    "AVG DEVICE FW DURATION [ns]",
+    "MIN DEVICE FW DURATION [ns]",
+    "MAX DEVICE FW DURATION [ns]",
     "AVG DEVICE KERNEL SAMPLES/S",
     "Lower Threshold AVG DEVICE KERNEL SAMPLES/S",
     "Upper Threshold AVG DEVICE KERNEL SAMPLES/S",
     "MIN DEVICE KERNEL SAMPLES/S",
     "MAX DEVICE KERNEL SAMPLES/S",
+    "AVG DEVICE KERNEL DURATION [ns]",
+    "MIN DEVICE KERNEL DURATION [ns]",
+    "MAX DEVICE KERNEL DURATION [ns]",
     "AVG DEVICE BRISC KERNEL SAMPLES/S",
     "MIN DEVICE BRISC KERNEL SAMPLES/S",
     "MAX DEVICE BRISC KERNEL SAMPLES/S",
+    "AVG DEVICE BRISC KERNEL DURATION [ns]",
+    "MIN DEVICE BRISC KERNEL DURATION [ns]",
+    "MAX DEVICE BRISC KERNEL DURATION [ns]",
 ]
 
 check_cols = ["AVG DEVICE KERNEL SAMPLES/S"]

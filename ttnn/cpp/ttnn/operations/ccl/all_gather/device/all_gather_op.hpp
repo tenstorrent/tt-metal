@@ -13,7 +13,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-
+#include "ttnn/distributed/types.hpp"
 
 #include "ttnn/run_operation.hpp"
 
@@ -122,18 +122,25 @@ struct AllGather {
     const uint32_t dim;
     const uint32_t num_links;
     const uint32_t ring_size;
-    const uint32_t ring_index;
     const std::optional<size_t> user_defined_num_workers;
     const std::optional<size_t> user_defined_num_buffers_per_channel;
-    const std::optional<chip_id_t> receiver_device_id;
-    const std::optional<chip_id_t> sender_device_id;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
+    std::optional<uint32_t> cluster_axis;
+    std::vector<IDevice*> devices;
+    const distributed::MeshDevice* mesh_device = nullptr;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload(
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const std::vector<Tensor>& input_tensors,
+        std::vector<Tensor>& output_tensors) const;
+    tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
+        const ttnn::MeshCoordinate& mesh_coord,
+        const std::vector<Tensor>& input_tensors,
+        std::vector<Tensor>& output_tensors) const;
 };
 
 namespace ccl{
@@ -171,6 +178,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
+    chip_id_t target_device_id,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     ccl::Topology topology,
@@ -184,6 +192,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
+    chip_id_t target_device_id,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     ccl::Topology topology,
@@ -206,8 +215,28 @@ Tensor all_gather(
     const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
 
+std::vector<Tensor> all_gather(
+    const std::vector<Tensor>& input_tensors,
+    const int32_t dim,
+    const uint32_t num_links = 1,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<size_t> user_defined_num_workers = std::nullopt,
+    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
+
 Tensor all_gather(
     const Tensor& input_tensor,
+    const int32_t dim,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const uint32_t num_links = 1,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<size_t> user_defined_num_workers = std::nullopt,
+    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear);
+
+std::vector<Tensor> all_gather(
+    const std::vector<Tensor>& input_tensors,
     const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,

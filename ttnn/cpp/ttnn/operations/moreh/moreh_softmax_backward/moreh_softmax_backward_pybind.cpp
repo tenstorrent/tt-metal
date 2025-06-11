@@ -5,8 +5,8 @@
 #include "moreh_softmax_backward_pybind.hpp"
 
 #include "moreh_softmax_backward.hpp"
-#include "pybind11/decorators.hpp"
-#include "cpp/pybind11/export_enum.hpp"
+#include "ttnn-pybind/decorators.hpp"
+#include "ttnn-pybind/export_enum.hpp"
 
 namespace ttnn::operations::moreh::moreh_softmax_backward {
 

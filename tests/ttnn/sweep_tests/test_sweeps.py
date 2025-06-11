@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec
 from .sweeps import (
     SWEEP_SOURCES_DIR,
     permutations,
@@ -31,7 +32,10 @@ for file_name in sorted(SWEEP_SOURCES_DIR.glob("**/*.py")):
 def create_test_function(file_name):
     base_name = os.path.basename(file_name)
     base_name = os.path.splitext(base_name)[0]
-    sweep_module = SourceFileLoader(f"sweep_module_{base_name}", str(file_name)).load_module()
+    loader = SourceFileLoader(f"sweep_module_{base_name}", str(file_name))
+    spec = loader.spec
+    sweep_module = module_from_spec(spec)
+    loader.exec_module(sweep_module)
     base_name = base_name + ".csv"
     sweep_tests = []
     for sweep_test_index, parameter_list in enumerate(permutations(sweep_module.parameters)):

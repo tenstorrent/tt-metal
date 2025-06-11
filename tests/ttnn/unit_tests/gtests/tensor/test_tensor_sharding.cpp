@@ -1,18 +1,40 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common_tensor_test_utils.hpp"
-#include "gtest/gtest.h"
-#include "gmock/gmock.h"
-
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <stddef.h>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/async_runtime.hpp"
+#include <tt_stl/span.hpp>
+#include <algorithm>
+#include <functional>
+#include <iostream>
+#include <iterator>
+#include <optional>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include "common_tensor_test_utils.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/tile.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
-#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
@@ -98,8 +120,7 @@ TEST_P(ShardWithAlignmentTests, LogicalToPhysical) {
                                 params.inputs.logical_shard_shape,
                                 ShardOrientation::ROW_MAJOR,
                                 ShardMode::LOGICAL);
-    MemoryConfig memory_config{
-        .memory_layout = params.inputs.memory_layout, .buffer_type = BufferType::L1, .shard_spec = shard_spec};
+    MemoryConfig memory_config{params.inputs.memory_layout, BufferType::L1, shard_spec};
     auto tensor_layout = TensorLayout(DataType::BFLOAT16, params.inputs.page_config, memory_config);
     auto tensor_spec = TensorSpec(params.inputs.shape, tensor_layout);
 
@@ -120,7 +141,7 @@ TEST_P(ShardWithAlignmentTests, LogicalToPhysical) {
     if (tensor_spec.layout() == Layout::TILE) {
         // TODO: Fix convert_layout_tile_to_row_major to take in vector instead of buffer?
         physical_data = tensor_impl::convert_layout_tile_to_row_major(
-            physical_shape, tensor_spec.tile(), owned_buffer::create(std::move(physical_data)));
+            physical_shape, tensor_spec.tile(), tt::stl::make_const_span(physical_data));
     }
 
     // auto shape_2d = tensor_spec.logical_2d_shape();
@@ -149,8 +170,7 @@ TEST_P(ShardWithAlignmentTests, PhysicalToLogical) {
                                 params.inputs.logical_shard_shape,
                                 ShardOrientation::ROW_MAJOR,
                                 ShardMode::LOGICAL);
-    MemoryConfig memory_config{
-        .memory_layout = params.inputs.memory_layout, .buffer_type = BufferType::L1, .shard_spec = shard_spec};
+    MemoryConfig memory_config{params.inputs.memory_layout, BufferType::L1, shard_spec};
     auto tensor_layout = TensorLayout(DataType::BFLOAT16, params.inputs.page_config, memory_config);
     auto tensor_spec = TensorSpec(params.inputs.shape, tensor_layout);
 
@@ -171,7 +191,7 @@ TEST_P(ShardWithAlignmentTests, PhysicalToLogical) {
     if (tensor_spec.layout() == Layout::TILE) {
         // TODO: Fix convert_layout_row_major_to_tile to take in vector instead of buffer?
         physical_data = tensor_impl::convert_layout_row_major_to_tile(
-            physical_shape, tensor_spec.tile(), owned_buffer::create(std::move(physical_data)));
+            physical_shape, tensor_spec.tile(), tt::stl::make_const_span(physical_data));
     }
     auto logical_data = tensor_impl::decode_tensor_data(std::move(physical_data), tensor_spec);
 
@@ -784,15 +804,14 @@ INSTANTIATE_TEST_SUITE_P(
                 .page_config = PageConfig(Layout::TILE),
                 .memory_config =
                     MemoryConfig{
-                        .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-                        .buffer_type = BufferType::L1,
-                        .shard_spec =
-                            ShardSpec{
-                                num_cores_to_corerangeset(tt::div_up(48 * 56, 48), grid_size, /*row_wise=*/true),
-                                {48, 32},
-                                ShardOrientation::ROW_MAJOR,
-                                ShardMode::LOGICAL
-                            }
+                        TensorMemoryLayout::HEIGHT_SHARDED,
+                        BufferType::L1,
+                        ShardSpec{
+                            num_cores_to_corerangeset(tt::div_up(48 * 56, 48), grid_size, /*row_wise=*/true),
+                            {48, 32},
+                            ShardOrientation::ROW_MAJOR,
+                            ShardMode::LOGICAL
+                        }
                     }
             },
             CreateShardedTensorWithAlignmentExpected{.physical_shape = Shape2D{3584, 32}}
@@ -807,15 +826,14 @@ INSTANTIATE_TEST_SUITE_P(
                 .page_config = PageConfig(Layout::TILE),
                 .memory_config =
                     MemoryConfig{
-                        .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-                        .buffer_type = BufferType::L1,
-                        .shard_spec =
-                            ShardSpec{
-                                num_cores_to_corerangeset(tt::div_up(48 * 56, 64), grid_size, /*row_wise=*/true),
-                                {64, 32},
-                                ShardOrientation::ROW_MAJOR,
-                                ShardMode::LOGICAL
-                            }
+                        TensorMemoryLayout::HEIGHT_SHARDED,
+                        BufferType::L1,
+                        ShardSpec{
+                            num_cores_to_corerangeset(tt::div_up(48 * 56, 64), grid_size, /*row_wise=*/true),
+                            {64, 32},
+                            ShardOrientation::ROW_MAJOR,
+                            ShardMode::LOGICAL
+                        }
                     }
             },
             CreateShardedTensorWithAlignmentExpected{.physical_shape = Shape2D{2688, 32}}
@@ -829,9 +847,9 @@ INSTANTIATE_TEST_SUITE_P(
                 .page_config = PageConfig(Layout::TILE),
                 .memory_config =
                     MemoryConfig{
-                        .memory_layout = TensorMemoryLayout::INTERLEAVED,
-                        .buffer_type = BufferType::DRAM,
-                        .shard_spec = std::nullopt
+                        TensorMemoryLayout::INTERLEAVED,
+                        BufferType::DRAM,
+                        std::nullopt
                     }
             },
             CreateShardedTensorWithAlignmentExpected{.physical_shape = Shape2D{3072, 32}}
@@ -850,10 +868,9 @@ INSTANTIATE_TEST_SUITE_P(
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .memory_config =
                     MemoryConfig{
-                        .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
-                        .buffer_type = BufferType::L1,
-                        .shard_spec =
-                            ShardSpec{
+                        TensorMemoryLayout::WIDTH_SHARDED,
+                        BufferType::L1,
+                        ShardSpec{
                                 num_cores_to_corerangeset(tt::div_up(5, 1), grid_size, /*row_wise=*/true),
                                 {20, 1},
                                 ShardOrientation::ROW_MAJOR,
@@ -873,15 +890,14 @@ INSTANTIATE_TEST_SUITE_P(
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .memory_config =
                     MemoryConfig{
-                        .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
-                        .buffer_type = BufferType::L1,
-                        .shard_spec =
-                            ShardSpec{
-                                num_cores_to_corerangeset(tt::div_up(5, 4), grid_size, /*row_wise=*/true),
-                                {20, 4},
-                                ShardOrientation::ROW_MAJOR,
-                                ShardMode::LOGICAL
-                            }
+                        TensorMemoryLayout::WIDTH_SHARDED,
+                        BufferType::L1,
+                        ShardSpec{
+                            num_cores_to_corerangeset(tt::div_up(5, 4), grid_size, /*row_wise=*/true),
+                            {20, 4},
+                            ShardOrientation::ROW_MAJOR,
+                            ShardMode::LOGICAL
+                        }
                     }
             },
             CreateShardedTensorWithAlignmentExpected{.physical_shape = Shape2D{20, 8}}
@@ -895,9 +911,9 @@ INSTANTIATE_TEST_SUITE_P(
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .memory_config =
                     MemoryConfig{
-                        .memory_layout = TensorMemoryLayout::INTERLEAVED,
-                        .buffer_type = BufferType::L1,
-                        .shard_spec = std::nullopt
+                        TensorMemoryLayout::INTERLEAVED,
+                        BufferType::L1,
+                        std::nullopt
                     }
             },
             CreateShardedTensorWithAlignmentExpected{.physical_shape = Shape2D{20, 5}}
@@ -915,10 +931,9 @@ INSTANTIATE_TEST_SUITE_P(
                 .page_config = PageConfig(Layout::TILE, Tile({32, 16})),
                 .memory_config =
                     MemoryConfig{
-                        .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
-                        .buffer_type = BufferType::L1,
-                        .shard_spec =
-                            ShardSpec{
+                        TensorMemoryLayout::BLOCK_SHARDED,
+                        BufferType::L1,
+                        ShardSpec{
                                 CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{3, 5})),
                                 {48, 10},
                                 {64, 48},
@@ -938,10 +953,9 @@ INSTANTIATE_TEST_SUITE_P(
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .memory_config =
                     MemoryConfig{
-                        .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
-                        .buffer_type = BufferType::L1,
-                        .shard_spec =
-                            ShardSpec{
+                        TensorMemoryLayout::BLOCK_SHARDED,
+                        BufferType::L1,
+                        ShardSpec{
                                 CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{2, 3})),
                                 {5, 2},
                                 {7, 3},
@@ -987,10 +1001,9 @@ INSTANTIATE_TEST_SUITE_P(
             .page_config = PageConfig(Layout::TILE, Tile({32, 16})),
             .memory_config =
                 MemoryConfig{
-                    .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-                    .buffer_type = BufferType::L1,
-                    .shard_spec =
-                        ShardSpec{
+                    TensorMemoryLayout::HEIGHT_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
                             num_cores_to_corerangeset(10, grid_size, /*row_wise=*/true),
                             {10, 20},
                             ShardOrientation::ROW_MAJOR,
@@ -1004,10 +1017,9 @@ INSTANTIATE_TEST_SUITE_P(
             .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
             .memory_config =
                 MemoryConfig{
-                    .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-                    .buffer_type = BufferType::L1,
-                    .shard_spec =
-                        ShardSpec{
+                    TensorMemoryLayout::HEIGHT_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
                             num_cores_to_corerangeset(10, grid_size, /*row_wise=*/true),
                             {10, 20},
                             {40, 20},
@@ -1022,10 +1034,9 @@ INSTANTIATE_TEST_SUITE_P(
             .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
             .memory_config =
                 MemoryConfig{
-                    .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-                    .buffer_type = BufferType::L1,
-                    .shard_spec =
-                        ShardSpec{
+                    TensorMemoryLayout::HEIGHT_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
                             num_cores_to_corerangeset(10, grid_size, /*row_wise=*/true),
                             {10, 20},
                             {40, 32},
@@ -1061,10 +1072,9 @@ INSTANTIATE_TEST_SUITE_P(
             .page_config = PageConfig(Layout::TILE, Tile({32, 16})),
             .memory_config =
                 MemoryConfig{
-                    .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-                    .buffer_type = BufferType::L1,
-                    .shard_spec =
-                        ShardSpec{
+                    TensorMemoryLayout::HEIGHT_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
                             num_cores_to_corerangeset(3, grid_size, /*row_wise=*/true),
                             {32, 16},
                             ShardOrientation::ROW_MAJOR,
@@ -1078,10 +1088,9 @@ INSTANTIATE_TEST_SUITE_P(
             .page_config = PageConfig(Layout::TILE, Tile({32, 16})),
             .memory_config =
                 MemoryConfig{
-                    .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-                    .buffer_type = BufferType::L1,
-                    .shard_spec =
-                        ShardSpec{
+                    TensorMemoryLayout::HEIGHT_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
                             num_cores_to_corerangeset(5, grid_size, /*row_wise=*/true),
                             {10, 20},
                             ShardOrientation::ROW_MAJOR,
@@ -1096,10 +1105,9 @@ INSTANTIATE_TEST_SUITE_P(
             .page_config = PageConfig(Layout::TILE, Tile({32, 16})),
             .memory_config =
                 MemoryConfig{
-                    .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-                    .buffer_type = BufferType::L1,
-                    .shard_spec =
-                        ShardSpec{
+                    TensorMemoryLayout::HEIGHT_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
                             num_cores_to_corerangeset(10, grid_size, /*row_wise=*/true),
                             {32, 16},
                             ShardOrientation::ROW_MAJOR,
@@ -1113,10 +1121,9 @@ INSTANTIATE_TEST_SUITE_P(
             .page_config = PageConfig(Layout::TILE, Tile({32, 16})),
             .memory_config =
                 MemoryConfig{
-                    .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-                    .buffer_type = BufferType::L1,
-                    .shard_spec =
-                        ShardSpec{
+                    TensorMemoryLayout::HEIGHT_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
                             num_cores_to_corerangeset(10, grid_size, /*row_wise=*/true),
                             {32, 10},
                             ShardOrientation::ROW_MAJOR,
@@ -1131,10 +1138,9 @@ INSTANTIATE_TEST_SUITE_P(
             .page_config = PageConfig(Layout::TILE, Tile({16, 32})),
             .memory_config =
                 MemoryConfig{
-                    .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
-                    .buffer_type = BufferType::L1,
-                    .shard_spec =
-                        ShardSpec{
+                    TensorMemoryLayout::WIDTH_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
                             num_cores_to_corerangeset(3, grid_size, /*row_wise=*/true),
                             {16, 32},
                             ShardOrientation::ROW_MAJOR,
@@ -1148,10 +1154,9 @@ INSTANTIATE_TEST_SUITE_P(
             .page_config = PageConfig(Layout::TILE, Tile({16, 32})),
             .memory_config =
                 MemoryConfig{
-                    .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
-                    .buffer_type = BufferType::L1,
-                    .shard_spec =
-                        ShardSpec{
+                    TensorMemoryLayout::WIDTH_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
                             num_cores_to_corerangeset(5, grid_size, /*row_wise=*/true),
                             {20, 10},
                             ShardOrientation::ROW_MAJOR,
@@ -1166,10 +1171,9 @@ INSTANTIATE_TEST_SUITE_P(
             .page_config = PageConfig(Layout::TILE, Tile({16, 32})),
             .memory_config =
                 MemoryConfig{
-                    .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
-                    .buffer_type = BufferType::L1,
-                    .shard_spec =
-                        ShardSpec{
+                    TensorMemoryLayout::WIDTH_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
                             num_cores_to_corerangeset(10, grid_size, /*row_wise=*/true),
                             {16, 32},
                             ShardOrientation::ROW_MAJOR,
@@ -1183,10 +1187,9 @@ INSTANTIATE_TEST_SUITE_P(
             .page_config = PageConfig(Layout::TILE, Tile({16, 32})),
             .memory_config =
                 MemoryConfig{
-                    .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
-                    .buffer_type = BufferType::L1,
-                    .shard_spec =
-                        ShardSpec{
+                    TensorMemoryLayout::WIDTH_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
                             num_cores_to_corerangeset(10, grid_size, /*row_wise=*/true),
                             {10, 32},
                             ShardOrientation::ROW_MAJOR,
@@ -1201,10 +1204,9 @@ INSTANTIATE_TEST_SUITE_P(
             .page_config = PageConfig(Layout::TILE, Tile({16, 32})),
             .memory_config =
                 MemoryConfig{
-                    .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
-                    .buffer_type = BufferType::L1,
-                    .shard_spec =
-                        ShardSpec{
+                    TensorMemoryLayout::BLOCK_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
                             CoreRangeSet((std::set<CoreRange>){CoreRange(CoreCoord{0, 0}, CoreCoord{6, 0}), CoreRange(CoreCoord{0, 1}, CoreCoord{1, 1})}),
                             {10, 32},
                             ShardOrientation::ROW_MAJOR,
@@ -1219,10 +1221,9 @@ INSTANTIATE_TEST_SUITE_P(
             .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
             .memory_config =
                 MemoryConfig{
-                    .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
-                    .buffer_type = BufferType::L1,
-                    .shard_spec =
-                        ShardSpec{
+                    TensorMemoryLayout::BLOCK_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
                             CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6})),
                             {10, 20},
                             ShardOrientation::ROW_MAJOR,
@@ -1237,10 +1238,9 @@ INSTANTIATE_TEST_SUITE_P(
             .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
             .memory_config =
                 MemoryConfig{
-                    .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
-                    .buffer_type = BufferType::L1,
-                    .shard_spec =
-                        ShardSpec{
+                    TensorMemoryLayout::BLOCK_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
                             CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6})),
                             {20, 10},
                             ShardOrientation::ROW_MAJOR,
@@ -1255,10 +1255,9 @@ INSTANTIATE_TEST_SUITE_P(
             .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
             .memory_config =
                 MemoryConfig{
-                    .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
-                    .buffer_type = BufferType::L1,
-                    .shard_spec =
-                        ShardSpec{
+                    TensorMemoryLayout::BLOCK_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
                             CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6})),
                             {10, 20},
                             ShardOrientation::COL_MAJOR,
@@ -1273,10 +1272,9 @@ INSTANTIATE_TEST_SUITE_P(
             .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
             .memory_config =
                 MemoryConfig{
-                    .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
-                    .buffer_type = BufferType::L1,
-                    .shard_spec =
-                        ShardSpec{
+                    TensorMemoryLayout::BLOCK_SHARDED,
+                    BufferType::L1,
+                    ShardSpec{
                             CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6})),
                             {20, 10},
                             ShardOrientation::COL_MAJOR,

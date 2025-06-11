@@ -2,11 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
+from loguru import logger
 
 # import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
-
-from loguru import logger
 
 
 @torch.no_grad()

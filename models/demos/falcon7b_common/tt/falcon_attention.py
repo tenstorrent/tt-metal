@@ -2,22 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import math
-from torch import nn
 from typing import Optional, Tuple
 
-from models.demos.falcon7b_common.tt.model_utils import get_falcon_default_core_grid
+import torch
+from torch import nn
+
 import ttnn
-from ttnn import ReplicateTensorToMesh
-
-from models.utility_functions import (
-    nearest_32,
-    is_wormhole_b0,
-)
-
-from models.demos.falcon7b_common.tt.model_utils import get_weights_cached
 from models.demos.falcon7b_common.tests.test_utils import tt_from_torch
+from models.demos.falcon7b_common.tt.model_utils import get_falcon_default_core_grid, get_weights_cached
+from models.utility_functions import is_wormhole_b0, nearest_32
+from ttnn import ReplicateTensorToMesh
 
 
 class TtFalconRotaryEmbedding(torch.nn.Module):
@@ -646,12 +641,9 @@ class TtFalconAttentionDecode(nn.Module):
                 -2,
                 -3,
             )
-            query_layer = ttnn.reshape_on_device(
+            query_layer = ttnn.reshape(
                 query_layer,
-                batch,
-                1,
-                self.padded_local_heads,
-                self.head_dim,  # Batch must be in dim 0 to match K cache
+                (batch, 1, self.padded_local_heads, self.head_dim),  # Batch must be in dim 0 to match K cache
             )
             query_layer = ttnn.interleaved_to_sharded(
                 query_layer,
@@ -792,29 +784,13 @@ class TtFalconAttentionDecode(nn.Module):
             )
 
             # Get batch in dim 1
-            attn_output = ttnn.reshape_on_device(attn_output, 1, batch, self.padded_local_heads, self.head_dim)
+            attn_output = ttnn.transpose(attn_output, 0, 1)
 
             # Get batch in dim 2
-            attn_output = ttnn.transpose(
-                attn_output,
-                -2,
-                -3,
-            )
+            attn_output = ttnn.transpose(attn_output, -2, -3)
 
             # UNPAD
-            attn_output_shape = attn_output.padded_shape
-            attn_output = ttnn.slice(
-                attn_output,
-                starts=(0, 0, 0, 0),
-                ends=(
-                    attn_output_shape[0],
-                    self.num_heads,
-                    attn_output_shape[2],
-                    attn_output_shape[3],
-                ),
-                steps=(1, 1, 1, 1),
-                memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-            )
+            attn_output = attn_output[:, : self.num_heads, :, :]
         else:
             # TODO: switch to group_attn_matmul once multiple q heads is supported (issue #5318)
             if is_wormhole_b0():

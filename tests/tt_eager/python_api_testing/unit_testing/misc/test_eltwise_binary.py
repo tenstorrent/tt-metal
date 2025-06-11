@@ -58,7 +58,9 @@ def test_run_elt_binary(dtype, test_func_name, torch_func_name, pre_in0_silu, de
 
     if pre_in0_silu:
         torch_silu = torch.nn.SiLU()
-        out_t = test_func_name(in0_t, in1_t, input_tensor_a_activation=ttnn.UnaryOpType.SILU, memory_config=mem_config)
+        out_t = test_func_name(
+            in0_t, in1_t, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mem_config
+        )
     else:
         out_t = test_func_name(in0_t, in1_t)
     out = tt2torch_tensor(out_t)
@@ -170,7 +172,7 @@ def test_run_elt_binary_mul_with_sub_devices(device):
     out_t = ttnn.mul(
         in0_t,
         in1_t,
-        input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+        input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
         dtype=ttnn.bfloat8_b,
         memory_config=output_mem_config,
     )

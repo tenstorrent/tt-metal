@@ -19,31 +19,18 @@ Tensor _fast_reduce_nc(
     const std::optional<const ttnn::Tensor>& output,
     const MemoryConfig& output_mem_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
-
-    TT_FATAL(input.storage_type() == StorageType::DEVICE || input.storage_type() == StorageType::MULTI_DEVICE, "Error");
+    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Error");
     auto kernel_config_val =
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
-    operation::launch_op(
-        [dim, output_mem_config, kernel_config_val, queue_id](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            return operation::run(
-                FastReduceNCDeviceOperation{
-                    .dim = dim, .output_mem_config = output_mem_config, .compute_kernel_config = kernel_config_val},
-                input_tensors,
-                optional_input_tensors,
-                optional_output_tensors,
-                queue_id);
-        },
-        {input},
-        output_tensors,
-        {},
-        {output});
-
-    return output_tensors.at(0);
+    return operation::run(
+               FastReduceNCDeviceOperation{
+                   .dim = dim, .output_mem_config = output_mem_config, .compute_kernel_config = kernel_config_val},
+               {input},
+               {},
+               {output},
+               queue_id)
+        .at(0);
 }
 
 void FastReduceNCDeviceOperation::validate_with_output_tensors(
@@ -56,7 +43,7 @@ void FastReduceNCDeviceOperation::validate_with_output_tensors(
     check_tensor(output, "FastReduceNC", "output", {DataType::BFLOAT16, DataType::BFLOAT8_B});
 
     // validate input dim
-    const auto input_rank = input.get_logical_shape().rank();
+    const auto input_rank = input.logical_shape().rank();
     TT_FATAL(
         (this->dim >= 0 && this->dim <= tt::tt_metal::MAX_NUM_DIMENSIONS - 2),
         "dim must be between 0 and {}.",
@@ -67,18 +54,18 @@ void FastReduceNCDeviceOperation::validate_with_output_tensors(
 std::vector<ttnn::TensorSpec> FastReduceNCDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     if (output_tensors.at(0).has_value()) {
-        return {output_tensors.at(0)->get_tensor_spec()};
+        return {output_tensors.at(0)->tensor_spec()};
     }
 
     const auto& input = input_tensors.at(0);
-    const auto& input_shape = input.get_padded_shape();
+    const auto& input_shape = input.padded_shape();
     const auto input_rank = input_shape.rank();
 
     // keepdim=true
     auto output_shape = input_shape;
     // last 2-dim
     output_shape[this->dim] = 1;
-    return {TensorSpec(output_shape, TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
+    return {TensorSpec(output_shape, TensorLayout(input.dtype(), PageConfig(Layout::TILE), output_mem_config))};
 }
 
 std::vector<Tensor> FastReduceNCDeviceOperation::create_output_tensors(

@@ -25,8 +25,8 @@ namespace ttml::ops {
 namespace {
 
 bool was_broadcasted(const autograd::TensorPtr& input, const ttnn::Tensor& grad) {
-    auto input_shape = input->get_value().get_logical_shape();
-    auto grad_shape = grad.get_logical_shape();
+    auto input_shape = input->get_value().logical_shape();
+    auto grad_shape = grad.logical_shape();
     if (input_shape.rank() != grad_shape.rank()) {
         return false;
     }
@@ -42,8 +42,8 @@ bool was_broadcasted(const autograd::TensorPtr& input, const ttnn::Tensor& grad)
 
 ttnn::SmallVector<int64_t> get_broadcast_dimensions(const autograd::TensorPtr& input, const ttnn::Tensor& grad) {
     ttnn::SmallVector<int64_t> broadcast_dims;
-    auto input_shape = input->get_value().get_logical_shape();
-    auto grad_shape = grad.get_logical_shape();
+    auto input_shape = input->get_value().logical_shape();
+    auto grad_shape = grad.logical_shape();
     for (size_t i = 0; i < input_shape.size(); ++i) {
         if (input_shape[i] != grad_shape[i]) {
             broadcast_dims.push_back(static_cast<int64_t>(i));
@@ -66,7 +66,9 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::Auto
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::TensorPtr& b) {
     auto out = autograd::create_tensor();
 
-    out->set_value(ttnn::experimental::add(a->get_value(), b->get_value()));
+    constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+    out->set_value(
+        ttnn::add(a->get_value(), b->get_value(), std::nullopt, std::nullopt, std::nullopt, none, none, none, false));
     autograd::GradFunction grad = [a, b, out]() {
         if (was_broadcasted(a, out->get_grad())) {
             a->add_grad(ttnn::moreh_sum(

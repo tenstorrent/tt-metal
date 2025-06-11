@@ -3,11 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/allocator/algorithms/free_list.hpp"
-#include <assert.hpp>
-#include <boost/smart_ptr/make_local_shared.hpp>
 
+#include <assert.hpp>
+#include <boost/smart_ptr/make_local_shared_object.hpp>
 #include <algorithm>
-#include <cmath>
+#include <functional>
+#include <string>
+#include <unordered_map>
+
+#include "allocator/algorithms/allocator_algorithm.hpp"
 
 namespace tt {
 

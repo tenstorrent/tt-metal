@@ -1,0 +1,65 @@
+name: "[internal] didt tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      runner-label:
+        required: true
+        type: string
+      timeout:
+        required: true
+        type: number
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+
+jobs:
+  ttnn:
+    name: didt tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    runs-on: ["in-service", "cloud-virtual-machine", "${{ inputs.runner-label }}"]
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Run di/dt Tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: |
+          if [[ "${{ inputs.runner-label }}" == "N300" ]]; then
+            export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+          fi
+          pytest tests/didt/test_resnet_conv.py::test_resnet_conv -k "1chips" --didt-workload-iterations 100 --determinism-check-interval 1
+          pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "without_gelu and 1chips" --didt-workload-iterations 100 --determinism-check-interval 1
+          pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "with_gelu and 1chips" --didt-workload-iterations 100 --determinism-check-interval 1
+          pytest tests/didt/test_lm_head_matmul.py::test_lm_head_matmul -k "1chips" --didt-workload-iterations 100 --determinism-check-interval 1
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U08JJGXKWKB # Radomir Djogo
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

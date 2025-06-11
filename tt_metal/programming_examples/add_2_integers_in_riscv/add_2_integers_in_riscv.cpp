@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/device.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
 
-int main(int argc, char** argv) {
+int main() {
     /* Silicon accelerator setup */
     IDevice* device = CreateDevice(0);
 

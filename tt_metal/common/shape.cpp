@@ -4,11 +4,14 @@
 
 #include "shape.hpp"
 
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt_stl/small_vector.hpp>
+#include <functional>
 #include <numeric>
 #include <ostream>
-
-#include <tt-metalium/assert.hpp>
-#include <tt-metalium/small_vector.hpp>
+#include <utility>
 
 namespace tt::tt_metal {
 
@@ -44,7 +47,7 @@ Shape Shape::to_rank(size_t new_rank) const {
     return Shape(std::move(new_shape));
 }
 
-const uint32_t Shape::get_normalized_index(std::int64_t index) const {
+uint32_t Shape::get_normalized_index(std::int64_t index) const {
     std::int64_t rank = static_cast<std::int64_t>(this->rank());
     std::uint64_t normalized_index = index >= 0 ? index : rank + index;
     TT_FATAL(
@@ -78,7 +81,7 @@ tt::stl::SmallVector<uint32_t> compute_strides(const tt::tt_metal::Shape& shape)
         return tt::stl::SmallVector<uint32_t>(shape.rank(), 0);
     }
 
-    ttnn::SmallVector<uint32_t> strides;
+    tt::stl::SmallVector<uint32_t> strides;
     for (std::int32_t index = 0; index < shape.rank(); index++) {
         num_elements /= shape[index];
         strides.push_back(num_elements);
@@ -87,3 +90,12 @@ tt::stl::SmallVector<uint32_t> compute_strides(const tt::tt_metal::Shape& shape)
 }
 
 }  // namespace tt::tt_metal
+
+nlohmann::json tt::stl::json::to_json_t<tt::tt_metal::Shape>::operator()(const tt::tt_metal::Shape& shape) const {
+    return tt::stl::json::to_json(shape.view());
+}
+
+tt::tt_metal::Shape tt::stl::json::from_json_t<tt::tt_metal::Shape>::operator()(
+    const nlohmann::json& json_object) const {
+    return tt::tt_metal::Shape(tt::stl::json::from_json<tt::tt_metal::ShapeBase::Container>(json_object));
+}

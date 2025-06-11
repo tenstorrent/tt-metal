@@ -22,13 +22,13 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     // split work
-    auto shape = input_grad.get_padded_shape();
+    auto shape = input_grad.padded_shape();
     auto H = shape[-2];
     auto W = shape[-1];
     auto Ht = H / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
 
-    auto num = input_grad.volume() / H / W;
+    auto num = input_grad.physical_volume() / H / W;
 
     uint32_t num_cols_tiles = num * Wt;
     uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
@@ -44,7 +44,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_grad.get_dtype());
+    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_grad.dtype());
 
     CreateCircularBuffer(
         program,
@@ -62,9 +62,9 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
         });
 
     // create read/wrtie kernel
-    bool y_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool dy_is_dram = output_grad.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool dx_is_dram = input_grad.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool y_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool dy_is_dram = output_grad.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool dx_is_dram = input_grad.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
@@ -126,7 +126,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
         }
 
         float scaler = 1.0f;
-        uint32_t mask_h = input_grad.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT;
+        uint32_t mask_h = input_grad.logical_shape()[-2] % tt::constants::TILE_HEIGHT;
         if (mask_h == 0) {
             mask_h = tt::constants::TILE_HEIGHT;
         }

@@ -2,15 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from flask import Flask, request, jsonify, send_from_directory
-from gunicorn.app.base import BaseApplication
-from http import HTTPStatus
-from loguru import logger
-from models.demos.wormhole.stable_diffusion.demo.web_demo.task_queue import TaskQueue
-from models.demos.wormhole.stable_diffusion.demo.web_demo.model import warmup_model
 import os
+from http import HTTPStatus
 from threading import Thread
 
+from flask import Flask, jsonify, request, send_from_directory
+from gunicorn.app.base import BaseApplication
+from loguru import logger
+
+from models.demos.wormhole.stable_diffusion.demo.web_demo.model import warmup_model
+from models.demos.wormhole.stable_diffusion.demo.web_demo.task_queue import TaskQueue
 
 app = Flask(__name__)
 

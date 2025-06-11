@@ -2,31 +2,50 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <cctype>
 #include <chrono>
-#include <functional>
-#include <random>
-#include <stdexcept>
-#include <string>
-#include <vector>
-#include <ranges>
-
+#include <fmt/base.h>
+#include <stdlib.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <exception>
+#include <map>
+#include <memory>
+#include <optional>
+#include <ranges>
+#include <set>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "get_platform_architecture.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <yaml-cpp/yaml.h>
-
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "test_common.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -119,8 +138,9 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     uint32_t page_size, num_pages, num_pages_w_per_receiver;
     get_max_page_size_and_num_pages(block_w, block_h, single_tile_size, page_size, num_pages, num_pages_w_per_receiver);
 
-    log_info("Input block size: {}x{}, num_blocks: {}", block_h, block_w, num_blocks);
+    log_info(tt::LogTest, "Input block size: {}x{}, num_blocks: {}", block_h, block_w, num_blocks);
     log_info(
+        tt::LogTest,
         "Pages set up as page_size: {}, num_pages: {}, num_pages_w_per_receiver: {}",
         page_size,
         num_pages,
@@ -188,7 +208,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
         const std::array reader_rt_args = {(std::uint32_t)bank_id, (std::uint32_t)vc};
 
-        log_info("core: {}, vc: {}", core, vc);
+        log_info(tt::LogTest, "core: {}, vc: {}", core, vc);
 
         tt_metal::SetRuntimeArgs(program, reader_kernel, core, reader_rt_args);
 
@@ -197,8 +217,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
         auto writer_core2 = all_l1_writer_cores_ordered[(i * 2) + 1];
         auto writer_core_phy2 = device->worker_core_from_logical_core(writer_core2);
 
-        log_info("writer_core_phy1: {}", writer_core_phy1);
-        log_info("writer_core_phy2: {}", writer_core_phy2);
+        log_info(tt::LogTest, "writer_core_phy1: {}", writer_core_phy1);
+        log_info(tt::LogTest, "writer_core_phy2: {}", writer_core_phy2);
 
         const std::array writer_rt_args = {
             (std::uint32_t)(vc + 2) & 0x3,
@@ -324,7 +344,7 @@ bool validation(
         }
         core_id++;
     }
-    log_info("Validation passed.");
+    log_info(tt::LogTest, "Validation passed.");
     return true;
 }
 
@@ -398,7 +418,7 @@ void get_l1_writer_core_coords_grayskull(
 
 int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        log_error("Test not supported w/ slow dispatch, exiting");
+        log_error(tt::LogTest, "Test not supported w/ slow dispatch, exiting");
     }
 
     bool pass = true;
@@ -413,7 +433,7 @@ int main(int argc, char** argv) {
     uint32_t num_banks = 1;
     uint32_t bank_start_id = 1;
 
-    log_info("start DRAM benchmark");
+    log_info(tt::LogTest, "start DRAM benchmark");
 
     // try {
     ////////////////////////////////////////////////////////////////////////////
@@ -506,7 +526,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
         tt_metal::DispatchCoreConfig dispatch_core_config;
-        if (tt::tt_metal::get_platform_architecture() == tt::ARCH::GRAYSKULL) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::GRAYSKULL) {
             dispatch_core_config =
                 tt_metal::DispatchCoreConfig{tt_metal::DispatchCoreType::WORKER, tt_metal::DispatchCoreAxis::ROW};
         } else {
@@ -519,8 +539,8 @@ int main(int argc, char** argv) {
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
         uint32_t num_cores_x = compute_with_storage_grid_size.x;
         uint32_t num_cores_y = compute_with_storage_grid_size.y;
-        tt::log_debug("device x : {}", num_cores_x);
-        tt::log_debug("device y : {}", num_cores_y);
+        log_debug(tt::LogTest, "device x : {}", num_cores_x);
+        log_debug(tt::LogTest, "device y : {}", num_cores_y);
 
         int clock_freq_mhz = get_tt_npu_clock(device);
 
@@ -547,15 +567,15 @@ int main(int argc, char** argv) {
         uint32_t num_tiles_per_core = num_tiles / num_cores;
         uint32_t num_tiles_cb = num_tiles_per_core / num_blocks;
 
-        log_info("all_dram_reader_cores");
+        log_info(tt::LogTest, "all_dram_reader_cores");
         for (auto core : all_dram_reader_cores_ordered) {
             auto phys_core = device->worker_core_from_logical_core(core);
-            log_info("logical core: {}, virtual core: {}", core, phys_core);
+            log_info(tt::LogTest, "logical core: {}, virtual core: {}", core, phys_core);
         }
-        log_info("all_l1_writer_cores");
+        log_info(tt::LogTest, "all_l1_writer_cores");
         for (auto core : all_l1_writer_cores_ordered) {
             auto phys_core = device->worker_core_from_logical_core(core);
-            log_info("logical core: {}, virtual core: {}", core, phys_core);
+            log_info(tt::LogTest, "logical core: {}, virtual core: {}", core, phys_core);
         }
 
         log_info(
@@ -619,7 +639,7 @@ int main(int argc, char** argv) {
             auto t_begin = std::chrono::steady_clock::now();
             EnqueueProgram(device->command_queue(), program, false);
             Finish(device->command_queue());
-            tt_metal::DumpDeviceProfileResults(device, program);
+            tt_metal::detail::DumpDeviceProfileResults(device);
             auto t_end = std::chrono::steady_clock::now();
             auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             dram_bandwidth.push_back((input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
@@ -667,7 +687,7 @@ int main(int argc, char** argv) {
 
         // Determine if it passes performance goal
         auto avg_dram_bandwidth = calculate_average(dram_bandwidth);
-        if (pass && bypass_check == false) {
+        if (pass && !bypass_check) {
             // goal is 90% of peak DRAM bandwidth performance
             double target_bandwidth = static_cast<double>(dram_bandwidth_spec) * 0.9;
             if (avg_dram_bandwidth < target_bandwidth) {

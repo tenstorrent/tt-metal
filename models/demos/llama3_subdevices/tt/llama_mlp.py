@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,9 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
+import os
+
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 
 def pad_to_next_multiple(tensor):
@@ -71,6 +74,16 @@ class TtLlamaMLP(LightweightModule):
             cache_file_name=cache_name(name),
         )
 
+        as_interleaved_tensor = lambda name, type, dim: ttnn.as_tensor(
+            torch_weight(name[:2]).unsqueeze(0).unsqueeze(0),  # Grab only the wX part of the name
+            dtype=type,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=cache_name(name),
+        )
+
         self.four_bit_mlp = args.optimizations.bfp4_mlp
 
         # Sharded weights
@@ -84,14 +97,23 @@ class TtLlamaMLP(LightweightModule):
         self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=w2_dim)
         self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
 
+        self.w1_interleaved = as_interleaved_tensor(
+            "w1_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
+        )
+        self.w2_interleaved = as_interleaved_tensor("w2_interleaved", ttnn.bfloat8_b, dim=w2_dim)
+        self.w3_interleaved = as_interleaved_tensor(
+            "w3_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
+        )
+
         if tt_ccl.mode == "decode":
             self.prefetch(prefetcher_setup, tt_ccl)
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
-        self.prefetcher_setup.insert_tensor(self.w1)
-        self.prefetcher_setup.insert_tensor(self.w3)
-        self.prefetcher_setup.insert_tensor(self.w2)
+        if tt_ccl.mode == "decode":
+            self.prefetcher_setup.insert_tensor(self.w1)
+            self.prefetcher_setup.insert_tensor(self.w3)
+            self.prefetcher_setup.insert_tensor(self.w2)
         self.tt_ccl = tt_ccl
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
@@ -115,11 +137,11 @@ class TtLlamaMLP(LightweightModule):
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
 
-        w1_out_reduced = self.tt_ccl.line_all_reduce(
+        w1_out_reduced = self.tt_ccl.line_reduce_scatter(
             w1_out,
             cluster_axis=1,
-            num_links=3,
-            memory_config=self.model_config["MUL_IN_MEMCFG"],
+            num_links=4 if is_RING_6U else 3,
+            memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
         )
 
         w3_out = ttnn.linear(
@@ -136,30 +158,38 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(x)
         try:
-            w3_out_reduced = self.tt_ccl.line_all_reduce(
+            w3_out_reduced = self.tt_ccl.line_reduce_scatter(
                 w3_out,
                 cluster_axis=1,
-                num_links=3,
-                memory_config=self.model_config["MUL_IN_MEMCFG"],
+                num_links=4 if is_RING_6U else 3,
+                memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
             )
         except Exception as e:
             print(e)
             self.tt_ccl.close()
 
-        w2_in = ttnn.mul(
+        ff1ff3 = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
-            input_tensor_a_activation=ttnn.UnaryOpType.SILU,
-            dtype=ttnn.bfloat16,
-            memory_config=self.model_config["MUL_IN_MEMCFG"],
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            dtype=ttnn.bfloat8_b,
+            memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
         )
-
-        w2_in = ttnn.to_memory_config(w2_in, self.model_config["FF2_IN_RING_MEMCFG"])
 
         # print("eltwise mul", w2_in)
 
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
+
+        w2_in = self.tt_ccl.line_all_gather(
+            ff1ff3,
+            dim=3,
+            cluster_axis=1,
+            num_links=4 if is_RING_6U else 3,
+            memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+            buffer_key="BINARY_MUL",
+        )
+        ttnn.deallocate(ff1ff3)
 
         w2_out = ttnn.linear(
             w2_in,
@@ -172,10 +202,12 @@ class TtLlamaMLP(LightweightModule):
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
-        ttnn.deallocate(w2_in)
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(
-            w2_out, cluster_axis=0, num_links=3, memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"]
+            w2_out,
+            cluster_axis=0,
+            num_links=4 if is_RING_6U else 3,
+            memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
 
         ttnn.deallocate(w2_out)
@@ -190,16 +222,17 @@ class TtLlamaMLP(LightweightModule):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
-        if seq_len >= 1024:
-            # Reshape input to to fit on device and parallelize computation
-            x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
-        pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len)
+        use_w1_w3_interleaved = seq_len >= 4096
+        pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
         pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
-        pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len)
+        pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
+
+        if 1024 <= seq_len < 4096:
+            x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
 
         w1_out = ttnn.linear(
             x,
-            self.w1,
+            self.w1_interleaved if use_w1_w3_interleaved else self.w1,
             compute_kernel_config=(
                 self.args.compute_kernel_config_lofi
                 if self.four_bit_mlp
@@ -209,10 +242,13 @@ class TtLlamaMLP(LightweightModule):
             program_config=pc_1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
+        w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+            w1_out, cluster_axis=1, num_links=3, memory_config=w1_out.memory_config(), buffer_key="FF1", dim=3
+        )
+        ttnn.deallocate(w1_out)
         w3_out = ttnn.linear(
             x,
-            self.w3,
+            self.w3_interleaved if use_w1_w3_interleaved else self.w3,
             compute_kernel_config=(
                 self.args.compute_kernel_config_lofi
                 if self.four_bit_mlp
@@ -222,48 +258,44 @@ class TtLlamaMLP(LightweightModule):
             program_config=pc_3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # ttnn.deallocate(x)
-
-        try:
-            w1_out_reduced = self.tt_ccl.line_all_reduce(
-                w1_out, cluster_axis=1, num_links=3, memory_config=w1_out.memory_config(), buffer_key="FF1"
-            )
-            w3_out_reduced = self.tt_ccl.line_all_reduce(
-                w3_out, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3"
-            )
-
-        except Exception as e:
-            print(e)
-            self.tt_ccl.close()
-
+        ttnn.deallocate(x)
+        w3_out_reduced = self.tt_ccl.line_reduce_scatter(
+            w3_out, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
+        )
+        ttnn.deallocate(w3_out)
         w2_in = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
-            input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )
-
+        w2_in_gathered = self.tt_ccl.line_all_gather(
+            w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
+        )
+        ttnn.deallocate(w2_in)
         # ttnn.deallocate(w3_out)
         # ttnn.deallocate(w1_out)
+
         w2_out = ttnn.linear(
-            w2_in,
-            self.w2,
+            w2_in_gathered,
+            self.w2_interleaved,
             compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
             dtype=ttnn.bfloat8_b,
             program_config=pc_2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # core_grid=ttnn.CoreGrid(y=8, x=4),  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
+
         ttnn.deallocate(w2_in)
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out, cluster_axis=0, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="FF2"
         )
-
-        original_shape = w2_out_reduced.shape
-        w2_out_reduced = ttnn.reshape(
-            w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
-        )
+        ttnn.deallocate(w2_out)
+        if 1024 <= seq_len < 4096:
+            original_shape = w2_out_reduced.shape
+            w2_out_reduced = ttnn.reshape(
+                w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
+            )
 
         # ttnn.deallocate(w2_out)
         return w2_out_reduced

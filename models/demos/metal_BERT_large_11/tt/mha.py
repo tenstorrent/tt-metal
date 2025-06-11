@@ -4,12 +4,14 @@
 
 
 import math
-import torch
-
 from typing import Optional
-import ttnn
+
+import torch
 from tt_lib.utils import pad_weight
+
+import ttnn
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
+from models.demos.metal_BERT_large_11.tt.tensor_utils import load_or_compute_and_cache
 
 
 def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
@@ -176,67 +178,83 @@ class TtMultiHeadAttentionModel:
     def __init__(self, config, encoder_idx, state_dict, device, model_config=None, tt_cache_path=None):
         layer_name = f"bert.encoder.layer.{encoder_idx}.attention.self"
 
+        qkv_weight_cache_path = None
+        qkv_bias_cache_path = None
+
         if tt_cache_path is not None:
             interleaved_str = ""
             if "QKV_INTERLEAVED" in model_config:
                 interleaved_str = f"interleaved_{model_config['QKV_INTERLEAVED']}_"
-            qkv_weight = ttnn.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{layer_name}.qkv.weight_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin"
-                )
-            ).to(device, model_config["OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG"])
-            qkv_bias = ttnn.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{layer_name}.qkv.bias_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_BIAS_DTYPE'].name}.bin"
-                )
-            ).to(device, model_config["OP1_FUSED_QKV_MM_BIAS_MEMCFG"])
-        else:
-            qw = state_dict[f"{layer_name}.query.weight"]
-            qb = state_dict[f"{layer_name}.query.bias"]
-            kw = state_dict[f"{layer_name}.key.weight"]
-            kb = state_dict[f"{layer_name}.key.bias"]
-            vw = state_dict[f"{layer_name}.value.weight"]
-            vb = state_dict[f"{layer_name}.value.bias"]
+            qkv_weight_cache_path = str(
+                f"{tt_cache_path}/"
+                f"{layer_name}.qkv.weight_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin"
+            )
+            qkv_bias_cache_path = str(
+                f"{tt_cache_path}/"
+                f"{layer_name}.qkv.bias_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_BIAS_DTYPE'].name}.bin"
+            )
 
-            # Weights pre-transposed on host​. No on-the fly transpose of W​
+        def compute_qkv_weight():
+            qw = state_dict[f"{layer_name}.query.weight"]
+            kw = state_dict[f"{layer_name}.key.weight"]
+            vw = state_dict[f"{layer_name}.value.weight"]
+
             qw = torch.transpose(qw, -1, -2)
             kw = torch.transpose(kw, -1, -2)
             vw = torch.transpose(vw, -1, -2)
+
             if "QKV_INTERLEAVED" in model_config:
                 const_w_dims = qw.shape[:-1]
-                const_b_dims = qb.shape[:-1]
                 qw = qw.reshape([*const_w_dims, model_config["QKV_INTERLEAVED"], -1])
-                qb = qb.reshape([*const_b_dims, model_config["QKV_INTERLEAVED"], -1])
                 kw = kw.reshape(qw.shape)
-                kb = kb.reshape(qb.shape)
                 vw = vw.reshape(qw.shape)
-                vb = vb.reshape(qb.shape)
-                qkv_weight = torch.cat((qw, kw, vw), -1).reshape([*const_w_dims, -1])
-                qkv_bias = torch.cat((qb, kb, vb), -1).reshape([*const_b_dims, -1])
+                qkv_weight_torch = torch.cat((qw, kw, vw), -1).reshape([*const_w_dims, -1])
             else:
-                qkv_weight = torch.cat((qw, kw, vw), -1)
-                qkv_bias = torch.cat((qb, kb, vb), -1)
+                qkv_weight_torch = torch.cat((qw, kw, vw), -1)
 
-            qkv_weight = pad_weight(qkv_weight)
-            qkv_bias = pad_weight(qkv_bias)
+            qkv_weight_torch = pad_weight(qkv_weight_torch)
 
-            qkv_weight = ttnn.from_torch(
-                qkv_weight,
-                model_config["OP1_FUSED_QKV_MM_WEIGHTS_DTYPE"],
+            return ttnn.from_torch(
+                qkv_weight_torch,
+                dtype=model_config["OP1_FUSED_QKV_MM_WEIGHTS_DTYPE"],
                 layout=ttnn.Layout.TILE,
-                device=device,
-                memory_config=model_config["OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG"],
             )
 
-            qkv_bias = ttnn.from_torch(
-                qkv_bias,
-                model_config["OP1_FUSED_QKV_MM_BIAS_DTYPE"],
+        def compute_qkv_bias():
+            qb = state_dict[f"{layer_name}.query.bias"]
+            kb = state_dict[f"{layer_name}.key.bias"]
+            vb = state_dict[f"{layer_name}.value.bias"]
+
+            if "QKV_INTERLEAVED" in model_config:
+                const_b_dims = qb.shape[:-1]
+                qb = qb.reshape([*const_b_dims, model_config["QKV_INTERLEAVED"], -1])
+                kb = kb.reshape(qb.shape)
+                vb = vb.reshape(qb.shape)
+                qkv_bias_torch = torch.cat((qb, kb, vb), -1).reshape([*const_b_dims, -1])
+            else:
+                qkv_bias_torch = torch.cat((qb, kb, vb), -1)
+
+            qkv_bias_torch = pad_weight(qkv_bias_torch)
+
+            return ttnn.from_torch(
+                qkv_bias_torch,
+                dtype=model_config["OP1_FUSED_QKV_MM_BIAS_DTYPE"],
                 layout=ttnn.Layout.TILE,
-                device=device,
-                memory_config=model_config["OP1_FUSED_QKV_MM_BIAS_MEMCFG"],
             )
+
+        qkv_weight = load_or_compute_and_cache(
+            qkv_weight_cache_path,
+            compute_qkv_weight,
+            device=device,
+            mem_config=model_config["OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG"],
+        )
+
+        qkv_bias = load_or_compute_and_cache(
+            qkv_bias_cache_path,
+            compute_qkv_bias,
+            device=device,
+            mem_config=model_config["OP1_FUSED_QKV_MM_BIAS_MEMCFG"],
+        )
 
         # Hidden dim
         hidden_dim = qkv_weight.padded_shape[-1] // 3

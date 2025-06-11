@@ -19,7 +19,6 @@ struct MorehAbsPow {
 }  // namespace ttnn::operations::moreh::moreh_abs_pow
 
 namespace ttnn {
-constexpr auto moreh_abs_pow = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::moreh_abs_pow",
-    ttnn::operations::moreh::moreh_abs_pow::MorehAbsPow>();
+constexpr auto moreh_abs_pow =
+    ttnn::register_operation<"ttnn::moreh_abs_pow", ttnn::operations::moreh::moreh_abs_pow::MorehAbsPow>();
 }

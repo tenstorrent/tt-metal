@@ -461,3 +461,11 @@ html.writer-html5
 .project-versions {
   font-size: small;
 }
+
+/*
+Fix for horizontal stacking weirdness in the RTD theme with Python properties:
+https://github.com/readthedocs/sphinx_rtd_theme/issues/1301
+*/
+.py.property {
+  display: block !important;
+}

@@ -61,7 +61,7 @@ bool RunCustomCycle(tt_metal::IDevice* device, int loop_count) {
     return pass;
 }
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {

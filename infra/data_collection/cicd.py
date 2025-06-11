@@ -46,7 +46,7 @@ def create_cicd_json_for_data_analysis(
 
     github_job_id_to_annotations = get_github_job_id_to_annotations(workflow_outputs_dir, github_pipeline_id)
 
-    raw_jobs = get_job_rows_from_github_info(github_pipeline_json, github_jobs_json, github_job_id_to_annotations)
+    raw_jobs = get_job_rows_from_github_info(workflow_outputs_dir, github_jobs_json, github_job_id_to_annotations)
 
     github_job_ids = []
     for raw_job in raw_jobs:
@@ -65,12 +65,6 @@ def create_cicd_json_for_data_analysis(
         github_job_id = raw_job["github_job_id"]
 
         logger.info(f"Processing raw GitHub job {github_job_id}")
-
-        # https://github.com/tenstorrent/tt-metal/issues/18887
-        # Skip the smoketest report jobs
-        if raw_job["name"] == "Metalium  smoke tests":
-            logger.warning(f"Job id:{github_job_id} Skipping Metalium smoke test report")
-            continue
 
         test_report_exists = github_job_id in github_job_id_to_test_reports
         if test_report_exists:

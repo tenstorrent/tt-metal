@@ -64,13 +64,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
     CoreCoord compute_with_storage_grid_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     tt_metal::IDevice* device = input_tensor.device();
 
-    bool is_dram = input_tensor.memory_config().buffer_type == tt::tt_metal::BufferType::DRAM;
+    bool is_dram = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
@@ -82,7 +82,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
     auto q_shard_spec = output[0].shard_spec().value();
     auto q_cores = q_shard_spec.grid;
     auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
-    auto in_shape = input_tensor.get_padded_shape();
+    auto in_shape = input_tensor.padded_shape();
     auto in_num_tiles = in_shape[-2] * in_shape[-1] / TILE_HW;
 
     uint32_t q_output_cb_index = CBIndex::c_16;
@@ -224,16 +224,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
     CoreCoord compute_with_storage_grid_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     tt_metal::IDevice* device = input_tensor.device();
     // Create CBs for reader/writer for batch_offset
     uint32_t batch_offset_cb_index_reader = CBIndex::c_15;
     uint32_t batch_offset_cb_index_writer = CBIndex::c_14;
-    tt::tt_metal::CBHandle cb_batch_offset_reader = 0;
-    tt::tt_metal::CBHandle cb_batch_offset_writer = 0;
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
@@ -262,7 +260,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
     // if batch_offset is provided we need to allocate a buffer for it
     if (batch_offset.has_value()) {
         tt::DataFormat cb_batch_offset_data_format =
-            tt_metal::datatype_to_dataformat_converter(batch_offset.value().get_dtype());
+            tt_metal::datatype_to_dataformat_converter(batch_offset.value().dtype());
         uint32_t single_batch_offset_tile_size = tt_metal::detail::TileSize(cb_batch_offset_data_format);
         batch_offset_index_stick_size = batch_offset.value().buffer()->aligned_page_size();
 
@@ -270,13 +268,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
             tt_metal::CircularBufferConfig(
                 single_batch_offset_tile_size, {{batch_offset_cb_index_reader, cb_batch_offset_data_format}})
                 .set_page_size(batch_offset_cb_index_reader, 1);
-        cb_batch_offset_reader = tt_metal::CreateCircularBuffer(program, qk_cores, cb_batch_offset_config_reader);
+        tt_metal::CreateCircularBuffer(program, qk_cores, cb_batch_offset_config_reader);
 
         tt_metal::CircularBufferConfig cb_batch_offset_config_writer =
             tt_metal::CircularBufferConfig(
                 single_batch_offset_tile_size, {{batch_offset_cb_index_writer, cb_batch_offset_data_format}})
                 .set_page_size(batch_offset_cb_index_writer, 1);
-        cb_batch_offset_writer = tt_metal::CreateCircularBuffer(program, qk_cores, cb_batch_offset_config_writer);
+        tt_metal::CreateCircularBuffer(program, qk_cores, cb_batch_offset_config_writer);
     }
 
     uint32_t q_output_cb_index = CBIndex::c_16;
@@ -517,16 +515,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
     CoreCoord compute_with_storage_grid_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     tt_metal::IDevice* device = input_tensor.device();
     // Create CBs for reader/writer for batch_offset
     uint32_t batch_offset_cb_index_reader = CBIndex::c_15;
     uint32_t batch_offset_cb_index_writer = CBIndex::c_14;
-    tt::tt_metal::CBHandle cb_batch_offset_reader = 0;
-    tt::tt_metal::CBHandle cb_batch_offset_writer = 0;
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     const uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
@@ -555,7 +551,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
     // if batch_offset is provided we need to allocate a buffer for it
     if (batch_offset.has_value()) {
         tt::DataFormat cb_batch_offset_data_format =
-            tt_metal::datatype_to_dataformat_converter(batch_offset.value().get_dtype());
+            tt_metal::datatype_to_dataformat_converter(batch_offset.value().dtype());
         uint32_t single_batch_offset_tile_size = tt_metal::detail::TileSize(cb_batch_offset_data_format);
         batch_offset_index_stick_size = batch_offset.value().buffer()->aligned_page_size();
 
@@ -563,13 +559,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
             tt_metal::CircularBufferConfig(
                 single_batch_offset_tile_size, {{batch_offset_cb_index_reader, cb_batch_offset_data_format}})
                 .set_page_size(batch_offset_cb_index_reader, 1);
-        cb_batch_offset_reader = tt_metal::CreateCircularBuffer(program, qk_cores, cb_batch_offset_config_reader);
+        tt_metal::CreateCircularBuffer(program, qk_cores, cb_batch_offset_config_reader);
 
         tt_metal::CircularBufferConfig cb_batch_offset_config_writer =
             tt_metal::CircularBufferConfig(
                 single_batch_offset_tile_size, {{batch_offset_cb_index_writer, cb_batch_offset_data_format}})
                 .set_page_size(batch_offset_cb_index_writer, 1);
-        cb_batch_offset_writer = tt_metal::CreateCircularBuffer(program, qk_cores, cb_batch_offset_config_writer);
+        tt_metal::CreateCircularBuffer(program, qk_cores, cb_batch_offset_config_writer);
     }
 
     uint32_t q_output_cb_index = CBIndex::c_16;

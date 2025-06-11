@@ -4,8 +4,12 @@
 
 #pragma once
 
-#include "core_coord.hpp"
-#include "umd/device/tt_soc_descriptor.h"
+#include <cstdint>
+
+#include <tt-metalium/core_coord.hpp>
+#include <umd/device/tt_soc_descriptor.h>
+
+enum class CoreType;
 
 namespace tt {
 

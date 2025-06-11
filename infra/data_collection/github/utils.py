@@ -11,6 +11,7 @@ from typing import Optional, Union
 
 from loguru import logger
 
+from infra.data_collection.github.workflows import is_job_hanging_from_job_log
 from infra.data_collection.models import InfraErrorV1, TestErrorV1
 from infra.data_collection.pydantic_models import CompleteBenchmarkRun
 
@@ -93,9 +94,9 @@ def return_first_string_starts_with(starting_string, strings):
     raise Exception(f"{strings} do not have any that match {starting_string}")
 
 
-def get_job_failure_signature_(github_job, failure_description) -> Optional[Union[InfraErrorV1]]:
+def get_job_failure_signature_(github_job, failure_description, workflow_outputs_dir) -> Optional[Union[InfraErrorV1]]:
     error_snippet_to_signature_mapping = {
-        "timed out": str(InfraErrorV1.JOB_UNIT_TIMEOUT_FAILURE),
+        "has timed out": str(InfraErrorV1.JOB_UNIT_TIMEOUT_FAILURE),
         "exceeded the maximum execution time": str(InfraErrorV1.JOB_CUMULATIVE_TIMEOUT_FAILURE),
         "lost communication with the server": str(InfraErrorV1.RUNNER_COMM_FAILURE),
         "runner has received a shutdown signal": str(InfraErrorV1.RUNNER_SHUTDOWN_FAILURE),
@@ -107,7 +108,19 @@ def get_job_failure_signature_(github_job, failure_description) -> Optional[Unio
     # Check the mapping dictionary for specific failure signature types
     for error_snippet in error_snippet_to_signature_mapping:
         if error_snippet in failure_description:
-            return error_snippet_to_signature_mapping[error_snippet]
+            error_signature = error_snippet_to_signature_mapping[error_snippet]
+            # Determine if timeout is a hang
+            if error_signature in [
+                str(InfraErrorV1.JOB_CUMULATIVE_TIMEOUT_FAILURE),
+                str(InfraErrorV1.JOB_UNIT_TIMEOUT_FAILURE),
+            ] and is_job_hanging_from_job_log(
+                error_snippet,
+                workflow_outputs_dir=workflow_outputs_dir,
+                workflow_run_id=github_job["run_id"],
+                workflow_job_id=github_job["id"],
+            ):
+                error_signature = str(InfraErrorV1.JOB_HANG)
+            return error_signature
 
     # If failure occurred in runner setup, classify as set up failure
     for step in github_job["steps"]:
@@ -125,7 +138,9 @@ def get_job_failure_signature_(github_job, failure_description) -> Optional[Unio
     return str(InfraErrorV1.GENERIC_FAILURE)
 
 
-def get_failure_signature_and_description_from_annotations(github_job, github_job_id_to_annotations):
+def get_failure_signature_and_description_from_annotations(
+    github_job, github_job_id_to_annotations, workflow_outputs_dir
+):
     failure_signature, failure_description = None, None
 
     # Don't return any failure info if job passed
@@ -153,12 +168,14 @@ def get_failure_signature_and_description_from_annotations(github_job, github_jo
                     # Infrastructure error
                     failure_description = _annot.get("message")
                     if failure_description:
-                        failure_signature = get_job_failure_signature_(github_job, failure_description)
+                        failure_signature = get_job_failure_signature_(
+                            github_job, failure_description, workflow_outputs_dir
+                        )
                         return failure_signature, failure_description
     return failure_signature, failure_description
 
 
-def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
+def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workflow_outputs_dir):
     github_job_id = github_job["id"]
 
     logger.info(f"Processing github job with ID {github_job_id}")
@@ -191,6 +208,16 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
     else:
         ubuntu_version = None
 
+    # Clean up ephemeral runner names
+    if host_name and host_name.startswith("tt-beta"):
+        parts = host_name.split("-")
+        # Issue: https://github.com/tenstorrent/tt-metal/issues/21694
+        # Remove non-constant ephemeral runner suffix from tt-beta runner names only if the second last part is "runner"
+        # We don't want to remove the suffix for non-ephemeral tt-beta runners (e.g. tt-beta-ubuntu-2204-xlarge)
+        # E.g. tt-beta-ubuntu-2204-n150-large-stable-nk6pd-runner-5g5f9 -> tt-beta-ubuntu-2204-n150-large-stable-nk6pd
+        if len(parts) >= 2 and parts[-2] == "runner":
+            host_name = "-".join(parts[:-1])
+
     os = ubuntu_version
 
     name = github_job["name"]
@@ -213,7 +240,7 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
 
     if labels_have_overlap(["E150", "grayskull", "arch-grayskull"], labels):
         detected_arch = "grayskull"
-    elif labels_have_overlap(["N150", "N300", "wormhole_b0", "arch-wormhole_b0"], labels):
+    elif labels_have_overlap(["N150", "N300", "wormhole_b0", "arch-wormhole_b0", "config-t3000"], labels):
         detected_arch = "wormhole_b0"
     elif labels_have_overlap(["BH", "arch-blackhole"], labels):
         detected_arch = "blackhole"
@@ -226,8 +253,11 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
     # In order of preference
     if detected_config:
         if not detected_arch:
-            raise Exception(f"There must be an arch detected for config {detected_config}")
-        card_type = f"{detected_config}-{detected_arch}"
+            # This will occur for jobs where runs-on: has a config-* label but doesn't have an arch-* or card-specific label
+            logger.warning(f"No arch label found for config {detected_config} in job label, unable to infer card type")
+            card_type = None
+        else:
+            card_type = f"{detected_config}-{detected_arch}"
     elif single_cards_overlap:
         logger.info(f"Detected overlap in single cards: {single_cards_overlap}")
         card_type = list(single_cards_overlap)[0]
@@ -266,7 +296,7 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
     github_job_link = github_job["html_url"]
 
     failure_signature, failure_description = get_failure_signature_and_description_from_annotations(
-        github_job, github_job_id_to_annotations
+        github_job, github_job_id_to_annotations, workflow_outputs_dir
     )
 
     return {
@@ -291,9 +321,12 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
     }
 
 
-def get_job_rows_from_github_info(github_pipeline_json, github_jobs_json, github_job_id_to_annotations):
+def get_job_rows_from_github_info(workflow_outputs_dir, github_jobs_json, github_job_id_to_annotations):
     job_rows = list(
-        map(lambda job: get_job_row_from_github_job(job, github_job_id_to_annotations), github_jobs_json["jobs"])
+        map(
+            lambda job: get_job_row_from_github_job(job, github_job_id_to_annotations, workflow_outputs_dir),
+            github_jobs_json["jobs"],
+        )
     )
     return [x for x in job_rows if x is not None]
 

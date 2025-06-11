@@ -35,33 +35,33 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
 
     Program program{};
 
-    bool grad_is_dram = grad_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool index_is_dram = index_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool grad_is_dram = grad_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool index_is_dram = index_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
     uint32_t grad_element_size_bytes = grad_tensor.element_size();
     uint32_t index_element_size_bytes = index_tensor.element_size();
     constexpr uint32_t INPUT_SIZE = 32;
 
-    tt::DataFormat grad_cb_data_format = datatype_to_dataformat_converter(grad_tensor.get_dtype());
+    tt::DataFormat grad_cb_data_format = datatype_to_dataformat_converter(grad_tensor.dtype());
     uint32_t grad_single_tile_size = tt::tt_metal::detail::TileSize(grad_cb_data_format);
 
-    tt::DataFormat index_cb_data_format = datatype_to_dataformat_converter(index_tensor.get_dtype());
+    tt::DataFormat index_cb_data_format = datatype_to_dataformat_converter(index_tensor.dtype());
     uint32_t index_single_page_size =
         INPUT_SIZE * index_element_size_bytes;  // Only need 32 at most at a time, which is less than full page size
-    uint32_t index_page_size = index_tensor.get_padded_shape()[-1] * index_element_size_bytes;
+    uint32_t index_page_size = index_tensor.padded_shape()[-1] * index_element_size_bytes;
 
     tt::DataFormat mask_cb_data_format = tt::DataFormat::UInt8;
     uint32_t mask_single_page_size = INPUT_SIZE * 1;  // UInt8 is 1 byte per element
 
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    uint32_t embedding_dim = grad_tensor.get_padded_shape()[-1];
+    uint32_t embedding_dim = grad_tensor.padded_shape()[-1];
     uint32_t embedding_tiles = embedding_dim / TILE_WIDTH;
 
-    uint32_t batch_size = index_tensor.get_padded_shape()[0];
-    uint32_t seq_len_tiles = index_tensor.get_padded_shape()[-1] / TILE_WIDTH;
+    uint32_t batch_size = index_tensor.padded_shape()[0];
+    uint32_t seq_len_tiles = index_tensor.padded_shape()[-1] / TILE_WIDTH;
     uint32_t input_height_tiles = batch_size * seq_len_tiles;
 
     uint32_t num_embeddings_tiles = num_embeddings / TILE_HEIGHT;
@@ -115,8 +115,8 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
         index_page_size,
         index_stick_size_is_power_of_two,
         index_log2_stick_size,
-        index_tensor.get_dtype() == DataType::BFLOAT16,  // TODO: Only supports either BFLOAT16 or UINT32
-        output.get_dtype() == DataType::BFLOAT16,        // TODO: Only supports either BFLOAT16 or BFLOAT8_B
+        index_tensor.dtype() == DataType::BFLOAT16,  // TODO: Only supports either BFLOAT16 or UINT32
+        output.dtype() == DataType::BFLOAT16,        // TODO: Only supports either BFLOAT16 or BFLOAT8_B
         max_tiles_per_core,
         batch_size,
         seq_len_tiles,
@@ -163,12 +163,14 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     }
 
     auto override_runtime_args_callback = [reader_kernel_id, cores, device](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto index_dram_buffer = input_buffers.at(0);
-        auto grad_dram_buffer = input_buffers.at(1);
-        auto output_dram_buffer = output_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto index_dram_buffer = input_tensors.at(0).buffer();
+        auto grad_dram_buffer = input_tensors.at(1).buffer();
+        auto output_dram_buffer = output_tensors.at(0).buffer();
 
         auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
         for (const auto& core : cores) {

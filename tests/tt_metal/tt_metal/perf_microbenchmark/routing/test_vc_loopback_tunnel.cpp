@@ -2,14 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <assert.h>
+#include <chrono>
+#include <fmt/base.h>
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
+#include <stdint.h>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "rtoptions.hpp"
-#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include <tt-metalium/device.hpp>
-#include "test_common.hpp"
+#include <exception>
+#include <fstream>
+#include <map>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "hw/inc/tt_fabric_status.h"
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
+#include "impl/context/metal_context.hpp"
+#include "test_common.hpp"
+#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
 int main(int argc, char **argv) {
     using std::vector;
@@ -166,18 +191,9 @@ int main(int argc, char **argv) {
         int device_id_l = test_device_id;
 
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id_l);
-        auto const& device_active_eth_cores = device->get_active_ethernet_cores();
+        auto eth_core_l = get_active_ethernet_core(device);
 
-        if (device_active_eth_cores.size() == 0) {
-            log_info(LogTest,
-                "Device {} does not have enough active cores. Need 1 active ethernet core for this test.",
-                device_id_l);
-            tt_metal::CloseDevice(device);
-            throw std::runtime_error("Test cannot run on specified device.");
-        }
-
-        auto eth_core_iter = device_active_eth_cores.begin();
-        auto [device_id_r, eth_receiver_core] = device->get_connected_ethernet_core(*eth_core_iter);
+        auto [device_id_r, eth_receiver_core] = device->get_connected_ethernet_core(eth_core_l);
 
         tt_metal::IDevice* device_r = tt_metal::CreateDevice(device_id_r);
 
@@ -1008,10 +1024,10 @@ int main(int argc, char **argv) {
 
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

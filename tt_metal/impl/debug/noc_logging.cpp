@@ -4,17 +4,23 @@
 
 #include "noc_logging.hpp"
 
+#include <stdint.h>
+#include <array>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 // #include <iomanip>
 #include <set>
+#include <string>
 
+#include "assert.hpp"
+#include "core_coord.hpp"
 #include "debug_helpers.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include "llrt.hpp"
-#include "rtoptions.hpp"
-#include "llrt/tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
+#include <tt-logger/tt-logger.hpp>
+#include <umd/device/tt_soc_descriptor.h>
+#include "utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -26,9 +32,10 @@ namespace tt {
 
 static string logfile_path = "generated/noc_data/";
 void PrintNocData(noc_data_t noc_data, const string& file_name) {
-    std::filesystem::path output_dir(tt::llrt::RunTimeOptions::get_instance().get_root_dir() + logfile_path);
+    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    std::filesystem::path output_dir(rtoptions.get_root_dir() + logfile_path);
     std::filesystem::create_directories(output_dir);
-    std::string filename = tt::llrt::RunTimeOptions::get_instance().get_root_dir() + logfile_path + file_name;
+    std::string filename = rtoptions.get_root_dir() + logfile_path + file_name;
     std::ofstream outfile(filename);
 
     for (uint32_t idx = 0; idx < NOC_DATA_SIZE; idx++) {
@@ -41,9 +48,10 @@ void PrintNocData(noc_data_t noc_data, const string& file_name) {
 }
 
 void DumpCoreNocData(chip_id_t device_id, const CoreDescriptor& logical_core, noc_data_t& noc_data) {
-    CoreCoord virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
-        device_id, logical_core.coord, logical_core.type);
-    for (int risc_id = 0; risc_id < GetNumRiscs(logical_core); risc_id++) {
+    CoreCoord virtual_core =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            device_id, logical_core.coord, logical_core.type);
+    for (int risc_id = 0; risc_id < GetNumRiscs(device_id, logical_core); risc_id++) {
         // Read out the DPRINT buffer, we stored our data in the "data field"
         uint64_t addr = GetDprintBufAddr(device_id, virtual_core, risc_id);
         auto from_dev = tt::llrt::read_hex_vec_from_core(device_id, virtual_core, addr, DPRINT_BUFFER_SIZE);
@@ -74,13 +82,13 @@ void DumpDeviceNocData(chip_id_t device_id, noc_data_t& noc_data, noc_data_t& di
 
 void DumpNocData(const std::vector<chip_id_t>& devices) {
     // Skip if feature is not enabled
-    if (!tt::llrt::RunTimeOptions::get_instance().get_record_noc_transfers()) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_record_noc_transfers()) {
         return;
     }
 
     noc_data_t noc_data = {}, dispatch_noc_data = {};
     for (chip_id_t device_id : devices) {
-        log_info("Dumping noc data for Device {}...", device_id);
+        log_info(tt::LogMetal, "Dumping noc data for Device {}...", device_id);
         DumpDeviceNocData(device_id, noc_data, dispatch_noc_data);
     }
 
@@ -90,20 +98,22 @@ void DumpNocData(const std::vector<chip_id_t>& devices) {
 
 void ClearNocData(chip_id_t device_id) {
     // Skip if feature is not enabled
-    if (!tt::llrt::RunTimeOptions::get_instance().get_record_noc_transfers()) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_record_noc_transfers()) {
         return;
     }
 
     // This feature is incomatible with dprint since they share memory space
     TT_FATAL(
-        tt::llrt::RunTimeOptions::get_instance().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint) == false,
+        tt::tt_metal::MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint) ==
+            false,
         "NOC transfer recording is incompatible with DPRINT");
 
     CoreDescriptorSet all_cores = GetAllCores(device_id);
     for (const CoreDescriptor& logical_core : all_cores) {
-        CoreCoord virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
-            device_id, logical_core.coord, logical_core.type);
-        for (int risc_id = 0; risc_id < GetNumRiscs(logical_core); risc_id++) {
+        CoreCoord virtual_core =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                device_id, logical_core.coord, logical_core.type);
+        for (int risc_id = 0; risc_id < GetNumRiscs(device_id, logical_core); risc_id++) {
             uint64_t addr = GetDprintBufAddr(device_id, virtual_core, risc_id);
             std::vector<uint32_t> initbuf = std::vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
             tt::llrt::write_hex_vec_to_core(device_id, virtual_core, initbuf, addr);

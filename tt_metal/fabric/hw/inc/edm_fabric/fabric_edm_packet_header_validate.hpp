@@ -21,4 +21,17 @@ FORCE_INLINE bool is_valid(const LowLatencyPacketHeader& packet_header) {
     return (packet_header.noc_send_type <= NOC_SEND_TYPE_LAST);
 }
 
+FORCE_INLINE void validate(const LowLatencyMeshPacketHeader& packet_header) {}
+FORCE_INLINE bool is_valid(const LowLatencyMeshPacketHeader& packet_header) {
+    return (packet_header.noc_send_type <= NOC_SEND_TYPE_LAST);
+}
+
+FORCE_INLINE void validate(const MeshPacketHeader& packet_header) {
+    ASSERT(packet_header.noc_send_type <= NOC_SEND_TYPE_LAST);
+}
+
+FORCE_INLINE bool is_valid(const MeshPacketHeader& packet_header) {
+    return (packet_header.noc_send_type <= NOC_SEND_TYPE_LAST);
+}
+
 }  // namespace tt::tt_fabric

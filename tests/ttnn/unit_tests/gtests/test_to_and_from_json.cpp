@@ -2,10 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <iostream>
+#include <optional>
+#include <set>
+#include <variant>
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "gtest/gtest.h"
-#include "ttnn/operations/matmul/matmul.hpp"
+#include <tt_stl/reflection.hpp>
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
 struct TestMemoryConfigParams {
@@ -31,17 +38,16 @@ INSTANTIATE_TEST_SUITE_P(
         // Interleaved
         TestMemoryConfigParams{
             ttnn::MemoryConfig{
-                .memory_layout = ttnn::TensorMemoryLayout::INTERLEAVED,
-                .buffer_type = ttnn::BufferType::DRAM,
-                .shard_spec = std::nullopt
+                ttnn::TensorMemoryLayout::INTERLEAVED,
+                ttnn::BufferType::DRAM
             }
         },
         // Physical shard mode
         TestMemoryConfigParams{
             ttnn::MemoryConfig{
-                .memory_layout = ttnn::TensorMemoryLayout::WIDTH_SHARDED,
-                .buffer_type = ttnn::BufferType::DRAM,
-                .shard_spec = tt::tt_metal::ShardSpec(
+                ttnn::TensorMemoryLayout::WIDTH_SHARDED,
+                ttnn::BufferType::DRAM,
+                tt::tt_metal::ShardSpec(
                     CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{1, 2}, CoreCoord{7, 4}}}},
                     {32, 128},
                     tt::tt_metal::ShardOrientation::ROW_MAJOR
@@ -51,9 +57,9 @@ INSTANTIATE_TEST_SUITE_P(
         // Logical shard mode
         TestMemoryConfigParams{
             ttnn::MemoryConfig{
-                .memory_layout = ttnn::TensorMemoryLayout::BLOCK_SHARDED,
-                .buffer_type = ttnn::BufferType::DRAM,
-                .shard_spec = tt::tt_metal::ShardSpec(
+                ttnn::TensorMemoryLayout::BLOCK_SHARDED,
+                ttnn::BufferType::DRAM,
+                tt::tt_metal::ShardSpec(
                     CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 4}}}},
                     {5, 6},
                     tt::tt_metal::ShardOrientation::ROW_MAJOR,
@@ -64,9 +70,9 @@ INSTANTIATE_TEST_SUITE_P(
         // Logical shard mode + custom physical shard shape
         TestMemoryConfigParams{
             ttnn::MemoryConfig{
-                .memory_layout = ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
-                .buffer_type = ttnn::BufferType::L1,
-                .shard_spec = tt::tt_metal::ShardSpec(
+                ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
+                ttnn::BufferType::L1,
+                tt::tt_metal::ShardSpec(
                     CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 7}}}},
                     {3, 4},
                     {32, 32},

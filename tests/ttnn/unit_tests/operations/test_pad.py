@@ -2,14 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
+from math import prod
 
+import pytest
 import torch
 
-import ttnn
-
+from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
+from tests.ttnn.unit_tests.operations.test_utils import (
+    TILE_HEIGHT,
+    TILE_WIDTH,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_wormhole_b0
+import ttnn
 
 
 @pytest.mark.parametrize("n", [16])
@@ -271,7 +275,7 @@ def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 3
+        device.set_program_cache_misses_allowed(False)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -291,24 +295,6 @@ def test_pad(device, h, w, padding, torch_padding, value):
     assert output_tensor.shape == torch_output_tensor.shape
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
-
-
-@pytest.mark.parametrize("h", [2, 30])
-@pytest.mark.parametrize("w", [128, 60])
-@pytest.mark.parametrize("padding", [((0, 32), (0, 32)), ((0, 32), (0, 64))])
-@pytest.mark.parametrize("value", [0])
-def test_pad_any_input_shape(device, h, w, padding, value):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
-
-    output_tensor = ttnn.to_torch(output_tensor)
-    tilezed_input_shape = input_tensor.padded_shape
-    th = tilezed_input_shape[-2]
-    tw = tilezed_input_shape[-1]
-    assert output_tensor.shape == ttnn.Shape((th + padding[0][0] + padding[0][1], tw + padding[1][0] + padding[1][1]))
 
 
 @pytest.mark.parametrize("h", [32])
@@ -430,6 +416,7 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
+@skip_for_blackhole("Fails on Blackhole. Issue #20698")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
 @pytest.mark.parametrize("use_multicore", [True, False], ids=["multicore", "singlecore"])
 @pytest.mark.parametrize(
@@ -451,3 +438,54 @@ def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape):
 
     out_torch = out_torch[: shape[0], : shape[1], : shape[2], : shape[3]]
     assert_with_pcc(in_torch, out_torch, 0.9999)
+
+
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("shape", [[1, 1, 18, 13]])
+@pytest.mark.parametrize("padshape", [[1, 1, TILE_HEIGHT, TILE_WIDTH]])
+@pytest.mark.parametrize("use_multicore", [False, True])
+def test_pad_op(device, in_dtype, shape, padshape, use_multicore):
+    torch_input = torch.randn(shape, dtype=torch.bfloat16).bfloat16()
+
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+    output_tt = ttnn.pad(ttnn_input, padshape, [0, 0, 0, 0], value=0, use_multicore=use_multicore)
+    output_tt = ttnn.to_torch(output_tt)
+    assert output_tt.shape == torch.Size(padshape)
+
+    shape_diff = list(map(lambda x, y: x - y, padshape, shape))
+    output_torch = torch.nn.functional.pad(torch_input, [0, shape_diff[-1], 0, shape_diff[-2]], value=0)
+    assert_with_pcc(output_tt, output_torch, 0.9999)
+
+
+def _unsqueeze(smaller, larger, fill):
+    diff = len(larger) - len(smaller)
+    return [fill] * diff + smaller
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [[2, 8], [1, 2, 3, 4], [5, 4, 3, 2, 1], [2, 128], [2, 60], [30, 128], [30, 60], [320, 320], [1, 1, 320, 320]],
+)
+@pytest.mark.parametrize(
+    "padding", [[25, 1], [5, 4], [64], [32, 32], [1, 0, 0, 0], [1, 0, 0], [32, 32, 32, 64], [0, 64], [0, 0, 0, 64]]
+)
+def test_pad_tile(shape, padding, device):
+    if (shape, padding) in [([5, 4, 3, 2, 1], [1, 0, 0, 0]), ([5, 4, 3, 2, 1], [32, 32, 32, 64])]:
+        pytest.xfail("Can't pad upper dims with rank>4")
+
+    if len(shape) < len(padding):
+        shape = _unsqueeze(shape, padding, 1)
+    elif len(padding) < len(shape):
+        padding = _unsqueeze(padding, shape, 0)
+
+    input = torch.ones(prod(shape), dtype=torch.bfloat16).reshape(shape)
+    input_tensor = ttnn.from_torch(input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    torch_padding = sum([[0, p] for p in reversed(padding)], [])
+    torch_output = torch.nn.functional.pad(input, torch_padding, value=5)
+
+    output = ttnn.pad(input_tensor, [(0, p) for p in padding], value=5)
+
+    out_tt = ttnn.to_torch(output)
+
+    assert_with_pcc(out_tt, torch_output, 0.9999)

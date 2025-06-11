@@ -11,7 +11,7 @@ import ttnn
 from loguru import logger
 from models.utility_functions import is_grayskull, is_blackhole, torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole, run_for_blackhole
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole, run_for_blackhole, skip_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -56,23 +56,21 @@ def transpose(
         assert device.num_program_cache_entries() == expected_program_cache_size
 
 
-@run_for_blackhole()
 def test_fold_transpose(device, use_program_cache):
-    N = 32
+    N = 16
     C = 4
     H = 256
     W = 224
     input_shape = (N, C, H, W)
-    ## 128
-    grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 8)),
-            ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(10, 9)),
-        }
-    )
+    ## 64
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    num_cores = min(N, compute_grid_size.x * compute_grid_size.y)
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
+
     sharded_config = ttnn.create_sharded_memory_config_(
         input_shape,
-        grid,
+        shard_grid,
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
@@ -1169,8 +1167,8 @@ def test_transpose_16411(device):
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_transpose_high_rank(*, device: ttnn.Device, rank: int, indices, layout):
     torch.manual_seed(2005)
-    ttnn.disable_and_clear_program_cache(device)
-    ttnn.enable_program_cache(device)
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
 
     shape = [2] * rank
 
@@ -1227,3 +1225,23 @@ def test_resnet50_fold(device, n, c, h, w, dim0, dim1):
     tt_output = ttnn.to_torch(tt_output.cpu())
 
     assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+def test_transpose_21803(device):
+    torch.manual_seed(2005)
+    # Test parameters
+    dim1, dim2, dim3, dim4, dim5 = 1, 1, 8, 64, 256
+    dtype = ttnn.bfloat8_b
+
+    for i in range(100):
+        torch_input = torch.randn(dim1, dim2, dim3, dim4, dim5, dtype=torch.bfloat16)
+        ttnn_input = ttnn.from_torch(torch_input, dtype, layout=ttnn.Layout.TILE, device=device)
+        ttnn_output = ttnn.permute(ttnn_input, [0, 1, 2, 4, 3])
+
+        torch_output = ttnn.to_torch(ttnn_output, dtype=torch.bfloat16)
+
+        if torch.any(torch.isnan(torch_input)) or torch.any(torch.isinf(torch_input)):
+            continue
+
+        if torch.any(torch.isinf(torch_output)) or (torch.any(torch.isnan(torch_output))):
+            assert False, f"Found infinity values at iteration {i} in ttnn but not in pytorch"

@@ -3,35 +3,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from enum import Enum
-import torch
-import ttnn
-from loguru import logger
+
 import numpy as np
+import torch
+from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
-from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
-
-from models.demos.falcon7b_common.tt.falcon_common import (
-    PytorchFalconCausalLM,
-)
-
+import ttnn
 from models.demos.falcon7b_common.tests.test_utils import (
-    get_rand_falcon_inputs,
     concat_device_out_layer_present,
-    load_hf_model,
-    get_num_devices,
     dump_device_profiler,
+    get_num_devices,
+    get_rand_falcon_inputs,
+    load_hf_model,
 )
-
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    get_atol_rtol_pcc,
-)
-
-from models.utility_functions import (
-    tt_tensors_to_torch_tensors,
-    profiler,
-)
+from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.falcon7b_common.tt.falcon_common import PytorchFalconCausalLM
 from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import profiler, tt_tensors_to_torch_tensors
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import get_atol_rtol_pcc
 
 
 def get_inputs_on_device(llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len):
@@ -94,12 +84,12 @@ DECODE_CONFIG_TO_PCC = {
         "BFLOAT16-L1": {128: (0.65, 0.77, 0.79), 1024: (0.59, 0.85, 0.85), 2047: (0.55, 0.95, 0.94)},
     },
     DeviceSetup.WORMHOLE_B0: {
-        "BFLOAT16-DRAM": {128: (0.89, 0.92, 0.91), 1024: (0.92, 0.94, 0.95), 2047: (0.95, 0.96, 0.97)},
-        "BFLOAT16-L1": {128: (0.89, 0.92, 0.91), 1024: (0.92, 0.94, 0.95), 2047: (0.95, 0.96, 0.97)},
-        "BFLOAT16-L1_SHARDED": {128: (0.90, 0.91, 0.91), 1024: (0.93, 0.94, 0.96), 2047: (0.92, 0.93, 0.94)},
+        "BFLOAT16-DRAM": {128: (0.89, 0.92, 0.92), 1024: (0.92, 0.93, 0.94), 2047: (0.97, 0.99, 0.98)},
+        "BFLOAT16-L1": {128: (0.89, 0.92, 0.92), 1024: (0.92, 0.93, 0.94), 2047: (0.97, 0.99, 0.98)},
+        "BFLOAT16-L1_SHARDED": {128: (0.89, 0.92, 0.92), 1024: (0.95, 0.95, 0.96), 2047: (0.94, 0.94, 0.95)},
     },
     DeviceSetup.T3000: {
-        "BFLOAT16-L1_SHARDED": {128: (0.85, 0.89, 0.90), 1024: (0.90, 0.92, 0.93), 2047: (0.95, 0.91, 0.89)}
+        "BFLOAT16-L1_SHARDED": {128: (0.87, 0.90, 0.90), 1024: (0.92, 0.94, 0.94), 2047: (0.95, 0.92, 0.90)}
     },
 }
 
@@ -120,7 +110,6 @@ def run_test_FalconCausalLM_end_to_end(
     e2e_perf=False,
     expected_inference_time=None,
     device_perf=False,
-    async_mode=False,
 ):
     assert not (e2e_perf and device_perf), "Cannot run both e2e and device perf test at the same time"
     if e2e_perf:
@@ -398,7 +387,7 @@ def run_test_FalconCausalLM_end_to_end(
     if e2e_perf:
         profiler.print()
 
-        comment = f"num_devices={num_devices}_kv_cache_len={kv_cache_len}_seq_len={seq_len}_num_layers={num_layers}_config={model_config_str}_async={async_mode}"
+        comment = f"num_devices={num_devices}_kv_cache_len={kv_cache_len}_seq_len={seq_len}_num_layers={num_layers}_config={model_config_str}"
         cpu_time = profiler.get("hugging_face_reference_model")
         first_iter_time = profiler.get("first_model_run_with_compile")
         second_iter_time = profiler.get("model_run_for_inference")

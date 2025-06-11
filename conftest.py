@@ -15,12 +15,18 @@ import multiprocess
 import signal
 import time
 import psutil
+import subprocess
 from datetime import datetime
 
 from loguru import logger
 
 from tests.scripts.common import run_process_and_get_result
-from tests.scripts.common import get_updated_device_params
+from tests.scripts.common import get_dispatch_core_type, get_updated_device_params
+
+# Constants for device configurations
+GALAXY_NUM_DEVICES = 32
+TG_NUM_PCIE_DEVICES = 4
+SIX_U_NUM_PCIE_DEVICES = 32
 
 
 @pytest.fixture(scope="function")
@@ -54,19 +60,212 @@ def is_single_card_n300(device):
     return num_pcie == 1 and num_devices == 2 and device.arch().name == "WORMHOLE_B0"
 
 
+@pytest.fixture(scope="function")
+def galaxy_type():
+    if is_6u():
+        return "6U"
+    elif is_tg_cluster():
+        return "4U"
+    else:
+        return None
+
+
+def is_galaxy():
+    import ttnn
+
+    num_devices = ttnn.GetNumAvailableDevices()
+    # Galaxy systems have 32 devices
+    return num_devices == GALAXY_NUM_DEVICES
+
+
+# TODO: Remove this when TG clusters are deprecated.
+def is_6u():
+    import ttnn
+
+    # 6U has 32 PCIe devices
+    return is_galaxy() and ttnn.GetNumPCIeDevices() == SIX_U_NUM_PCIE_DEVICES
+
+
+# TODO: Remove this when TG clusters are deprecated.
+def is_tg_cluster():
+    import ttnn
+
+    # TG has 4 PCIe devices
+    return is_galaxy() and ttnn.GetNumPCIeDevices() == TG_NUM_PCIE_DEVICES
+
+
+def first_available_tg_device():
+    assert is_tg_cluster()
+    # The id of the first user exposed device for a TG cluster is 4
+    return 4
+
+
 @pytest.fixture(scope="session")
-def model_location_generator():
-    def model_location_generator_(model_version, model_subdir=""):
+def is_ci_v2_env():
+    yield "TT_GH_CI_INFRA" in os.environ
+
+
+# We don't want other people using this stuff... wonder if we should just stuff it in the fixture that's calling it instead
+class CIv2ModelDownloadUtils_:
+    @staticmethod
+    def download_from_ci_v2_cache(
+        model_path,
+        timeout_in_s,
+        download_dir_suffix="",
+        endpoint_prefix="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface",
+    ):
+        assert model_path, f"model_path cannot be empty when downloading - what is wrong with you?: {model_path}"
+
+        assert isinstance(
+            timeout_in_s, int
+        ), f"{timeout_in_s} is not an integer, which it should be because it's a timeout duration"
+
+        # RK: Will this be portable? LOL
+        download_dir = Path("/tmp/ttnn_model_cache/") / download_dir_suffix
+
+        download_dir.mkdir(parents=True, exist_ok=True)
+
+        download_dir_str = str(download_dir)
+
+        # Add trailing slash to model_path if it doesn't have one, as wget
+        # seems to not download recursively via subprocess if it doesn't have
+        # it
+        if model_path and not model_path.endswith("/"):
+            model_path = model_path + "/"
+
+        endpoint = f"{endpoint_prefix}/{model_path}"
+
+        try:
+            # TODO: How do we add a timeout here without relying on native timeout command?
+            subprocess.run(
+                [
+                    "wget",
+                    "-r",
+                    "-nH",
+                    "-x",
+                    "--cut-dirs=5",
+                    "-np",
+                    "--progress=dot:giga",
+                    "-R",
+                    "index.html*",
+                    "-P",
+                    download_dir_str,
+                    endpoint,
+                ],
+                check=True,
+                text=True,
+                timeout=timeout_in_s,
+            )
+        except subprocess.TimeoutExpired as err:
+            logger.error(f"Timeout of {timeout_in_s} seconds occurred while downloading from {endpoint}.")
+            raise err
+        except Exception as err:
+            logger.error(
+                f"Unknown error occurred while trying to download from {endpoint}. Check above logs from wget call."
+            )
+            logger.error(err)
+            raise err
+
+        return download_dir / Path(model_path)
+
+
+@pytest.fixture(scope="session")
+def model_location_generator(is_ci_v2_env):
+    """
+    Returns a function that will determine the appropriate file path for a
+    model based on available locations.
+
+    This function locates model files by checking several possible locations in the following order:
+    1. CIv2 cache if running in CI environment and the user requests CIv2
+       resources via setting download_if_ci_v2 to True.
+       If we're in a CIv2 environment and download_if_ci_v2 is True, that means
+       the model is requesting files from CIv2. However, we will error out if
+       the files are not available because that means the responsible developer
+       did not properly uploaded the requested files.
+    2. Cloud MLPerf path if available, which is virtually all cases for CIv1
+    3. Default to the model_version string, which means downloading to the
+       local Huggingface cache directory (HF_HOME, or ~/.cache/huggingface by
+       default)
+
+    For CIv2 specifically
+    ---------------------
+
+    The expected directory structure in the single source of truth datastore
+    should be:
+
+    lfc://mldata/model_checkpoints/pytorch/huggingface/pytorch
+    ├── huggingface
+    └── hf_repo_owner/hf_repo
+        ├── weight1.bin
+        ├── weight2.bin
+        ├── ...
+        └── T3K
+            ├── T3K_ttnn_tensor1.bin
+            ├── T3K_ttnn_tensor2.bin
+            └── ...
+        └── N300
+            ├── N300_ttnn_tensor1.bin
+            ├── N300_ttnn_tensor2.bin
+            └── ...
+
+    Why couple the TT-NN tensor binaries into the Huggingface model's folder?
+    This is because tensors are generated on a per-model basis, so in terms
+    of folder organization there isn't too much benefit from having a separate
+    place for HF weights and a separate place for the bins.
+
+    What's nice about this is this makes it clear which HF model corresponds
+    to which set of tensor binaries, which is useful for engineers to quickly
+    see which model is generating which binaries.
+
+    Note that the logic for all of this is in CIv2ModelDownloadUtils_.
+
+    :param model_version: The version identifier of the model to locate
+    :type model_version: str
+    :param model_subdir: Subdirectory within the model folder structure.
+                         Default is empty string.
+                         Note: Nested subdirectories (model_subdir) are not
+                         supported in CIv2 cache.
+    :type model_subdir: str
+    :param download_if_ci_v2: Whether to download from CI v2 cache if in a CI v2 environment
+    :type download_if_ci_v2: bool
+    :param ci_v2_timeout_in_s: Timeout for download from CI v2 cache in seconds
+    :type ci_v2_timeout_in_s: int
+
+    :return: The path to the model files (internal MLPerf path, CI v2 cache
+             path, or just model_version which uses HF_HOME)
+    :rtype: os.PathLike (str, pathlib.Path etc.)
+
+    :raises AssertionError: If trying to run in CIv2 environment with MLPerf
+    files which is impossible, or if model_subdir contains unsupported
+    directory structure
+    """
+
+    def model_location_generator_(model_version, model_subdir="", download_if_ci_v2=False, ci_v2_timeout_in_s=300):
         model_folder = Path("tt_dnn-models") / model_subdir
         internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
         has_internal_weka = internal_weka_path.exists()
-        internal_cache_path = Path("/opt/tt-metal-models") / model_folder / model_version
-        has_internal_cache = internal_cache_path.exists()
-        if has_internal_weka:
+
+        download_from_ci_v2 = download_if_ci_v2 and is_ci_v2_env
+
+        if download_from_ci_v2:
+            assert (
+                not has_internal_weka
+            ), "For some reason, we see a file existing at the expected MLPerf location: {internal_weka_path} on CIv2. Please use the opportunity to clean up your model and get rid of MLPerf if you're moving to CIv2"
+            assert (
+                not model_subdir
+            ), f"model_subdir is set to {model_subdir}, but we don't support further levels of directories in the large file cache in CIv2"
+            civ2_download_path = CIv2ModelDownloadUtils_.download_from_ci_v2_cache(
+                model_version, download_dir_suffix="model_weights", timeout_in_s=ci_v2_timeout_in_s
+            )
+            logger.info(f"For model location, using CIv2 large file cache: {civ2_download_path}")
+            return civ2_download_path
+        elif has_internal_weka:
+            logger.info(f"For model location, using internal MLPerf path: {internal_weka_path}")
             return internal_weka_path
-        elif has_internal_cache:
-            return internal_cache_path
         else:
+            logger.info(
+                f"For model location, local copy not found, so likely downloading straight from HF: {model_version}"
+            )
             return model_version
 
     return model_location_generator_
@@ -78,14 +277,9 @@ def get_tt_cache_path():
         model_folder = Path("tt_dnn-models/tt") / model_subdir
         internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
         has_internal_weka = internal_weka_path.exists()
-        internal_cache_path = Path("/opt/tt-metal-models") / model_folder / model_version
-        has_internal_cache = internal_cache_path.exists()
         if has_internal_weka:
-            logger.debug(f"Using internal weka path: {internal_weka_path}")
+            logger.debug(f"Using internal MLPerf path: {internal_weka_path}")
             return internal_weka_path
-        elif has_internal_cache:
-            logger.debug(f"Using internal cache path: {internal_cache_path}")
-            return internal_cache_path
         else:
             default_path = Path(default_dir) / model_folder / model_version
             default_path.mkdir(parents=True, exist_ok=True)
@@ -107,8 +301,12 @@ def device(request, device_params):
     device_id = request.config.getoption("device_id")
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
 
-    num_devices = ttnn.GetNumPCIeDevices()
-    assert device_id < num_devices, "CreateDevice not supported for non-mmio device"
+    # When initializing a single device on a TG system, we want to
+    # target the first user exposed device, not device 0 (one of the
+    # 4 gateway devices)
+    if is_tg_cluster() and not device_id:
+        device_id = first_available_tg_device()
+
     updated_device_params = get_updated_device_params(device_params)
     device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     ttnn.SetDefaultDevice(device)
@@ -228,11 +426,43 @@ def mesh_device(request, silicon_arch_name, device_params):
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
+
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
+    del mesh_device
+
+
+@pytest.fixture(scope="function")
+def t3k_single_board_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
+    import ttnn
+
+    device_ids = ttnn.get_device_ids()
+
+    assert len(device_ids) == 8, "This fixture is only applicable for T3K systems"
+
+    try:
+        pcie_id = request.param
+    except (ValueError, AttributeError):
+        pcie_id = 0  # Default to using first board
+
+    assert pcie_id < 4, "Requested board id is out of range"
+
+    mesh_device_ids = [device_ids[pcie_id], device_ids[pcie_id + 4]]
+    mesh_shape = ttnn.MeshShape(1, 2)
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape, mesh_device_ids, dispatch_core_type=get_dispatch_core_type(), **device_params
+    )
+
+    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    yield mesh_device
+
+    ttnn.DumpDeviceProfiler(mesh_device)
+
+    ttnn.close_mesh_device(mesh_device)
     del mesh_device
 
 
@@ -264,8 +494,10 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
+
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -290,8 +522,10 @@ def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
+
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -317,12 +551,22 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
+
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
     del mesh_device
+
+
+@pytest.fixture()
+def ensure_devices_tg():
+    import ttnn
+
+    device_ids = ttnn.get_device_ids()
+    assert len(device_ids) == 32, f"Expected 32 devices, got {len(device_ids)}"
 
 
 @pytest.fixture()
@@ -357,6 +601,8 @@ def get_devices(request):
         devices = [request.getfixturevalue("t3k_mesh_device")]
     elif "pcie_mesh_device" in request.fixturenames:
         devices = [request.getfixturevalue("pcie_mesh_device")]
+    elif "t3k_single_board_mesh_device" in request.fixturenames:
+        devices = request.getfixturevalue("t3k_single_board_mesh_device").get_devices()
     else:
         devices = []
     return devices
@@ -372,19 +618,6 @@ def use_program_cache(request):
     yield
     for dev in devices:
         dev.disable_and_clear_program_cache()
-
-
-@pytest.fixture(scope="function")
-def enable_async_mode(request):
-    devices = get_devices(request)
-    if not devices:
-        logger.warning("No device fixture found to apply async mode to: ASYNC MODE DISABLED")
-
-    for dev in devices:
-        dev.enable_async(request.param)
-    yield request.param
-    for dev in devices:
-        dev.enable_async(False)
 
 
 @pytest.fixture(scope="function")
@@ -450,6 +683,39 @@ def pytest_addoption(parser):
         default=None,
         help="Enable process timeout",
     )
+    parser.addoption(
+        "--didt-workload-iterations",
+        action="store",
+        default=None,
+        help="Number of workload iterations to run for didt tests",
+    )
+    parser.addoption(
+        "--determinism-check-interval",
+        action="store",
+        default=None,
+        help="Check determinism every nth iteration",
+    )
+
+
+# Indicates the iteration interval at which determinism is verified for the op output
+@pytest.fixture
+def determinism_check_interval(request):
+    iterations = request.config.getoption("--determinism-check-interval")
+    if iterations is not None:
+        # this will throw an error if bad value is passed
+        return int(iterations)
+    return -1
+
+
+# Indicated the number of workload iterations to run within didt tests
+@pytest.fixture
+def didt_workload_iterations(request):
+    iterations = request.config.getoption("--didt-workload-iterations")
+    if iterations is not None:
+        # this will throw an error if bad value is passed
+        return int(iterations)
+    # default is 100000
+    return 100000
 
 
 @pytest.fixture
@@ -658,24 +924,25 @@ def pytest_handlecrashitem(crashitem, report, sched):
 
 
 def reset_tensix(tt_open_devices=None):
-    import ttnn
+    import shutil
 
-    arch = ttnn.get_arch_name()
-    if arch != "grayskull" and arch != "wormhole_b0":
-        raise Exception(f"Unrecognized arch for tensix-reset: {arch}")
+    if is_galaxy():
+        logger.info("Skipping reset for Galaxy systems, need a new reset.json scheme")
+        return
+
+    # Check if tt-smi exists
+    if not shutil.which("tt-smi"):
+        logger.error("tt-smi command not found. Cannot reset devices. Please install tt-smi.")
+        return
 
     if tt_open_devices is None:
-        logger.info(f"Running reset with reset script: /opt/tt_metal_infra/scripts/ci/{arch}/reset.sh")
-        smi_reset_result = run_process_and_get_result(f"/opt/tt_metal_infra/scripts/ci/{arch}/reset.sh")
+        logger.info(f"Running reset for all pci devices")
+        smi_reset_result = run_process_and_get_result(f"tt-smi -r")
     else:
         tt_open_devices_str = ",".join([str(i) for i in tt_open_devices])
-        check_smi_metal = run_process_and_get_result("tt-smi-metal -h")
         logger.info(f"Running reset for pci devices: {tt_open_devices_str}")
-        if check_smi_metal.returncode > 0:
-            logger.info(f"Test failed - resetting {arch} with tt-smi")
-            smi_reset_result = run_process_and_get_result(f"tt-smi -r {tt_open_devices_str}")
-        else:
-            smi_reset_result = run_process_and_get_result(f"tt-smi-metal -r {tt_open_devices_str}")
+        smi_reset_result = run_process_and_get_result(f"tt-smi -r {tt_open_devices_str}")
+
     logger.info(f"tt-smi reset status: {smi_reset_result.returncode}")
 
 

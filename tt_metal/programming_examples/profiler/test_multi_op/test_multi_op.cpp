@@ -5,6 +5,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
+#include <hostdevcommon/profiler_common.h>
 
 using namespace tt;
 
@@ -43,7 +44,7 @@ void RunCustomCycle(tt_metal::IDevice* device, int fastDispatch) {
     }
 }
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {

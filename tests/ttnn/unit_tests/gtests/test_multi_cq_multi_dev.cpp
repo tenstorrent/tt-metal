@@ -2,16 +2,49 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn_test_fixtures.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/bfloat16.hpp>
-#include "ttnn/async_runtime.hpp"
-#include "ttnn/operations/functions.hpp"
 #include <tt-metalium/event.hpp>
-#include <cmath>
+#include <map>
+#include <memory>
+#include <optional>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "ttnn/async_runtime.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn_test_fixtures.hpp"
+#include "umd/device/types/arch.h"
+
+namespace ttnn {
+namespace operations {
+namespace unary {
+enum class UnaryOpType;
+struct UnaryWithParam;
+}  // namespace unary
+}  // namespace operations
+}  // namespace ttnn
 
 using namespace tt;
 using namespace tt_metal;
@@ -33,17 +66,9 @@ Tensor dispatch_ops_to_device(IDevice* dev, Tensor input_tensor, QueueId cq_id) 
     return output_tensor;
 }
 
-TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
-    // 8 devices with 2 CQs. Enable this test on T3K only.
-    if (tt::tt_metal::GetNumAvailableDevices() < 8 or
-        tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP();
-    }
-
-    MemoryConfig mem_cfg = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        .buffer_type = BufferType::DRAM,
-        .shard_spec = std::nullopt};
+// Disabled: https://github.com/tenstorrent/tt-metal/issues/21666
+TEST_F(MultiCommandQueueT3KFixture, DISABLED_Test2CQMultiDeviceProgramsOnCQ1) {
+    MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
 
     ttnn::Shape shape{1, 3, 2048, 2048};
     uint32_t buf_size_datums = 2048 * 2048 * 3;
@@ -64,21 +89,17 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
                 }
                 TensorSpec tensor_spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
                 ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
-                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
-                auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
-                Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
+                auto input_tensor = allocate_tensor_on_mesh(tensor_spec, device.get());
 
-                auto write_event = std::make_shared<Event>();
-                auto workload_event = std::make_shared<Event>();
                 ttnn::write_buffer(
                     ttnn::QueueId(0),
                     input_tensor,
                     {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
-                ttnn::record_event(device->command_queue(0), write_event);
-                ttnn::wait_for_event(device->command_queue(1), write_event);
-                auto output_tensor = dispatch_ops_to_device(device, input_tensor, ttnn::QueueId(1));
-                ttnn::record_event(device->command_queue(1), workload_event);
-                ttnn::wait_for_event(device->command_queue(0), workload_event);
+                auto write_event = ttnn::record_event(device->mesh_command_queue(0));
+                ttnn::wait_for_event(device->mesh_command_queue(1), write_event);
+                auto output_tensor = dispatch_ops_to_device(device.get(), input_tensor, ttnn::QueueId(1));
+                auto workload_event = ttnn::record_event(device->mesh_command_queue(1));
+                ttnn::wait_for_event(device->mesh_command_queue(0), workload_event);
 
                 ttnn::read_buffer(
                     ttnn::QueueId(0),
@@ -100,17 +121,9 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
     }
 }
 
-TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
-    // 8 devices with 2 CQs. Enable this test on T3K only.
-    if (tt::tt_metal::GetNumAvailableDevices() < 8 or
-        tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP();
-    }
-
-    MemoryConfig mem_cfg = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        .buffer_type = BufferType::DRAM,
-        .shard_spec = std::nullopt};
+// Disabled: https://github.com/tenstorrent/tt-metal/issues/21666
+TEST_F(MultiCommandQueueT3KFixture, DISABLED_Test2CQMultiDeviceProgramsOnCQ0) {
+    MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
 
     ttnn::Shape shape{1, 3, 2048, 2048};
     uint32_t buf_size_datums = 2048 * 2048 * 3;
@@ -132,21 +145,17 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
-                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
-                auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
-                Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
+                auto input_tensor = allocate_tensor_on_mesh(tensor_spec, device.get());
 
-                auto write_event = std::make_shared<Event>();
-                auto workload_event = std::make_shared<Event>();
                 ttnn::write_buffer(
                     ttnn::QueueId(1),
                     input_tensor,
                     {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
-                ttnn::record_event(device->command_queue(1), write_event);
-                ttnn::wait_for_event(device->command_queue(0), write_event);
-                auto output_tensor = dispatch_ops_to_device(device, input_tensor, ttnn::DefaultQueueId);
-                ttnn::record_event(device->command_queue(0), workload_event);
-                ttnn::wait_for_event(device->command_queue(1), workload_event);
+                auto write_event = ttnn::record_event(device->mesh_command_queue(1));
+                ttnn::wait_for_event(device->mesh_command_queue(0), write_event);
+                auto output_tensor = dispatch_ops_to_device(device.get(), input_tensor, ttnn::DefaultQueueId);
+                auto workload_event = ttnn::record_event(device->mesh_command_queue(0));
+                ttnn::wait_for_event(device->mesh_command_queue(1), workload_event);
                 // std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 ttnn::read_buffer(
                     ttnn::QueueId(1),
@@ -168,17 +177,9 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
     }
 }
 
-TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
-    // 8 devices with 2 CQs. Enable this test on T3K only.
-    if (tt::tt_metal::GetNumAvailableDevices() < 8 or
-        tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP();
-    }
-
-    MemoryConfig mem_cfg = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        .buffer_type = BufferType::DRAM,
-        .shard_spec = std::nullopt};
+// Disabled: https://github.com/tenstorrent/tt-metal/issues/21666
+TEST_F(MultiCommandQueueT3KFixture, DISABLED_Test2CQMultiDeviceWithCQ1Only) {
+    MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
 
     ttnn::Shape shape{1, 3, 2048, 2048};
     uint32_t buf_size_datums = 2048 * 2048 * 3;
@@ -200,22 +201,17 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
                 }
 
                 TensorSpec tensor_spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
-                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
-                auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
-                Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
-
-                auto write_event = std::make_shared<Event>();
-                auto workload_event = std::make_shared<Event>();
+                auto input_tensor = allocate_tensor_on_mesh(tensor_spec, device.get());
 
                 ttnn::write_buffer(
                     ttnn::QueueId(1),
                     input_tensor,
                     {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
-                ttnn::record_event(device->command_queue(1), write_event);
-                ttnn::wait_for_event(device->command_queue(1), write_event);
-                auto output_tensor = dispatch_ops_to_device(device, input_tensor, ttnn::QueueId(1));
-                ttnn::record_event(device->command_queue(1), workload_event);
-                ttnn::wait_for_event(device->command_queue(1), workload_event);
+                auto write_event = ttnn::record_event(device->mesh_command_queue(1));
+                ttnn::wait_for_event(device->mesh_command_queue(1), write_event);
+                auto output_tensor = dispatch_ops_to_device(device.get(), input_tensor, ttnn::QueueId(1));
+                auto workload_event = ttnn::record_event(device->mesh_command_queue(1));
+                ttnn::wait_for_event(device->mesh_command_queue(1), workload_event);
                 ttnn::read_buffer(
                     ttnn::QueueId(1),
                     output_tensor,

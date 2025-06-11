@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,9 +20,10 @@ class TtSegformerLayer:
         self.mlp = TtSegformerMixFFN(parameters["mlp"], mlp_hidden_size)
 
     def __call__(
-        self, hidden_states: ttnn.Tensor, height: int, width: int, parameters, device, output_attentions=False
+        self, device, hidden_states: ttnn.Tensor, height: int, width: int, parameters, output_attentions=False
     ):
         self_attention_outputs = self.attention(
+            device,
             ttnn.layer_norm(
                 hidden_states,
                 weight=parameters.layer_norm_1.weight,
@@ -46,6 +47,7 @@ class TtSegformerLayer:
         ttnn.deallocate(attention_output)
 
         mlp_output = self.mlp(
+            device,
             ttnn.layer_norm(
                 hidden_states,
                 weight=parameters.layer_norm_2.weight,
@@ -58,7 +60,6 @@ class TtSegformerLayer:
             height,
             width,
             parameters=parameters.mlp,
-            device=device,
         )
         layer_output = mlp_output + hidden_states
 

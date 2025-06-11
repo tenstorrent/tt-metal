@@ -52,7 +52,6 @@ class MambaConv:
             dtype=self.config.output_dtype,
             weights_dtype=self.config.weights_dtype,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            input_channels_alignment=32,
             deallocate_activation=True,
         )
         self.conv1d_compute_config = ttnn.init_device_compute_kernel_config(
@@ -87,7 +86,7 @@ class MambaConv:
         input_tensor_splits = self.prepare_input(input_tensor)
         output_tensor_splits = []
         for i in range(self.config.channels_split_factor):
-            [tt_output_tensor_on_device, out_length, [weights_device, _]] = ttnn.Conv1d(
+            [tt_output_tensor_on_device, out_length, [weights_device, _]] = ttnn.conv1d(
                 input_tensor=input_tensor_splits[i],
                 weight_tensor=self.tt_weight_tensor_splits[i],
                 in_channels=self.config.input_channels // self.config.channels_split_factor,
@@ -101,8 +100,6 @@ class MambaConv:
                 input_length=self.config.input_length,
                 conv_config=self.conv1d_config,
                 compute_config=self.conv1d_compute_config,
-                conv_op_cache={},
-                debug=False,
                 groups=self.config.groups // self.config.channels_split_factor,
                 return_output_dim=True,
                 return_weights_and_bias=True,

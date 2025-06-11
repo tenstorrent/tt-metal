@@ -1,5 +1,6 @@
 project(ttml)
 
+# TODO: remove glob
 set(SOURCE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd
     ${CMAKE_CURRENT_SOURCE_DIR}/core
@@ -30,6 +31,8 @@ set(METAL_OPS_FILES
     # General
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/operations.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ttnn_all_includes.hpp
+    # Common
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/common/program_utils.hpp
     # RMSNorm
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.hpp
@@ -38,6 +41,29 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.cpp
+    # CrossEntropy
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/device/cross_entropy_fw_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/cross_entropy_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/cross_entropy_bw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_bw/device/cross_entropy_bw_program_factory.cpp
+    # ProfilerNoOp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/profiler_no_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/profiler_no_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
@@ -65,6 +91,7 @@ if(NOT TARGET Metalium::Metal)
         "$ENV{TT_METAL_HOME}/tt_stl"
         # TTNN
         "$ENV{TT_METAL_HOME}/ttnn"
+        "$ENV{TT_METAL_HOME}/ttnn/api"
         "$ENV{TT_METAL_HOME}/ttnn/cpp"
         "$ENV{TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated"
         "${reflect_SOURCE_DIR}"
@@ -122,7 +149,7 @@ add_library(ttml STATIC ${SOURCES})
 
 target_include_directories(ttml PUBLIC ${PROJECT_SOURCE_DIR})
 
-find_package(Python REQUIRED Development)
+find_package(Python3 REQUIRED Development)
 
 foreach(lib ${BoostPackages})
     target_include_directories(ttml SYSTEM PUBLIC ${Boost${lib}_SOURCE_DIR}/include)
@@ -137,7 +164,7 @@ target_link_libraries(
         atomic
         Metalium::Metal
         Metalium::TTNN
-        Python::Python
+        Python3::Python
         fmt::fmt-header-only
         magic_enum::magic_enum
         yaml-cpp::yaml-cpp
@@ -148,10 +175,12 @@ target_link_libraries(
         wandbcpp
         Boost::core
         Boost::container
+        tt-logger
 )
 
 message(STATUS "xtensor_SOURCE_DIR: ${xtensor_SOURCE_DIR}")
 message(STATUS "xtl_SOURCE_DIR: ${xtl_SOURCE_DIR}")
+message(STATUS "xtensor-blas_SOURCE_DIR: ${xtensor-blas_SOURCE_DIR}")
 
 message(STATUS "msgpack_SOURCE_DIR: ${msgpack_SOURCE_DIR}")
 target_include_directories(ttml PUBLIC ${msgpack_SOURCE_DIR}/include)
@@ -160,36 +189,56 @@ target_include_directories(ttml PUBLIC ${CLI11_SOURCE_DIR}/include)
 
 target_include_directories(ttml PUBLIC ${TOKENZIER_CPP_PATH}/include)
 
-target_link_libraries(
-    tokenizers_cpp
-    PUBLIC
-        ${LIBC++}
-        ${LIBC++ABI}
-)
-target_compile_options(tokenizers_cpp PUBLIC -stdlib=libc++)
+if(ENABLE_LIBCXX)
+    target_link_libraries(
+        tokenizers_cpp
+        PUBLIC
+            ${LIBC++}
+            ${LIBC++ABI}
+    )
+    target_compile_options(tokenizers_cpp PUBLIC -stdlib=libc++)
 
-target_link_libraries(
-    wandbcpp
-    PUBLIC
-        ${LIBC++}
-        ${LIBC++ABI}
-)
-target_compile_options(wandbcpp PUBLIC -stdlib=libc++)
+    target_link_libraries(
+        wandbcpp
+        PUBLIC
+            ${LIBC++}
+            ${LIBC++ABI}
+    )
+    target_compile_options(wandbcpp PUBLIC -stdlib=libc++)
+endif()
 
 add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
 
-set(TOKENIZER_URL "https://huggingface.co/togethercomputer/RedPajama-INCITE-Chat-3B-v1/resolve/main/tokenizer.json")
-set(TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/gpt2-tokenizer.json")
+set(GPT2_TOKENIZER_URL
+    "https://huggingface.co/togethercomputer/RedPajama-INCITE-Chat-3B-v1/resolve/main/tokenizer.json"
+)
+set(GPT2_TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/gpt2-tokenizer.json")
 
 # Check if the file already exists before downloading
-if(NOT EXISTS "${TOKENIZER_FILE}")
-    message(STATUS "Downloading Tokenizer text file to ${TOKENIZER_FILE}")
+if(NOT EXISTS "${GPT2_TOKENIZER_FILE}")
+    message(STATUS "Downloading Tokenizer text file to ${GPT2_TOKENIZER_FILE}")
     file(
         DOWNLOAD
-            ${TOKENIZER_URL}
-            ${TOKENIZER_FILE}
+            ${GPT2_TOKENIZER_URL}
+            ${GPT2_TOKENIZER_FILE}
         SHOW_PROGRESS
     )
 else()
-    message(STATUS "Tokenizer text file already exists at ${TOKENIZER_FILE}, skipping download.")
+    message(STATUS "Tokenizer text file already exists at ${GPT2_TOKENIZER_FILE}, skipping download.")
+endif()
+
+set(TINYLLAMA_TOKENIZER_URL "https://huggingface.co/TinyLlama/TinyLlama_v1.1/resolve/main/tokenizer.json")
+set(TINYLLAMA_TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/tinyllama-tokenizer.json")
+
+# Check if the file already exists before downloading
+if(NOT EXISTS "${TINYLLAMA_TOKENIZER_FILE}")
+    message(STATUS "Downloading Tokenizer text file to ${TINYLLAMA_TOKENIZER_FILE}")
+    file(
+        DOWNLOAD
+            ${TINYLLAMA_TOKENIZER_URL}
+            ${TINYLLAMA_TOKENIZER_FILE}
+        SHOW_PROGRESS
+    )
+else()
+    message(STATUS "Tokenizer text file already exists at ${TINYLLAMA_TOKENIZER_FILE}, skipping download.")
 endif()

@@ -10,6 +10,9 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
+
+#include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -20,17 +23,17 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
     const auto& output_buffer_page_mapping = *output_buffer->get_buffer_page_mapping();
     const auto& input_buffer_page_mapping = *input_buffer->get_buffer_page_mapping();
 
-    const auto& output_shard_to_host_mapping = output_buffer_page_mapping.dev_page_to_host_page_mapping_;
-    const auto& input_page_to_local_page_mapping = input_buffer_page_mapping.host_page_to_local_shard_page_mapping_;
-    const auto& host_page_to_input_page_mapping = input_buffer_page_mapping.host_page_to_dev_page_mapping_;
+    const auto& output_shard_to_host_mapping = output_buffer_page_mapping.dev_page_to_host_page_mapping;
+    const auto& input_page_to_local_page_mapping = input_buffer_page_mapping.host_page_to_local_shard_page_mapping;
+    const auto& host_page_to_input_page_mapping = input_buffer_page_mapping.host_page_to_dev_page_mapping;
 
-    auto output_cores = output_buffer_page_mapping.all_cores_;
+    auto output_cores = output_buffer_page_mapping.all_cores;
     // First get output_core to vector< pair<input_core, input_page> (num_pages_in_output)
     std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page(
         output_cores.size());
 
     for (uint32_t output_page_id = 0; output_page_id < output_buffer->num_dev_pages(); output_page_id++) {
-        auto output_core_id = output_buffer_page_mapping.dev_page_to_core_mapping_[output_page_id];
+        auto output_core_id = output_buffer_page_mapping.dev_page_to_core_mapping[output_page_id];
         TT_ASSERT(output_core_id < output_cores.size());
         auto host_page = output_shard_to_host_mapping[output_page_id];
         std::optional<std::pair<CoreCoord, uint32_t>> mapped_page = std::nullopt;
@@ -38,7 +41,7 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
             auto input_page = host_page_to_input_page_mapping[host_page.value()];
             auto local_input_page = input_page_to_local_page_mapping[host_page.value()];
             auto input_core =
-                input_buffer_page_mapping.all_cores_[input_buffer_page_mapping.dev_page_to_core_mapping_[input_page]];
+                input_buffer_page_mapping.all_cores[input_buffer_page_mapping.dev_page_to_core_mapping[input_page]];
             mapped_page = std::make_optional<std::pair<CoreCoord, uint32_t>>({input_core, local_input_page});
         }
         output_core_to_vector_input_core_page[output_core_id].push_back(mapped_page);
@@ -48,7 +51,7 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
     std::unordered_map<CoreCoord, std::vector<PageStride>> ret_map;
     ret_map.reserve(output_cores.size());
 
-    auto output_core_host_page_indices = output_buffer_page_mapping.core_host_page_indices_;
+    auto output_core_host_page_indices = output_buffer_page_mapping.core_host_page_indices;
     auto device = input_buffer->device();
     auto full_grid = device->compute_with_storage_grid_size();
     CoreCoord end_core = (*output_buffer->shard_spec().grid().ranges().rbegin()).end_coord;
@@ -319,10 +322,10 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
         remote_shard_spec.grid, std::nullopt, remote_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
     uint32_t unit_size, local_units_per_shard, remote_units_per_shard;
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.get_dtype());
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());
 
     uint32_t num_units = local_tensor.buffer()->num_pages();
-    if (local_tensor.get_layout() == Layout::TILE) {
+    if (local_tensor.layout() == Layout::TILE) {
         unit_size = tt::tt_metal::detail::TileSize(data_format);
         local_units_per_shard = local_shard_spec.numel() / TILE_HW;
         remote_units_per_shard = remote_shard_spec.numel() / TILE_HW;
@@ -356,7 +359,6 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     auto remote_buffer_type = remote_tensor.buffer()->buffer_type();
     auto bank_id =
         device->allocator()->get_bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
-    uint32_t bank_offset = device->allocator()->get_bank_offset(remote_buffer_type, bank_id);
 
     std::array<tt::tt_metal::KernelHandle, 2> kernels = {kernel_id_0, kernel_id_1};
     uint32_t local_units_left = num_units;
@@ -378,7 +380,6 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
                         remote_core_units_rem = remote_units_per_shard;
                         bank_id = device->allocator()->get_bank_ids_from_logical_core(
                             remote_buffer_type, remote_cores[remote_core_idx])[0];
-                        bank_offset = device->allocator()->get_bank_offset(remote_buffer_type, bank_id);
                     }
                     uint32_t units_to_transfer = std::min(remote_core_units_rem, local_units_to_transfer);
                     bank_id = device->allocator()->get_bank_ids_from_logical_core(
@@ -442,15 +443,15 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
 
     uint32_t total_size, page_size, unit_size;
     auto output_shard_shape = output_shard_spec.shape;
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
-    if (input.get_layout() == Layout::TILE) {
+    if (input.layout() == Layout::TILE) {
         page_size = tt::tt_metal::detail::TileSize(data_format);
         unit_size = page_size;
         total_size = output_shard_spec.numel() / TILE_HW * unit_size;
     } else {
         unit_size = output_shard_spec.shape[1] * output.element_size();
-        page_size = output.get_padded_shape()[-1] * output.element_size();
+        page_size = output.padded_shape()[-1] * output.element_size();
         total_size = output_shard_shape[0] * unit_size;
     }
 
@@ -530,89 +531,6 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-struct WidthShardedRuntimeArgs {
-    uint32_t write_size;
-    uint32_t read_offset;
-    uint32_t bank_id;
-    uint32_t write_offset;
-};
-
-std::tuple<std::vector<std::vector<WidthShardedRuntimeArgs>>, uint32_t, uint32_t, uint32_t>
-compute_width_sharded_reshard_runtime_args(
-    const std::array<uint32_t, 2>& local_shard_shape,
-    const std::array<uint32_t, 2>& remote_shard_shape,
-    const std::vector<CoreCoord>& local_cores,
-    const std::vector<CoreCoord>& remote_cores,
-    const BufferType& remote_buffer_type,
-    const CoreType& remote_core_type,
-    IDevice* device,
-    uint32_t element_size) {
-    const uint32_t num_local_shards = local_cores.size();
-    const uint32_t num_remote_shards = remote_cores.size();
-
-    const uint32_t local_shard_height = local_shard_shape[0];
-    const uint32_t local_shard_width = local_shard_shape[1];
-    const uint32_t remote_shard_height = remote_shard_shape[0];
-    const uint32_t remote_shard_width = remote_shard_shape[1];
-
-    using WidthShardedRuntimeArgsForSingleCore = std::vector<WidthShardedRuntimeArgs>;
-
-    TT_FATAL(local_shard_height == remote_shard_height, "Unexpected mismatch in shard heights");
-    TT_FATAL(
-        local_shard_width * num_local_shards == remote_shard_width * num_remote_shards,
-        "Unexpected mismatch in tensor widths");
-
-    const uint32_t total_num_sticks = local_shard_height;
-    const uint32_t local_stride_bytes = element_size * local_shard_width;
-    const uint32_t remote_stride_bytes = element_size * remote_shard_width;
-    const uint32_t total_elements_bytes = local_shard_width * num_local_shards;
-
-    std::vector<WidthShardedRuntimeArgsForSingleCore> runtime_args_for_each_core;
-
-    uint32_t local_shard_offset = 0;
-    uint32_t remote_shard_offset = 0;
-    uint32_t current_remote_core_idx = 0;
-    uint32_t total_bytes_to_transfer = 0;
-    for (const auto& core : local_cores) {
-        WidthShardedRuntimeArgsForSingleCore core_args;
-        while (local_shard_offset < local_shard_width) {
-            const uint32_t remaining_input = local_shard_width - local_shard_offset;
-            const uint32_t remaining_output = remote_shard_width - remote_shard_offset;
-            const uint32_t transfer_size = std::min(remaining_input, remaining_output);
-
-            const auto bank_id = device->allocator()->get_bank_ids_from_logical_core(
-                remote_buffer_type, remote_cores[current_remote_core_idx])[0];
-            const auto bank_offset = device->allocator()->get_bank_offset(remote_buffer_type, bank_id);
-            core_args.emplace_back(
-                element_size * transfer_size,
-                element_size * local_shard_offset,
-                bank_id,
-                element_size * remote_shard_offset);
-
-            local_shard_offset += transfer_size;
-            remote_shard_offset += transfer_size;
-            total_bytes_to_transfer += transfer_size;
-
-            // If the current output shard is full, move to the next one
-            if (remote_shard_offset == remote_shard_width) {
-                ++current_remote_core_idx;
-                remote_shard_offset = 0;
-            }
-        }
-        local_shard_offset = 0;
-        runtime_args_for_each_core.push_back(core_args);
-    }
-
-    TT_FATAL(
-        runtime_args_for_each_core.size() == num_local_shards,
-        "Expect to have one set of runtime args per local core");  // sanity check
-    TT_FATAL(
-        total_bytes_to_transfer == total_elements_bytes,
-        "Expect to transfer all elements from input to output");  // sanity check
-
-    return {runtime_args_for_each_core, total_num_sticks, local_stride_bytes, remote_stride_bytes};
-}
-
 template <bool is_reader>
 operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& input, Tensor& output) {
     auto device = input.device();
@@ -634,10 +552,10 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
     const auto remote_cores = corerange_to_cores(
         remote_shard_spec.grid, std::nullopt, remote_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
-    const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.get_dtype());
+    const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());
     const uint32_t element_size = tt::datum_size(data_format);
 
-    TT_FATAL(local_tensor.get_layout() == Layout::ROW_MAJOR, "Expected row major tensor");
+    TT_FATAL(local_tensor.layout() == Layout::ROW_MAJOR, "Expected row major tensor");
     const uint32_t unit_size = local_shard_spec.shape[1] * local_tensor.element_size();  // width * element size
     const uint32_t local_units_per_shard = local_shard_spec.shape[0];                    // height
     const uint32_t remote_units_per_shard = remote_shard_spec.shape[0];                  // height
@@ -666,7 +584,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
 
     // Generate all read/write offsets for each core
     auto [runtime_args_for_each_core, total_num_sticks, local_stride_bytes, remote_stride_bytes] =
-        compute_width_sharded_reshard_runtime_args(
+        compute_width_sharding_reshard_segments(
             local_shard_spec.shape,
             remote_shard_spec.shape,
             local_cores,
@@ -738,18 +656,18 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
 }
 
 operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& output) {
-    if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-        output.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        if (output.memory_config().buffer_type == BufferType::L1) {
+    if (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+        output.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        if (output.memory_config().buffer_type() == BufferType::L1) {
             return reshard_multi_core_same_width<true>(input, output);
         } else {
             return reshard_multi_core_same_width<false>(input, output);
         }
     } else if (
         input.layout() == Layout::ROW_MAJOR &&
-        input.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED &&
-        output.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        if (output.memory_config().buffer_type == BufferType::L1) {
+        input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+        output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        if (output.memory_config().buffer_type() == BufferType::L1) {
             return reshard_multi_core_same_height<true>(input, output);
         } else {
             return reshard_multi_core_same_height<false>(input, output);

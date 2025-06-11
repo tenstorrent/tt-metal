@@ -5,9 +5,9 @@
 #pragma once
 #include <cstdint>
 #include <vector>
-#include "tt_backend_api_types.hpp"              // for DataFormat
-#include "umd/device/types/arch.h"                      // for ARCH
-#include "circular_buffer_constants.h"  // for NUM_CIRCULAR_BUFFERS
+#include <tt-metalium/tt_backend_api_types.hpp>  // for DataFormat
+#include <umd/device/types/arch.h>               // for ARCH
+#include <tt-metalium/circular_buffer_constants.h>  // for NUM_CIRCULAR_BUFFERS
 
 enum class UnpackToDestMode : std::uint8_t;
 
@@ -57,7 +57,7 @@ std::vector<DataFormat> get_pack_src_formats(
     bool fp32_dest_acc_en,
     bool bfp8_pack_precise,
     bool int_fpu_en = false,
-    tt::ARCH arch = tt::ARCH::GRAYSKULL);
+    tt::ARCH arch = tt::ARCH::WORMHOLE_B0);
 std::vector<DataFormat> get_pack_dst_formats(DataFormat buf_formats[NUM_CIRCULAR_BUFFERS]);
 
 }  // namespace tt

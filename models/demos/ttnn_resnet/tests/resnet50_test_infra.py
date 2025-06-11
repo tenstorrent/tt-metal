@@ -2,28 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
+import copy
 import os
+
 import pytest
 import torch
 import torchvision
-import copy
+from loguru import logger
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-)
-from models.utility_functions import (
-    is_blackhole,
-    is_wormhole_b0,
-    is_grayskull,
-    divup,
-)
-
-from tests.ttnn.utils_for_testing import check_with_pcc
 from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
-
 from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50 import resnet50
+from models.utility_functions import divup, is_blackhole, is_grayskull, is_wormhole_b0
+from tests.ttnn.utils_for_testing import check_with_pcc
 
 
 def load_resnet50_model(model_location_generator):
@@ -194,6 +186,7 @@ class ResNet50TestInfra:
         self.pcc_passed = False
         self.pcc_message = "Did you forget to call validate()?"
         self.device = device
+        self.num_devices = device.get_num_devices()
         self.batch_size = batch_size
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype
@@ -224,8 +217,7 @@ class ResNet50TestInfra:
             "ACTIVATIONS_DTYPE": act_dtype,
         }
 
-        num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
-        input_shape = (batch_size * num_devices, 3, 224, 224)
+        input_shape = (batch_size * self.num_devices, 3, 224, 224)
 
         self.torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
 
@@ -258,8 +250,7 @@ class ResNet50TestInfra:
         self.ops_parallel_config = {}
 
     def get_mesh_mappers(self, device):
-        is_mesh_device = isinstance(device, ttnn.MeshDevice)
-        if is_mesh_device:
+        if device.get_num_devices() != 1:
             inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
             weights_mesh_mapper = None  # ttnn.ReplicateTensorToMesh(device) causes unnecessary replication/takes more time on the first pass
             output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
@@ -279,14 +270,12 @@ class ResNet50TestInfra:
                 core_grid = ttnn.CoreGrid(y=5, x=6)  # untested due to unsupported batch20 on WH
         elif self.batch_size == 32:
             core_grid = ttnn.CoreGrid(y=10, x=13)
-        num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
         # torch tensor
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
-        if num_devices > 1:
-            n, c, h, w = torch_input_tensor.shape
-            n = n // num_devices
-        else:
-            n, c, h, w = torch_input_tensor.shape
+
+        n, c, h, w = torch_input_tensor.shape
+        n = n // self.num_devices
+
         # sharded mem config for fold input
         num_cores = core_grid.x * core_grid.y
         shard_h = (n * c * h + num_cores - 1) // num_cores
@@ -298,7 +287,10 @@ class ResNet50TestInfra:
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
         tt_inputs_host = ttnn.from_torch(
-            torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.inputs_mesh_mapper
+            torch_input_tensor,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self.inputs_mesh_mapper,
         )
         return tt_inputs_host, input_mem_config
 

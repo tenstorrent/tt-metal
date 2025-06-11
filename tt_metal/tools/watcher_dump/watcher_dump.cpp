@@ -1,13 +1,20 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <iostream>
-#include <filesystem>
 #include <host_api.hpp>
-#include "impl/debug/watcher_server.hpp"
+#include <filesystem>
+#include <iostream>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "device.hpp"
+#include "dispatch_core_common.hpp"
+#include "impl/context/metal_context.hpp"
 #include "impl/debug/noc_logging.hpp"
+#include "impl/debug/watcher_server.hpp"
 #include "impl/dispatch/debug_tools.hpp"
-#include "rtoptions.hpp"
+#include "impl/dispatch/system_memory_manager.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -27,13 +34,14 @@ void dump_data(
     bool eth_dispatch,
     int num_hw_cqs) {
     // Don't clear L1, this way we can dump the state.
-    llrt::RunTimeOptions::get_instance().set_clear_l1(false);
+    tt_metal::MetalContext::instance().rtoptions().set_clear_l1(false);
 
     // Watcher should be disabled for this, so we don't (1) overwrite the kernel_names.txt and (2) do any other dumping
     // than the one we want.
-    llrt::RunTimeOptions::get_instance().set_watcher_enabled(false);
+    tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(false);
 
-    std::filesystem::path parent_dir(tt::llrt::RunTimeOptions::get_instance().get_root_dir() + output_dir_name);
+    std::filesystem::path parent_dir(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + output_dir_name);
     std::filesystem::path cq_dir(parent_dir.string() + "command_queue_dump/");
     std::filesystem::create_directories(cq_dir);
 
@@ -139,11 +147,13 @@ int main(int argc, char* argv[]) {
         } else if (s == "-w" || s == "--dump-watcher") {
             dump_watcher = true;
         } else if (s == "-c" || s == "--dump-cqs") {
-            dump_cqs = true;
+            cout << "CQ dumping currently disabled" << endl;
+            // dump_cqs = true;
         } else if (s == "--dump-cqs-data") {
-            dump_cqs_raw_data = true;
+            cout << "CQ raw data dumping currently disabled" << endl;
+            // dump_cqs_raw_data = true;
         } else if (s == "--dump-noc-transfer-data") {
-            tt::llrt::RunTimeOptions::get_instance().set_record_noc_transfers(true);
+            tt::tt_metal::MetalContext::instance().rtoptions().set_record_noc_transfers(true);
             dump_noc_xfers = true;
         } else if (s == "--eth-dispatch") {
             eth_dispatch = true;

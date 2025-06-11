@@ -8,6 +8,7 @@
 #include "hostdevcommon/kernel_structs.h"
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include <tt-metalium/fabric.hpp>
 #include "tt-metalium/kernel_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/erisc_datamover_builder.hpp>
@@ -161,7 +162,6 @@ void generate_ccl_slice_sequence_commands_impl(
             auto header_index = args_out.size();
             args_out.push_back(static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandHeader::to_uint32(
                 ttnn::ccl::cmd::CclCommandHeader{command_type, dest_args, 1})));
-            std::size_t num_args = 0;
 
             // tensor shape
             if (last_slice.tensor_shape != slice.tensor_shape) {
@@ -175,8 +175,6 @@ void generate_ccl_slice_sequence_commands_impl(
                 for (std::size_t j = args_out.size() - num_words_for_args; j < args_out.size(); j++) {
                     log_trace(tt::LogOp, "\t{}", args_out[j]);
                 }
-
-                num_args++;
             }
 
             // tensor slice shape
@@ -192,8 +190,6 @@ void generate_ccl_slice_sequence_commands_impl(
                 for (std::size_t i = args_out.size() - num_words_for_args; i < args_out.size(); i++) {
                     log_trace(tt::LogOp, "\t{}", args_out[i]);
                 }
-
-                num_args++;
             }
 
             // tensor slice offset
@@ -209,8 +205,6 @@ void generate_ccl_slice_sequence_commands_impl(
                 for (std::size_t j = args_out.size() - num_words_for_args; j < args_out.size(); j++) {
                     log_trace(tt::LogOp, "\t{}", args_out[j]);
                 }
-
-                num_args++;
             }
 
             // worker slice offset
@@ -228,7 +222,6 @@ void generate_ccl_slice_sequence_commands_impl(
                 for (std::size_t j = args_out.size() - num_words_for_args; j < args_out.size(); j++) {
                     log_trace(tt::LogOp, "\t{}", args_out[j]);
                 }
-                num_args++;
             }
 
             // worker_pages_per_slice
@@ -244,8 +237,6 @@ void generate_ccl_slice_sequence_commands_impl(
                 for (std::size_t j = args_out.size() - num_words_for_args; j < args_out.size(); j++) {
                     log_trace(tt::LogOp, "\t{}", args_out[j]);
                 }
-
-                num_args++;
             }
 
             args_out[header_index] = static_cast<uint32_t>(ttnn::ccl::cmd::CclCommandHeader::to_uint32(
@@ -1195,6 +1186,140 @@ void generate_multi_input_command_stream_kernel_rt_args(
 
 }
 
+void generate_multi_input_command_stream_kernel_rt_args(
+    Program& program,
+    tt::tt_metal::KernelHandle kernel_id,
+    std::vector<Tensor const*> const& tensors,
+    std::vector<size_t> const& page_sizes,
+    IDevice* device,
+    uint32_t link,
+    uint32_t num_pages_per_edm_buffer,  // TODO: get from fabric
+    CoreRangeSet const& worker_core_range,
+    ttnn::ccl::cmd::CclHostLowLevelCommandSequence const& ccl_command_stream0,
+    std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> const& ccl_command_stream1,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
+    std::optional<std::unordered_map<const Tensor*, IDevice*>> const& tensor_device_override,
+    std::optional<std::vector<size_t>> const& tensor_indices,
+    ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider) {
+
+    bool fill_args_overrider = rt_args_overrider != nullptr;
+
+    if (fill_args_overrider) {
+        TT_FATAL(tensor_indices.has_value(), "Internal Error. Tensor indices must be provided when using rt_args_overrider");
+        const size_t tensor_count = std::count_if(tensors.begin(), tensors.end(), [](Tensor const* t) { return t != nullptr; });
+        TT_FATAL(tensor_indices.value().size() == tensor_count, "Internal Error. Tensor indices must match the number of tensors");
+        for (auto tensor_index : tensor_indices.value()) {
+            while (rt_args_overrider->size() <= tensor_index) {
+                rt_args_overrider->add_tensor();
+            }
+        }
+    }
+
+    // TODO: see if we can pull the kernel defines to understand if we built the kernel in single command stream mode
+    log_trace(
+        tt::LogOp,
+        "Generating multi command stream kernel RT args for kernel {} on core(s): {}",
+        kernel_id,
+        worker_core_range);
+    log_trace(tt::LogOp, "Command stream 0:");
+    log_command_stream(ccl_command_stream0, 1);
+    if (ccl_command_stream1) {
+        log_trace(tt::LogOp, "Command stream 1:");
+        log_command_stream(ccl_command_stream1.value(), 1);
+    }
+
+    std::vector<const std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand>*> command_streams = {
+        &ccl_command_stream0};
+    if (ccl_command_stream1.has_value()) {
+        command_streams.push_back(&ccl_command_stream1.value());
+    }
+
+    // RT ARGS
+    const size_t num_command_streams = command_streams.size();
+    TT_FATAL(
+        tensors.size() <= num_command_streams,
+        "Current CCL Command Processor kernel only supports a 1-to-1 mapping between command streams and tensors. "
+        "Switching between tensors within a command stream is future work");
+    TT_FATAL(page_sizes.size() == tensors.size(), "Number of page sizes must match with the number of tensors");
+    auto command_stream_start_arg_indices = std::vector<size_t>(num_command_streams, 0);
+    std::vector<uint32_t> rt_args;
+    rt_args.reserve(200);
+    for (size_t i = 0; i < tensors.size(); i++) {
+        if (tensors[i]) {
+            if (fill_args_overrider) {
+                rt_args_overrider->add_runtime_arg_index(tensor_indices.value()[i], rt_args.size());
+            }
+            rt_args.push_back(tensors[i]->buffer()->address());
+        } else {
+            // take up the rt arg with filler value  in case user built a kernel across a core range
+            // set with multiple command streams/tensors, but this particular core doesn't actualy need/use
+            // both tensors/command streams
+            rt_args.push_back(0xdeaddead);
+        }
+    }
+    for (size_t i = 0; i < num_command_streams; i++) {
+        rt_args.push_back(command_streams[i]->size());  // in0_read_command_slices
+        command_stream_start_arg_indices[i] = rt_args.size();
+        rt_args.push_back(0);  // in0_command_start_offset
+    }
+    rt_args.push_back(num_pages_per_edm_buffer);
+    TT_FATAL(tensors.size() == page_sizes.size(), "Number of pages must match with the number of tensors");
+    for (size_t i = 0; i < tensors.size(); i++) {
+        if (tensors[i]) {
+            rt_args.push_back(page_sizes[i]);  // in0
+        } else {
+            rt_args.push_back(0xdeaddead);
+        }
+    }
+
+    for (Tensor const* t : tensors) {
+        if (t) {
+            bool rt_args_enabled = true;
+            rt_args.push_back(rt_args_enabled);
+            if (tensor_device_override.has_value() and
+                tensor_device_override.value().find(t) != tensor_device_override.value().end()) {
+                std::ranges::copy(
+                    ttnn::ccl::emit_address_generator_runtime_args(tensor_device_override->at(t), *t),
+                    std::back_inserter(rt_args));
+            } else {
+                std::ranges::copy(
+                    ttnn::ccl::emit_address_generator_runtime_args(t->buffer()->device(), *t),
+                    std::back_inserter(rt_args));
+            }
+        } else {
+            bool rt_args_enabled = false;
+            rt_args.push_back(rt_args_enabled);
+        }
+        // else: Interleaved addrgen passes no additional args - we specify interleaved addrgen as the default
+    }
+    rt_args.push_back(forward_device.has_value() and forward_device.value());
+    auto worker_core = corerange_to_cores(worker_core_range).at(0);
+    if (forward_device.has_value() and forward_device.value()) {
+        tt::tt_fabric::append_fabric_connection_rt_args(device->id(), forward_device.value()->id(), link, program, {worker_core}, rt_args);
+    }
+
+    rt_args.push_back(backward_device.has_value() and backward_device.value());
+    if (backward_device.has_value() and backward_device.value()) {
+        tt::tt_fabric::append_fabric_connection_rt_args(device->id(), backward_device.value()->id(), link, program, {worker_core}, rt_args);
+    }
+
+    for (size_t i = 0; i < num_command_streams; i++) {
+        // Update the command stream start arg index argument to point to here (i.e. where
+        // this command stream's commands will start)
+        rt_args[command_stream_start_arg_indices[i]] = rt_args.size();
+        generate_ccl_command_stream_to_kernel_args((*command_streams[i]), i, tensor_indices, rt_args_overrider, rt_args);
+    }
+
+    log_trace(tt::LogOp, "\tMulti-input command processor RT Args");
+    for (size_t i = 0; i < rt_args.size(); i++) {
+        auto const& arg = rt_args[i];
+        log_trace(tt::LogOp, "\t\t{}: {}", i, arg);
+    }
+    tt::tt_metal::SetRuntimeArgs(program, kernel_id, worker_core_range, rt_args);
+
+}
+
 void generate_multi_command_stream_kernel_rt_args(
     Program& program,
     tt::tt_metal::KernelHandle kernel_id,
@@ -1436,12 +1561,12 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
 
     // If we are on device zero, we send n-1 chunks in ascending order
     auto& input_tensor = this->op_config.get_input_tensor(0);
-    TT_ASSERT(input_tensor.get_padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
+    TT_ASSERT(input_tensor.padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
     ttnn::ccl::Shape4D<uint32_t> input_tensor_shape = {
-        input_tensor.get_padded_shape()[0],
-        input_tensor.get_padded_shape()[1],
-        input_tensor.get_padded_shape()[2],
-        input_tensor.get_padded_shape()[3]};
+        input_tensor.padded_shape()[0],
+        input_tensor.padded_shape()[1],
+        input_tensor.padded_shape()[2],
+        input_tensor.padded_shape()[3]};
 
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(input_tensor.buffer()->address()),
@@ -1515,12 +1640,12 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
 
     // If we are on device zero, we send n-1 chunks in ascending order
     auto& output_tensor = this->op_config.get_output_tensor(0);
-    TT_ASSERT(output_tensor.get_padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
+    TT_ASSERT(output_tensor.padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
     ttnn::ccl::Shape4D<uint32_t> output_tensor_shape = {
-        output_tensor.get_padded_shape()[0],
-        output_tensor.get_padded_shape()[1],
-        output_tensor.get_padded_shape()[2],
-        output_tensor.get_padded_shape()[3]};
+        output_tensor.padded_shape()[0],
+        output_tensor.padded_shape()[1],
+        output_tensor.padded_shape()[2],
+        output_tensor.padded_shape()[3]};
 
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(output_tensor.buffer()->address()),
@@ -1637,7 +1762,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
 std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_ct_args() const {
     auto const& input_tensor = this->op_config.get_input_tensor(0);
     std::vector<uint32_t> args = {
-        static_cast<uint32_t>(input_tensor.memory_config().memory_layout),  // tensor memory layout
+        static_cast<uint32_t>(input_tensor.memory_config().memory_layout()),  // tensor memory layout
         static_cast<uint32_t>(input_tensor.buffer()->buffer_type()),        // buffer type
         static_cast<uint32_t>(input_tensor.layout()),                       // page layout
         static_cast<uint32_t>(tt::CB::c_in0)                                // cb_id
@@ -1652,7 +1777,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_ct_args
 std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_ct_args() const {
     auto const& output_tensor = this->op_config.get_output_tensor(0);
     std::vector<uint32_t> args = {
-        static_cast<uint32_t>(output_tensor.memory_config().memory_layout),  // tensor memory layout
+        static_cast<uint32_t>(output_tensor.memory_config().memory_layout()),  // tensor memory layout
         static_cast<uint32_t>(output_tensor.buffer()->buffer_type()),        // buffer type
         static_cast<uint32_t>(output_tensor.layout()),                       // page layout
         static_cast<uint32_t>(tt::CB::c_in0)                                 // cb_id
@@ -1670,7 +1795,7 @@ bool can_command_stream_be_lowered_to_noc_commands(const Tensor& tensor) {
     static constexpr size_t args_per_noc_command = 4;
     static constexpr size_t max_noc_commands = 256;
     size_t page_num_elements =
-        tensor.layout() == Layout::TILE ? tensor.get_tensor_spec().tile().get_tile_hw(): tensor.padded_shape()[-1];
+        tensor.layout() == Layout::TILE ? tensor.tensor_spec().tile().get_tile_hw(): tensor.padded_shape()[-1];
     size_t num_tensor_pages = tensor.padded_shape().volume() / page_num_elements;
 
     // Interleaved tensors are currently not iterable on host so we can't resolve the page locations

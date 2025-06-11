@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-
 from typing import Optional, Tuple
+
+import torch
+
+import ttnn
 
 
 def split_sequence_length(x: ttnn.Tensor, batch: int = 0, chunk_size: int = 32):

@@ -7,16 +7,16 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter.hpp"
 #include "ttnn/types.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail {
+namespace {
 
 template <typename ccl_operation_t>
 void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
@@ -28,8 +28,8 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const int32_t dim,
-               const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
-               const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
+               const GlobalSemaphore& from_remote_multi_device_global_semaphore,
+               const GlobalSemaphore& to_remote_multi_device_global_semaphore,
                ttnn::operations::reduction::ReduceType math_op,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
@@ -63,8 +63,8 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
                const int32_t dim,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
-               const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
-               const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
+               const GlobalSemaphore& from_remote_multi_device_global_semaphore,
+               const GlobalSemaphore& to_remote_multi_device_global_semaphore,
                const std::optional<std::vector<ttnn::Tensor>>& persistent_output_tensors,
                ttnn::operations::reduction::ReduceType math_op,
                const ttnn::MemoryConfig& memory_config,
@@ -100,10 +100,10 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
             py::arg("subdevice_id") = std::nullopt});
 }
 
-}  // namespace detail
+}  // namespace
 
 void py_bind_reduce_scatter_async(pybind11::module& module) {
-    detail::bind_reduce_scatter(
+    bind_reduce_scatter(
         module,
         ttnn::experimental::reduce_scatter_async,
         R"doc(
@@ -131,17 +131,12 @@ void py_bind_reduce_scatter_async(pybind11::module& module) {
         Example:
 
             >>> full_tensor = torch.randn([1, 1, 256, 256], dtype=torch.bfloat16)
-            >>> num_devices = 8
-            >>> dim = 3
-            >>> input_tensors = torch.chunk(full_tensor, num_devices, dim)
-            >>> physical_device_ids = ttnn.get_t3k_physical_device_ids_ring()
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
-            >>> tt_input_tensors = []
-            >>> for i, t in enumerate(input_tensors):
-                    tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], mem_config))
-            >>> input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
-
-            >>> output = ttnn.reduce_scatter(input_tensor_mesh, dim=0, topology=ttnn.Topology.Linear)
+            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
+            >>> input_tensor = ttnn.from_torch(
+                    full_tensor,
+                    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+                )
+            >>> output = ttnn.reduce_scatter(input_tensor, dim=0, topology=ttnn.Topology.Linear)
 
         )doc");
 }

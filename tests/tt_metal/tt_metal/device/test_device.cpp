@@ -2,13 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <gtest/gtest.h>
-
-#include "device_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <stddef.h>
+#include <stdint.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/buffer_types.hpp>
+#include "impl/dispatch/command_queue_common.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "device_fixture.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal {
 
@@ -41,7 +66,7 @@ bool l1_ping(
             tt_metal::detail::ReadFromDeviceL1(device, dest_core, l1_byte_address, byte_size, dest_core_data);
             pass &= (dest_core_data == inputs);
             if (not pass) {
-                log_error("Mismatch at Core: ={}", dest_core.str());
+                log_error(tt::LogTest, "Mismatch at Core: ={}", dest_core.str());
             }
         }
     }
@@ -223,16 +248,20 @@ TEST_F(DeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
 TEST_F(DeviceFixture, TestDeviceToHostMemChannelAssignment) {
     std::unordered_map<chip_id_t, std::set<chip_id_t>> mmio_device_to_device_group;
     for (unsigned int dev_id = 0; dev_id < num_devices_; dev_id++) {
-        chip_id_t assoc_mmio_dev_id = tt::Cluster::instance().get_associated_mmio_device(dev_id);
+        chip_id_t assoc_mmio_dev_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev_id);
         std::set<chip_id_t>& device_ids = mmio_device_to_device_group[assoc_mmio_dev_id];
         device_ids.insert(dev_id);
     }
 
     for (const auto& [mmio_dev_id, device_group] : mmio_device_to_device_group) {
-        EXPECT_EQ(tt::Cluster::instance().get_num_host_channels(mmio_dev_id), device_group.size());
+        EXPECT_EQ(
+            tt::tt_metal::MetalContext::instance().get_cluster().get_num_host_channels(mmio_dev_id),
+            device_group.size());
         std::unordered_set<uint16_t> channels;
         for (const chip_id_t& device_id : device_group) {
-            channels.insert(tt::Cluster::instance().get_assigned_channel_for_device(device_id));
+            channels.insert(
+                tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id));
         }
         EXPECT_EQ(channels.size(), device_group.size());
     }
@@ -245,17 +274,17 @@ TEST_F(DeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     EXPECT_TRUE(device->is_mmio_capable());
     CoreCoord logical_core(0, 0);
 
-    uint32_t base_l1_src_address =
-        device->allocator()->get_base_allocator_addr(HalMemType::L1) + hal_ref.get_alignment(HalMemType::L1);
+    uint32_t base_l1_src_address = device->allocator()->get_base_allocator_addr(HalMemType::L1) +
+                                   MetalContext::instance().hal().get_alignment(HalMemType::L1);
     // This is a slow dispatch test dispatch core type is needed to query DispatchMemMap
     uint32_t base_pcie_dst_address =
-        DispatchMemMap::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED) +
-        hal_ref.get_alignment(HalMemType::L1);
+        MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED) +
+        MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     uint32_t size_bytes = 2048 * 128;
     std::vector<uint32_t> src = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, size_bytes / sizeof(uint32_t));
-    EXPECT_EQ(hal_ref.get_alignment(HalMemType::L1), 16);
-    uint32_t num_16b_writes = size_bytes / hal_ref.get_alignment(HalMemType::L1);
+    EXPECT_EQ(MetalContext::instance().hal().get_alignment(HalMemType::L1), 16);
+    uint32_t num_16b_writes = size_bytes / MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     tt_metal::detail::WriteToDeviceL1(device, logical_core, base_l1_src_address, src);
 
@@ -271,11 +300,58 @@ TEST_F(DeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     tt_metal::detail::LaunchProgram(device, program);
 
     std::vector<uint32_t> result(size_bytes / sizeof(uint32_t));
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-    tt::Cluster::instance().read_sysmem(result.data(), size_bytes, base_pcie_dst_address, mmio_device_id, channel);
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
+    uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+        result.data(), size_bytes, base_pcie_dst_address, mmio_device_id, channel);
 
     EXPECT_EQ(src, result);
+}
+
+// One risc caches L1 address then polls for expected value that other risc on same core writes after some delay
+// Expected test scenarios:
+// 1. `invalidate_cache` is true: pass
+// 2. `invalidate_cache` is false: hang because periodic HW cache flush is default disabled
+// 3. `invalidate_cache` is false and env var `TT_METAL_ENABLE_HW_CACHE_INVALIDATION` is set: pass
+TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
+    CoreCoord core{0, 0};
+
+    uint32_t l1_unreserved_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
+    std::vector<uint32_t> random_vec(1, 0xDEADBEEF);
+    tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base, random_vec);
+
+    uint32_t value_to_write = 39;
+    bool invalidate_cache =
+        true;  // To make sure this test passes on CI set this to true but can be modified for local debug
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    uint32_t sem0_id = tt_metal::CreateSemaphore(program, core, 0);
+
+    tt_metal::KernelHandle kernel0 = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/poll_l1.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0});
+
+    tt_metal::SetRuntimeArgs(
+        program, kernel0, core, {l1_unreserved_base, value_to_write, sem0_id, (uint32_t)invalidate_cache});
+
+    tt_metal::KernelHandle kernel1 = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/write_to_break_poll.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::NOC_1});
+
+    tt_metal::SetRuntimeArgs(program, kernel1, core, {l1_unreserved_base, value_to_write, sem0_id});
+
+    tt_metal::detail::LaunchProgram(device_, program);
+
+    tt_metal::detail::ReadFromDeviceL1(device_, core, l1_unreserved_base, sizeof(uint32_t), random_vec);
+    EXPECT_EQ(random_vec[0], value_to_write);
 }
 
 }  // namespace tt::tt_metal

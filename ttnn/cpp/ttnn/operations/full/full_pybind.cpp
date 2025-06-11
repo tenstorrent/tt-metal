@@ -9,7 +9,7 @@
 
 #include "full.hpp"
 #include "pybind11/cast.h"
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/full/device/full_device_operation.hpp"
 
 namespace ttnn::operations::full {

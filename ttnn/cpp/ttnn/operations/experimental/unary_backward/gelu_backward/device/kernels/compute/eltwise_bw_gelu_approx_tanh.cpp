@@ -13,8 +13,8 @@
 #include "compute_kernel_api/binary_bitwise_sfpu.h"
 #include "compute_kernel_api/binary_shift.h"
 #include "compute_kernel_api.h"
-
-#include "eltwise_bw_gelu_common.hpp"
+#include "compute_kernel_api/copy_dest_values.h"
+#include "compute_kernel_api/eltwise_unary/fill.h"
 
 #define M_SQRT2 1.41421356237309504880f    /* sqrt(2) */
 #define M_2_SQRTPI 1.12837916709551257390f /* 2/sqrt(pi) */
@@ -57,47 +57,47 @@ void MAIN {
             mul_binary_tile(1, 2);
 
             // tile[1] = 0.044715 * x^3
-            load_immediate_value(3, kKappa);
+            fill_tile(3, kKappa);
             mul_binary_tile(1, 3);
 
             // tile[1] = x + 0.044715 * x^3
             add_binary_tile(1, 2);
 
             // tile[1] = sqrt(2/π) * (x + 0.044715 * x^3)
-            load_immediate_value(3, kBeta);
+            fill_tile(3, kBeta);
             mul_binary_tile(1, 3);
 
             // tile[1] = tanh(sqrt(2/π) * (x + 0.044715 * x^3))
             tanh_tile_init();
             tanh_tile(1);
-            copy_value(4, 1);  // save tanh to tile[7]
+            copy_dest_values(4, 1);  // save tanh to tile[7]
 
             // CDF term: tile[1] = 0.5 * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
-            load_immediate_value(3, 1.0f);
+            fill_tile(3, 1.0f);
             add_binary_tile(1, 3);
-            load_immediate_value(3, 0.5f);
+            fill_tile(3, 0.5f);
             mul_binary_tile(1, 3);
 
             // tile[4] = 1 - tanh^2
             square_tile(4);
-            load_immediate_value(3, 1.0f);
+            fill_tile(3, 1.0f);
             sub_binary_tile(3, 4);
-            copy_value(4, 3);
+            copy_dest_values(4, 3);
 
             // tile[2] = (1 + 0.134145 * x**2)
-            load_immediate_value(3, kKappa * 3.0f);
+            fill_tile(3, kKappa * 3.0f);
             square_tile(2);         // x^2
             mul_binary_tile(2, 3);  // 0.134145 * x**2
-            load_immediate_value(3, 1.0f);
+            fill_tile(3, 1.0f);
             add_binary_tile(2, 3);  // 1 + 0.134145 * x**2
 
             // PDF term: tile[2] = 0.5 * sqrt(2/π) * (1 + 0.134145 * x^2) * (1 - tanh^2)
             mul_binary_tile(2, 4);
-            load_immediate_value(3, kBeta / 2.0f);
+            fill_tile(3, kBeta / 2.0f);
             mul_binary_tile(2, 3);
 
             // tile[2] = x * pdf tern
-            copy_value(3, 8);
+            copy_dest_values(3, 8);
             mul_binary_tile(2, 3);
 
             // result: tile[1] = grad * (cdf_term + x * pdf_term)

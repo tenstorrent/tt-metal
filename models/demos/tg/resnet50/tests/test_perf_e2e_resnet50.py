@@ -12,9 +12,8 @@ from models.utility_functions import run_for_wormhole_b0
 @pytest.mark.model_perf_tg
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
-    "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    ((16, True, 0.0500, 60),),
-    indirect=["enable_async_mode"],
+    "device_batch_size, expected_inference_time, expected_compile_time",
+    ((16, 0.0500, 60),),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -28,17 +27,15 @@ def test_perf(
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
-    enable_async_mode,
     model_location_generator,
 ):
-    mode = "async" if enable_async_mode else "sync"
     run_perf_resnet(
         device_batch_size,
         expected_inference_time,
         expected_compile_time,
         hf_cat_image_sample_input,
         mesh_device,
-        f"resnet50_{mode}",
+        f"resnet50",
         model_location_generator,
     )
 
@@ -47,9 +44,8 @@ def test_perf(
 @pytest.mark.model_perf_tg
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1500000}], indirect=True)
 @pytest.mark.parametrize(
-    "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    ((16, True, 0.0081, 60),),
-    indirect=["enable_async_mode"],
+    "device_batch_size, expected_inference_time, expected_compile_time",
+    ((16, 0.0081, 60),),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -63,17 +59,15 @@ def test_perf_trace(
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
-    enable_async_mode,
     model_location_generator,
 ):
-    mode = "async" if enable_async_mode else "sync"
     run_perf_resnet(
         device_batch_size,
         expected_inference_time,
         expected_compile_time,
         hf_cat_image_sample_input,
         mesh_device,
-        f"resnet50_trace_{mode}",
+        f"resnet50_trace",
         model_location_generator,
     )
 
@@ -82,9 +76,8 @@ def test_perf_trace(
 @pytest.mark.model_perf_tg
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
-    "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    ((16, True, 0.0530, 60),),
-    indirect=["enable_async_mode"],
+    "device_batch_size, expected_inference_time, expected_compile_time",
+    ((16, 0.0530, 60),),
 )
 def test_perf_2cqs(
     mesh_device,
@@ -93,17 +86,15 @@ def test_perf_2cqs(
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
-    enable_async_mode,
     model_location_generator,
 ):
-    mode = "async" if enable_async_mode else "sync"
     run_perf_resnet(
         device_batch_size,
         expected_inference_time,
         expected_compile_time,
         hf_cat_image_sample_input,
         mesh_device,
-        f"resnet50_2cqs_{mode}",
+        f"resnet50_2cqs",
         model_location_generator,
     )
 
@@ -114,9 +105,8 @@ def test_perf_2cqs(
     "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1332224}], indirect=True
 )
 @pytest.mark.parametrize(
-    "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    ((16, True, 0.0069, 60),),
-    indirect=["enable_async_mode"],
+    "device_batch_size, expected_inference_time, expected_compile_time",
+    ((16, 0.0069, 60),),
 )
 def test_perf_trace_2cqs(
     mesh_device,
@@ -125,16 +115,14 @@ def test_perf_trace_2cqs(
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
-    enable_async_mode,
     model_location_generator,
 ):
-    mode = "async" if enable_async_mode else "sync"
     run_perf_resnet(
         device_batch_size,
         expected_inference_time,
         expected_compile_time,
         hf_cat_image_sample_input,
         mesh_device,
-        f"resnet50_trace_2cqs_{mode}",
+        f"resnet50_trace_2cqs",
         model_location_generator,
     )

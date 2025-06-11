@@ -54,12 +54,12 @@ bool RunCustomCycle(tt_metal::IDevice* device, int loop_count) {
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
 
     EnqueueProgram(device->command_queue(), program, false);
-    tt_metal::DumpDeviceProfileResults(device, program);
+    tt_metal::detail::DumpDeviceProfileResults(device);
 
     return pass;
 }
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {

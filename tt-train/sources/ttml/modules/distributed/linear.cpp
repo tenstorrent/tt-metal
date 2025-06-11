@@ -4,6 +4,8 @@
 
 #include "linear.hpp"
 
+#include <cmath>
+
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -55,7 +57,7 @@ void RowParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out_fe
 
     uint32_t rank = 4U;
     auto mesh_shape = device->shape();
-    const float init_k = std::sqrtf(1.F / static_cast<float>(in_features));
+    const float init_k = std::sqrt(1.F / static_cast<float>(in_features));
 
     ttml::core::XTensorToMeshVariant<float> shard_composer =
         ttml::core::ShardXTensorToMesh<float>(mesh_shape, rank - 1U);
@@ -106,7 +108,7 @@ void ColumnParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out
 
     uint32_t rank = 4U;
     auto mesh_shape = device->shape();
-    const float init_k = std::sqrtf(1.F / static_cast<float>(in_features));
+    const float init_k = std::sqrt(1.F / static_cast<float>(in_features));
 
     ttml::core::XTensorToMeshVariant<float> shard_composer =
         ttml::core::ShardXTensorToMesh<float>(mesh_shape, rank - 2U);

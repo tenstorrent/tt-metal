@@ -1,5 +1,5 @@
-Adding New ttnn Operation
-#########################
+Adding New TT-NN Operation
+##########################
 
 .. note::
    This document is meant for contributors to TT-NN.
@@ -11,20 +11,20 @@ Adding New ttnn Operation
 FAQ
 ***
 
-What is a ttnn operation?
--------------------------
+What is a TT-NN operation?
+--------------------------
 
-A ttnn operation is a function that takes in one or more input tensors and produces one or more output tensors. It is implemented in C++ and can be called from Python.
+A TT-NN operation is a function that takes in one or more input tensors and produces one or more output tensors. It is implemented in C++ and can be called from Python.
 
-What steps are needed to add ttnn operation in C++?
----------------------------------------------------
+What steps are needed to add TT-NN operation in C++?
+----------------------------------------------------
 1. There are 2 options for writing a new operation. Optiona ``a`` is to write a device operation and option ``b`` is to write a composite operation
    a. Implement device operation in C++. Device operation is a struct that specifies how to create output tensors and a program to run on the device.
    b. Implement a composite operation in C++. Composite operation simply defines ``operator()`` method that calls other operations.
 2. Register the struct using `ttnn::register_operation`.
 
-What steps are needed to add ttnn operation in Python?
-------------------------------------------------------
+What steps are needed to add TT-NN operation in Python?
+-------------------------------------------------------
 1. Take an existing registered C++ operation and add a Python binding for it using `ttnn::bind_registered_operation`.
    The operation will be auto-registered in python. If the operation is called `ttnn::add` in C++, then the python binding will be `ttnn.add`.
 2. (Optional) Attach golden function to the operation using `ttnn.attach_golden_function`. This is useful for debugging and testing.
@@ -137,8 +137,8 @@ Add the following code in a python file:
         output_tensor:  "torch.Tensor" = ...
         return output_tensor
 
-    # ttnn Tensors are converted to torch tensors before calling the golden function automatically
-    # And the outputs are converted back to ttnn Tensors
+    # TT-NN Tensors are converted to torch tensors before calling the golden function automatically
+    # And the outputs are converted back to TT-NN Tensors
     # But in some cases you may need to preprocess the inputs and postprocess the outputs manually
 
     # In order to preprocess the inputs manually, use the following signature

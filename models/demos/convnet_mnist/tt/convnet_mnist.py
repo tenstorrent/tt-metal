@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
 import torch.nn.functional as F
 from torch import nn
+
+import ttnn
 
 
 def convnet_mnist(
@@ -21,8 +22,6 @@ def convnet_mnist(
         weights_dtype=ttnn.bfloat16,
         activation="",
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        input_channels_alignment=32,
-        transpose_shards=False,
         reshard_if_not_optimal=True,
         deallocate_activation=True,
         reallocate_halo_output=True,
@@ -65,13 +64,7 @@ def convnet_mnist(
         tt_weight = ttnn.to_device(tt_weight, device)
 
     x = ttnn.conv2d(
-        input_tensor=x,
-        weight_tensor=tt_weight,
-        bias_tensor=tt_bias,
-        **conv_kwargs,
-        compute_config=compute_config,
-        conv_op_cache={},
-        debug=True,
+        input_tensor=x, weight_tensor=tt_weight, bias_tensor=tt_bias, **conv_kwargs, compute_config=compute_config
     )
     x = ttnn.relu(x)
 
@@ -131,8 +124,6 @@ def convnet_mnist(
         weight_tensor=tt_weight,
         bias_tensor=tt_bias,
         **conv_kwargs,
-        conv_op_cache={},
-        debug=False,
         return_output_dim=True,
         return_weights_and_bias=False,
     )

@@ -2,12 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/device_pool.hpp>
-#include "rtoptions.hpp"
-#include <tt-metalium/bfloat16.hpp>
 #include <chrono>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <array>
+#include <exception>
+#include <map>
+#include <memory>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include "impl/context/metal_context.hpp"
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 /*
  * Similar to loopback programming example, except run on al devices and skip device teardown to check if we can
@@ -25,9 +51,9 @@ int main(int argc, char** argv) {
     // Any arg means that we shouldn't do teardown.
     bool skip_teardown = (argc > 1);
     if (skip_teardown) {
-        tt::log_info("Running loopback test with no teardown, to see if we can recover next run.");
+        log_info(tt::LogTest, "Running loopback test with no teardown, to see if we can recover next run.");
     } else {
-        tt::log_info("Running loopback test with proper teardown");
+        log_info(tt::LogTest, "Running loopback test with proper teardown");
     }
 
     bool pass = true;
@@ -37,7 +63,7 @@ int main(int argc, char** argv) {
         ids.push_back(id);
     }
 
-    const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
     tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
 
@@ -112,9 +138,9 @@ int main(int argc, char** argv) {
             );
 
             EnqueueProgram(cq, program, false);
-            tt::log_info("Started program");
+            log_info(tt::LogTest, "Started program");
             Finish(cq);
-            tt::log_info("Finished program");
+            log_info(tt::LogTest, "Finished program");
 
             /*
             * Validation & Teardown
@@ -125,15 +151,15 @@ int main(int argc, char** argv) {
             pass &= input_vec == result_vec;
 
         } catch (const std::exception &e) {
-            tt::log_error(tt::LogTest, "Test failed with exception!");
-            tt::log_error(tt::LogTest, "{}", e.what());
+            log_error(tt::LogTest, "Test failed with exception!");
+            log_error(tt::LogTest, "{}", e.what());
 
             throw;
         }
     }
 
     if (pass) {
-        tt::log_info(tt::LogTest, "Test Passed");
+        log_info(tt::LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

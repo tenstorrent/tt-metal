@@ -1,21 +1,19 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import os
-import torch
 from typing import Optional
+
+import torch
+from loguru import logger
+
+import ttnn
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
+    get_default_compute_config,
     permute_conv_parameters,
     weight_to_bfp8,
 )
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    conv_cache,
-    get_default_compute_config,
-)
-from loguru import logger
-
 
 config_override = {
     (320, 320, 64, 64): {"act_block_h": 64},
@@ -48,7 +46,6 @@ class resnetBlock2D:
         self,
         device,
         parameters,
-        reader_patterns_cache,
         batch_size,
         input_height,
         input_width,
@@ -387,7 +384,15 @@ class resnetBlock2D:
             nonlinearity = ttnn.silu
 
         out_channels = in_channels if out_channels is None else out_channels
-        hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        if input_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            # workaround for #21088; we call to_layout on tensor in DRAM
+            hidden_states = ttnn.sharded_to_interleaved(input_tensor)
+        else:
+            hidden_states = input_tensor
+
+        hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+
         if ttnn.get_memory_config(hidden_states) != self.first_gn_expected_input_sharded_memory_config:
             hidden_states = ttnn.to_memory_config(hidden_states, self.first_gn_expected_input_sharded_memory_config)
 
@@ -439,8 +444,6 @@ class resnetBlock2D:
                 weights_dtype=ttnn.bfloat8_b,
                 activation="",
                 shard_layout=self.conv1_shard_layout,
-                input_channels_alignment=32,
-                transpose_shards=False,
                 reshard_if_not_optimal=False,
             )
             compute_config = ttnn.init_device_compute_kernel_config(
@@ -494,7 +497,6 @@ class resnetBlock2D:
                 bias_tensor=self.conv1s_bias[0],
                 **conv_kwargs_1,
                 compute_config=compute_config,
-                conv_op_cache=conv_cache,
             )
 
         else:
@@ -540,8 +542,6 @@ class resnetBlock2D:
                     weights_dtype=ttnn.bfloat8_b,
                     activation="",
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                    input_channels_alignment=32,
-                    transpose_shards=False,
                     reshard_if_not_optimal=False,
                 )
                 compute_config = ttnn.init_device_compute_kernel_config(
@@ -597,7 +597,6 @@ class resnetBlock2D:
                     bias_tensor=self.conv1s_bias[i],
                     **conv_kwargs_2,
                     compute_config=compute_config,
-                    conv_op_cache=conv_cache,
                     return_output_dim=True,
                     return_weights_and_bias=False,
                 )
@@ -696,8 +695,6 @@ class resnetBlock2D:
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            input_channels_alignment=32,
-            transpose_shards=False,
             reshard_if_not_optimal=False,
         )
         compute_config = get_default_compute_config(self.device)
@@ -744,7 +741,6 @@ class resnetBlock2D:
             bias_tensor=self.conv2_bias,
             **conv_kwargs_3,
             compute_config=compute_config,
-            conv_op_cache=conv_cache,
             return_output_dim=True,
             return_weights_and_bias=False,
         )
@@ -766,16 +762,14 @@ class resnetBlock2D:
                 weights_dtype=ttnn.bfloat8_b,
                 activation="",
                 shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                input_channels_alignment=32,
-                transpose_shards=False,
                 reshard_if_not_optimal=False,
             )
             compute_config = ttnn.init_device_compute_kernel_config(
                 self.device.arch(),
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
             )
 
             conv_kwargs_4 = {
@@ -819,7 +813,6 @@ class resnetBlock2D:
                 bias_tensor=self.conv_shortcut_bias,
                 **conv_kwargs_4,
                 compute_config=compute_config,
-                conv_op_cache=conv_cache,
                 return_output_dim=True,
                 return_weights_and_bias=False,
             )

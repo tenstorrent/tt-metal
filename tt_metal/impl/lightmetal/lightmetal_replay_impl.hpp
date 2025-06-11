@@ -10,7 +10,7 @@
 #include <optional>
 #include <tt-metalium/lightmetal_binary.hpp>
 
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
 
 namespace tt::tt_metal {
@@ -40,7 +40,6 @@ struct CreateCircularBufferCommand;
 struct LightMetalCompareCommand;
 struct RuntimeArg;
 
-struct TraceDescriptor;
 struct TraceDescriptorByTraceId;
 struct LightMetalBinary;
 }  // namespace tt::tt_metal::flatbuffer

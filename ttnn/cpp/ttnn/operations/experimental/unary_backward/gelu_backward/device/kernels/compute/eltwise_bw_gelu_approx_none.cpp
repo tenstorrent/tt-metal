@@ -15,7 +15,7 @@
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/eltwise_unary/erf_erfc.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
-#include "eltwise_bw_gelu_common.hpp"
+#include "compute_kernel_api/eltwise_unary/fill.h"
 
 namespace NAMESPACE {
 
@@ -53,14 +53,14 @@ void MAIN {
             copy_tile(cb_input, i, 4);     // x => tile 7
 
             // Step 1: erf(x / sqrt(2))
-            load_immediate_value(3, kAlpha);
+            fill_tile(3, kAlpha);
             mul_binary_tile(1, 3);  // tile[1] = x / sqrt(2)
             erf_tile(1);            // tile[1] = erf( x / sqrt(2) )
 
             // cdf_term = 0.5 * (1.0 + erf(x / sqrt(2)))
-            load_immediate_value(3, 1.0f);
+            fill_tile(3, 1.0f);
             add_binary_tile(1, 3);  // tile[1] += 1.0
-            load_immediate_value(3, 0.5f);
+            fill_tile(3, 0.5f);
             mul_binary_tile(1, 3);  // tile[1] *= 0.5
 
             // Now tile[1] holds cdf_term
@@ -68,12 +68,12 @@ void MAIN {
             // Step 2: pdf_term = x * (1 / sqrt(2π)) * exp(-x^2 / 2)
             //   tile[2] will hold exp(- x^2 / 2)
             square_tile(2);  // tile[2] = x^2
-            load_immediate_value(3, -0.5f);
+            fill_tile(3, -0.5f);
             mul_binary_tile(2, 3);  // tile[2] = -0.5 * x^2
             exp_tile(2);            // tile[2] = exp(- x^2 / 2)
 
             // multiply by (1 / sqrt(2π))
-            load_immediate_value(3, kBeta);
+            fill_tile(3, kBeta);
             mul_binary_tile(2, 3);  // tile[2] *= 1 / sqrt(2π)
 
             // multiply by x

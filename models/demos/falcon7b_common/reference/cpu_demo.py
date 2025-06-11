@@ -2,15 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
 from functools import partial
+
 import pytest
 import torch
 from loguru import logger
-
-from transformers import AutoTokenizer
-
-from transformers import FalconForCausalLM
-import time
+from transformers import AutoTokenizer, FalconForCausalLM
 
 falcon1b = "tiiuae/falcon-rw-1b"
 MODEL_VERSION = "tiiuae/falcon-7b-instruct"

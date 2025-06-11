@@ -32,7 +32,7 @@ struct RotaryEmbedding {
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 
-    const operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
+    operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
 }  // namespace tt_metal

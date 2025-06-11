@@ -65,8 +65,6 @@ def run(
     *,
     device,
 ):
-    device.enable_async(False)
-
     # Extract the shape and split_size from split_specs
     shape = split_specs["shape"]
     dim = split_specs.get("dim", 0)  # Get the dimension to split, default to 0 if unspecified

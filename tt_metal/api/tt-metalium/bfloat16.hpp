@@ -1,17 +1,16 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <cstring>
 #include <cstdint>
-#include <vector>
-#include <optional>
+#include <cstring>
 #include <functional>
-
-#include <tt-metalium/tile.hpp>
-#include <tt_stl/span.hpp>
+#include <ostream>
+#include <string>
+#include <utility>
+#include <vector>
 
 class bfloat16 {
 private:

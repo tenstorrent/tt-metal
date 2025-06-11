@@ -1,0 +1,86 @@
+name: "zzz Basic tests"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      package-artifact-name:
+        required: true
+        type: string
+      runner:
+        required: true
+        type: string
+      per-test-timeout:
+        required: false
+        type: string
+        default: 5.5
+
+jobs:
+  metalium-basic:
+    runs-on: ${{ format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner) }}
+    container:
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      env:
+        ASAN_OPTIONS: "color=always"
+        TSAN_OPTIONS: "color=always"
+        UBSAN_OPTIONS: "color=always:print_stacktrace=1:halt_on_error=1"
+      volumes:
+        - /work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: --device /dev/tenstorrent
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
+          path: /work/pkgs/
+
+      - name: Install packages
+        run: |
+          apt install ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-validation_*.deb
+
+      - name: Run a test
+        id: test
+        timeout-minutes: 30
+        env:
+          GTEST_COLOR: yes
+          GTEST_OUTPUT: xml:/work/test-reports/
+          TT_METAL_HOME: /usr/libexec/tt-metalium # TODO: Need to get away from env vars!
+          TT_METAL_WATCHER: 5
+          TT_METAL_WATCHER_TEST_MODE: 1
+        run: |
+          /usr/bin/tt-metalium-validation-basic
+
+      - name: workaround
+        run: |
+          # The test-reporting action runs git ls-files with no way to opt-out.
+          # Give it a dummy repo so it doesn't fail.
+          git init
+      - name: Test Report
+        # Because of https://github.com/tenstorrent/tt-metal/issues/19413, only run for our repo
+        # for now. No forks!
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
+        uses: phoenix-actions/test-reporting@f957cd93fc2d848d556fa0d03c57bc79127b6b5e # v15
+        with:
+          name: Metalium ${{ inputs.runner }} basic tests
+          path: /work/test-reports/*.xml
+          reporter: jest-junit
+          working-directory: /work
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        with:
+          path: /work/test-reports/
+          prefix: "test_reports_"
+
+      - name: Check for slow tests
+        uses: tenstorrent/tt-metal/.github/actions/detect-slow-tests@main
+        with:
+          threshold: ${{ inputs.per-test-timeout }}

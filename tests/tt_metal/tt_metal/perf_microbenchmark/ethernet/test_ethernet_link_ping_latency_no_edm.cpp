@@ -3,33 +3,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <limits>
-#include <random>
-#include <tuple>
-#include <map>
-
-#include "umd/device/types/arch.h"
-#include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include "tt_backend_api_types.hpp"
+#include <assert.h>
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
-
-#include <tt-metalium/persistent_kernel_cache.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstdlib>
+#include <exception>
+#include <iostream>
+#include <limits>
+#include <map>
+#include <numeric>
+#include <string>
 #include <thread>
+#include <tuple>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
 
-// TODO: ARCH_NAME specific, must remove
-#include "eth_l1_address_map.h"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "df/float32.hpp"
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "umd/device/tt_xy_pair.h"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -94,12 +101,11 @@ std::tuple<tt_metal::Program, tt_metal::Program> build(
     std::vector<uint32_t> const& ct_args = {num_channels};
 
     // Kernel Setup
-
+    uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     auto rt_args = [&]() -> std::vector<uint32_t> {
         return std::vector<uint32_t>{
-            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-            static_cast<uint32_t>(num_samples),
-            static_cast<uint32_t>(sample_page_size)};
+            erisc_unreserved_base, static_cast<uint32_t>(num_samples), static_cast<uint32_t>(sample_page_size)};
     };
 
     local_kernel = tt_metal::CreateKernel(
@@ -141,11 +147,11 @@ void run(
     std::size_t num_samples,
     std::size_t sample_page_size,
     std::size_t max_channels_per_direction) {
+    uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     auto rt_args = [&]() -> std::vector<uint32_t> {
         return std::vector<uint32_t>{
-            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-            static_cast<uint32_t>(num_samples),
-            static_cast<uint32_t>(sample_page_size)};
+            erisc_unreserved_base, static_cast<uint32_t>(num_samples), static_cast<uint32_t>(sample_page_size)};
     };
     log_trace(tt::LogTest, "Running...");
 
@@ -217,30 +223,25 @@ int main(int argc, char** argv) {
     std::cout << "done setting up test fixture" << std::endl;
 
     const auto& device_0 = test_fixture.devices_.at(0);
-    std::cout << "1" << std::endl;
-    auto const& active_eth_cores = device_0->get_active_ethernet_cores(true);
-    std::cout << "2" << std::endl;
+    const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
     auto eth_sender_core_iter_end = active_eth_cores.end();
     chip_id_t device_id = std::numeric_limits<chip_id_t>::max();
-    std::cout << "3" << std::endl;
     tt_xy_pair eth_receiver_core;
     bool initialized = false;
     tt_xy_pair eth_sender_core;
-    std::cout << "4" << std::endl;
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     do {
         TT_ASSERT(eth_sender_core_iter != eth_sender_core_iter_end);
-        std::cout << "4a" << std::endl;
-        std::tie(device_id, eth_receiver_core) = device_0->get_connected_ethernet_core(*eth_sender_core_iter);
-        std::cout << "4b" << std::endl;
-        eth_sender_core = *eth_sender_core_iter;
+        if (cluster.is_ethernet_link_up(device_0->id(), *eth_sender_core_iter)) {
+            std::tie(device_id, eth_receiver_core) = device_0->get_connected_ethernet_core(*eth_sender_core_iter);
+            eth_sender_core = *eth_sender_core_iter;
+        }
         eth_sender_core_iter++;
     } while (device_id != 1);
-    std::cout << "5" << std::endl;
     TT_ASSERT(device_id == 1);
-    std::cout << "6" << std::endl;
     const auto& device_1 = test_fixture.devices_.at(device_id);
-    std::cout << "7" << std::endl;
+
     // Add more configurations here until proper argc parsing added
     bool success = false;
     success = true;

@@ -8,10 +8,13 @@
 // issues
 #include <stdio.h>
 #include <cstring>
-#define MASK_64      0xFFFFFFFFFFFFFFC0
-#define OFFSET_64    0x000000000000003F
-#define MASK_16      0xFFFFFFFFFFFFFFF0
-#define OFFSET_16    0x000000000000000F
+
+constexpr uint64_t ALIGN_REQ_64 = 64;
+constexpr uint64_t MASK_64 = 0xFFFFFFFFFFFFFFC0;
+constexpr uint64_t OFFSET_64 = 0x000000000000003F;
+constexpr uint64_t ALIGN_REQ_16 = 16;
+constexpr uint64_t MASK_16 = 0xFFFFFFFFFFFFFFF0;
+constexpr uint64_t OFFSET_16 = 0x000000000000000F;
 
 namespace tt::data_movement::common {
 
@@ -20,7 +23,7 @@ FORCE_INLINE void enhanced_noc_async_read(
     const uint64_t src_noc_addr, const uint32_t dst_l1_addr, const uint32_t bytes) {
     // If you do not know the max_transfer_size at compile time write 0 to it.
     // only reads is true if we ONLY use noc_async_read and all calls to tt_memmove have use_read_datamover as True
-    if constexpr (only_reads) {
+    if constexpr (only_reads && max_transfer_size <= NOC_MAX_BURST_SIZE) {
         noc_async_read_one_packet(src_noc_addr, dst_l1_addr, bytes);
     } else {
         noc_async_read<max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size>(
@@ -33,7 +36,7 @@ FORCE_INLINE void enhanced_noc_async_write(
     const uint32_t src_l1_addr, const uint64_t dst_noc_addr, const uint32_t bytes) {
     // If you do not know the max_transfer_size at compile time write 0 to it.
     // only writes is true if we ONLY use noc_async_read and all calls to tt_memmove have use_read_datamover as False
-    if constexpr (only_writes) {
+    if constexpr (only_writes && max_transfer_size <= NOC_MAX_BURST_SIZE) {
         noc_async_write_one_packet(src_l1_addr, dst_noc_addr, bytes);
     } else {
         noc_async_write<max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size>(

@@ -2,14 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/container/vector.hpp>
 #include <gtest/gtest.h>
-#include <gmock/gmock.h>
+#include <xtensor/containers/xarray.hpp>
+#include <xtensor/generators/xbuilder.hpp>
+#include <xtensor/containers/xcontainer.hpp>
+#include <xtensor/core/xiterator.hpp>
+#include <xtensor/core/xlayout.hpp>
+#include <xtensor/core/xmath.hpp>
+#include <xtensor/core/xshape.hpp>
+#include <xtensor/containers/xstorage.hpp>
+#include <xtensor/core/xtensor_forward.hpp>
+#include <xtensor/utils/xtensor_simd.hpp>
+#include <cstddef>
+#include <tuple>
+#include <vector>
 
+#include "gmock/gmock.h"
+#include <tt-metalium/shape.hpp>
+#include <tt_stl/span.hpp>
 #include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
-#include "ttnn/tensor/xtensor/xtensor_all_includes.hpp"
 
 namespace ttnn {
 namespace {

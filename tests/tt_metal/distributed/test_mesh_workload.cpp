@@ -2,21 +2,55 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <random>
-
-#include <stdexcept>
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <cmath>
+#include <cstdlib>
+#include <exception>
+#include <map>
+#include <memory>
+#include <optional>
+#include <random>
+#include <stdexcept>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "env_lib.hpp"
-
 #include "gmock/gmock.h"
-#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/semaphore.hpp>
+#include <tt_stl/span.hpp>
 #include "tests/tt_metal/distributed/utils.hpp"
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "umd/device/tt_core_coordinates.h"
+#include <tt-metalium/util.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -135,7 +169,7 @@ void validate_sems(
         ::tt::tt_metal::detail::ReadFromDeviceL1(device, core, sem_buffer_base, sem_buffer_size, readback_sem_vals);
         uint32_t sem_idx = 0;
         for (uint32_t i = 0; i < readback_sem_vals.size();
-             i += (hal_ref.get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
+             i += (MetalContext::instance().hal().get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
             EXPECT_EQ(readback_sem_vals[i], expected_semaphore_values[sem_idx]);
             sem_idx++;
         }
@@ -146,25 +180,34 @@ using MeshWorkloadTestT3000 = T3000MeshDeviceFixture;
 using MeshWorkloadTestTG = TGMeshDeviceFixture;
 using MeshWorkloadTestSuite = GenericMeshDeviceFixture;
 
-TEST_F(MeshWorkloadTestSuite, MeshWorkloadOnActiveEthAsserts) {
-    if (mesh_device_->num_devices() == 1) {
-        // Unit mesh devices (such as N150) do not have ethernet cores.
-        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
+    uint32_t num_workloads = 10;
+    auto random_seed = 0;
+    uint32_t num_iters = 500;
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
+    std::vector<std::shared_ptr<MeshWorkload>> workloads = {};
+    log_info(tt::LogTest, "Create {} workloads", num_workloads);
+    for (int i = 0; i < num_workloads; i++) {
+        std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
+        for (const auto& device_coord : MeshCoordinateRange(mesh_device_->shape())) {
+            IDevice* device = mesh_device_->get_device(device_coord);
+            auto programs = utils::create_random_programs(
+                1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
+            AddProgramToMeshWorkload(
+                *workload, std::move(*programs[0]), MeshCoordinateRange(device_coord, device_coord));
+        }
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+        workloads.push_back(workload);
     }
-    // A MeshWorkload cannot be run on ethernet core - Runtime should assert if the
-    // user tries this. Verify this functionality here.
-    std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
-    uint32_t seed = 0;
-    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        IDevice* device = mesh_device_->get_device(coord);
-        auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-            /*num_programs=*/1,
-            mesh_device_->compute_with_storage_grid_size(),
-            seed,
-            device->get_active_ethernet_cores(true));
-        AddProgramToMeshWorkload(*workload, std::move(*programs[0]), MeshCoordinateRange(coord, coord));
+    for (int i = 0; i < num_iters; i++) {
+        if (i % 100 == 0) {
+            log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
+        }
+        for (auto& workload : workloads) {
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+        }
     }
-    EXPECT_THROW(EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false), std::exception);
+    Finish(mesh_device_->mesh_command_queue());
 }
 
 TEST_F(MeshWorkloadTestSuite, OverlappingProgramRanges) {
@@ -194,7 +237,7 @@ TEST_F(MeshWorkloadTestT3000, SimultaneousMeshWorkloads) {
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
-    log_info("Create MeshWorkloads with multiple programs each");
+    log_info(tt::LogTest, "Create MeshWorkloads with multiple programs each");
 
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
@@ -278,7 +321,7 @@ TEST_F(MeshWorkloadTestTG, SimultaneousMeshWorkloads) {
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
-    log_info("Create MeshWorkloads with multiple programs each");
+    log_info(tt::LogTest, "Create MeshWorkloads with multiple programs each");
 
     std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
 
@@ -370,7 +413,7 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
-    log_info("Create {} MeshWorkloads", num_programs);
+    log_info(tt::LogTest, "Create {} MeshWorkloads", num_programs);
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
     std::mt19937 rng(seed);
@@ -537,7 +580,6 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     AddProgramToMeshWorkload(mesh_workload, std::move(program), devices_0);
     AddProgramToMeshWorkload(mesh_workload, std::move(*program_1), devices_1);
 
-    std::size_t buffer_idx = 0;
     std::vector<uint32_t> src_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 1);
 
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
@@ -557,7 +599,6 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
             }
         }
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
-        buffer_idx = 0;
         for (const auto& device_coord : devices_0) {
             for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
                 for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {

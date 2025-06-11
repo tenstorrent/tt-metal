@@ -47,10 +47,9 @@ def test_grok_model_perf(
     reset_seeds,
 ):
     dtype = ttnn.bfloat8_b
-    t3k_mesh_device.enable_async(True)
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=False)
+    model_args = TtModelArgs(t3k_mesh_device, dummy_weights=False)
     model_args.n_layers = 1
 
     # Clear global profiler state before starting measurements
@@ -100,8 +99,7 @@ def test_grok_model_perf(
     profiler.print(units="ms")
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
 
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.DumpDeviceProfiler(t3k_mesh_device.get_device(device_id))
+    ttnn.DumpDeviceProfiler(t3k_mesh_device)
 
     if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
         signpost("Model perf run")

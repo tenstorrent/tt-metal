@@ -28,8 +28,8 @@ ttnn::Tensor GroupAttnMatmulOperation::invoke(
     } else if (input_tensor_b.is_sharded()) {
         row_major = input_tensor_b.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
     } else if (mem_config.is_sharded()) {
-        if (mem_config.shard_spec.has_value()) {
-            row_major = mem_config.shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
+        if (mem_config.shard_spec().has_value()) {
+            row_major = mem_config.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
         }
     }
 
@@ -40,7 +40,7 @@ ttnn::Tensor GroupAttnMatmulOperation::invoke(
 
     // Need to cache on out_subblock_w because it must be a compile time arg for optimal use of templated pack_untilize
     // APIs
-    const uint32_t Nt = input_tensor_b.get_padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    const uint32_t Nt = input_tensor_b.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     constexpr uint32_t HALF_DST_MAX = 8;  // 8 is the max number of tiles for half DST (assuming out_subblock_h == 1)
     constexpr uint32_t HALF_DST_MAX_FP32 = 4;  // max dst tiles are 4 for fp32
     uint32_t out_subblock_w;
@@ -64,7 +64,7 @@ ttnn::Tensor GroupAttnMatmulOperation::invoke(
                    out_subblock_w,
                    compute_with_storage_grid_size,
                    mem_config,
-                   output_dtype.value_or(input_tensor_a.get_dtype()),
+                   output_dtype.value_or(input_tensor_a.dtype()),
                    row_major,
                    kernel_config_val},
                {input_tensor_a, input_tensor_b},

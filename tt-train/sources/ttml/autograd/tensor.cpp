@@ -34,18 +34,18 @@ Tensor::Tensor(const tt::tt_metal::Tensor& value, bool requires_grad) : m_value(
 
 void Tensor::add_grad(const tt::tt_metal::Tensor& grad) {
     if (!is_grad_initialized()) {
-        auto value_shape = m_value.get_tensor().get_logical_shape();
-        if (grad.get_logical_shape() != value_shape) {
+        auto value_shape = m_value.get_tensor().logical_shape();
+        if (grad.logical_shape() != value_shape) {
             throw std::logic_error(fmt::format(
-                "Shapes of gradients are not equal. Expected: {}, got: {}", value_shape, grad.get_logical_shape()));
+                "Shapes of gradients are not equal. Expected: {}, got: {}", value_shape, grad.logical_shape()));
         }
 
         m_grad = grad;
         return;
     }
 
-    const auto& grad_shape = grad.get_logical_shape();
-    const auto& m_grad_shape = m_grad.get_logical_shape();
+    const auto& grad_shape = grad.logical_shape();
+    const auto& m_grad_shape = m_grad.logical_shape();
     if (grad_shape != m_grad_shape) {
         throw std::logic_error(
             fmt::format("Shapes of gradients are not equal. Expected: {}, got: {}", m_grad_shape, grad_shape));
@@ -53,7 +53,8 @@ void Tensor::add_grad(const tt::tt_metal::Tensor& grad) {
 
     // It is important to not use inline addition here
     // m_grad might share memory with other tensors
-    m_grad = ttnn::experimental::add(m_grad, grad);
+    constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+    m_grad = ttnn::add(m_grad, grad, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
 }
 
 void Tensor::backward(bool retain_graph) {
@@ -110,13 +111,13 @@ void Tensor::set_value(const tt::tt_metal::Tensor& value) {
 
 void Tensor::set_grad(const tt::tt_metal::Tensor& grad) {
     if (core::is_tensor_initialized(grad)) {
-        auto grad_shape = grad.get_logical_shape();
-        auto value_shape = m_value.get_tensor().get_logical_shape();
+        auto grad_shape = grad.logical_shape();
+        auto value_shape = m_value.get_tensor().logical_shape();
         if (grad_shape != value_shape) {
             throw std::logic_error(fmt::format(
                 "Shapes of gradients are not equal. Expected: {}, got: {}",
-                m_value.get_tensor().get_logical_shape(),
-                grad.get_logical_shape()));
+                m_value.get_tensor().logical_shape(),
+                grad.logical_shape()));
         }
     }
     m_grad = grad;
@@ -151,7 +152,7 @@ const std::optional<NodeId>& Tensor::get_node() const {
 }
 
 const ttnn::Shape& Tensor::get_shape() const {
-    return get_value().get_logical_shape();
+    return get_value().logical_shape();
 }
 
 uint32_t Tensor::get_rank() const {

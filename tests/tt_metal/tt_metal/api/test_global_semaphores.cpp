@@ -3,14 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-
+#include <stddef.h>
+#include <stdint.h>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <vector>
 
-#include "device_fixture.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/device.hpp>
+#include "dispatch_fixture.hpp"
+#include <tt-metalium/hal_types.hpp>
+#include "llrt.hpp"
+#include "impl/context/metal_context.hpp"
+#include "umd/device/types/xy_pair.h"
 
 namespace tt::tt_metal {
 
@@ -100,7 +105,7 @@ TEST_F(DispatchFixture, ResetGlobalSemaphores) {
                     device->id(), device->worker_core_from_logical_core(core), overwrite_value, address);
                 EXPECT_EQ(sem_vals[0], initial_value);
             }
-            tt::Cluster::instance().l1_barrier(device->id());
+            tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
             for (const auto& core : cores_vec) {
                 auto sem_vals = tt::llrt::read_hex_vec_from_core(
                     device->id(), device->worker_core_from_logical_core(core), address, sizeof(uint32_t));

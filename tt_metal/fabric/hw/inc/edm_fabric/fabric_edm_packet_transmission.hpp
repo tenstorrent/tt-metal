@@ -87,9 +87,39 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeade
 #endif
 }
 
+FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
+    if constexpr (enable_ring_support) {
+        auto start_trid = RX_CH_TRID_STARTS[rx_channel_id];
+        auto end_trid = start_trid + NUM_TRANSACTION_IDS;
+        for (int i = start_trid; i < end_trid; i++) {
+            if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
+                while (
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+            } else {
+                while (
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i));
+                while (
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+            }
+        }
+    } else {
+        for (size_t i = 0; i < NUM_TRANSACTION_IDS; i++) {
+            if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
+                while (
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+            } else {
+                while (
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i));
+                while (
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+            }
+        }
+    }
+}
+
 // Since we unicast to local, we must omit the packet header
 // This function only does reads, and within scope there are no modifications to the packet header
-FORCE_INLINE void execute_chip_unicast_to_local_chip(
+__attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_to_local_chip(
     tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
     uint16_t payload_size_bytes,
     uint32_t transaction_id,
@@ -98,6 +128,9 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE);
 
     tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
+    if (noc_send_type >= tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC) {
+        __builtin_unreachable();
+    }
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
@@ -107,10 +140,12 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(
                 payload_size_bytes,
                 transaction_id,
                 tt::tt_fabric::local_chip_data_cmd_buf,
-                tt::tt_fabric::edm_to_local_chip_noc);
+                tt::tt_fabric::edm_to_local_chip_noc,
+                tt::tt_fabric::forward_and_local_write_noc_vc);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE: {
+            ASSERT(payload_size_bytes > 0);
             // TODO: confirm if we need to adjust dest core count if we span eth or dram cores
             const auto mcast_dest_address = get_noc_multicast_addr(
                 header.command_fields.mcast_write.noc_x_start,
@@ -128,28 +163,48 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(
             const uint64_t dest_address = header.command_fields.unicast_seminc.noc_address;
             const auto increment = header.command_fields.unicast_seminc.val;
             if (header.command_fields.unicast_seminc.flush) {
-                if constexpr (enable_ring_support) {
-                    auto start_trid = RX_CH_TRID_STARTS[rx_channel_id];
-                    auto end_trid = start_trid + NUM_TRANSACTION_IDS;
-                    for (size_t i = start_trid; i < end_trid; i++) {
-                        while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(
-                            tt::tt_fabric::edm_to_local_chip_noc, i));
-                    }
-                } else {
-                    for (size_t i = 0; i < NUM_TRANSACTION_IDS; i++) {
-                        while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(
-                            tt::tt_fabric::edm_to_local_chip_noc, i));
-                    }
-                }
+                flush_write_to_noc_pipeline(rx_channel_id);
             }
-            noc_semaphore_inc(dest_address, increment, tt::tt_fabric::edm_to_local_chip_noc);
+            noc_semaphore_inc<true>(
+                dest_address,
+                increment,
+                tt::tt_fabric::edm_to_local_chip_noc,
+                tt::tt_fabric::forward_and_local_write_noc_vc);
 
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
             const auto dest_address = header.command_fields.unicast_inline_write.noc_address;
             const auto value = header.command_fields.unicast_inline_write.value;
-            noc_inline_dw_write(dest_address, value, 0xF, tt::tt_fabric::edm_to_local_chip_noc);
+            noc_inline_dw_write<false, true>(
+                dest_address,
+                value,
+                0xF,
+                tt::tt_fabric::edm_to_local_chip_noc,
+                tt::tt_fabric::forward_and_local_write_noc_vc);
+        } break;
+
+        case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
+            const auto dest_address = header.command_fields.unicast_seminc_fused.noc_address;
+            noc_async_write_one_packet_with_trid<false, false>(
+                payload_start_address,
+                dest_address,
+                payload_size_bytes,
+                transaction_id,
+                tt::tt_fabric::local_chip_data_cmd_buf,
+                tt::tt_fabric::edm_to_local_chip_noc,
+                tt::tt_fabric::forward_and_local_write_noc_vc);
+
+            const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
+            const auto increment = header.command_fields.unicast_seminc_fused.val;
+            if (header.command_fields.unicast_seminc_fused.flush) {
+                flush_write_to_noc_pipeline(rx_channel_id);
+            }
+            noc_semaphore_inc<true>(
+                semaphore_dest_address,
+                increment,
+                tt::tt_fabric::edm_to_local_chip_noc,
+                tt::tt_fabric::forward_and_local_write_noc_vc);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC:
@@ -177,6 +232,19 @@ FORCE_INLINE void update_packet_header_for_next_hop(
         cached_routing_fields.value >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
 }
 
+FORCE_INLINE void update_packet_header_for_next_hop(
+    volatile tt_l1_ptr tt::tt_fabric::LowLatencyMeshPacketHeader* packet_header,
+    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {
+    // This is the hop index. At every ethernet hop, we increment by 1
+    // so that the next receiver indexes into its respecive hop command
+    // in packet_header.route_buffer[]
+    packet_header->routing_fields.value = cached_routing_fields.value + 1;
+}
+
+FORCE_INLINE void update_packet_header_for_next_hop(
+    volatile tt_l1_ptr tt::tt_fabric::MeshPacketHeader* packet_header,
+    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {}
+
 // This function forwards a packet to the downstream EDM channel for eventual sending
 // to the next chip in the line/ring
 //
@@ -187,7 +255,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 // !!!WARNING!!! * ENSURE DOWNSTREAM EDM HAS SPACE FOR PACKET BEFORE CALLING
 // !!!WARNING!!!
 // This function does a write, so needs to be volatile to avoid compiler optimizations
-template <uint8_t NUM_SENDER_BUFFERS, bool enable_ring_support>
+template <uint8_t NUM_SENDER_BUFFERS, bool enable_ring_support, bool stateful_api>
 FORCE_INLINE void forward_payload_to_downstream_edm(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint16_t payload_size_bytes,
@@ -200,6 +268,9 @@ FORCE_INLINE void forward_payload_to_downstream_edm(
     // This is a good place to print the packet header for debug if you are trying to inspect packets
     // because it is before we start manipulating the header for forwarding
     update_packet_header_for_next_hop(packet_header, cached_routing_fields);
-    downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<enable_ring_support>(
+    downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<
+        enable_ring_support,
+        tt::tt_fabric::edm_to_downstream_noc,
+        stateful_api>(
         reinterpret_cast<size_t>(packet_header), payload_size_bytes + sizeof(PACKET_HEADER_TYPE), transaction_id);
 }

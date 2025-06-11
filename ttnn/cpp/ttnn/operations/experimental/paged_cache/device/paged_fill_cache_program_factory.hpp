@@ -11,5 +11,9 @@
 namespace ttnn::operations::experimental::paged_cache::detail {
 
 tt::tt_metal::operation::ProgramWithCallbacks paged_fill_cache_multi_core(
-    const Tensor& cache_tensor, const Tensor& input_tensor, const Tensor& page_table_tensor, const uint32_t batch_idx);
+    const Tensor& cache_tensor,
+    const Tensor& input_tensor,
+    const Tensor& page_table_tensor,
+    std::optional<const Tensor> batch_idx_tensor,
+    const uint32_t batch_idx_fallback);
 }  // namespace ttnn::operations::experimental::paged_cache::detail

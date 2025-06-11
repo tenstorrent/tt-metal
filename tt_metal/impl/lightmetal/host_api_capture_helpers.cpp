@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/overloaded.hpp>
-#include <circular_buffer_types.hpp>
+#include <circular_buffer_config.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
+#include "dispatch/system_memory_manager.hpp"
 
 #include <kernel_types.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
@@ -27,25 +28,25 @@ namespace {
 void PrintHostDataType(const HostDataType& data) {
     std::visit(
         tt::stl::overloaded{
-            [](const std::shared_ptr<std::vector<uint8_t>>& value) {
+            [](const std::shared_ptr<std::vector<uint8_t>>& /*value*/) {
                 log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint8_t>>");
             },
-            [](const std::shared_ptr<std::vector<uint16_t>>& value) {
+            [](const std::shared_ptr<std::vector<uint16_t>>& /*value*/) {
                 log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint16_t>>");
             },
-            [](const std::shared_ptr<std::vector<int32_t>>& value) {
+            [](const std::shared_ptr<std::vector<int32_t>>& /*value*/) {
                 log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<int32_t>>");
             },
-            [](const std::shared_ptr<std::vector<uint32_t>>& value) {
+            [](const std::shared_ptr<std::vector<uint32_t>>& /*value*/) {
                 log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint32_t>>");
             },
-            [](const std::shared_ptr<std::vector<float>>& value) {
+            [](const std::shared_ptr<std::vector<float>>& /*value*/) {
                 log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<float>>");
             },
-            [](const std::shared_ptr<std::vector<bfloat16>>& value) {
+            [](const std::shared_ptr<std::vector<bfloat16>>& /*value*/) {
                 log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<bfloat16>>");
             },
-            [](const void* value) { log_info(tt::LogMetalTrace, "HostDataType contains: const void*"); },
+            [](const void* /*value*/) { log_info(tt::LogMetalTrace, "HostDataType contains: const void*"); },
             [](auto&&) { log_info(tt::LogMetalTrace, "HostDataType contains: Unknown type"); }},
         data);
 }
@@ -63,7 +64,7 @@ void CaptureCommand(tt::tt_metal::flatbuffer::CommandType cmd_type, ::flatbuffer
 }
 }  // namespace
 
-void CaptureReplayTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, bool blocking) {
+void CaptureReplayTrace(IDevice* /*device*/, uint8_t cq_id, uint32_t trace_id, bool blocking) {
     auto& ctx = LightMetalCaptureContext::get();
     log_debug(tt::LogMetalTrace, "{}: cq_id: {} trace_id: {} blocking: {}", __FUNCTION__, cq_id, trace_id, blocking);
     auto cmd = tt::tt_metal::flatbuffer::CreateReplayTraceCommand(ctx.get_builder(), cq_id, trace_id, blocking);
@@ -77,14 +78,14 @@ void CaptureEnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::EnqueueTraceCommand, cmd.Union());
 }
 
-void CaptureLoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id) {
+void CaptureLoadTrace(IDevice* /*device*/, uint8_t cq_id, uint32_t trace_id) {
     auto& ctx = LightMetalCaptureContext::get();
     log_debug(tt::LogMetalTrace, "{}: cq_id: {} trace_id: {}", __FUNCTION__, cq_id, trace_id);
     auto cmd = tt::tt_metal::flatbuffer::CreateLoadTraceCommand(ctx.get_builder(), trace_id, cq_id);
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::LoadTraceCommand, cmd.Union());
 }
 
-void CaptureReleaseTrace(IDevice* device, uint32_t trace_id) {
+void CaptureReleaseTrace(IDevice* /*device*/, uint32_t trace_id) {
     auto& ctx = LightMetalCaptureContext::get();
     log_debug(tt::LogMetalTrace, "{}: trace_id: {}", __FUNCTION__, trace_id);
     auto cmd = tt::tt_metal::flatbuffer::CreateReleaseTraceCommand(ctx.get_builder(), trace_id);
@@ -99,10 +100,9 @@ void CaptureBufferCreate(
     DeviceAddr page_size,
     const BufferType buffer_type,
     const TensorMemoryLayout buffer_layout,
-    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameters,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
-    assert(device->id() == 0 && "multichip not supported yet");
     auto& ctx = LightMetalCaptureContext::get();
     auto& fbb = ctx.get_builder();
 
@@ -124,7 +124,11 @@ void CaptureBufferCreate(
     auto address_offset = address.has_value() ? flatbuffer::CreateUint32Optional(fbb, address.value()) : 0;
     auto bottom_up_offset = bottom_up.has_value() ? flatbuffer::CreateBoolOptional(fbb, bottom_up.value()) : 0;
     auto sub_device_id_offset = sub_device_id.has_value() ? flatbuffer::CreateUint8Optional(fbb, **sub_device_id) : 0;
-    auto shard_parameters_offset = to_flatbuffer(shard_parameters, fbb);
+    std::optional<ShardSpecBuffer> shard_spec_buffer;
+    if (shard_parameters && std::holds_alternative<ShardSpecBuffer>(*shard_parameters)) {
+        shard_spec_buffer = std::get<ShardSpecBuffer>(*shard_parameters);
+    }
+    auto shard_parameters_offset = to_flatbuffer(shard_spec_buffer, fbb);
 
     auto cmd = tt::tt_metal::flatbuffer::CreateBufferCreateCommand(
         fbb,
@@ -240,7 +244,7 @@ void CaptureEnqueueWriteBuffer(
 void CaptureEnqueueReadBuffer(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    void* dst,
+    void* /*dst*/,
     bool blocking) {
     auto& ctx = LightMetalCaptureContext::get();
 
@@ -393,7 +397,7 @@ void CaptureSetRuntimeArgsUint32VecPerCore(
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::SetRuntimeArgsUint32VecPerCoreCommand, cmd.Union());
 }
 void CaptureSetRuntimeArgs(
-    IDevice* device,
+    IDevice* /*device*/,
     const std::shared_ptr<Kernel>& kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::shared_ptr<RuntimeArgs>& runtime_args) {

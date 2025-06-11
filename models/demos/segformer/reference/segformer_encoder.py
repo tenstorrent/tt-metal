@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Optional, Tuple, Union
+
 import torch
 import torch.nn as nn
 from transformers.modeling_outputs import BaseModelOutput
-from models.demos.segformer.reference.segformer_overlap_patch_embeddings import (
-    SegformerOverlapPatchEmbeddings,
-)
+
 from models.demos.segformer.reference.segformer_layer import SegformerLayer
-from typing import Optional, Tuple, Union
+from models.demos.segformer.reference.segformer_overlap_patch_embeddings import SegformerOverlapPatchEmbeddings
 
 
 class SegformerEncoder(nn.Module):

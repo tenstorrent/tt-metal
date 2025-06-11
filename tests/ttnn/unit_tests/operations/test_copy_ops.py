@@ -85,9 +85,9 @@ def run_assign_test_opt_tensor(N, C, H, W, memory_config, dtype, device):
     opt_tensor = torch.randn(shape, dtype=torch_dtype)
     opt_tensor = ttnn.from_torch(opt_tensor, dtype, layout=ttnn.Layout.TILE, device=device, memory_config=memory_config)
 
-    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
     ttnn.assign(input, memory_config=memory_config, dtype=dtype, output_tensor=opt_tensor)
-    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
 
     assert opt_tensor.shape == input.shape
     assert opt_tensor.dtype == dtype
@@ -255,9 +255,9 @@ def test_typecast_output_tensor(device):
 
     output_ttnn = ttnn.typecast(bfloat16_tensor, ttnn.uint32, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
     ttnn.typecast(bfloat16_tensor, to_dtype, memory_config=ttnn.L1_MEMORY_CONFIG, output_tensor=uint32_preallocated)
-    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
 
     torch_gold = ttnn.to_torch(gold_tensor)
     torch_output_ttnn = ttnn.to_torch(output_ttnn)

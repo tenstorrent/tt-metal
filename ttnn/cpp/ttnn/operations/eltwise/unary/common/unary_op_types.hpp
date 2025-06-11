@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,6 +18,7 @@ enum class UnaryOpType {
     SQRT,
     SIGMOID,
     LOG,
+    LOG1P,
     TANH,
     LOG2,
     LOG10,
@@ -71,6 +72,7 @@ enum class UnaryOpType {
     DIV_UNARY_SFPU,
     IDENTITY_UINT32,
     UNARY_NE,
+    UNARY_EQ,
     UNARY_GT,
     UNARY_LT,
     TILED_PROD,
@@ -81,9 +83,7 @@ enum class UnaryOpType {
     BITWISE_OR,
     RIGHT_SHIFT,
     FLOOR,
-    FLOOR_FLOAT32,
     CEIL,
-    CEIL_FLOAT32,
     ROUND,
     LEFT_SHIFT,
     REMAINDER,
@@ -92,7 +92,20 @@ enum class UnaryOpType {
     FILL,
     PRELU_SFPU,
     ZERO_POINT,
+    ALT_COMPLEX_ROTATE90,
     MISH,
+    MAXIMUM,
+    MINIMUM,
+    TANHSHRINK,
+};
+
+enum class VecMode {
+    None = 0,
+    R = 1,
+    C = 2,
+    RC = 4,
+    RC_custom = 6,
+    Invalid = 0xFF,
 };
 
 struct UnaryWithParam {
@@ -106,7 +119,7 @@ struct UnaryWithParam {
     bool has_parameter() const { return params.size() > 0; }
 
     static constexpr auto attribute_names = std::forward_as_tuple("op_type", "param");
-    const auto attribute_values() const { return std::forward_as_tuple(this->op_type, this->params); }
+    auto attribute_values() const { return std::forward_as_tuple(this->op_type, this->params); }
 };
 
 using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;

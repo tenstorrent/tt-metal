@@ -4,15 +4,14 @@
 
 import pytest
 import torch
+from transformers import AutoTokenizer
 
-from models.demos.wormhole.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
 from models.demos.wormhole.mamba.benchmarks.loglikelihood import (
     compute_loglikelihood,
     compute_loglikelihood_given_prompt_and_target,
 )
+from models.demos.wormhole.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
 from models.utility_functions import skip_for_grayskull
-
-from transformers import AutoTokenizer
 
 
 @skip_for_grayskull()

@@ -2,26 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "eth_router.hpp"
-#include "prefetch.hpp"
-#include "eth_tunneler.hpp"
 
 #include <host_api.hpp>
-#include <tt_metal.hpp>
+#include <map>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
+#include "assert.hpp"
+#include "device.hpp"
+#include "impl/context/metal_context.hpp"
+#include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch/dispatch_settings.hpp"
+#include "dispatch_core_common.hpp"
+#include "eth_tunneler.hpp"
+#include "hal.hpp"
+#include "prefetch.hpp"
+#include "utils.hpp"
 
 using namespace tt::tt_metal;
 
 void EthRouterKernel::GenerateStaticConfigs() {
-    auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
+    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
+    kernel_type_ = FDKernelType::ROUTING;
+
     if (as_mux_) {
-        uint16_t channel =
-            tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id_);  // TODO: can be mmio
-        logical_core_ = dispatch_core_manager::instance().mux_core(servicing_device_id_, channel, placement_cq_id_);
+        uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
+            servicing_device_id_);  // TODO: can be mmio
+        logical_core_ = MetalContext::instance().get_dispatch_core_manager().mux_core(
+            servicing_device_id_, channel, placement_cq_id_);
         static_config_.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;
         // TODO: why is this hard-coded NUM_CQS=1 for galaxy?
-        if (tt::Cluster::instance().is_galaxy_cluster()) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
             static_config_.rx_queue_size_words = my_dispatch_constants.mux_buffer_size(1) >> 4;
         } else {
             static_config_.rx_queue_size_words = my_dispatch_constants.mux_buffer_size(device_->num_hw_cqs()) >> 4;
@@ -46,8 +59,10 @@ void EthRouterKernel::GenerateStaticConfigs() {
         // Mux fowrads all VCs
         static_config_.fwd_vc_count = this->static_config_.vc_count;
     } else {
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
-        logical_core_ = dispatch_core_manager::instance().demux_d_core(device_->id(), channel, placement_cq_id_);
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
+        logical_core_ =
+            MetalContext::instance().get_dispatch_core_manager().demux_d_core(device_->id(), channel, placement_cq_id_);
         static_config_.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;
         static_config_.rx_queue_size_words = 0x8000 >> 4;
 
@@ -68,7 +83,7 @@ void EthRouterKernel::GenerateStaticConfigs() {
             static_config_.output_depacketize_local_sem[idx] =
                 tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
             // Forwward VCs are the ones that don't connect to a prefetch
-            if (auto pk = dynamic_cast<PrefetchKernel*>(downstream_kernels_[idx])) {
+            if (dynamic_cast<PrefetchKernel*>(downstream_kernels_[idx]) != nullptr) {
                 static_config_.fwd_vc_count = this->static_config_.fwd_vc_count.value() - 1;
             }
         }
@@ -277,25 +292,18 @@ void EthRouterKernel::CreateKernel() {
     }
     TT_ASSERT(compile_args.size() == 36);
     const auto& grid_size = device_->grid_size();
+    const auto& hal = MetalContext::instance().hal();
     std::map<string, string> defines = {
         // All of these unused, remove later
-        {"MY_NOC_X",
-         std::to_string(tt::tt_metal::hal_ref.noc_coordinate(noc_selection_.non_dispatch_noc, grid_size.x, 0))},
-        {"MY_NOC_Y",
-         std::to_string(tt::tt_metal::hal_ref.noc_coordinate(noc_selection_.non_dispatch_noc, grid_size.y, 0))},
+        {"MY_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.non_dispatch_noc, grid_size.x, 0))},
+        {"MY_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.non_dispatch_noc, grid_size.y, 0))},
         {"UPSTREAM_NOC_INDEX", std::to_string(noc_selection_.upstream_noc)},
-        {"UPSTREAM_NOC_X",
-         std::to_string(tt::tt_metal::hal_ref.noc_coordinate(noc_selection_.upstream_noc, grid_size.x, 0))},
-        {"UPSTREAM_NOC_Y",
-         std::to_string(tt::tt_metal::hal_ref.noc_coordinate(noc_selection_.upstream_noc, grid_size.y, 0))},
-        {"DOWNSTREAM_NOC_X",
-         std::to_string(tt::tt_metal::hal_ref.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
-        {"DOWNSTREAM_NOC_Y",
-         std::to_string(tt::tt_metal::hal_ref.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
-        {"DOWNSTREAM_SLAVE_NOC_X",
-         std::to_string(tt::tt_metal::hal_ref.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
-        {"DOWNSTREAM_SLAVE_NOC_Y",
-         std::to_string(tt::tt_metal::hal_ref.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
+        {"UPSTREAM_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.upstream_noc, grid_size.x, 0))},
+        {"UPSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.upstream_noc, grid_size.y, 0))},
+        {"DOWNSTREAM_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
+        {"DOWNSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
         {"SKIP_NOC_LOGGING", "1"}};
     configure_kernel_variant(dispatch_kernel_file_names[PACKET_ROUTER_MUX], compile_args, defines, false, false, false);
 }

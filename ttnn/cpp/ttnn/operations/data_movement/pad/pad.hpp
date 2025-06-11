@@ -12,44 +12,43 @@
 namespace ttnn {
 namespace operations::data_movement {
 
-// We overload over Array1D-8D
-#define PAD_OVERLOAD_DIM(ShapeType)                                                                                \
-    static ttnn::Tensor invoke(                                                                                    \
-        QueueId,                                                                                                   \
-        const ttnn::Tensor&,                                                                                       \
-        const ShapeType&,                                                                                          \
-        const ShapeType&,                                                                                          \
-        const float,                                                                                               \
-        const bool,                                                                                                \
-        const std::optional<MemoryConfig>&);                                                                       \
-    static ttnn::Tensor invoke(                                                                                    \
-        const ttnn::Tensor&, const ShapeType&, const ShapeType&, const float, const std::optional<MemoryConfig>&); \
-    static ttnn::Tensor invoke(const ttnn::Tensor&, const ShapeType&, const ShapeType&, const float);
+struct PadSpecDim {
+    uint32_t before_elements;
+    uint32_t after_elements;
+};
 
 struct ExecutePad {
-    PAD_OVERLOAD_DIM(tt::tt_metal::Array1D)
-    PAD_OVERLOAD_DIM(tt::tt_metal::Array2D)
-    PAD_OVERLOAD_DIM(tt::tt_metal::Array3D)
-    PAD_OVERLOAD_DIM(tt::tt_metal::Array4D)
-    PAD_OVERLOAD_DIM(tt::tt_metal::Array5D)
-    PAD_OVERLOAD_DIM(tt::tt_metal::Array6D)
-    PAD_OVERLOAD_DIM(tt::tt_metal::Array7D)
-    PAD_OVERLOAD_DIM(tt::tt_metal::Array8D)
-
     // This function signature is similar to pytorch's signature
     // Any rank tensor supported
     static ttnn::Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
-        tt::stl::Span<const std::pair<uint32_t, uint32_t>> padding,
+        const ttnn::SmallVector<PadSpecDim>& padding,
         const float value,
         const bool use_multicore,
         const std::optional<MemoryConfig>& memory_config_arg);
+
+    static ttnn::Tensor invoke(
+        QueueId queue_id,
+        const ttnn::Tensor& input_tensor,
+        const ttnn::SmallVector<std::pair<uint32_t, uint32_t>>& padding,
+        const float value,
+        const bool use_multicore = false,
+        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
+
+    // legacy API
+    static ttnn::Tensor invoke(
+        QueueId queue_id,
+        const ttnn::Tensor& input_tensor,
+        const tt::tt_metal::Array4D& output_shape,
+        const tt::tt_metal::Array4D& input_tensor_start,
+        const float value,
+        const bool use_multicore = false,
+        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
 };
 
 }  // namespace operations::data_movement
 
-constexpr auto pad =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::pad", ttnn::operations::data_movement::ExecutePad>();
+constexpr auto pad = ttnn::register_operation<"ttnn::pad", ttnn::operations::data_movement::ExecutePad>();
 
 }  // namespace ttnn

@@ -29,13 +29,10 @@ DEFINE_MOREH_SOFT_OP(MorehLogSoftmax);
 }  // namespace ttnn::operations::moreh::moreh_softmax
 
 namespace ttnn {
-constexpr auto moreh_softmax = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::moreh_softmax",
-    ttnn::operations::moreh::moreh_softmax::MorehSoftmax>();
-constexpr auto moreh_softmin = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::moreh_softmin",
-    ttnn::operations::moreh::moreh_softmax::MorehSoftmin>();
-constexpr auto moreh_logsoftmax = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::moreh_logsoftmax",
-    ttnn::operations::moreh::moreh_softmax::MorehLogSoftmax>();
+constexpr auto moreh_softmax =
+    ttnn::register_operation<"ttnn::moreh_softmax", ttnn::operations::moreh::moreh_softmax::MorehSoftmax>();
+constexpr auto moreh_softmin =
+    ttnn::register_operation<"ttnn::moreh_softmin", ttnn::operations::moreh::moreh_softmax::MorehSoftmin>();
+constexpr auto moreh_logsoftmax =
+    ttnn::register_operation<"ttnn::moreh_logsoftmax", ttnn::operations::moreh::moreh_softmax::MorehLogSoftmax>();
 }  // namespace ttnn

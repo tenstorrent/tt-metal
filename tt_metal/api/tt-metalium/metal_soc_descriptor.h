@@ -4,10 +4,20 @@
 
 #pragma once
 
-#include "tt_backend_api_types.hpp"
-#include "core_coord.hpp"
-#include "umd/device/tt_soc_descriptor.h"
-#include "umd/device/tt_cluster_descriptor.h"
+#include <stdint.h>
+#include <cstddef>
+#include <map>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <umd/device/tt_cluster_descriptor.h>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/xy_pair.h>
+
+enum BoardType : uint32_t;
 
 //! tt_SocDescriptor contains information regarding the SOC configuration targetted.
 /*!

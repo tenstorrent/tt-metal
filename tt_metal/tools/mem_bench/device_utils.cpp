@@ -4,8 +4,23 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "device_utils.hpp"
+#include <map>
+#include <string>
+#include <string_view>
+#include <variant>
+
 #include "context.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
+#include "device_utils.hpp"
+#include "kernel_types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Program;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal::tools::mem_bench {
 

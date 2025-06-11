@@ -29,23 +29,27 @@ enum class HalL1MemAddrType : uint8_t {
     WATCHER,
     DPRINT,
     PROFILER,
-    KERNEL_CONFIG,
-    UNRESERVED,
+    KERNEL_CONFIG,  // End is start of unreserved memory
+    UNRESERVED,     // Only for ethernet cores
+    DEFAULT_UNRESERVED,
     CORE_INFO,
     GO_MSG,
     LAUNCH_MSG_BUFFER_RD_PTR,
     LOCAL,
     BANK_TO_NOC_SCRATCH,
     APP_SYNC_INFO,
-    TILE_HEADER_BUFFER,
     APP_ROUTING_INFO,
     RETRAIN_COUNT,
+    RETRAIN_FORCE,
     FABRIC_ROUTER_CONFIG,
+    ETH_FW_MAILBOX,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 
-enum class HalDramMemAddrType : uint8_t { DRAM_BARRIER = 0, COUNT = 1 };
+enum class HalDramMemAddrType : uint8_t { BARRIER = 0, PROFILER = 1, UNRESERVED = 2, COUNT = 3 };
 
 enum class HalMemType : uint8_t { L1 = 0, DRAM = 1, HOST = 2, COUNT = 3 };
+
+enum class HalTensixHarvestAxis : uint8_t { ROW = 0x1, COL = 0x2 };
 
 }  // namespace tt::tt_metal

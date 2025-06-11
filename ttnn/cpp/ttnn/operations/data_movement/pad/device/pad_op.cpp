@@ -20,46 +20,49 @@ void Pad::validate_with_output_tensors(
     TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operand to pad needs to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
     TT_FATAL(
-        input_tensor.get_layout() == tt::tt_metal::Layout::TILE ||
-            input_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        input_tensor.layout() == tt::tt_metal::Layout::TILE || input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Error");
-    if (input_tensor.get_layout() == Layout::TILE) {
+    if (input_tensor.layout() == Layout::TILE) {
         TT_FATAL(
             (this->input_tensor_start[0] == 0 && this->input_tensor_start[1] == 0 && this->input_tensor_start[2] == 0 &&
              this->input_tensor_start[3] == 0),
             "On device padding only supports padding at end of dims");
     }
     TT_FATAL(
-        input_tensor.get_padded_shape()[0] + this->input_tensor_start[0] <= this->output_padded_shape[0],
+        input_tensor.padded_shape()[0] + this->input_tensor_start[0] <= this->output_padded_shape[0],
         "Output size cannot fit input with offset");
     TT_FATAL(
-        input_tensor.get_padded_shape()[1] + this->input_tensor_start[1] <= this->output_padded_shape[1],
+        input_tensor.padded_shape()[1] + this->input_tensor_start[1] <= this->output_padded_shape[1],
         "Output size cannot fit input with offset");
     TT_FATAL(
-        input_tensor.get_padded_shape()[2] + this->input_tensor_start[2] <= this->output_padded_shape[2],
+        input_tensor.padded_shape()[2] + this->input_tensor_start[2] <= this->output_padded_shape[2],
         "Output size cannot fit input with offset");
     TT_FATAL(
-        input_tensor.get_padded_shape()[3] + this->input_tensor_start[3] <= this->output_padded_shape[3],
+        input_tensor.padded_shape()[3] + this->input_tensor_start[3] <= this->output_padded_shape[3],
         "Output size cannot fit input with offset");
 
-    if (input_tensor.get_layout() == Layout::TILE) {
+    if (input_tensor.layout() == Layout::TILE) {
         TT_FATAL((this->output_padded_shape[2] % TILE_HEIGHT == 0), "Can only pad tilized tensor with full tiles");
         TT_FATAL((this->output_padded_shape[3] % TILE_WIDTH == 0), "Can only pad tilized tensor with full tiles");
         TT_FATAL(
-            input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16,
+            input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16,
             "Cannot pad tilized tensor with specified format");
-    } else if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
+    } else if (input_tensor.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
-            input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16,
+            input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16,
             "Cannot pad RM tensor with specified format");
     }
 
     if (input_tensor.is_sharded()) {
-        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "ttnn.pad: For sharded inputs, only height-sharding is supported.");
-        TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR, "ttnn.pad: Only row-major sharded inputs are supported.");
+        TT_FATAL(
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "ttnn.pad: For sharded inputs, only height-sharding is supported.");
+        TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "ttnn.pad: Only row-major sharded inputs are supported.");
 
         TT_FATAL(this->output_mem_config.is_sharded(), "ttnn.pad: For sharded inputs, the output must be sharded.");
-        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "ttnn.pad: for sharded inputs, only height-sharding is supported for the output.");
+        TT_FATAL(
+            this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "ttnn.pad: for sharded inputs, only height-sharding is supported for the output.");
     }
 }
 
@@ -68,8 +71,8 @@ std::vector<ttnn::TensorSpec> Pad::compute_output_specs(const std::vector<Tensor
     return {TensorSpec(
         output_logical_shape,
         TensorLayout::fromPaddedShape(
-            input_tensor.get_dtype(),
-            PageConfig(input_tensor.get_layout()),
+            input_tensor.dtype(),
+            PageConfig(input_tensor.layout()),
             output_mem_config,
             output_logical_shape,
             output_padded_shape))};
@@ -79,21 +82,21 @@ operation::ProgramWithCallbacks Pad::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
         if (input_tensor.is_sharded()) {
             uint32_t input_tot_h = std::accumulate(
-                input_tensor.get_logical_shape().view().begin(),
-                input_tensor.get_logical_shape().view().end() - 1,
+                input_tensor.logical_shape().view().begin(),
+                input_tensor.logical_shape().view().end() - 1,
                 1,
                 std::multiplies<uint32_t>());
-            uint32_t input_w = input_tensor.get_logical_shape()[3];
+            uint32_t input_w = input_tensor.logical_shape()[3];
 
             uint32_t output_tot_h = std::accumulate(
-                output_tensor.get_logical_shape().view().begin(),
-                output_tensor.get_logical_shape().view().end() - 1,
+                output_tensor.logical_shape().view().begin(),
+                output_tensor.logical_shape().view().end() - 1,
                 1,
                 std::multiplies<uint32_t>());
-            uint32_t output_w = output_tensor.get_logical_shape()[3];
+            uint32_t output_w = output_tensor.logical_shape()[3];
 
             if (input_w != output_w and input_tot_h != output_tot_h) {
                 TT_THROW(
@@ -120,9 +123,9 @@ operation::ProgramWithCallbacks Pad::create_program(
                     input_tensor, output_tensor, this->output_padded_shape, this->input_tensor_start, this->pad_value);
             }
         }
-    } else if (input_tensor.get_layout() == Layout::TILE) {
+    } else if (input_tensor.layout() == Layout::TILE) {
         if (this->use_multicore) {
-            tt::log_warning(
+            log_warning(
                 tt::LogType::LogOp, "TILE layout does not have multicore implementation yet. Falling back to 1 core.");
         }
         return detail::pad_tile(

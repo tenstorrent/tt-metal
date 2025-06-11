@@ -176,6 +176,9 @@ on:
           - normalization.softmax.softmax
           - normalization.softmax.softmax_sharded
           - normalization.batch_norm.batch_norm
+          - normalization.generality.layernorm
+          - normalization.generality.softmax
+          - normalization.generality.softmax_fused
           - eltwise.unary.identity.identity
           - eltwise.unary.identity.identity_sharded
           - eltwise.unary.neg.neg
@@ -476,6 +479,7 @@ on:
           - reduction.traces.mean_traces
           - reduction.traces.sum_traces
           - reduction.traces.topk_traces
+          - reduction.generality.argmax
           - reduction.generality.reduction_all_ranks
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
@@ -489,6 +493,8 @@ on:
           - matmul.short.matmul_user_program_config
           - matmul.short.matmul_traces
           - matmul.short.matmul
+          - matmul.generality.matmul
+          - matmul.generality.linear
           - losses.l1_loss
           - losses.mse_loss
           - data_movement.concat.concat_interleaved_n_tensors
@@ -546,6 +552,8 @@ on:
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       build-wheel: true
@@ -574,14 +582,14 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     timeout-minutes: 30
-    runs-on: [build, in-service]
+    runs-on: tt-beta-ubuntu-2204-large
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
         with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Run ttnn sweeps generation (single sweep)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
         run: python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --elastic cloud --tag ci-main --explicit
@@ -628,7 +636,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -637,27 +645,12 @@ jobs:
     timeout-minutes: 720
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
         with:
-          submodules: recursive
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
-      - name: ⬇️ Download Build
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          path: docker-job
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-          path: docker-job
-      - name: Install Wheel
-        run: |
-          WHEEL_FILENAME=$(ls -1 *.whl)
-          pip3 install $WHEEL_FILENAME
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Run ttnn sweeps (single sweep)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
         run: python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --elastic cloud --tag ci-main

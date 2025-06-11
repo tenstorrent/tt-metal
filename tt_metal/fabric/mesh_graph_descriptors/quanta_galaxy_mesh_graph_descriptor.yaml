@@ -20,7 +20,7 @@ Mesh: [
   id: 0,
   board: Galaxy,
   topology: [1, 1],
-  host_mapping: [[]]}
+  host_ranks: [[0]]}
 ]
 
 Graph: [

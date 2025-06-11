@@ -4,20 +4,13 @@
 
 import pytest
 import torch
-
 from loguru import logger
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 
 import ttnn
-
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
-
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-    is_e75,
-)
+from models.utility_functions import comp_allclose, comp_pcc, is_e75
 
 
 def run_bert_question_and_answering_inference(

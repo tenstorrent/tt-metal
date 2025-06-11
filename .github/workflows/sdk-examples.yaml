@@ -1,0 +1,76 @@
+name: "[impl] SDK examples"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      package-artifact-name:
+        required: true
+        type: string
+      runner:
+        required: true
+        type: string
+      product:
+        required: true
+        type: string
+
+jobs:
+  sdk-examples:
+    runs-on: ${{ format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner) }}
+    container:
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      volumes:
+        - /work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: --device /dev/tenstorrent
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
+          path: /work/pkgs/
+
+      - name: Install packages
+        run: |
+          set -euo pipefail
+          apt update
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb
+
+      - name: Run examples
+        id: test
+        timeout-minutes: 15
+        env:
+          TT_METAL_HOME: /usr/libexec/tt-metalium # TODO: Need to get away from env vars!
+          TT_METAL_WATCHER: 5
+          TT_METAL_WATCHER_TEST_MODE: 1
+          CC: gcc-12
+          CXX: g++-12
+        run: |
+          set -euo pipefail
+          for example in /usr/share/${{ inputs.product }}/examples/*; do
+            example_name=$(basename "$example")
+            # Wouldn't it be nice if we could have nested groups?
+            # Yeah, others thought so, too. https://github.com/actions/toolkit/issues/1001
+            echo "::group::${example_name} - build"
+            cd `mktemp -d`
+            cmake -G Ninja -S "$example" -B .
+            cmake --build .
+            echo "::endgroup::"
+
+            echo "::group::${example_name} - run"
+            # Find and run the built executable
+            exec_path=$(find . -maxdepth 1 -type f -executable -not -name "*.so")
+            [ "$(echo "$exec_path" | wc -l)" -eq 1 ] || {
+              echo "Expected exactly one executable, found: $(echo "$exec_path" | wc -l)" >&2
+              echo "$exec_path" >&2
+              exit 1
+            }
+            "$exec_path"
+            echo "::endgroup::"
+          done

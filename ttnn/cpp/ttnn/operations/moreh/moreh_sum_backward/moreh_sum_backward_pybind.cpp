@@ -5,7 +5,7 @@
 #include "moreh_sum_backward_pybind.hpp"
 
 #include "moreh_sum_backward.hpp"
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::moreh::moreh_sum_backward {
 void bind_moreh_sum_backward_operation(py::module& module) {

@@ -1,10 +1,18 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include <stdint.h>
+#include <array>
+#include <optional>
+
+#include "dispatch/kernels/packet_queue_ctrl.hpp"
 #include "fd_kernel.hpp"
 
-typedef struct mux_static_config {
+namespace tt {
+namespace tt_metal {
+
+struct mux_static_config_t {
     std::optional<uint32_t> reserved;
     std::optional<uint32_t> rx_queue_start_addr_words;
     std::optional<uint32_t> rx_queue_size_words;
@@ -21,9 +29,9 @@ typedef struct mux_static_config {
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> input_packetize_local_sem;
     std::optional<uint32_t> input_packetize_src_endpoint;   // Packed w/ max 4 assumption
     std::optional<uint32_t> input_packetize_dest_endpoint;  // Same as src
-} mux_static_config_t;
+};
 
-typedef struct mux_dependent_config {
+struct mux_dependent_config_t {
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> remote_rx_x;         // [4:7], dependent
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> remote_rx_y;         // [4:7], dependent
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> remote_rx_queue_id;  // [4:7], dependent
@@ -36,7 +44,7 @@ typedef struct mux_dependent_config {
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN>
         input_packetize_log_page_size;                                                                      // Dependent
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_IN> input_packetize_upstream_sem;  // Dependent
-} mux_dependent_config_t;
+};
 
 class MuxKernel : public FDKernel {
 public:
@@ -52,3 +60,6 @@ private:
     mux_static_config_t static_config_;
     mux_dependent_config_t dependent_config_;
 };
+
+}  // namespace tt_metal
+}  // namespace tt

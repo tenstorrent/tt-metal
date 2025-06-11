@@ -61,6 +61,7 @@ foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
 endforeach()
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/api)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/data_movement)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/debug_tools)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/device)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch)
@@ -68,31 +69,36 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/eth)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/integration)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llk)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/perf_microbenchmark)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/stl)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/noc)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/lightmetal)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sfpi)
 
 add_custom_target(
     metal_tests
     DEPENDS
         ${METAL_TEST_TARGETS}
         metal_perf_microbenchmark_tests
-        unit_tests_api_wormhole_b0
-        unit_tests_api_blackhole
-        unit_tests_debug_tools_wormhole_b0
-        unit_tests_debug_tools_blackhole
+        unit_tests_api
+        unit_tests_data_movement
+        unit_tests_debug_tools
         unit_tests_device
         unit_tests_dispatch
-        unit_tests_eth_wormhole_b0
-        unit_tests_eth_blackhole
+        unit_tests_eth
         unit_tests_integration
         unit_tests_llk
-        unit_tests_stl
         unit_tests_noc
         unit_tests_lightmetal
+        unit_tests_sfpi
 )
 
 add_library(metalium_test_files INTERFACE)
+# These headers are for the device, not host; will require cross compiling to verify.
+set_target_properties(
+    metalium_test_files
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 target_sources(
     metalium_test_files
     PUBLIC
@@ -110,7 +116,7 @@ target_sources(
             test_kernels/misc/add_two_ints.cpp
             test_kernels/misc/brisc_print.cpp
             test_kernels/misc/circular_buffer/cb_non_blocking_master_test_kernel.cpp
-            test_kernels/misc/circular_buffer/cb_non_blocking_slave_test_kernel.cpp
+            test_kernels/misc/circular_buffer/cb_non_blocking_subordinate_test_kernel.cpp
             test_kernels/misc/dprint_raise_wait_brisc.cpp
             test_kernels/misc/dprint_raise_wait_ncrisc.cpp
             test_kernels/misc/erisc_print.cpp
@@ -130,6 +136,7 @@ target_sources(
             test_kernels/misc/print_tile_trisc.cpp
             test_kernels/misc/print_with_wait.cpp
             test_kernels/misc/runtime_args_kernel.cpp
+            test_kernels/misc/sub_device/add_common_and_unique_rta.cpp
             test_kernels/misc/sub_device/incrementer.cpp
             test_kernels/misc/sub_device/persistent_remote_waiter.cpp
             test_kernels/misc/sub_device/persistent_waiter.cpp

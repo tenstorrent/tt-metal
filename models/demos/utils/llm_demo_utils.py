@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+
 from loguru import logger
-from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
+
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 
 def create_benchmark_data(profiler: BenchmarkProfiler, measurements: dict, N_warmup_iter: dict, targets: dict):
@@ -114,7 +116,7 @@ def check_tokens_match(generated_text: dict, expected_greedy_output_path: str):
 def verify_perf(
     measurements: dict,
     expected_perf_metrics: dict,
-    high_tol_percentage=1.1,  # 10% tolerance to account for +-5% CI variance
+    high_tol_percentage=1.15,  # 15% tolerance (approx +-5% CI variance + 5% real increase)
 ):
     """
     Verify the performance metrics against the expected values.

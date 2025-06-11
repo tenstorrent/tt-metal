@@ -4,11 +4,19 @@
 
 #pragma once
 
+#include <tt_stl/indestructible.hpp>
 #include <memory>
+#include <optional>
 #include <vector>
 
-#include "mesh_coord.hpp"
-#include <tt_stl/indestructible.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+
+namespace tt {
+namespace stl {
+template <typename T>
+class Indestructible;
+}  // namespace stl
+}  // namespace tt
 
 namespace tt::tt_metal::distributed {
 
@@ -18,6 +26,7 @@ namespace tt::tt_metal::distributed {
 class SystemMesh {
 private:
     class Impl;  // Forward declaration only
+
     std::unique_ptr<Impl> pimpl_;
     SystemMesh();
 
@@ -35,6 +44,12 @@ public:
 
     // Returns the physical device ID for a given logical coordinate
     int get_physical_device_id(const MeshCoordinate& coord) const;
+
+    // Returns the physical mesh ID for a given logical coordinate
+    uint32_t get_physical_mesh_id(const MeshCoordinate& coord) const;
+
+    // Returns the global device coordinate for a given physical device ID
+    MeshCoordinate get_global_device_coordinate(int physical_device_id) const;
 
     // Returns the physical device IDs mapped to a MeshDevice
     std::vector<int> get_mapped_physical_device_ids(

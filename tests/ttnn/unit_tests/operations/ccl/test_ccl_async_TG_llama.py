@@ -19,7 +19,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     QKV_CRS,
     FF1_CRS,
 )
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
+from models.demos.llama3_subdevices.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
@@ -58,15 +58,9 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "num_devices, num_links",
+    "num_devices",
     [
-        (4, 3),
-    ],
-)
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat8_b,
+        4,
     ],
 )
 @pytest.mark.parametrize(
@@ -77,11 +71,12 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
 )
 @pytest.mark.parametrize("shard_grid_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 @pytest.mark.parametrize(
-    "tensor_mem_layout, output_shape, dim, input_shard_shape,input_shard_grid,output_shard_shape, output_shard_grid, layout",
+    "tensor_mem_layout, output_shape, num_links, dim, input_shard_shape,input_shard_grid,output_shard_shape, output_shard_grid, layout, input_dtype",
     (
         (  # AllGather after SDPA
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             (1, 32, 32, 128),
+            3,
             1,
             (32, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
@@ -93,38 +88,70 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
                 }
             ),
             ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
         ),
         (  # AllGather after Binary Mult+Silu
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             (1, 1, 32, 3840),
+            3,
             3,
             (32, 32),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 4))}),
             (32, 160),
             get_core_range_set(PREFETCHER_NOC1_GRID),
             ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
         ),
         (  # AllGather for layernorm
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             (1, 1, 32, 128),
+            1,
             3,
             (32, 32),
             CORE_RANGE_SET_1x1,
             (32, 128),
             CORE_RANGE_SET_1x1,
             ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+        ),
+        (  # AllGather for sampling values
+            ttnn.TensorMemoryLayout.INTERLEAVED,
+            (1, 1, 32, 256),
+            1,
+            3,
+            None,
+            None,
+            None,
+            None,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+        ),
+        (  # AllGather for sampling indices
+            ttnn.TensorMemoryLayout.INTERLEAVED,
+            (1, 1, 32, 256),
+            1,
+            3,
+            None,
+            None,
+            None,
+            None,
+            ttnn.TILE_LAYOUT,
+            ttnn.uint16,
         ),
     ),
     ids=[
         "sdpa",
         "binary_mult",
         "layernorm",
+        "sampling_values",
+        "sampling_indices",
     ],
 )
 @pytest.mark.parametrize("replication_factor", [8])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 17068032}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 17068032, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+)
 def test_all_gather_tg_llama(
     mesh_device,
     num_devices,
@@ -141,18 +168,20 @@ def test_all_gather_tg_llama(
     layout,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters,
     warmup_iters,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
-    input_shard_spec = ttnn.ShardSpec(
-        input_shard_grid,
-        input_shard_shape,
-        shard_grid_orientation,
-    )
+    if input_shard_grid is not None and input_shard_shape is not None:
+        input_shard_spec = ttnn.ShardSpec(
+            input_shard_grid,
+            input_shard_shape,
+            shard_grid_orientation,
+        )
+    else:
+        input_shard_spec = None
 
     if output_shard_grid is not None and output_shard_shape is not None:
         output_shard_spec = ttnn.ShardSpec(
@@ -177,7 +206,6 @@ def test_all_gather_tg_llama(
         ttnn.BufferType.L1,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
         input_shard_spec=input_shard_spec,
@@ -187,21 +215,18 @@ def test_all_gather_tg_llama(
         profiler=profiler,
         trace_mode=True,
         use_all_gather_async=True,
-        enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
         use_persistent_output=True,
     )
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
+    "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set, input_dtype, output_dtype",
     [
-        ([1, 1, 32, 2048], 0, 4, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
-        ([1, 1, 32, 1280], 1, 3, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 3, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
-        ([1, 1, 32, 16 * 1024], 1, 3, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS),  # LM head all reduce
+        ([1, 1, 32, 2048], 0, 4, 24, RING_CRS, 16, NORM_CRS, ttnn.bfloat8_b, None),  # FF2/DO all reduce
+        ([1, 1, 32, 1280], 1, 3, 24, RING_CRS, 10, QKV_CRS, ttnn.bfloat8_b, ttnn.bfloat16),  # QKV all reduce
+        ([1, 1, 32, 3584], 1, 3, 24, RING_CRS, 28, FF1_CRS, ttnn.bfloat8_b, None),  # FF1 all reduce
+        ([1, 1, 32, 16 * 1024], 1, 3, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS, ttnn.bfloat8_b, None),  # LM head all reduce
     ],
     ids=[
         "ff2",
@@ -211,22 +236,21 @@ def test_all_gather_tg_llama(
     ],
 )
 @pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat8_b,
-    ],
-)
-@pytest.mark.parametrize(
     "num_iters, warmup_iters",
     [
         (NUM_ITERATIONS, 10),
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 23887872, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    [
+        {
+            "trace_region_size": 23887872,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -241,6 +265,7 @@ def test_all_reduce_tg_llama(
     output_shape,
     cluster_axis,
     input_dtype,
+    output_dtype,
     num_links,
     input_num_cores,
     input_core_range_set,
@@ -248,10 +273,10 @@ def test_all_reduce_tg_llama(
     output_core_range_set,
     num_iters,
     warmup_iters,
-    enable_async,
     trace_mode,
     use_program_cache,
     function_level_defaults,
+    ensure_devices_tg,
 ):
     profiler = BenchmarkProfiler()
 
@@ -265,9 +290,9 @@ def test_all_reduce_tg_llama(
         input_core_range_set,
         output_num_cores,
         output_core_range_set,
+        output_dtype=output_dtype,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
-        enable_async=enable_async,
         trace_mode=trace_mode,
         validate_all=False,
         profiler=profiler,

@@ -97,7 +97,7 @@ def run(
 
     start_time = start_measuring_time()
     result = ttnn.multiply(
-        input_tensor_a, input_tensor_b, input_tensor_a_activation=ttnn.UnaryOpType.SILU, memory_config=sharded_config
+        input_tensor_a, input_tensor_b, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=sharded_config
     )
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)

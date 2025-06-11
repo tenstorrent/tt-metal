@@ -7,8 +7,8 @@
 // #include "debug/dprint.h"
 
 // H-bcast mask
-FORCE_INLINE void generate_bcast_row_mask(const uint32_t cb_id, const uint32_t num_datum_padded, const uint32_t val) {
-    const uint32_t mask_val = val >> 16;
+FORCE_INLINE void generate_bcast_row_mask(
+    const uint32_t cb_id, const uint32_t num_datum_padded, const uint16_t mask_val) {
     cb_reserve_back(cb_id, 1);
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id));
 
@@ -61,9 +61,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_mask = tt::CBIndex::c_5;
     const uint32_t mask_padded_data = get_arg_val<uint32_t>(4);
     const uint32_t num_datum_padded = get_arg_val<uint32_t>(5);
-    const uint32_t val_to_pad = get_arg_val<uint32_t>(6);
+
+    // Adds -inf padding. Note: the value is the uint16 representation of bfloat16's -inf
+    constexpr uint16_t mask_val = 0xFF80;
     if (mask_padded_data) {
-        generate_bcast_row_mask(cb_id_mask, num_datum_padded, val_to_pad);
+        generate_bcast_row_mask(cb_id_mask, num_datum_padded, mask_val);
     }
 
     const InterleavedAddrGenFast<dst_is_dram> s = {

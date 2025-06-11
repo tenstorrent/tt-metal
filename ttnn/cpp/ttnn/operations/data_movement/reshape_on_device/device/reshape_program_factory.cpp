@@ -18,17 +18,17 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
 
     CoreRange core({0, 0}, {0, 0});
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    uint32_t num_tiles = a.volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = a.physical_volume() / tt::constants::TILE_HW;
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
 
-    auto output_shape = output.get_padded_shape();
+    auto output_shape = output.padded_shape();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -40,12 +40,12 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
             .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t alignment = src0_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram, alignment};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
 
     if (alignment > (tt::constants::FACE_WIDTH * a.element_size())) {
@@ -74,7 +74,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
         unary_reader_kernel_id,
         core,
         {src0_buffer->address(),
-         a.get_padded_shape()[3] / tt::constants::TILE_WIDTH,
+         a.padded_shape()[3] / tt::constants::TILE_WIDTH,
          (uint32_t)output_shape[0],
          (uint32_t)output_shape[1],
          (uint32_t)output_shape[2] / tt::constants::TILE_HEIGHT,
@@ -83,12 +83,14 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles, 0});
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_buffer = input_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
 
-        auto dst_buffer = output_buffers.at(0);
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 
@@ -119,8 +121,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     bool split_work_by_old_sticks) {
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.get_padded_shape();
-    auto output_shape = output_tensor.get_padded_shape();
+    auto input_shape = input_tensor.padded_shape();
+    auto output_shape = output_tensor.padded_shape();
 
     uint32_t old_stick_size = input_shape[3] * input_tensor.element_size();
     uint32_t new_stick_size = output_shape[3] * output_tensor.element_size();
@@ -207,22 +209,22 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 }
 
 operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& output) {
-    TT_FATAL(a.get_dtype() == output.get_dtype(), "Error");
+    TT_FATAL(a.dtype() == output.dtype(), "Error");
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::tt_metal::IDevice* device = a.device();
 
-    auto output_shape = output.get_padded_shape();
+    auto output_shape = output.padded_shape();
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    uint32_t num_old_sticks = a.get_padded_shape()[0] * a.get_padded_shape()[1] * a.get_padded_shape()[2];
+    uint32_t num_old_sticks = a.padded_shape()[0] * a.padded_shape()[1] * a.padded_shape()[2];
     uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
 
-    uint32_t old_stick_size = a.get_padded_shape()[3] * a.element_size();
+    uint32_t old_stick_size = a.padded_shape()[3] * a.element_size();
     uint32_t new_stick_size = output_shape[3] * output.element_size();
 
     TT_FATAL(
@@ -255,7 +257,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     // Reader compile-time args
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool old_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(old_stick_size);
     uint32_t old_log2_stick_size = old_stick_size_is_power_of_two ? (std::uint32_t)std::log2(old_stick_size) : 0;
     bool is_new_stick_larger = new_stick_size > old_stick_size;
@@ -268,7 +270,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
         (std::uint32_t)old_stick_size_is_power_of_two ? old_log2_stick_size : old_stick_size};
 
     // Writer compile-time args
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool new_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(new_stick_size);
     uint32_t new_log2_stick_size = new_stick_size_is_power_of_two ? (std::uint32_t)std::log2(new_stick_size) : 0;
     std::vector<uint32_t> writer_ct_args = {
@@ -329,13 +331,13 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
 
         uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-        auto output_shape = dst_tensor.get_logical_shape();
+        auto output_shape = dst_tensor.logical_shape();
 
         uint32_t num_old_sticks =
-            src_tensor.get_padded_shape()[0] * src_tensor.get_padded_shape()[1] * src_tensor.get_padded_shape()[2];
+            src_tensor.padded_shape()[0] * src_tensor.padded_shape()[1] * src_tensor.padded_shape()[2];
         uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
 
-        uint32_t old_stick_size = src_tensor.get_padded_shape()[3] * src_tensor.element_size();
+        uint32_t old_stick_size = src_tensor.padded_shape()[3] * src_tensor.element_size();
         uint32_t new_stick_size = output_shape[3] * dst_tensor.element_size();
 
         bool split_work_by_old_sticks = old_stick_size > new_stick_size;

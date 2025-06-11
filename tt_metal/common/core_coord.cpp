@@ -2,22 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <core_coord.hpp>
-
-#include <algorithm>
-#include <cstdint>
-#include <limits>
-#include <mutex>
-#include <optional>
-#include <set>
-#include <string>
-#include <vector>
-
-#include "umd/device/tt_xy_pair.h"
 #include <assert.hpp>
-#include "tracy/Tracy.hpp"
+#include <core_coord.hpp>
+#include <nlohmann/json.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <iterator>
+#include <limits>
+#include <map>
+#include <optional>
+#include <ostream>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "tracy/Tracy.hpp"
 
 auto fmt::formatter<CoreCoord>::format(const CoreCoord& core_coord, format_context& ctx) const
     -> format_context::iterator {
@@ -177,28 +179,11 @@ CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(cor
 
 CoreRangeSet::CoreRangeSet(const CoreRange& core_range) : ranges_{core_range} {}
 
-void swap(CoreRangeSet& first, CoreRangeSet& second) {
-    std::scoped_lock lock(first.ranges_guard, second.ranges_guard);
-    std::swap(first.ranges_, second.ranges_);
-}
+void swap(CoreRangeSet& first, CoreRangeSet& second) { std::swap(first.ranges_, second.ranges_); }
 
-CoreRangeSet::CoreRangeSet(const CoreRangeSet& other) {
-    std::scoped_lock lock(other.ranges_guard);
-    this->ranges_ = other.ranges_;
-}
-
-CoreRangeSet& CoreRangeSet::operator=(const CoreRangeSet& other) {
-    std::scoped_lock lock(other.ranges_guard);
-    this->ranges_ = other.ranges_;
-    return *this;
-}
+CoreRangeSet::CoreRangeSet(const CoreRangeSet& other) { this->ranges_ = other.ranges_; }
 
 CoreRangeSet::CoreRangeSet(CoreRangeSet&& other) noexcept { swap(*this, other); }
-
-CoreRangeSet& CoreRangeSet::operator=(CoreRangeSet&& other) noexcept {
-    swap(*this, other);
-    return *this;
-}
 
 CoreRangeSet::CoreRangeSet(std::vector<CoreRange>&& core_ranges) : ranges_(std::move(core_ranges)) {
     ZoneScoped;
@@ -639,6 +624,15 @@ std::vector<CoreCoord> corerange_to_cores(const CoreRangeSet& crs, std::optional
     }
 
     return all_cores;
+}
+
+CoreRangeSet select_from_corerange(const CoreRangeSet& crs, uint32_t start_index, uint32_t end_index, bool row_wise) {
+    auto all_cores = corerange_to_cores(crs, end_index + 1, row_wise);
+    std::vector<CoreRange> selected_cores;
+    for (uint32_t i = start_index; i <= end_index; i++) {
+        selected_cores.push_back(CoreRange(all_cores[i], all_cores[i]));
+    }
+    return CoreRangeSet(selected_cores);
 }
 
 bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b) { return !(a == b); }

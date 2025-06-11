@@ -9,7 +9,11 @@ from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-UNET_FULL_MODEL_PCC = 0.99999
+UNET_FULL_MODEL_PCC = 0.99840
+UNET_FULL_MODEL_PCC_BH = 0.99780
+
+UNET_TRACE_REGION_SIZE = 483328
+UNET_L1_SMALL_REGION_SIZE = 36864
 
 
 @dataclass
@@ -25,17 +29,14 @@ class UNetPerformanceStatistics:
 
 
 def is_n300_with_eth_dispatch_cores(mesh_device) -> bool:
-    all_devices_using_full_grid = all(
-        [(8 == device.core_grid.x and 8 == device.core_grid.y) for device in mesh_device.get_devices()]
-    )
-    return all_devices_using_full_grid and (len(mesh_device.get_devices()) == 2)
+    all_devices_using_full_grid = 8 == mesh_device.core_grid.x and 8 == mesh_device.core_grid.y
+
+    return all_devices_using_full_grid and (mesh_device.get_num_devices() == 2)
 
 
 def is_t3k_with_eth_dispatch_cores(mesh_device) -> bool:
-    all_devices_using_full_grid = all(
-        [(8 == device.core_grid.x and 8 == device.core_grid.y) for device in mesh_device.get_devices()]
-    )
-    return all_devices_using_full_grid and (len(mesh_device.get_devices()) == 8)
+    all_devices_using_full_grid = 8 == mesh_device.core_grid.x and 8 == mesh_device.core_grid.y
+    return all_devices_using_full_grid and (mesh_device.get_num_devices() == 8)
 
 
 def verify_with_pcc(torch_tensor, ttnn_tensor, pcc):

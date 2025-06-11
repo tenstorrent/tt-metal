@@ -23,7 +23,7 @@ protected:
 };
 
 void compare_tensors(const ttnn::Tensor& t1, const ttnn::Tensor& t2, float eps) {
-    ASSERT_EQ(t1.get_logical_shape(), t2.get_logical_shape());
+    ASSERT_EQ(t1.logical_shape(), t2.logical_shape());
     auto t1_vec = ttml::core::to_vector(t1);
     auto t2_vec = ttml::core::to_vector(t2);
     ASSERT_EQ(t1_vec.size(), t2_vec.size());
@@ -38,7 +38,7 @@ void compare_tensors(const ttnn::Tensor& t1, const ttnn::Tensor& t2, float eps) 
 }
 
 bool compare_tensors_for_broken(const ttnn::Tensor& t1, const ttnn::Tensor& t2, float eps) {
-    if (t1.get_logical_shape() != t2.get_logical_shape()) {
+    if (t1.logical_shape() != t2.logical_shape()) {
         return false;
     }
 

@@ -18,6 +18,8 @@ from models.demos.llama3_subdevices.tt.distributed_norm import DistributedNorm
 from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
+
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -44,7 +46,16 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
         "decode",
     ],
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
 def test_llama_rms_norm_inference(
     max_seq_len,
     batch_size,
@@ -54,8 +65,6 @@ def test_llama_rms_norm_inference(
     reset_seeds,
 ):
     dtype = ttnn.bfloat16
-
-    mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=True)
 

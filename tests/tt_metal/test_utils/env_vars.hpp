@@ -8,13 +8,11 @@
 #include "umd/device/device_api_metal.h"
 #include "umd/device/tt_cluster_descriptor.h"
 #include "umd/device/tt_simulation_device.h"
-#include "rtoptions.hpp"
+#include "impl/context/metal_context.hpp"
 
 #include <string>
 
-namespace {
-
-std::string get_string_lowercase(tt::ARCH arch) {
+inline std::string get_string_lowercase(tt::ARCH arch) {
     switch (arch) {
         case tt::ARCH::GRAYSKULL: return "grayskull"; break;
         case tt::ARCH::WORMHOLE_B0: return "wormhole_b0"; break;
@@ -22,8 +20,6 @@ std::string get_string_lowercase(tt::ARCH arch) {
         case tt::ARCH::Invalid: return "invalid"; break;
         default: return "invalid"; break;
     }
-}
-
 }
 
 namespace tt {
@@ -42,8 +38,8 @@ inline std::string get_env_arch_name() {
 
 inline std::string get_umd_arch_name() {
 
-    if(llrt::RunTimeOptions::get_instance().get_simulator_enabled()) {
-        tt_SimulationDeviceInit init(llrt::RunTimeOptions::get_instance().get_simulator_path());
+    if(tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+        tt_SimulationDeviceInit init(tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
         return tt::arch_to_str(init.get_arch_name());
     }
 

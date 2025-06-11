@@ -4,17 +4,22 @@
 
 #pragma once
 
+#include <core_coord.hpp>
+#include <kernel.hpp>
 #include <string>
 #include <vector>
 
-#include <core_coord.hpp>
-#include <kernel.hpp>
+namespace tt {
+namespace tt_metal {
+struct KernelSource;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
 class JitBuildEnv;
-class JitBuildSettings;
 class JitBuildOptions;
+class JitBuildSettings;
 
 void jit_build_genfiles_kernel_include(
     const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src);

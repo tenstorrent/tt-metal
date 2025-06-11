@@ -1,23 +1,21 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import bz2
-import pytest
-from loguru import logger
 import os
-import ttnn
-from models.tt_transformers.tt.common import (
-    get_prefill_rot_mat,
-    PagedAttentionConfig,
-    preprocess_inputs_prefill,
-)
-from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
 from pathlib import Path
 
+import pytest
+import torch
+from loguru import logger
 
-def get_accuracy_thresholds(base_model_name: str, device_name: str, optimizations: ModelOptimizations):
+import ttnn
+from models.tt_transformers.tt.common import PagedAttentionConfig, get_prefill_rot_mat, preprocess_inputs_prefill
+from models.tt_transformers.tt.model import Transformer
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
+
+
+def get_accuracy_thresholds(model_args, optimizations):
     """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
     # Read PERF.md
     perf_file = Path(__file__).parent.parent / "PERF.md"
@@ -26,10 +24,15 @@ def get_accuracy_thresholds(base_model_name: str, device_name: str, optimization
 
     # Split into sections based on optimization mode
     sections = content.split("## ")
-    target_section = next(s for s in sections if s.lower().startswith(f"{optimizations.__name__}\n"))
+    if callable(optimizations):
+        optimizations = optimizations(model_args)
+    first_decoder_conf = optimizations.decoder_optimizations[0]
+    target_section = next(s for s in sections if s.lower().startswith(f"{first_decoder_conf.__name__}\n"))
 
     # Parse the table and find the row for our model and device
     # Potential lines have the form "| Llama3.1-8b    | T3K    | 91        | 99        | 49.8          |"
+    base_model_name = model_args.base_model_name
+    device_name = model_args.device_name
     correct_line = (
         lambda line: "|" in line
         and base_model_name.lower() in line.split("|")[1].strip().lower()
@@ -58,10 +61,10 @@ def get_accuracy_thresholds(base_model_name: str, device_name: str, optimization
 
 
 @torch.no_grad()
-@pytest.mark.timeout(900)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
     "prefill_len, decode_len, max_seq_len",  # Max seqlen should be at least prefill_len + decode_len
-    ((512, 128, 1024),),
+    ((512, 511, 1024),),
     #    ((131072-8192, 8192-1, 131072),),
 )
 @pytest.mark.parametrize(
@@ -76,9 +79,10 @@ def get_accuracy_thresholds(base_model_name: str, device_name: str, optimization
 @pytest.mark.parametrize(
     "optimizations",
     [
-        ModelOptimizations.accuracy,
-        ModelOptimizations.performance,
+        lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
+        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
+    ids=["performance", "accuracy"],
 )
 @pytest.mark.parametrize(
     "paged_attention",
@@ -127,9 +131,11 @@ def test_tt_model_acc(
 
     dtype = ttnn.bfloat8_b
 
-    mesh_device.enable_async(True)
-
-    optimizations = request.config.getoption("--optimizations") or optimizations
+    json_config_file = request.config.getoption("--decoder_config_file")
+    if json_config_file:
+        optimizations = parse_decoder_json(json_config_file)
+    else:
+        optimizations = request.config.getoption("--optimizations") or optimizations
 
     # Load model args and tokenizer
     model_args = ModelArgs(mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len)
@@ -329,6 +335,7 @@ def test_tt_model_acc(
         tt_out_tok = ttnn.argmax(
             tt_out_rm,
             dim=3,
+            keepdim=True,
             use_multicore=True if model_args.max_batch_size == 1 else False,
         )
         if not use_reference_file:
@@ -424,7 +431,7 @@ def test_tt_model_acc(
     total_top1_acc = 100 * sum(top1_correct) / num_tokens
     total_top5_acc = 100 * sum(top5_correct) / num_tokens
     logger.info(
-        f"Total tokens {num_tokens}: Top-1 accuracy: {total_top1_acc:3.0f} %, Top-5 accuracy: {total_top5_acc:3.0f} %"
+        f"Total tokens {num_tokens}: Top-1 accuracy: {total_top1_acc:3.1f} %, Top-5 accuracy: {total_top5_acc:3.1f} %"
     )
 
     # Only show error summary when using reference files
@@ -432,7 +439,10 @@ def test_tt_model_acc(
         logger.info("\nError Summary (only showing errors where reference top-1 matches true token):")
         logger.info("-" * 120)
         for error in errors:
-            true_token = input_ids[0, error["position"] + 1].item()
+            if error["position"] + 1 < input_ids.shape[1]:
+                true_token = input_ids[0, error["position"] + 1].item()
+            else:
+                true_token = None
             if error["expected_ids"][0] == true_token:
                 sanitize = lambda x: repr(x)[1:-1]  # Use repr() and remove the outer quotes
                 context = sanitize(error["context"])
@@ -442,17 +452,17 @@ def test_tt_model_acc(
                 logger.info(f"{error['position']}: {context}[{incorrect}] != [{expected}], true: [{true_word}]")
 
     if use_reference_file:
-        # Get accuracy thresholds from PERF.md
-        min_top1_acc, min_top5_acc = get_accuracy_thresholds(
-            model_args.base_model_name,
-            model_args.device_name,
-            optimizations,
-        )
-
         logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
-        assert (
-            total_top1_acc >= min_top1_acc
-        ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
-        assert (
-            total_top5_acc >= min_top5_acc
-        ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
+
+        if not json_config_file:
+            # Get accuracy thresholds from PERF.md, unless the configuration is from a json
+            min_top1_acc, min_top5_acc = get_accuracy_thresholds(
+                model_args,
+                optimizations,
+            )
+            assert (
+                total_top1_acc >= min_top1_acc
+            ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
+            assert (
+                total_top5_acc >= min_top5_acc
+            ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"

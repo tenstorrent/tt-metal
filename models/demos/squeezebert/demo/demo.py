@@ -2,22 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import json
-import torch
-import pytest
+
 import evaluate
-
+import pytest
+import torch
 from loguru import logger
-from models.utility_functions import (
-    profiler,
-    disable_persistent_kernel_cache,
-)
+from transformers import SqueezeBertForQuestionAnswering, SqueezeBertTokenizer, pipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.squeezebert.tt import ttnn_functional_squeezebert
-from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 
-from transformers import SqueezeBertForQuestionAnswering, pipeline, SqueezeBertTokenizer
+import ttnn
+from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
+from models.demos.squeezebert.tt import ttnn_functional_squeezebert
+from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def load_inputs(input_path, batch):
@@ -122,7 +119,6 @@ def run_squeezebert_question_and_answering_inference(
         base_addr=f"transformer.",
         parameters=parameters,
         device=device,
-        reader_patterns_cache=None,
     )
     profiler.end(f"inference_time")
 
@@ -219,7 +215,6 @@ def run_squeezebert_question_and_answering_inference_squad_v2(
                     base_addr=f"transformer.",
                     parameters=parameters,
                     device=device,
-                    reader_patterns_cache=None,
                 )
                 tt_output = (
                     ttnn.to_torch(ttnn.from_device(tt_output))

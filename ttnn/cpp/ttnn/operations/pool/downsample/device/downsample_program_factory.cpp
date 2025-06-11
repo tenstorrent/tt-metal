@@ -197,7 +197,7 @@ DownsampleReadPatternParams generate_downsample_read_pattern(
 
     if (v.img_h == 0 && v.img_w == 0) {
         // Check for full images
-        while (1) {
+        while (true) {
             bool output_for_current_full_image =
                 v.output_flat_h + (output_img_height * output_img_width) <= output_end_flat_h + 1;
             bool input_for_current_full_image = v.input_flat_h + (img_height * img_width) <= input_end_flat_h + 1;
@@ -221,7 +221,7 @@ DownsampleReadPatternParams generate_downsample_read_pattern(
 
     bool found_first_unskipped_row_in_bottom_partial_imgage = false;
     // check for bottom partial image rows
-    while (1) {
+    while (true) {
         bool output_for_bottom_partial_image_row = (v.next_img_h == v.img_h)
                                                        ? (v.output_flat_h + output_img_width <= output_end_flat_h + 1)
                                                        : true;  // true for skipped row
@@ -294,7 +294,7 @@ DownsampleReadPatternParams generate_downsample_read_pattern(
     }
     TT_ASSERT(v.img_h < img_height && v.img_w < img_width);
 
-    if (0) {
+    if (false) { // NOLINT(readability-simplify-boolean-expr)
         log_debug(tt::LogOp, "   top_partial_middle_aligned_row_width: {}", top_partial_middle_aligned_row_width);
         log_debug(tt::LogOp, "   skip_top_partial_middle_aligned_row: {}", skip_top_partial_middle_aligned_row);
         log_debug(tt::LogOp, "   top_partial_right_aligned_row_width: {}", top_partial_right_aligned_row_width);
@@ -342,37 +342,37 @@ operation::ProgramWithCallbacks downsample_single_core(
     const Tensor& a, std::array<uint32_t, 5> downsample_params, Tensor& output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
     tt::DataFormat untilized_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t untilized_single_tile_size = tt::tt_metal::detail::TileSize(untilized_cb_data_format);
     auto [img_batch_size, img_height, img_width, img_stride_h, img_stride_w] = downsample_params;
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    TT_ASSERT(a.get_padded_shape()[0] == 1 && a.get_padded_shape()[1] == 1);
-    TT_ASSERT(output.get_padded_shape()[0] == 1 && output.get_padded_shape()[1] == 1);
+    TT_ASSERT(a.padded_shape()[0] == 1 && a.padded_shape()[1] == 1);
+    TT_ASSERT(output.padded_shape()[0] == 1 && output.padded_shape()[1] == 1);
 
     tt::tt_metal::IDevice* device = a.device();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     // Sanity check of output size
-    TT_ASSERT(output.volume() % TILE_HW == 0);
+    TT_ASSERT(output.physical_volume() % TILE_HW == 0);
     uint32_t unpadded_input_volume = img_batch_size * img_height * img_width;
-    TT_ASSERT(a.volume() >= unpadded_input_volume);
+    TT_ASSERT(a.physical_volume() >= unpadded_input_volume);
     uint32_t unpadded_output_volume = ceil((double)unpadded_input_volume / (double)(img_stride_h * img_stride_w));
-    TT_ASSERT(output.volume() >= unpadded_output_volume);
+    TT_ASSERT(output.physical_volume() >= unpadded_output_volume);
 
     uint32_t ncores_x_full_grid = device->compute_with_storage_grid_size().x;
     auto [num_cores_height_sliced, num_cores_width_sliced] = get_num_cores_height_width_sliced(
-        a.shard_spec().value().grid, a.memory_config().memory_layout, a.shard_spec().value().orientation);
+        a.shard_spec().value().grid, a.memory_config().memory_layout(), a.shard_spec().value().orientation);
     uint32_t num_cores = num_cores_height_sliced * num_cores_width_sliced;
     auto all_cores = a.shard_spec().value().grid;
-    auto memory_layout = a.memory_config().memory_layout;
+    auto memory_layout = a.memory_config().memory_layout();
     TT_ASSERT(all_cores == output.shard_spec().value().grid);
-    TT_ASSERT(memory_layout == output.memory_config().memory_layout);
+    TT_ASSERT(memory_layout == output.memory_config().memory_layout());
     TT_ASSERT(
         memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
     if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -386,11 +386,11 @@ operation::ProgramWithCallbacks downsample_single_core(
     auto core_range = all_cores;
 
     uint32_t input_height =
-        a.get_padded_shape()[2];  // input height == flattened face of input image, multiple images are stacked in H dim
-    uint32_t input_width = a.get_padded_shape()[3];         // input width == input image # of channels
-    uint32_t output_height = output.get_padded_shape()[2];  // output height == flattened face of output image, multiple
-                                                            // images are stacked in H dim
-    uint32_t output_width = output.get_padded_shape()[3];
+        a.padded_shape()[2];  // input height == flattened face of input image, multiple images are stacked in H dim
+    uint32_t input_width = a.padded_shape()[3];         // input width == input image # of channels
+    uint32_t output_height = output.padded_shape()[2];  // output height == flattened face of output image, multiple
+                                                        // images are stacked in H dim
+    uint32_t output_width = output.padded_shape()[3];
     TT_ASSERT(input_width == output_width);
 
     uint32_t input_height_unpadded = img_batch_size * img_height * img_width;
@@ -720,11 +720,7 @@ operation::ProgramWithCallbacks downsample_single_core(
             TT_ASSERT(local_read_pattern_offset == 0);
             local_read_pattern_offset = local_start_h % TILE_HEIGHT;
         }
-        if (v.input_flat_h != 0) {
-            input_flat_h_is_of_current_core = false;
-        } else {
-            input_flat_h_is_of_current_core = true;  // updating flag for next core
-        }
+        input_flat_h_is_of_current_core = (v.input_flat_h == 0);  // updating flag for next core
         TT_ASSERT(local_input_num_rows_of_tiles <= num_rows_of_input_tiles);
 
         if (v.output_flat_h != 0) {

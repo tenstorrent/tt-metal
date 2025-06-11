@@ -1,41 +1,43 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <tt-metalium/program_impl.hpp>
+#include <stdint.h>
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/mesh_graph.hpp>                   // FabricType
+#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <llrt/tt_cluster.hpp>
+#include <tt-metalium/erisc_datamover_builder.hpp>
+#include <set>
+#include <vector>
 
 namespace tt::tt_fabric {
 
-// Used to get the run-time args for estabilishing connection with the fabric router.
-// The API appends the connection specific run-time args to the set of exisiting
-// run-time args for the worker programs, which allows the workers to conveniently
-// build connection management object(s) using the run-time args.
-// It is advised to call the API once all the other run-time args for the prgram are
-// determined/pushed to keep things clean and avoid any extra arg management.
-//
-// Inputs:
-// src_chip_id: physical chip id/device id of the sender chip
-// dst_chip_id: physical chip id/device id of the receiver chip
-// routing_plane: the link (0..n) to use b/w the src_chip_id and dst_chip_id. On WH for
-//                instance we can have upto 4 active links b/w two chips
-// worker_program: program handle
-// worker_core: worker core logical coordinates
-// worker_args: list of existing run-time args to which the connection args will be appended
-//
-// Constraints:
-// 1. Currently the sender and reciever chip should be physically adjacent
-// 2. Currently the sender and reciever chip should be on the same mesh (for 1D)
-// 3. When connecting with 1D fabric routers, users are responsible for setting up the
-// connection appropriately. The API will not perform any checks to ensure that the
-// connection is indeed a 1D connection b/w all the workers.
-void append_fabric_connection_rt_args(
-    chip_id_t src_chip_id,
-    chip_id_t dst_chip_id,
-    routing_plane_id_t routing_plane,
-    tt::tt_metal::Program& worker_program,
-    const CoreCoord& worker_core,
-    std::vector<uint32_t>& worker_args);
+bool is_tt_fabric_config(tt::tt_metal::FabricConfig fabric_config);
+bool is_2d_fabric_config(tt::tt_metal::FabricConfig fabric_config);
+
+uint32_t get_sender_channel_count(tt::tt_fabric::Topology topology);
+uint32_t get_downstream_edm_count(tt::tt_fabric::Topology topology);
+
+void set_routing_mode(uint16_t routing_mode);
+void set_routing_mode(Topology topology, tt::tt_metal::FabricConfig fabric_config, uint32_t dimension = 1);
+
+FabricType get_fabric_type(tt::tt_metal::FabricConfig fabric_config, tt::ClusterType cluster_type);
+
+std::vector<uint32_t> get_forwarding_link_indices_in_direction(
+    chip_id_t src_chip_id, chip_id_t dst_chip_id, RoutingDirection direction);
+
+// returns which links on a given src chip are available for forwarding the data to a dst chip
+// these link indices can then be used to establish connection with the fabric routers
+std::vector<uint32_t> get_forwarding_link_indices(chip_id_t src_chip_id, chip_id_t dst_chip_id);
+
+void get_optimal_noc_for_edm(
+    FabricEriscDatamoverBuilder& edm_builder1,
+    FabricEriscDatamoverBuilder& edm_builder2,
+    const uint32_t num_links,
+    const Topology topology);
 
 }  // namespace tt::tt_fabric

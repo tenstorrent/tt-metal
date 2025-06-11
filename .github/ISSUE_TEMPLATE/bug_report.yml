@@ -1,0 +1,44 @@
+name: Bug report
+description: File a bug or issue
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        :star2: Thanks for taking the time to report this issue! :star2:
+  - type: textarea
+    id: describe-bug
+    attributes:
+      label: Describe the bug
+      description: |
+        A clear and concise description of what the bug is and how to reproduce it.
+      placeholder: Tell us what you see! Copy/paste/link to any relevant log output.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce-bug
+    attributes:
+      label: Steps to reproduce the issue
+      description: |
+        When possible/applicable, include the commands that you ran.
+      value: |
+        1. Go to '...'
+        2. Click on '....'
+        3. Scroll down to '....'
+        4. See error
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected behavior
+      description: A clear and concise description of what you expected to happen.
+  - type: textarea
+    id: environment-info
+    attributes:
+      label: Please complete the following environment information
+      description: |
+        Details about your issue.
+      placeholder: |
+        - OS version (e.g. Ubuntu 22.04)
+        - Python version
+        - Framework version (e.g. JAX version)
+        - Version of software (e.g. release wheel or commit ID if you built from source)

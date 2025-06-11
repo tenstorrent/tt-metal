@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "assert.hpp"
-#include "math.hpp"
-#include "tt_backend_api_types.hpp"
-#include "hostdevcommon/common_values.hpp"
-#include "data_types.hpp"
-#include "hal_types.hpp"
-#include "umd/device/tt_soc_descriptor.h"
+
+#include <hostdevcommon/common_values.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <umd/device/tt_soc_descriptor.h>
 
 namespace tt::tt_metal::detail {
 
@@ -38,7 +39,6 @@ inline DeviceAddr SizeBytesPerBank(
 
 inline NOC GetPreferredNOCForDRAMRead(ARCH arch) {
     switch (arch) {
-        case ARCH::GRAYSKULL: return NOC::NOC_1;
         case ARCH::WORMHOLE_B0:
         default: return NOC::NOC_0;
     }
@@ -46,7 +46,6 @@ inline NOC GetPreferredNOCForDRAMRead(ARCH arch) {
 
 inline NOC GetPreferredNOCForDRAMWrite(ARCH arch) {
     switch (arch) {
-        case ARCH::GRAYSKULL: return NOC::NOC_0;
         case ARCH::WORMHOLE_B0:
         default: return NOC::NOC_1;
     }

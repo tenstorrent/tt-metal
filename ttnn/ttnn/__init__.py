@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -95,9 +95,20 @@ def manage_config(name, value):
 
 
 from ttnn._ttnn.multi_device import (
-    get_device_tensor,
+    CppMeshToTensor,
+    CppTensorToMesh,
+    MeshMapperConfig,
+    MeshComposerConfig,
     get_device_tensors,
     aggregate_as_tensor,
+    combine_device_tensors,
+    replicate_tensor_to_mesh_mapper,
+    shard_tensor_to_mesh_mapper,
+    create_mesh_mapper,
+    concat_mesh_to_tensor_composer,
+    create_mesh_composer,
+    aggregate_tensor,
+    distribute_tensor,
     get_t3k_physical_device_ids_ring,
 )
 
@@ -105,8 +116,7 @@ from ttnn._ttnn.events import (
     MeshEvent,
     record_event,
     wait_for_event,
-    record_mesh_event,
-    wait_for_mesh_event,
+    event_synchronize,
 )
 
 from ttnn._ttnn.operations.trace import (
@@ -115,10 +125,6 @@ from ttnn._ttnn.operations.trace import (
     end_trace_capture,
     execute_trace,
     release_trace,
-    begin_mesh_trace_capture,
-    end_mesh_trace_capture,
-    execute_mesh_trace,
-    release_mesh_trace,
 )
 
 from ttnn._ttnn.global_circular_buffer import (
@@ -131,7 +137,6 @@ from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,
     get_global_semaphore_address,
     reset_global_semaphore_value,
-    create_global_semaphore_with_same_address,
 )
 
 from ttnn.types import (
@@ -158,6 +163,7 @@ from ttnn.types import (
     ShardOrientation,
     ShardMode,
     ShardSpec,
+    NdShardSpec,
     CoreRangeSet,
     CoreRange,
     CoreCoord,
@@ -167,7 +173,6 @@ from ttnn.types import (
     TILE_LAYOUT,
     StorageType,
     DEVICE_STORAGE_TYPE,
-    MULTI_DEVICE_STORAGE_TYPE,
     CoreGrid,
     CoreRange,
     Shape,
@@ -178,12 +183,21 @@ from ttnn.types import (
     MeshShape,
     MeshCoordinate,
     MeshCoordinateRange,
+    MeshCoordinateRangeSet,
     QueueId,
     UnaryWithParam,
     UnaryOpType,
     BinaryOpType,
     BcastOpMath,
     BcastOpDim,
+    CBFormatDescriptor,
+    CBDescriptor,
+    ReaderConfigDescriptor,
+    WriterConfigDescriptor,
+    ComputeConfigDescriptor,
+    KernelDescriptor,
+    SemaphoreDescriptor,
+    ProgramDescriptor,
 )
 
 from ttnn.device import (
@@ -193,13 +207,11 @@ from ttnn.device import (
     DispatchCoreConfig,
     open_device,
     close_device,
-    enable_program_cache,
-    disable_and_clear_program_cache,
     manage_device,
     synchronize_device,
-    synchronize_mesh_device,
     dump_device_memory_state,
     get_memory_view,
+    get_max_worker_l1_unreserved_size,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
@@ -284,6 +296,7 @@ sub = ttnn.subtract
 sub_ = ttnn.subtract_
 mul = ttnn.multiply
 mul_ = ttnn.multiply_
+div_ = ttnn.divide_
 
 
 # TODO: pybind the overloaded operators below
@@ -339,11 +352,24 @@ from ttnn.operations.ccl import (
 from ttnn.operations.conv2d import (
     Conv2dConfig,
     get_conv_output_dim,
+    Conv2dSliceConfig,
+    Conv2dSliceHeight,
+    Conv2dSliceWidth,
     prepare_conv_weights,
     prepare_conv_bias,
+    prepare_conv_transpose2d_weights,
+    prepare_conv_transpose2d_bias,
+    SlidingWindowParallelConfig,
 )
+from ttnn._ttnn.operations.conv import (
+    convert_conv_weight_tensor_to_tiled_layout,
+    convert_conv_weight_tensor_to_special_padding_tiled_layout,
+    convert_conv_weight_tensor_to_grouped_layout,
+)
+
 from ttnn._ttnn.operations.experimental import Conv3dConfig
-from ttnn.operations.conv1d import Conv1d, Conv1dConfig
+
+Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig
 

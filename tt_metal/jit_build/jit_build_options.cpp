@@ -2,10 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <jit_build_options.hpp>
-#include "build.hpp"
-#include <iostream>
+#include "jit_build_options.hpp"
+
 #include <string>
+
+#include "build.hpp"
+#include "utils.hpp"
+
+enum class MathFidelity : uint8_t;
+namespace tt {
+enum CBIndex : std::uint8_t;
+}  // namespace tt
 
 namespace tt::tt_metal {
 

@@ -2,35 +2,60 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <chrono>
-#include <functional>
-#include <random>
-
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdlib.h>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/allocator.hpp>
-
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
-#include <tt-metalium/constants.hpp>
-#include <optional>
-
-#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tests/tt_metal/test_utils/tilization.hpp"
-#include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <functional>
+#include <iostream>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <optional>
+#include <random>
+#include <ratio>
+#include <set>
+#include <string>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "test_common.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/utils.hpp>
 
 using std::vector;
 using namespace tt;
@@ -110,14 +135,6 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>
     uint32_t l1_unreserved_base);
 
 std::vector<float> generate_fp32_random(uint32_t num_elems, int32_t rand_max_val);
-
-namespace test {
-template <typename T>
-std::vector<T> tilize(std::vector<T> data, int rows, int cols);
-
-template <typename T>
-std::vector<T> untilize(std::vector<T> data, int rows, int cols);
-}  // namespace test
 
 template <typename T>
 std::vector<T> get_row_slice(std::vector<T> data, int start_row_index, int num_rows, int rows, int cols);
@@ -244,12 +261,12 @@ int main(int argc, char** argv) {
         uint32_t fidel = 0;  // lofi
         uint32_t num_tests = 10;
         uint32_t num_blocks = 1;
-        bool matmul_block = 0;
-        bool packer_l1 = 0;
-        bool fp32 = 0;
+        bool matmul_block = false;
+        bool packer_l1 = false;
+        bool fp32 = false;
         uint32_t interm_cb_dtype = 0;
         uint32_t subblock_choice = 0;
-        bool single_core = 0;
+        bool single_core = false;
         bool fast_dispatch_mode = false;
         try {
             std::tie(M, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--m", 11264);
@@ -296,11 +313,12 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         if (single_core) {
             TT_ASSERT(fast_dispatch_mode, "single core test only supports in fast dispatch mode");
-        } else if (fast_dispatch_mode == false) {
+        } else if (!fast_dispatch_mode) {
             setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", true);
 
 #if !defined(TRACY_ENABLE)
             log_error(
+                tt::LogTest,
                 "In the slow dispatch mode, device profiler is used to measure the "
                 "profiler option using ./build_metal.sh --enable-profiler");
 
@@ -405,14 +423,16 @@ int main(int argc, char** argv) {
         if (single_core) {
             if (dtype == 1) {
                 // in0
-                auto activations_tilized = test::tilize(tensor_in0_fp16.get_values(), M, K);
-                auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
+                auto activations_tilized = tilize_swizzled(tensor_in0_fp16.get_values(), M, K);
+                auto activations_tile_layout =
+                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
                 vector<uint32_t> activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
                 input_buffer0 = create_and_transfer_data_sharded_cb(device, activations, Mt, Kt);
 
                 // in1
-                auto identity_tilized = test::tilize(tensor_in1_fp16.get_values(), K, N);
-                auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
+                auto identity_tilized = tilize_swizzled(tensor_in1_fp16.get_values(), K, N);
+                auto weights_tile_layout =
+                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
                 auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
                 input_buffer1 = create_and_transfer_data_sharded_cb(device, weights, Kt, Nt);
 
@@ -429,12 +449,12 @@ int main(int argc, char** argv) {
 
             } else {
                 // in0
-                auto activations_tilized = test::tilize(tensor_in0_fp8.get_values(), M, K);
+                auto activations_tilized = tilize_swizzled(tensor_in0_fp8.get_values(), M, K);
                 std::vector<uint32_t> activations = pack_fp32_vec_as_bfp8_tiles(activations_tilized, true, false);
                 input_buffer0 = create_and_transfer_data_sharded_cb_fp8(device, activations, Mt, Kt);
 
                 // in1
-                auto identity_tilized = test::tilize(tensor_in1_fp8.get_values(), K, N);
+                auto identity_tilized = tilize_swizzled(tensor_in1_fp8.get_values(), K, N);
                 auto weights = pack_fp32_vec_as_bfp8_tiles(identity_tilized, true, false);
                 input_buffer1 = create_and_transfer_data_sharded_cb_fp8(device, weights, Kt, Nt);
 
@@ -446,7 +466,7 @@ int main(int argc, char** argv) {
                     0,
                     100,
                     std::chrono::system_clock::now().time_since_epoch().count());
-                auto output_tilized = test::tilize(out_tensor.get_values(), M, N);
+                auto output_tilized = tilize_swizzled(out_tensor.get_values(), M, N);
                 auto outputs = pack_fp32_vec_as_bfp8_tiles(output_tilized, true, false);
                 output_buffer = create_and_transfer_data_sharded_cb_fp8(device, outputs, Mt, Nt);
             }
@@ -458,7 +478,7 @@ int main(int argc, char** argv) {
         auto [math_fidelity, fp32_dest_acc_en] = get_compute_params(arch);
         if (single_core) {
             math_fidelity = fidel == 0 ? MathFidelity::LoFi : MathFidelity::HiFi2;
-            fp32_dest_acc_en = fp32 == 0 ? false : true;
+            fp32_dest_acc_en = fp32 != 0;
         }
         auto [out_subblock_h, out_subblock_w] = get_out_subblock_params(per_core_Mt, per_core_Nt, subblock_choice);
         auto [in0_cb_addr, in1_cb_addr, in2_cb_addr, out_cb_addr, in0_addr, in1_addr, out_addr] =
@@ -574,7 +594,7 @@ int main(int argc, char** argv) {
 
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
-            if (fast_dispatch_mode == false) {
+            if (!fast_dispatch_mode) {
                 log_debug(LogTest, "calling detail::LaunchProgram");
                 detail::LaunchProgram(device, program);
                 log_debug(LogTest, "detail::LaunchProgram done");
@@ -599,7 +619,7 @@ int main(int argc, char** argv) {
                 EnqueueProgram(device->command_queue(), program, false);
                 Finish(device->command_queue());
                 log_debug(LogTest, "EnqueProgram done");
-                tt_metal::DumpDeviceProfileResults(device, program);
+                tt_metal::detail::DumpDeviceProfileResults(device);
 
                 if (single_core) {
                     uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(device, program);
@@ -672,7 +692,7 @@ int main(int argc, char** argv) {
                 in1_bfp8_unpack_slice);
         }
 
-        if ((validation_result == false || performance_result == false) && bypass_check == false) {
+        if ((!validation_result || !performance_result) && !bypass_check) {
             log_error(
                 LogTest,
                 "The compute performance does not meet the criteria. "
@@ -684,10 +704,10 @@ int main(int argc, char** argv) {
         pass &= tt_metal::CloseDevice(device);
 
         // for csv
-        log_info("CSV_MICROBENCHMARK:title:test_compute_mm");
-        log_info("CSV_INPUT:M:{}:N:{}:K:{}:fast-dispatch:{}", M, N, K, fast_dispatch_mode);
-        log_info("CSV_OUTPUT:RMax(TFLOPS):{:.2f}", avg_rmax_tflops);
-        log_info("CSV_RESULT:pass:{}", pass);
+        log_info(tt::LogTest, "CSV_MICROBENCHMARK:title:test_compute_mm");
+        log_info(tt::LogTest, "CSV_INPUT:M:{}:N:{}:K:{}:fast-dispatch:{}", M, N, K, fast_dispatch_mode);
+        log_info(tt::LogTest, "CSV_OUTPUT:RMax(TFLOPS):{:.2f}", avg_rmax_tflops);
+        log_info(tt::LogTest, "CSV_RESULT:pass:{}", pass);
 
     } catch (const std::exception& e) {
         pass = false;
@@ -901,10 +921,10 @@ tt_metal::Program create_program_single_core(
     uint32_t interm_cb_dtype) {
     tt_metal::Program program{};
 
-    log_debug("cb_data_format: {} ", cb_data_format);
-    log_debug("math_fidelity: {} ", math_fidelity);
-    log_debug("single_tile_size: {} ", single_tile_size);
-    log_debug("fp32_dest_acc_en: {} ", fp32_dest_acc_en);
+    log_debug(tt::LogTest, "cb_data_format: {} ", cb_data_format);
+    log_debug(tt::LogTest, "math_fidelity: {} ", math_fidelity);
+    log_debug(tt::LogTest, "single_tile_size: {} ", single_tile_size);
+    log_debug(tt::LogTest, "fp32_dest_acc_en: {} ", fp32_dest_acc_en);
 
     uint32_t num_buffer = 1;  // No double buffer
     uint32_t in0_block_tiles = Mt * Kt;
@@ -955,20 +975,20 @@ tt_metal::Program create_program_single_core(
         num_blocks,
     };
 
-    log_debug("in0_cb_addr: {}", (*in0_cb_addr).address());
-    log_debug("in1_cb_addr: {}", (*in1_cb_addr).address());
-    log_debug("out_cb_addr: {}", (*out_cb_addr).address());
-    log_debug("cb_data_format: {}", cb_data_format);
-    log_debug("single_tile_size: {}", single_tile_size);
+    log_debug(tt::LogTest, "in0_cb_addr: {}", (*in0_cb_addr).address());
+    log_debug(tt::LogTest, "in1_cb_addr: {}", (*in1_cb_addr).address());
+    log_debug(tt::LogTest, "out_cb_addr: {}", (*out_cb_addr).address());
+    log_debug(tt::LogTest, "cb_data_format: {}", cb_data_format);
+    log_debug(tt::LogTest, "single_tile_size: {}", single_tile_size);
     if (matmul_block) {
-        log_debug("matmul_block");
+        log_debug(tt::LogTest, "matmul_block");
     } else {
-        log_debug("matmul_tiles");
+        log_debug(tt::LogTest, "matmul_tiles");
     }
     if (packer_l1) {
-        log_debug("packer_l1");
+        log_debug(tt::LogTest, "packer_l1");
     } else {
-        log_debug("no packer_l1");
+        log_debug(tt::LogTest, "no packer_l1");
     }
 
     CoreRange all_cores(
@@ -1032,11 +1052,12 @@ tt_metal::Program create_program_single_core(
         auto cb_out = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_out_config);
     }
 
-    log_debug("in0_CB_size: {}", in0_CB_tiles * single_tile_size);
-    log_debug("in1_CB_size: {}", in1_CB_tiles * single_tile_size);
-    log_debug("interm_CB_size: {}", out_CB_tiles * 4096);
-    log_debug("out_CB_size: {}", out_CB_size);
+    log_debug(tt::LogTest, "in0_CB_size: {}", in0_CB_tiles * single_tile_size);
+    log_debug(tt::LogTest, "in1_CB_size: {}", in1_CB_tiles * single_tile_size);
+    log_debug(tt::LogTest, "interm_CB_size: {}", out_CB_tiles * 4096);
+    log_debug(tt::LogTest, "out_CB_size: {}", out_CB_size);
     log_debug(
+        tt::LogTest,
         "total_CB_size: {}",
         in0_CB_tiles * single_tile_size + in1_CB_tiles * single_tile_size + out_CB_tiles * 4096 + out_CB_size);
 
@@ -1085,7 +1106,7 @@ tt_metal::Program create_program_single_core(
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines});
 
-    return std::move(program);
+    return program;
 }
 
 tt_metal::Program create_program(
@@ -1366,7 +1387,7 @@ tt_metal::Program create_program(
             tt_metal::SetRuntimeArgs(program, mm_in1_reader_writer_kernel_id, core, mm_in1_reader_writer_args);
         }
     }
-    return std::move(program);
+    return program;
 }
 
 std::vector<float> generate_fp32_random(uint32_t num_elems, int32_t rand_max_val = 100) {
@@ -1378,58 +1399,6 @@ std::vector<float> generate_fp32_random(uint32_t num_elems, int32_t rand_max_val
     }
     return vec;
 }
-
-namespace test {
-// Given a tensor that is row-major datums, make it tilized
-// so that its row major within a tile, and each tile's data
-// is contiguous
-template <typename T>
-std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
-    TT_ASSERT(rows % 32 == 0);
-    TT_ASSERT(cols % 32 == 0);
-    int num_tiles_r = rows / 32;
-    int num_tiles_c = cols / 32;
-    std::vector<T> result;
-    for (auto r = 0; r < num_tiles_r; r++) {
-        for (auto c = 0; c < num_tiles_c; c++) {
-            for (auto j = 0; j < 32; j++) {      // tile rows
-                for (auto i = 0; i < 32; i++) {  // tile cols
-                    // each row of tiles is 32x32 * num_tiles_c
-                    // each row within the row of tiles is cols
-                    // each col of tiles is 32
-                    // pick row of tiles, pick the row within the tile, pick col tile
-                    int index = r * 32 * 32 * num_tiles_c + j * cols + c * 32 + i;
-                    result.push_back(data.at(index));
-                }
-            }
-        }
-    }
-    return result;
-}
-
-// Given a tilized data (each tile's data is contiguous and row major within the
-// tile) transform it back to row major full tensor. (This function inverts the
-// tilize() function)
-template <typename T>
-std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
-    TT_ASSERT(rows % 32 == 0);
-    TT_ASSERT(cols % 32 == 0);
-    int num_tiles_r = rows / 32;
-    int num_tiles_c = cols / 32;
-    std::vector<T> result;
-    for (auto r = 0; r < num_tiles_r; r++) {
-        for (auto i = 0; i < 32; i++) {
-            for (auto c = 0; c < num_tiles_c; c++) {
-                int offset = r * 32 * 32 * num_tiles_c + c * 32 * 32 + i * 32;
-                for (auto j = 0; j < 32; j++) {
-                    result.push_back(data.at(offset + j));
-                }
-            }
-        }
-    }
-    return result;
-}
-}  // namespace test
 
 template <typename T>
 std::vector<T> get_row_slice(std::vector<T> data, int start_row_index, int num_rows, int rows, int cols) {
@@ -1496,12 +1465,12 @@ void prepare_inputs(
         std::vector<float> in0_slice = get_row_slice(in0_vec, r * per_core_Mt * 32, num_r * 32, Mt * 32, Kt * 32);
         // only use the first block of in0_slice
         auto in0_block_slice = get_col_slice(in0_slice, 0, in0_block_w * 32, num_r * 32, Kt * 32);
-        auto in0_block_tilized = test::tilize(in0_block_slice, num_r * 32, in0_block_w * 32);
+        auto in0_block_tilized = tilize_swizzled(in0_block_slice, num_r * 32, in0_block_w * 32);
         std::vector<uint32_t> in0 =
             pack_fp32_vec_as_bfp8_tiles(in0_block_tilized, /*row_major_input=*/true, /*is_exp_a=*/false);
 
         auto unpack_vec = unpack_bfp8_tiles_into_float_vec(in0, true, false);
-        auto untilize_vec = test::untilize(unpack_vec, num_r * 32, in0_block_w * 32);
+        auto untilize_vec = untilize_swizzled(unpack_vec, num_r * 32, in0_block_w * 32);
         in0_bfp8_unpack_slice.push_back(untilize_vec);
 
         for (int c = 0; c < num_cores_x; c++) {
@@ -1513,7 +1482,7 @@ void prepare_inputs(
                 in1_block_slice.at(i * (num_c * 32) + i) = (float)1;
             }
 
-            auto in1_block_tilized = test::tilize(in1_block_slice, in0_block_w * 32, num_c * 32);
+            auto in1_block_tilized = tilize_swizzled(in1_block_slice, in0_block_w * 32, num_c * 32);
             std::vector<uint32_t> in1 =
                 pack_fp32_vec_as_bfp8_tiles(in1_block_tilized, /*row_major_input=*/true, /*is_exp_a=*/false);
 
@@ -1545,8 +1514,8 @@ bool validation_single_core(
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
 
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
-    auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
-    auto result_untilized = test_utils::untilize(result_flat_layout, Mt * 32, Nt * 32);
+    auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
+    auto result_untilized = untilize_swizzled(result_flat_layout, Mt * 32, Nt * 32);
 
     std::vector<float> golden_vec(Mt * Nt * 32 * 32, 0);  // Initialize with zeros
     const auto& values0 = tensor_in0.get_values();
@@ -1592,7 +1561,7 @@ bool validation_single_core_fp8(
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
 
     auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);
-    auto result_untilized = test::untilize(result_bfp8, Mt * 32, Nt * 32);
+    auto result_untilized = untilize_swizzled(result_bfp8, Mt * 32, Nt * 32);
 
     std::vector<float> golden_vec(Mt * Nt * 32 * 32, 0);  // Initialize with zeros
     const auto& values0 = tensor_in0.get_values();
@@ -1654,7 +1623,7 @@ bool validation(
             uint32_t num_c = (c == num_cores_x - 1) ? (last_block_w) : (per_core_Nt);
             tt_metal::detail::ReadFromDeviceL1(device, core, out_addr, num_r * num_c * single_tile_size, result_vec);
             auto result_flat_layout = unpack_bfp8_tiles_into_float_vec(result_vec, true, false);
-            auto result_untilized = test::untilize(result_flat_layout, num_r * 32, num_c * 32);
+            auto result_untilized = untilize_swizzled(result_flat_layout, num_r * 32, num_c * 32);
 
             uint32_t num_patterns = (num_c - 1) / in0_block_w + 1;
             uint32_t last_remain_c = num_c % in0_block_w == 0 ? in0_block_w : num_c % in0_block_w;
@@ -1702,8 +1671,8 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
         {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
         {Mt, Nt});
 
-    log_debug("size_bytes: {}", size_bytes);
-    log_debug("page_size_bytes: {}", page_size_bytes);
+    log_debug(tt::LogTest, "size_bytes: {}", size_bytes);
+    log_debug(tt::LogTest, "page_size_bytes: {}", page_size_bytes);
 
     auto input_buffer = CreateBuffer(tt::tt_metal::ShardedBufferConfig{
         .device = device,
@@ -1728,8 +1697,8 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb_fp8(
         {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
         {Mt, Nt});
 
-    log_debug("size_bytes: {}", size_bytes);
-    log_debug("page_size_bytes: {}", page_size_bytes);
+    log_debug(tt::LogTest, "size_bytes: {}", size_bytes);
+    log_debug(tt::LogTest, "page_size_bytes: {}", page_size_bytes);
 
     auto input_buffer = CreateBuffer(tt::tt_metal::ShardedBufferConfig{
         .device = device,

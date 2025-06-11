@@ -2,21 +2,56 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_memory.h>
-#include "llrt.hpp"
-#include "tt_metal/detail/kernel_cache.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/kernel.hpp>
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <magic_enum/magic_enum.hpp>
+#include <stdint.h>
+#include <sys/types.h>
 #include <tt-metalium/device_pool.hpp>
-#include "llrt/hal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <compare>
+#include <cstring>
+#include <exception>
+#include <filesystem>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
 #include <thread>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "dev_msgs.h"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include "hostdevcommon/common_values.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "jit_build/build.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel_impl.hpp"
+#include "tt_memory.h"
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -142,8 +177,9 @@ int main(int argc, char** argv) {
             ////////////////////////////////////////////////////////////////////////////
             // Check that binary memory objects in the kernel match the ones obtained from the persistent cache
             uint32_t programmable_core_index =
-                tt_metal::hal_ref.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::TENSIX);
-            const tt_metal::KernelGroup* kernel_group = program.kernels_on_core(core, programmable_core_index);
+                tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
+                    tt_metal::HalProgrammableCoreType::TENSIX);
+            const tt_metal::KernelGroup* kernel_group = program.impl().kernels_on_core(core, programmable_core_index);
             TT_FATAL(
                 kernel_group != nullptr && kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].has_value() and
                     kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and
@@ -160,11 +196,11 @@ int main(int argc, char** argv) {
             uint32_t mask =
                 tt_metal::BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
             tt_metal::detail::CompileProgram(device, program);
-            compute_binaries.insert({mask, compute_kernel->binaries(mask)});
+            compute_binaries.insert({mask, tt_metal::KernelImpl::from(*compute_kernel).binaries(mask)});
             TT_FATAL(compute_binaries.at(mask).size() == 3, "Expected 3 Compute binaries!");
-            brisc_binaries.insert({mask, riscv0_kernel->binaries(mask)});
+            brisc_binaries.insert({mask, tt_metal::KernelImpl::from(*riscv0_kernel).binaries(mask)});
             TT_FATAL(brisc_binaries.at(mask).size() == 1, "Expected 1 BRISC binary!");
-            ncrisc_binaries.insert({mask, riscv1_kernel->binaries(mask)});
+            ncrisc_binaries.insert({mask, tt_metal::KernelImpl::from(*riscv1_kernel).binaries(mask)});
             TT_FATAL(ncrisc_binaries.at(mask).size() == 1, "Expected 1 NCRISC binary!");
         }
 
@@ -202,19 +238,26 @@ int main(int argc, char** argv) {
                                             .get_device_build_env(device->build_id())
                                             .build_key;
                         tt_metal::detail::CompileProgram(device, program);
-                        uint32_t programmable_core_index = tt_metal::hal_ref.get_programmable_core_type_index(
-                            tt_metal::HalProgrammableCoreType::TENSIX);
+                        uint32_t programmable_core_index =
+                            tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
+                                tt_metal::HalProgrammableCoreType::TENSIX);
                         const tt_metal::KernelGroup* kernel_group =
-                            program.kernels_on_core(core, programmable_core_index);
+                            program.impl().kernels_on_core(core, programmable_core_index);
                         auto compute_kernel = tt_metal::detail::GetKernel(
                             program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
                         auto riscv0_kernel = tt_metal::detail::GetKernel(
                             program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
                         auto riscv1_kernel = tt_metal::detail::GetKernel(
                             program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
-                        TT_FATAL(compute_kernel->binaries(mask) == compute_binaries.at(mask), "Error");
-                        TT_FATAL(riscv0_kernel->binaries(mask) == brisc_binaries.at(mask), "Error");
-                        TT_FATAL(riscv1_kernel->binaries(mask) == ncrisc_binaries.at(mask), "Error");
+                        TT_FATAL(
+                            tt_metal::KernelImpl::from(*compute_kernel).binaries(mask) == compute_binaries.at(mask),
+                            "Error");
+                        TT_FATAL(
+                            tt_metal::KernelImpl::from(*riscv0_kernel).binaries(mask) == brisc_binaries.at(mask),
+                            "Error");
+                        TT_FATAL(
+                            tt_metal::KernelImpl::from(*riscv1_kernel).binaries(mask) == ncrisc_binaries.at(mask),
+                            "Error");
 
                         std::string kernel_name = get_latest_kernel_binary_path(
                             tt_metal::BuildEnvManager::get_instance()

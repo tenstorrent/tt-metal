@@ -12,7 +12,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
@@ -560,7 +560,7 @@ create_worker_circular_buffers(
     std::optional<CoreRangeSet> const& second_worker_core_range,
     uint32_t worker_pages_per_transfer,
     tt::tt_metal::Program& program) {
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t page_size_bytes = op_config.get_page_size();
 
     // Input 0 CB
@@ -632,6 +632,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
+    chip_id_t target_device_id,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     ttnn::ccl::Topology topology,
@@ -639,8 +640,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const std::optional<size_t> user_defined_num_buffers_per_channel) {
     log_trace(tt::LogOp, "reduce_scatter_with_workers entry");
     TT_ASSERT(
-        input_tensor.get_padded_shape()[scatter_split_dim] ==
-            output_tensor.get_padded_shape()[scatter_split_dim] * ring_size,
+        input_tensor.padded_shape()[scatter_split_dim] == output_tensor.padded_shape()[scatter_split_dim] * ring_size,
         "Input and output tensor shapes must match");
     TT_ASSERT(
         input_tensor.buffer()->num_pages() % ring_size == 0,
@@ -658,7 +658,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     std::unique_ptr<ttnn::ccl::CclOpTensorConfig> output_tensor_config =
         ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
     // // The input tensor is fractured by ring_size so we divi
-    std::size_t input_tensor_n_elems_per_slice = input_tensor.volume() / ring_size;
+    std::size_t input_tensor_n_elems_per_slice = input_tensor.physical_volume() / ring_size;
     std::size_t input_tensor_num_units_per_tensor_slice =
         input_tensor_n_elems_per_slice / (tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT);
 
@@ -687,7 +687,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         edm_termination_mode);
     TT_ASSERT(num_edm_channels_per_link > 0);
 
-    const auto& device = input_tensor.device();
+    const auto& device =
+        input_tensor.mesh_device() ? input_tensor.mesh_device()->get_device(target_device_id) : input_tensor.device();
     auto const& topology_config = ttnn::ccl::RingTopology(
         device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
     bool is_linear = topology_config.is_linear;

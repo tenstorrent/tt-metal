@@ -13,11 +13,22 @@ on:
           - ASan
           - TSan
         default: "Release"
-      build-with-tracy:
+      topology:
+        required: false
+        type: choice
+        options:
+          - config-tg
+          - topology-6u
+        default: "config-tg"
+      extra-tag:
+        required: true
+        type: string
+        default: "in-service"
+      tg-quick:
         required: false
         type: boolean
         default: false
-      tg-quick:
+      tg-demo:
         required: false
         type: boolean
         default: false
@@ -30,65 +41,107 @@ on:
         type: boolean
         default: false
       tg-model-perf:
-        description: "TG model perf tests (requires tracy build)"
+        description: "tg-model-perf (Requires tracy build)"
         required: false
         type: boolean
         default: false
       tg-nightly:
+        description: "tg-nightly (Warning: Long running test! Do not choose this unless there is a specific need. Requires tracy build)"
         required: false
         type: boolean
         default: false
-
+      tg-stress:
+        required: false
+        type: boolean
+        default: false
 run-name: ${{ inputs.description }}
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
     with:
       build-type: ${{ inputs.build-type }}
-      tracy: ${{ inputs.build-with-tracy }}
+      tracy: ${{ inputs.tg-model-perf || inputs.tg-nightly }}
       build-wheel: true
       version: 22.04
-    secrets: inherit
   tg-quick:
     if: ${{ inputs.tg-quick }}
     needs: build-artifact
+    secrets: inherit
     uses: ./.github/workflows/tg-quick.yaml
     with:
+      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      topology-4u: ${{ inputs.topology == 'config-tg' }}
+      topology-6u: ${{ inputs.topology == 'topology-6u' }}
   tg-unit-tests:
     if: ${{ inputs.tg-unit }}
     needs: build-artifact
+    secrets: inherit
     uses: ./.github/workflows/tg-unit-tests-impl.yaml
     with:
+      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      topology: ${{ inputs.topology }}
   tg-frequent-tests:
     if: ${{ inputs.tg-frequent }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tg-frequent-tests-impl.yaml
     with:
+      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      topology: ${{ inputs.topology }}
+  tg-demo-tests:
+    if: ${{ inputs.tg-demo }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tg-demo-tests-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      topology: ${{ inputs.topology }}
   tg-model-perf-tests:
     if: ${{ inputs.tg-model-perf }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
     with:
+      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      topology: ${{ inputs.topology }}
   tg-nightly-tests:
     needs: build-artifact
     if: ${{ inputs.tg-nightly }}
     secrets: inherit
     uses: ./.github/workflows/tg-nightly-tests-impl.yaml
     with:
+      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      topology: ${{ inputs.topology }}
+  tg-stress-test:
+    needs: build-artifact
+    if: ${{ inputs.tg-stress }}
+    secrets: inherit
+    uses: ./.github/workflows/tg-stress.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      topology-4u: ${{ inputs.topology == 'config-tg' }}
+      topology-6u: ${{ inputs.topology == 'topology-6u' }}

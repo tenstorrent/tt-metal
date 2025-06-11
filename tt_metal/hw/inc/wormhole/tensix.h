@@ -13,8 +13,8 @@
 #include "dev_mem_map.h"
 
 // Convenience and type defines
-typedef std::uint32_t uint;
-typedef std::uint8_t byte;
+using uint = std::uint32_t;
+using byte = std::uint8_t;
 
 #define PREPROCESSOR_EVAL(x, y, z) x##y##z
 #define PREPROCESSOR_EXPAND(x, y, z) PREPROCESSOR_EVAL(x, y, z)
@@ -95,7 +95,7 @@ typedef std::uint8_t byte;
 #define RISCV_TDMA_STATUS_FLAG_ERROR_MASK 0x10
 
 #define RISCV_SOFT_RESET_0_NONE 0x00000
-#define RISCV_SOFT_RESET_0_BRISC 0x08000
+#define RISCV_SOFT_RESET_0_BRISC 0x00800
 #define RISCV_SOFT_RESET_0_NCRISC 0x40000
 #define RISCV_SOFT_RESET_0_TRISCS 0x07000
 
@@ -144,32 +144,32 @@ typedef std::uint8_t byte;
 #define RISCV_DEBUG_REG_WALL_CLOCK_H (RISCV_DEBUG_REGS_START_ADDR | 0x1F8)
 #define RISCV_DEBUG_REG_TIMESTAMP (RISCV_DEBUG_REGS_START_ADDR | 0x1FC)
 #define RISCV_DEBUG_REG_TIMESTAMP_STATUS (RISCV_DEBUG_REGS_START_ADDR | 0x204)
-typedef struct {
+struct riscv_debug_reg_dbg_dbus_cntl_t {
     uint dbg_sig_sel : 16;
     uint dbg_daisy_sel : 8;
     uint dbg_rd_sel : 4;
     uint dbg_reg_ovrd_en : 1;
     uint dbg_daisy_en : 1;
     uint dbg_reserved : 2;
-} riscv_debug_reg_dbg_dbus_cntl_t;
+};
 
-typedef union {
+union riscv_debug_reg_dbg_dbus_cntl_u {
     uint val;
     riscv_debug_reg_dbg_dbus_cntl_t f;
-} riscv_debug_reg_dbg_dbus_cntl_u;
+};
 
-typedef struct {
+struct riscv_debug_reg_dbg_l1_mem_reg2_t {
     uint mem_dump_mode : 4;
     uint skip_cycles : 8;
     uint mem_write : 1;
     uint mem_read : 1;
     uint reserved : 18;
-} riscv_debug_reg_dbg_l1_mem_reg2_t;
+};
 
-typedef union {
+union riscv_debug_reg_dbg_l1_mem_reg2_u {
     uint val;
     riscv_debug_reg_dbg_l1_mem_reg2_t f;
-} riscv_debug_reg_dbg_l1_mem_reg2_u;
+};
 
 #define SOFT_RESET_UNPACKER(arg) ((arg & 0x3) << 0)
 #define SOFT_RESET_PACKER(arg) ((arg & 0xf) << 2)
@@ -567,7 +567,7 @@ static constexpr unsigned int R63 = 63;
 #define R63_LO 126
 #define R63_HI 127
 
-typedef enum { UNP0 = 1, UNP1 = 2, PCK0 = 4 } cnt_id_t;
+enum cnt_id_t { UNP0 = 1, UNP1 = 2, PCK0 = 4 };
 
 #ifdef CPU_JAWBRIDGE
 #define TENSIX_MAX_KERNEL_LOOP_COUNT 128u
@@ -590,7 +590,7 @@ inline T bitmask(unsigned int bits) {
 
 template <class T>
 inline typename std::make_unsigned<T>::type pack_field(T x, unsigned int to_shift) {
-    typedef typename std::make_unsigned<T>::type u_T;
+    using u_T = typename std::make_unsigned<T>::type;
     u_T u_x(x);
 
     // verify that no bits are shifted away

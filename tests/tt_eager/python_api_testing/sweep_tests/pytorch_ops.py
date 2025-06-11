@@ -86,7 +86,7 @@ def normalize_global(x, *args, **kwargs):
 
 # Ternary Ops
 def sum(x, *args, dim, **kwargs):
-    return torch.sum(x, dim=dim, keepdim=True)
+    return torch.sum(x, dim=dim)
 
 
 def where(x, y, z, *args, **kwargs):
@@ -974,10 +974,9 @@ def xlogy(x, y, *args, **kwargs):
     return torch.xlogy(x, y)
 
 
-def prod(x, *args, all_dimensions, dim, **kwargs):
-    if all_dimensions:
-        result = torch.prod(x)
-        return result.view(1, 1, 1, 1)
+def prod(x, *args, dim, **kwargs):
+    if dim is None:
+        return torch.prod(x)
     return torch.prod(x, dim, keepdim=kwargs["keepdim"])
 
 
@@ -1234,15 +1233,15 @@ def outer(x, y, *args, **kwargs):
     return torch.outer(x.squeeze(), y.squeeze())
 
 
-def reduce_sum(x, dims=None, keepdim=True, *args, **kwargs):
+def reduce_sum(x, dims=None, keepdim=False, *args, **kwargs):
     return torch.sum(x, dims, keepdim)
 
 
-def reduce_max(x, dims=None, keepdim=True, *args, **kwargs):
+def reduce_max(x, dims=None, keepdim=False, *args, **kwargs):
     return torch.amax(x, dims, keepdim)
 
 
-def reduce_min(x, dims=None, keepdim=True, *args, **kwargs):
+def reduce_min(x, dims=None, keepdim=False, *args, **kwargs):
     return torch.amin(x, dims, keepdim)
 
 

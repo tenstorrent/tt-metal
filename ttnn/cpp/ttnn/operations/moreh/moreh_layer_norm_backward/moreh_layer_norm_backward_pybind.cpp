@@ -4,7 +4,7 @@
 
 #include "moreh_layer_norm_backward_pybind.hpp"
 
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "pybind11/pytypes.h"
 #include "ttnn/operations/moreh/moreh_layer_norm_backward/moreh_layer_norm_backward.hpp"
 

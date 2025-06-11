@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -140,14 +140,14 @@ std::pair<const mapping_table_t* const, uint32_t> get_shard_map(uint32_t L1_addr
 /*
 * ShardedAddrGen requires the type definition of a ShardedInfo class object whose templates hold the CT information
     ex.
-    typedef ShardedInfo <
+    using tensor_1_shard_info = ShardedInfo <
     SHARD_TYPE,
     NUMBER_OF_CORES,
     PAGE_SIZE_JUMP,
     PAGES_PER_TENSOR_ROW,
     CONTIGUITY,
     PAGES_PER_SHARD_WIDTH,
-    ROWS_PER_SHARD_HEIGHT> tensor_1_shard_info;
+    ROWS_PER_SHARD_HEIGHT>;
 
     The above parameters are usually obtained using get_compile_time_arg_val.
     In the program factory you can create an vector containing the above parameters in order using the function
@@ -245,7 +245,7 @@ struct ShardedAddrGen {
     FORCE_INLINE
     void noc_async_read_page(
         const uint32_t id, const uint32_t dest_addr, const uint32_t offset = 0, uint8_t noc = noc_index) const {
-        noc_async_read(this->get_noc_addr(id, offset), dest_addr, CONSTANT_ARGS.page_size_jump, noc);
+        noc_async_read(this->get_noc_addr(id, offset, noc), dest_addr, CONSTANT_ARGS.page_size_jump, noc);
     }
 };
 }  // namespace experimental

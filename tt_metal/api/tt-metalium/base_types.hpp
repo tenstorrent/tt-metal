@@ -6,7 +6,7 @@
 
 #include <ostream>
 
-#include "constants.hpp"
+#include <tt-metalium/constants.hpp>
 
 enum class MathFidelity : uint8_t {
     LoFi = 0,

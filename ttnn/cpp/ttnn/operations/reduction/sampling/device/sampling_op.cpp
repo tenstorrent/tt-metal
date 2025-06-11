@@ -15,26 +15,26 @@ void Sampling::validate_with_output_tensors(
     const auto& input_indices_tensor = input_tensors.at(1);
 
     TT_FATAL(
-        input_values_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_values_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Only INTERLEAVED memory layout is supported for inputs!");
 
-    TT_FATAL(input_values_tensor.get_dtype() == DataType::BFLOAT16, "Only BFLOAT16 is supported for inputs!");
-    TT_FATAL(input_values_tensor.get_layout() == Layout::TILE, "Only TILE_LAYOUT is supported for inputs!");
+    TT_FATAL(input_values_tensor.dtype() == DataType::BFLOAT16, "Only BFLOAT16 is supported for inputs!");
+    TT_FATAL(input_values_tensor.layout() == Layout::TILE, "Only TILE_LAYOUT is supported for inputs!");
 
     TT_FATAL(
-        input_indices_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        input_indices_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Only INTERLEAVED memory layout is supported for inputs!");
 
     TT_FATAL(
-        input_indices_tensor.get_dtype() == DataType::UINT32 || input_indices_tensor.get_dtype() == DataType::INT32,
+        input_indices_tensor.dtype() == DataType::UINT32 || input_indices_tensor.dtype() == DataType::INT32,
         "Only UINT32 & INT32 dtypes are supported for input indices!");
 
-    TT_FATAL(input_indices_tensor.get_layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR is supported for input indices!");
+    TT_FATAL(input_indices_tensor.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR is supported for input indices!");
 
     TT_FATAL(
-        input_indices_tensor.get_logical_shape() == input_values_tensor.get_logical_shape(),
+        input_indices_tensor.logical_shape() == input_values_tensor.logical_shape(),
         "Input values and indices must have the same shape!");
-    auto input_shape = input_values_tensor.get_logical_shape();
+    auto input_shape = input_values_tensor.logical_shape();
     TT_FATAL(input_shape[0] * input_shape[1] * input_shape[2] == 32, "Input must have 32 users!");
     TT_FATAL(input_shape[3] % 32 == 0, "Input inner dim ({}) must be divisible by 32, pad if needed!", input_shape[3]);
 
@@ -48,12 +48,12 @@ void Sampling::validate_with_output_tensors(
     const auto& optional_output_tensor = output_tensors.at(0);
     if (optional_output_tensor.has_value()) {
         TT_FATAL(
-            optional_output_tensor.value().get_dtype() == DataType::UINT32 ||
-                optional_output_tensor.value().get_dtype() == DataType::INT32,
+            optional_output_tensor.value().dtype() == DataType::UINT32 ||
+                optional_output_tensor.value().dtype() == DataType::INT32,
             "Only UINT32 & INT32 dtypes are supported for outputs!");
 
         TT_FATAL(
-            optional_output_tensor.value().memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            optional_output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Only INTERLEAVED memory layout is supported for outputs!");
     }
 
@@ -71,11 +71,11 @@ void Sampling::validate_with_output_tensors(
 std::vector<TensorSpec> Sampling::compute_output_specs(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     if (output_tensors.at(0).has_value()) {
-        return {output_tensors.at(0)->get_tensor_spec()};
+        return {output_tensors.at(0)->tensor_spec()};
     }
 
     const auto& input_values_tensor = input_tensors[0];
-    auto input_shape = input_values_tensor.get_logical_shape();
+    auto input_shape = input_values_tensor.logical_shape();
     ttnn::Shape output_shape({1, 1, 1, input_shape[2]});
 
     return {TensorSpec(

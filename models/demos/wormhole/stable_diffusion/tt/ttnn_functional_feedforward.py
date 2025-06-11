@@ -3,13 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 import math
 import os
+
 import torch
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_geglu import geglu
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    determine_largest_subblock_size,
-)
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import determine_largest_subblock_size
 
 
 def compare(tensor, name, reshape=False):

@@ -2,25 +2,26 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import math
 import os
-import json
-import ttnn
 from pathlib import Path
-from loguru import logger
+from typing import Tuple
+
 import torch
+from loguru import logger
+from tqdm import tqdm
+
+import ttnn
 from models.demos.qwen.reference.model import Transformer
 from models.demos.qwen.tt.qwen_common import (
-    precompute_freqs,
     freqs_to_rotation_matrix,
-    num_to_core_range_set,
     get_out_subblock_w,
     load_safetensor_weights,
+    num_to_core_range_set,
+    precompute_freqs,
 )
-from typing import Tuple
 from models.utility_functions import nearest_32
-from pathlib import Path
-from tqdm import tqdm
 
 
 class TtModelArgs:
@@ -168,7 +169,7 @@ class TtModelArgs:
         )  # for prefill
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
 
-        device = mesh_device.get_devices()[0] if mesh_device is not None else None
+        device = mesh_device if mesh_device is not None else None
         if device is not None:  # Avoid issue with test_qwen_torch.py not having a device
             self.n_local_heads = self.n_heads // self.num_devices
 

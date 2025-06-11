@@ -20,7 +20,7 @@ struct ShardedToInterleavedOperation {
 
 }  // namespace operations::data_movement
 
-constexpr auto sharded_to_interleaved = ttnn::register_operation_with_auto_launch_op<
+constexpr auto sharded_to_interleaved = ttnn::register_operation<
     "ttnn::sharded_to_interleaved",
     ttnn::operations::data_movement::ShardedToInterleavedOperation>();
 

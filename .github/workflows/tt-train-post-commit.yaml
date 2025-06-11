@@ -18,7 +18,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 20
+        default: 25
 
 jobs:
   models:
@@ -31,10 +31,11 @@ jobs:
           {name: tt-train, cmd: ctest --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on:
-      - ${{ inputs.runner-label }}
-      - cloud-virtual-machine
-      - in-service
+    runs-on: >-
+      ${{
+        github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
+        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+      }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -66,7 +67,7 @@ jobs:
           ldd tests/ttml_tests || true
           ${{ matrix.test-group.cmd }}
 
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -76,8 +77,7 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            /work/build/tt-train/generated/test_reports/
+          path: /work/build/tt-train/generated/test_reports/
           prefix: "test_reports_"
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main

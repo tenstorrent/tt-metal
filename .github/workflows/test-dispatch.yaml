@@ -58,12 +58,14 @@ jobs:
   #         echo "deployrunner=${{ inputs.runner-label }}" >> $GITHUB_OUTPUT
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
     with:
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.tracy }}
       version: ${{ inputs.version }}
       build-wheel: true
-    secrets: inherit
   test-dispatch:
     # needs: setup
     needs: build-artifact
@@ -101,7 +103,7 @@ jobs:
             -e ARCH_NAME=${{ inputs.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
-            -e WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+            ${{ (inputs.arch == 'wormhole_b0' && '-e WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml') || '' }}
           run_args: |
             pip3 install pytest-repeat
             ${{ inputs.command }}

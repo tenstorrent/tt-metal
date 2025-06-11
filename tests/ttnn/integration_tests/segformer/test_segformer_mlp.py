@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -51,9 +51,6 @@ def test_segformer_mlp(
     mlp_id,
     is_ci_env,
 ):
-    if is_ci_env:
-        pytest.skip("Skip in CI, model is WIP, issue# 13357")
-
     torch_input_tensor = torch.randn(batch_size, input_dim, height, width)
     torch_model = SegformerForSemanticSegmentation.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
     config = torch_model.config
@@ -83,7 +80,7 @@ def test_segformer_mlp(
     )
 
     ttnn_model = TtSegformerMLP()
-    ttnn_output = ttnn_model(ttnn_input_tensor, parameters=parameters)
+    ttnn_output = ttnn_model(device, ttnn_input_tensor, parameters=parameters)
 
     ttnn_output = ttnn.from_device(ttnn_output)
     ttnn_output = ttnn.to_torch(ttnn_output)

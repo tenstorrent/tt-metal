@@ -7,13 +7,15 @@
 #include <variant>
 #include <vector>
 
-#include "dispatch_core_common.hpp"
-#include "runtime_args_data.hpp"
-#include "program_impl.hpp"
-#include "device.hpp"
-#include "sub_device_types.hpp"
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/span.hpp>
-#include "lightmetal_binary.hpp"
+#include <tt-metalium/lightmetal_binary.hpp>
+#include <tt-metalium/profiler_types.hpp>
+#include <tt-metalium/profiler_optional_metadata.hpp>
 
 /** @file */
 
@@ -89,7 +91,8 @@ IDevice* CreateDevice(
     const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
     const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-    const std::vector<uint32_t>& l1_bank_remap = {});
+    const std::vector<uint32_t>& l1_bank_remap = {},
+    const size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
 // clang-format off
 /**
@@ -927,19 +930,23 @@ void LoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, const TraceDes
 
 // clang-format off
 /**
- * Read device side profiler data and dump results into device side CSV log
+ * Read device side profiler data for all devices in the mesh device and dump results into device side CSV log
  *
  * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
  *
  * Return value: void
  *
- * | Argument      | Description                                       | Type            | Valid Range               | Required |
- * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
- * | device        | The device holding the program being profiled.    | IDevice*        |                           | True     |
- * | program       | The program being profiled.                       | const Program & |                           | True     |
+ * | Argument      | Description                                           | Type                     | Valid Range               | Required |
+ * |---------------|-------------------------------------------------------|--------------------------|---------------------------|----------|
+ * | mesh_device   | The mesh device containing the devices to be profiled | MeshDevice&              |                           | Yes      |
+ * | state         | The dump state to use for this profiler dump          | ProfilerDumpState        |                           | No       |
+ * | metadata      | Metadata to include in the profiler results           | ProfilerOptionalMetadata |                           | No       |
  * */
 // clang-format on
-void DumpDeviceProfileResults(IDevice* device, const Program& program);
+void DumpMeshDeviceProfileResults(
+    distributed::MeshDevice& mesh_device,
+    ProfilerDumpState state = ProfilerDumpState::NORMAL,
+    const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
 // clang-format off
 /**

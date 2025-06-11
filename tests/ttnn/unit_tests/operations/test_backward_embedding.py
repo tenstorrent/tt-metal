@@ -68,6 +68,7 @@ def test_embedding_bw(input_dtype, output_dtype, batch_size, seq_len, embedding_
     assert comp_pass
 
 
+@skip_for_blackhole("Fails on BH. Issue #11816")
 @pytest.mark.parametrize(
     "batch_size, seq_len, embedding_dim, num_embeddings",
     [

@@ -4,10 +4,11 @@
 
 
 import torch
+from tt_lib.utils import pad_weight
 
 import ttnn
-from tt_lib.utils import pad_weight
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
+from models.demos.metal_BERT_large_11.tt.tensor_utils import load_or_compute_and_cache
 
 
 def feed_forward(
@@ -90,80 +91,99 @@ def feed_forward(
 
 class TtFeedForwardModel:
     def __init__(self, encoder_idx, state_dict, device, model_config, tt_cache_path):
-        # FF1 params
         layer_name = f"bert.encoder.layer.{encoder_idx}"
         encoder_ff1_str = f"{layer_name}.intermediate.dense"
         encoder_ff2_str = f"{layer_name}.output.dense"
-        if tt_cache_path is not None:
-            encoder0_ff1_weight = ttnn.load_tensor(
-                str(tt_cache_path / f"{encoder_ff1_str}.weight_{model_config['OP9_FF1_MM_WEIGHTS_DTYPE'].name}.bin")
-            ).to(device, model_config["OP9_FF1_MM_WEIGHTS_MEMCFG"])
-            encoder0_ff1_bias = ttnn.load_tensor(
-                str(tt_cache_path / f"{encoder_ff1_str}.bias_{model_config['OP9_FF1_MM_BIAS_DTYPE'].name}.bin")
-            ).to(device, model_config["OP9_FF1_MM_BIAS_MEMCFG"])
-            encoder0_ff1_weight_shape = encoder0_ff1_weight.padded_shape
 
-            encoder0_ff2_weight = ttnn.load_tensor(
-                str(tt_cache_path / f"{encoder_ff2_str}.weight_{model_config['OP10_FF2_MM_WEIGHTS_DTYPE'].name}.bin")
-            ).to(device, model_config["OP10_FF2_MM_WEIGHTS_MEMCFG"])
-            encoder0_ff2_bias = ttnn.load_tensor(
-                str(tt_cache_path / f"{encoder_ff2_str}.bias_{model_config['OP10_FF2_MM_BIAS_DTYPE'].name}.bin")
-            ).to(device, model_config["OP10_FF2_MM_BIAS_MEMCFG"])
-        else:
-            encoder0_ff1_weight = pad_weight(
+        ff1_weight_path = None
+        ff1_bias_path = None
+        ff2_weight_path = None
+        ff2_bias_path = None
+
+        if tt_cache_path is not None:
+            ff1_weight_path = str(
+                f"{tt_cache_path}/" f"{encoder_ff1_str}.weight_{model_config['OP9_FF1_MM_WEIGHTS_DTYPE'].name}.bin"
+            )
+            ff1_bias_path = str(
+                f"{tt_cache_path}/" f"{encoder_ff1_str}.bias_{model_config['OP9_FF1_MM_BIAS_DTYPE'].name}.bin"
+            )
+            ff2_weight_path = str(
+                f"{tt_cache_path}/" f"{encoder_ff2_str}.weight_{model_config['OP10_FF2_MM_WEIGHTS_DTYPE'].name}.bin"
+            )
+            ff2_bias_path = str(
+                f"{tt_cache_path}/" f"{encoder_ff2_str}.bias_{model_config['OP10_FF2_MM_BIAS_DTYPE'].name}.bin"
+            )
+
+        def compute_ff1_weight():
+            ff1_weight_torch = pad_weight(
                 torch.transpose(
                     state_dict[f"{encoder_ff1_str}.weight"],
                     -2,
                     -1,
                 )
             )
-            encoder0_ff1_bias = pad_weight(state_dict[f"{encoder_ff1_str}.bias"])
-
-            encoder0_ff1_weight_shape = encoder0_ff1_weight.shape
-            encoder0_ff1_bias_shape = encoder0_ff1_bias.shape
-
-            encoder0_ff1_weight = ttnn.from_torch(
-                encoder0_ff1_weight,
-                model_config["OP9_FF1_MM_WEIGHTS_DTYPE"],
+            return ttnn.from_torch(
+                ff1_weight_torch,
+                dtype=model_config["OP9_FF1_MM_WEIGHTS_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=model_config["OP9_FF1_MM_WEIGHTS_MEMCFG"],
-            )
-            encoder0_ff1_bias = ttnn.from_torch(
-                encoder0_ff1_bias,
-                model_config["OP9_FF1_MM_BIAS_DTYPE"],
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=model_config["OP9_FF1_MM_BIAS_MEMCFG"],
             )
 
-            # FF2 params
-            encoder0_ff2_weight = pad_weight(
+        def compute_ff1_bias():
+            ff1_bias_torch = pad_weight(state_dict[f"{encoder_ff1_str}.bias"])
+            return ttnn.from_torch(
+                ff1_bias_torch,
+                dtype=model_config["OP9_FF1_MM_BIAS_DTYPE"],
+                layout=ttnn.TILE_LAYOUT,
+            )
+
+        def compute_ff2_weight():
+            ff2_weight_torch = pad_weight(
                 torch.transpose(
                     state_dict[f"{encoder_ff2_str}.weight"],
                     -2,
                     -1,
                 )
             )
-            encoder0_ff2_bias = pad_weight(state_dict[f"{encoder_ff2_str}.bias"])
-
-            encoder0_ff2_weight_shape = encoder0_ff2_weight.shape
-            encoder0_ff2_bias_shape = encoder0_ff2_bias.shape
-
-            encoder0_ff2_weight = ttnn.from_torch(
-                encoder0_ff2_weight,
-                model_config["OP10_FF2_MM_WEIGHTS_DTYPE"],
+            return ttnn.from_torch(
+                ff2_weight_torch,
+                dtype=model_config["OP10_FF2_MM_WEIGHTS_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=model_config["OP10_FF2_MM_WEIGHTS_MEMCFG"],
             )
-            encoder0_ff2_bias = ttnn.from_torch(
-                encoder0_ff2_bias,
-                model_config["OP10_FF2_MM_BIAS_DTYPE"],
+
+        def compute_ff2_bias():
+            ff2_bias_torch = pad_weight(state_dict[f"{encoder_ff2_str}.bias"])
+            return ttnn.from_torch(
+                ff2_bias_torch,
+                dtype=model_config["OP10_FF2_MM_BIAS_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=model_config["OP10_FF2_MM_BIAS_MEMCFG"],
             )
+
+        encoder0_ff1_weight = load_or_compute_and_cache(
+            ff1_weight_path,
+            compute_ff1_weight,
+            device=device,
+            mem_config=model_config["OP9_FF1_MM_WEIGHTS_MEMCFG"],
+        )
+        encoder0_ff1_bias = load_or_compute_and_cache(
+            ff1_bias_path,
+            compute_ff1_bias,
+            device=device,
+            mem_config=model_config["OP9_FF1_MM_BIAS_MEMCFG"],
+        )
+        encoder0_ff2_weight = load_or_compute_and_cache(
+            ff2_weight_path,
+            compute_ff2_weight,
+            device=device,
+            mem_config=model_config["OP10_FF2_MM_WEIGHTS_MEMCFG"],
+        )
+        encoder0_ff2_bias = load_or_compute_and_cache(
+            ff2_bias_path,
+            compute_ff2_bias,
+            device=device,
+            mem_config=model_config["OP10_FF2_MM_BIAS_MEMCFG"],
+        )
+
+        encoder0_ff1_weight_shape = encoder0_ff1_weight.padded_shape
 
         self.ffn = feed_forward(
             *tuple(encoder0_ff1_weight_shape)[-2:],

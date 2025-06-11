@@ -64,11 +64,7 @@ inline void dprint_tensix_unpack_tile_descriptor_w_dim(
 
 inline void dprint_tensix_unpack_tile_descriptor_blobs_y_start(
     const ckernel::unpacker::unpack_tile_descriptor_t& tile_descriptor) {
-#ifdef ARCH_GRAYSKULL
-    DPRINT << DEC() << tile_descriptor.blobs_y_start << ENDL();
-#else
     DPRINT << DEC() << ((tile_descriptor.blobs_y_start_hi << 16) | tile_descriptor.blobs_y_start_lo) << ENDL();
-#endif
 }
 
 inline void dprint_tensix_unpack_tile_descriptor_digest_type(
@@ -109,12 +105,6 @@ inline void dprint_tensix_unpack_config_tileize_mode(const ckernel::unpacker::un
 inline void dprint_tensix_unpack_config_force_shared_exp(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.force_shared_exp << ENDL();
 }
-
-#ifdef ARCH_GRAYSKULL
-inline void dprint_tensix_unpack_config_reserved_0(const ckernel::unpacker::unpack_config_t& config) {
-    DPRINT << "0x" << HEX() << config.reserved_0 << ENDL();
-}
-#endif
 
 inline void dprint_tensix_unpack_config_upsample_rate(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << DEC() << config.upsample_rate << ENDL();
@@ -184,113 +174,6 @@ inline void dprint_tensix_unpack_config_reserved_5(const ckernel::unpacker::unpa
 
 // HARDWARE SPECIFIC FUNCTIONS
 
-#ifdef ARCH_GRAYSKULL
-inline void dprint_tensix_unpack_tile_descriptor_helper(
-    const ckernel::unpacker::unpack_tile_descriptor_t& tile_descriptor) {
-    DPRINT << "in_data_format: ";
-    dprint_tensix_unpack_tile_descriptor_in_data_format(tile_descriptor);
-    DPRINT << "uncompressed: ";
-    dprint_tensix_unpack_tile_descriptor_uncompressed(tile_descriptor);
-    DPRINT << "reserved_0: ";
-    dprint_tensix_unpack_tile_descriptor_reserved_0(tile_descriptor);
-    DPRINT << "blobs_per_xy_plane: ";
-    dprint_tensix_unpack_tile_descriptor_blobs_per_xy_plane(tile_descriptor);
-    DPRINT << "reserved_1: ";
-    dprint_tensix_unpack_tile_descriptor_reserved_1(tile_descriptor);
-    DPRINT << "x_dim: ";
-    dprint_tensix_unpack_tile_descriptor_x_dim(tile_descriptor);
-    DPRINT << "y_dim: ";
-    dprint_tensix_unpack_tile_descriptor_y_dim(tile_descriptor);
-    DPRINT << "z_dim: ";
-    dprint_tensix_unpack_tile_descriptor_z_dim(tile_descriptor);
-    DPRINT << "w_dim: ";
-    dprint_tensix_unpack_tile_descriptor_w_dim(tile_descriptor);
-    DPRINT << "blobs_y_start: ";
-    dprint_tensix_unpack_tile_descriptor_blobs_y_start(tile_descriptor);
-    DPRINT << "digest_type: ";
-    dprint_tensix_unpack_tile_descriptor_digest_type(tile_descriptor);
-    DPRINT << "digest_size: ";
-    dprint_tensix_unpack_tile_descriptor_digest_size(tile_descriptor);
-}
-
-inline void dprint_tensix_unpack_tile_descriptor(uint reg_id = 0) {
-    std::array<ckernel::unpacker::unpack_tile_descriptor_t, ckernel::unpacker::NUM_UNPACKERS> tile_descriptor_vec;
-    UNPACK(
-        tile_descriptor_vec = ckernel::unpacker::read_unpack_tile_descriptor();
-        if (reg_id >= 1 && reg_id <= ckernel::unpacker::NUM_UNPACKERS) {
-            DPRINT << "REG_ID: " << reg_id << ENDL();
-            dprint_tensix_unpack_tile_descriptor_helper(tile_descriptor_vec[reg_id - 1]);
-        } else if (reg_id == 0) {
-            for (uint i = 1; i <= ckernel::unpacker::NUM_UNPACKERS; i++) {
-                DPRINT << "REG_ID: " << i << ENDL();
-                dprint_tensix_unpack_tile_descriptor_helper(tile_descriptor_vec[i - 1]);
-                if (i != ckernel::unpacker::NUM_UNPACKERS) {
-                    DPRINT << ENDL();
-                }
-            }
-        } else {
-            DPRINT << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << ckernel::unpacker::NUM_UNPACKERS
-                   << "." << ENDL();
-        })
-}
-
-inline void dprint_tensix_unpack_config_helper(const ckernel::unpacker::unpack_config_t& config) {
-    DPRINT << "out_data_format: ";
-    dprint_tensix_unpack_config_out_data_format(config);
-    DPRINT << "throttle_mode: ";
-    dprint_tensix_unpack_config_throttle_mode(config);
-    DPRINT << "context_count: ";
-    dprint_tensix_unpack_config_context_count(config);
-    DPRINT << "haloize_mode: ";
-    dprint_tensix_unpack_config_haloize_mode(config);
-    DPRINT << "tileize_mode: ";
-    dprint_tensix_unpack_config_tileize_mode(config);
-    DPRINT << "force_shared_exp: ";
-    dprint_tensix_unpack_config_force_shared_exp(config);
-    DPRINT << "reserved_0: ";
-    dprint_tensix_unpack_config_reserved_0(config);
-    DPRINT << "upsample_rate: ";
-    dprint_tensix_unpack_config_upsample_rate(config);
-    DPRINT << "upsample_and_interlave: ";
-    dprint_tensix_unpack_config_upsample_and_interlave(config);
-    DPRINT << "shift_amount: ";
-    dprint_tensix_unpack_config_shift_amount(config);
-    DPRINT << "uncompress_cntx0_3: ";
-    dprint_tensix_unpack_config_uncompress_cntx0_3(config);
-    DPRINT << "reserved_1: ";
-    dprint_tensix_unpack_config_reserved_1(config);
-    DPRINT << "uncompress_cntx4_7: ";
-    dprint_tensix_unpack_config_uncompress_cntx4_7(config);
-    DPRINT << "reserved_2: ";
-    dprint_tensix_unpack_config_reserved_2(config);
-    DPRINT << "limit_addr: ";
-    dprint_tensix_unpack_config_limit_addr(config);
-    DPRINT << "fifo_size: ";
-    dprint_tensix_unpack_config_fifo_size(config);
-}
-
-inline void dprint_tensix_unpack_config(uint reg_id = 0) {
-    std::array<ckernel::unpacker::unpack_config_t, ckernel::unpacker::NUM_UNPACKERS> config_vec;
-    UNPACK(
-        config_vec = ckernel::unpacker::read_unpack_config();
-        if (reg_id >= 1 && reg_id <= ckernel::unpacker::NUM_UNPACKERS) {
-            DPRINT << "REG_ID: " << reg_id << ENDL();
-            dprint_tensix_unpack_config_helper(config_vec[reg_id - 1]);
-        } else if (reg_id == 0) {
-            for (uint i = 1; i <= ckernel::unpacker::NUM_UNPACKERS; i++) {
-                DPRINT << "REG_ID: " << i << ENDL();
-                dprint_tensix_unpack_config_helper(config_vec[i - 1]);
-                if (i != ckernel::unpacker::NUM_UNPACKERS) {
-                    DPRINT << ENDL();
-                }
-            }
-        } else {
-            DPRINT << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << ckernel::unpacker::NUM_UNPACKERS
-                   << "." << ENDL();
-        })
-}
-
-#else  // ARCH_WORMHOLE or ARCH_BLACKHOLE
 inline void dprint_tensix_unpack_tile_descriptor_helper(
     const ckernel::unpacker::unpack_tile_descriptor_t& tile_descriptor) {
     DPRINT << "in_data_format: ";
@@ -506,5 +389,3 @@ inline void dprint_tensix_alu_config() {
          DPRINT << "ALU_ACC_CTRL_INT8_math_enabled: ";
          dprint_tensix_alu_config_alu_acc_ctrl_int8_math_enabled(config);)
 }
-
-#endif  // END OF ELSE

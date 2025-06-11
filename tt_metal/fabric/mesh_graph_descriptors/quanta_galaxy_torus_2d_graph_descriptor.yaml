@@ -1,0 +1,27 @@
+ChipSpec: {
+  arch: wormhole_b0,
+  ethernet_ports: {
+    N: 4,
+    E: 4,
+    S: 4,
+    W: 4,
+  }
+}
+
+
+Board: [
+  { name: Galaxy,
+    type: TORUS_2D,
+    topology: [8, 4]}
+ ]
+
+Mesh: [
+{
+  id: 0,
+  board: Galaxy,
+  topology: [1, 1],
+  host_ranks: [[0]]}
+]
+
+Graph: [
+]

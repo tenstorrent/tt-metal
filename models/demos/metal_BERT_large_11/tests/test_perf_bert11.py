@@ -2,29 +2,27 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-
+import torch
 from loguru import logger
 from transformers import BertForQuestionAnswering, BertTokenizer
 
 import ttnn
-
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 from models.demos.metal_BERT_large_11.tt.model_config import (
     get_model_config,
     get_tt_cache_path,
     skip_unsupported_config,
 )
+from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
-    enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    is_blackhole,
     profiler,
     run_for_grayskull,
     run_for_wormhole_b0,
-    is_blackhole,
 )
-from models.perf.perf_utils import prep_perf_report
 
 model_version = "phiyodr/bert-large-finetuned-squad2"
 comments = "Large"

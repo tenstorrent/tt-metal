@@ -1,5 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import pathlib
@@ -59,7 +58,7 @@ def test_graph_capture_with_all_parameters(device):
     assert node1[0] == "\x00"
     assert (
         node1[1]
-        == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 2048, 4, 128]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt),alignment=Alignment([1]))))"
+        == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 2048, 4, 128]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([1]))))"
     )
     assert node1[2] == "1"
     assert node1[3] == "2"
@@ -70,12 +69,12 @@ def test_graph_capture_with_all_parameters(device):
     node4 = captured_graph[4]["arguments"]
     assert (
         node4[0]
-        == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 2048, 4, 128]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt),alignment=Alignment([1]))))"
+        == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 2048, 4, 128]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=RowMajorPageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([1]))))"
     )
     assert node4[1] == "SmallVector([0, 2, 1, 3])"
     assert (
         node4[2]
-        == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)"
+        == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
     )
     assert node4[3] == "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]"
     assert node4[4] == "0"
@@ -95,11 +94,11 @@ def test_graph_capture_with_all_parameters(device):
     node7 = captured_graph[7]["arguments"]
     assert node7[0] == "Shape([1, 4, 2048, 128])"
     assert node7[1] == "DataType::BFLOAT16"
-    assert node7[2] == "Row Major"
+    assert node7[2] == "Layout::ROW_MAJOR"
     assert node7[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
     assert (
         node7[4]
-        == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)"
+        == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
     )
 
 
@@ -131,11 +130,11 @@ def test_graph_capture_without_memory_config(device):
     node1 = captured_graph[1]["arguments"]
     assert (
         node1[0]
-        == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))"
+        == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([32, 32]))))"
     )
     assert (
         node1[1]
-        == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))"
+        == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([32, 32]))))"
     )
     assert node1[2] == "nullopt"
     assert node1[3] == "DataType::BFLOAT16"
@@ -146,11 +145,11 @@ def test_graph_capture_without_memory_config(device):
     node6 = captured_graph[6]["arguments"]
     assert (
         node6[0]
-        == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))"
+        == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([32, 32]))))"
     )
     assert (
         node6[1]
-        == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))"
+        == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([32, 32]))))"
     )
     assert node6[2] == "nullopt"
     assert node6[3] == "DataType::BFLOAT16"
@@ -172,11 +171,11 @@ def test_graph_capture_without_memory_config(device):
     node10 = captured_graph[10]["arguments"]
     assert node10[0] == "Shape([1, 1, 1, 1])"
     assert node10[1] == "DataType::BFLOAT16"
-    assert node10[2] == "Tile"
+    assert node10[2] == "Layout::TILE"
     assert node10[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
     assert (
         node10[4]
-        == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)"
+        == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
     )
 
 
@@ -191,7 +190,7 @@ def test_graph_capture_without_dtype(device):
     node1 = captured_graph[1]["arguments"]
     assert (
         node1[0]
-        == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([32, 32]),tensor_layout=TensorLayout(dtype=DataType::INT32,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))"
+        == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([32, 32]),tensor_layout=TensorLayout(dtype=DataType::INT32,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([32, 32]))))"
     )
     assert node1[1] == "3"
     assert node1[2] == "nullopt"
@@ -202,7 +201,7 @@ def test_graph_capture_without_dtype(device):
     node4 = captured_graph[4]["arguments"]
     assert (
         node4[0]
-        == "Tensor(storage=DeviceStorage(memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)),tensor_spec=TensorSpec(logical_shape=Shape([32, 32]),tensor_layout=TensorLayout(dtype=DataType::INT32,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))"
+        == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([32, 32]),tensor_layout=TensorLayout(dtype=DataType::INT32,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([32, 32]))))"
     )
     assert node4[1] == "3"
     assert node4[2] == "nullopt"
@@ -224,11 +223,11 @@ def test_graph_capture_without_dtype(device):
     node7 = captured_graph[7]["arguments"]
     assert node7[0] == "Shape([32, 32])"
     assert node7[1] == "DataType::INT32"
-    assert node7[2] == "Tile"
+    assert node7[2] == "Layout::TILE"
     assert node7[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
     assert (
         node7[4]
-        == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)"
+        == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
     )
 
 
@@ -266,10 +265,6 @@ def test_graph_capture_with_all_parameters_json_output(device):
     # arg1
     arg1 = item0["arguments"][1]["arg1"]
     tensor = arg1["Tensor"]
-    mem_config_storage = tensor["storage"]["memory_config"]
-    assert mem_config_storage["memory_layout"] == "TensorMemoryLayout::INTERLEAVED"
-    assert mem_config_storage["buffer_type"] == "BufferType::L1"
-    assert mem_config_storage["shard_spec"] == "std::nullopt"
 
     tspec = tensor["tensor_spec"]
     assert tspec["logical_shape"] == [1, 2048, 4, 128]
@@ -295,13 +290,6 @@ def test_graph_capture_with_all_parameters_json_output(device):
     item1 = data["content"][1]
     assert item1["operation"] == "ttnn::prim::permute"
     assert len(item1["arguments"]) == 5
-
-    arg0_item1 = item1["arguments"][0]["arg0"]
-    mem_config_item1 = arg0_item1["Tensor"]["storage"]["memory_config"]
-    assert mem_config_item1["memory_layout"] == "TensorMemoryLayout::INTERLEAVED"
-    assert mem_config_item1["buffer_type"] == "BufferType::L1"
-    assert mem_config_item1["shard_spec"] == "std::nullopt"
-    assert item1["arguments"][1]["arg1"]["SmallVector"] == [0, 2, 1, 3]
 
     arg2_item1 = item1["arguments"][2]["arg2"]["MemoryConfig"]
     assert arg2_item1["memory_layout"] == "TensorMemoryLayout::INTERLEAVED"
@@ -331,7 +319,7 @@ def test_graph_capture_with_all_parameters_json_output(device):
     arg0_item3 = item3["arguments"][0]["arg0"]
     assert arg0_item3["Shape"] == [1, 4, 2048, 128]
     assert item3["arguments"][1]["arg1"] == "DataType::BFLOAT16"
-    assert item3["arguments"][2]["arg2"] == "Row Major"
+    assert item3["arguments"][2]["arg2"] == "Layout::ROW_MAJOR"
     assert item3["arguments"][3]["arg3"] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
 
     arg4_item3 = item3["arguments"][4]["arg4"]
@@ -378,10 +366,6 @@ def test_graph_capture_without_memory_config_json_output(device):
     # arg0
     arg0_item0 = item0["arguments"][0]["arg0"]
     tensor0 = arg0_item0["Tensor"]
-    mem_config_storage0 = tensor0["storage"]["memory_config"]
-    assert mem_config_storage0["memory_layout"] == "TensorMemoryLayout::INTERLEAVED"
-    assert mem_config_storage0["buffer_type"] == "BufferType::DRAM"
-    assert mem_config_storage0["shard_spec"] == "std::nullopt"
 
     tspec0 = tensor0["tensor_spec"]
     assert tspec0["logical_shape"] == [1, 1, 1, 32]
@@ -400,10 +384,6 @@ def test_graph_capture_without_memory_config_json_output(device):
     # arg1
     arg1_item0 = item0["arguments"][1]["arg1"]
     tensor1 = arg1_item0["Tensor"]
-    mem_config_storage1 = tensor1["storage"]["memory_config"]
-    assert mem_config_storage1["memory_layout"] == "TensorMemoryLayout::INTERLEAVED"
-    assert mem_config_storage1["buffer_type"] == "BufferType::DRAM"
-    assert mem_config_storage1["shard_spec"] == "std::nullopt"
 
     tspec1 = tensor1["tensor_spec"]
     assert tspec1["logical_shape"] == [1, 1, 1, 32]
@@ -433,10 +413,6 @@ def test_graph_capture_without_memory_config_json_output(device):
     # arg0
     arg0_item1 = item1["arguments"][0]["arg0"]
     tensor0_item1 = arg0_item1["Tensor"]
-    mem_config_storage0_item1 = tensor0_item1["storage"]["memory_config"]
-    assert mem_config_storage0_item1["memory_layout"] == "TensorMemoryLayout::INTERLEAVED"
-    assert mem_config_storage0_item1["buffer_type"] == "BufferType::DRAM"
-    assert mem_config_storage0_item1["shard_spec"] == "std::nullopt"
 
     tspec0_item1 = tensor0_item1["tensor_spec"]
     assert tspec0_item1["logical_shape"] == [1, 1, 1, 32]
@@ -455,10 +431,6 @@ def test_graph_capture_without_memory_config_json_output(device):
     # arg1
     arg1_item1 = item1["arguments"][1]["arg1"]
     tensor1_item1 = arg1_item1["Tensor"]
-    mem_config_storage1_item1 = tensor1_item1["storage"]["memory_config"]
-    assert mem_config_storage1_item1["memory_layout"] == "TensorMemoryLayout::INTERLEAVED"
-    assert mem_config_storage1_item1["buffer_type"] == "BufferType::DRAM"
-    assert mem_config_storage1_item1["shard_spec"] == "std::nullopt"
 
     tspec1_item1 = tensor1_item1["tensor_spec"]
     assert tspec1_item1["logical_shape"] == [1, 1, 1, 32]
@@ -502,7 +474,7 @@ def test_graph_capture_without_memory_config_json_output(device):
     arg0_item3 = item3["arguments"][0]["arg0"]
     assert arg0_item3["Shape"] == [1, 1, 1, 1]
     assert item3["arguments"][1]["arg1"] == "DataType::BFLOAT16"
-    assert item3["arguments"][2]["arg2"] == "Tile"
+    assert item3["arguments"][2]["arg2"] == "Layout::TILE"
     assert item3["arguments"][3]["arg3"] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
 
     arg4_item3 = item3["arguments"][4]["arg4"]
@@ -533,12 +505,6 @@ def test_graph_capture_without_dtype_json_output(device):
     # arg0: Check the Tensor structure in arg0
     arg0_item0 = item0["arguments"][0]["arg0"]
     tensor0 = arg0_item0["Tensor"]
-
-    # Check storage.memory_config
-    mem_config_storage0 = tensor0["storage"]["memory_config"]
-    assert mem_config_storage0["memory_layout"] == "TensorMemoryLayout::INTERLEAVED"
-    assert mem_config_storage0["buffer_type"] == "BufferType::DRAM"
-    assert mem_config_storage0["shard_spec"] == "std::nullopt"
 
     # Check tensor_spec
     tspec0 = tensor0["tensor_spec"]
@@ -571,11 +537,6 @@ def test_graph_capture_without_dtype_json_output(device):
     # arg0: Check the Tensor structure in arg0 for item1
     arg0_item1 = item1["arguments"][0]["arg0"]
     tensor1 = arg0_item1["Tensor"]
-
-    mem_config_storage1 = tensor1["storage"]["memory_config"]
-    assert mem_config_storage1["memory_layout"] == "TensorMemoryLayout::INTERLEAVED"
-    assert mem_config_storage1["buffer_type"] == "BufferType::DRAM"
-    assert mem_config_storage1["shard_spec"] == "std::nullopt"
 
     tspec1 = tensor1["tensor_spec"]
     assert tspec1["logical_shape"] == [32, 32]
@@ -624,7 +585,7 @@ def test_graph_capture_without_dtype_json_output(device):
     # arg1
     assert item3["arguments"][1]["arg1"] == "DataType::INT32"
     # arg2
-    assert item3["arguments"][2]["arg2"] == "Tile"
+    assert item3["arguments"][2]["arg2"] == "Layout::TILE"
     # arg3
     assert item3["arguments"][3]["arg3"] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
 

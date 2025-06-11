@@ -22,7 +22,8 @@ struct DropoutDeviceOperation {
     using tensor_args_t = dropout::tensor_args_t;
     using spec_return_value_t = dropout::spec_return_value_t;
     using tensor_return_value_t = dropout::tensor_return_value_t;
-    using program_factory_t = std::variant<program::DropoutProgramFactory>;
+    using program_factory_t = std::variant<program::DropoutProgramFactory, program::DropoutMeshWorkloadFactory>;
+    using shared_variables_t = program::DropoutProgramFactory::shared_variables_t;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -41,6 +42,7 @@ struct DropoutDeviceOperation {
         float prob,
         float scale,
         uint32_t seed,
+        bool use_per_device_seed,
         DataType output_dtype,
         const MemoryConfig& output_memory_config = MemoryConfig(),
         const std::optional<Tensor>& preallocated_output = std::nullopt);

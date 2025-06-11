@@ -19,12 +19,11 @@ ttnn::Tensor ShardedToInterleavedOperation::invoke(
         return input_tensor;
     }
 
-    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
     auto shard_spec = input_tensor.shard_spec().value();
     return tt::tt_metal::operation::run(
                ShardedToInterleavedDeviceOperation{
                    .output_mem_config = memory_config,
-                   .output_dtype = output_dtype.value_or(input_tensor.get_dtype()),
+                   .output_dtype = output_dtype.value_or(input_tensor.dtype()),
                    .is_l1_aligned = is_l1_aligned.value_or(false)},
                {input_tensor})
         .at(0);

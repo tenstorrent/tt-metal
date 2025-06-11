@@ -2,20 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "circular_buffer_test_utils.hpp"
-#include "device_fixture.hpp"
-#include "gtest/gtest.h"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/circular_buffer.hpp>
-
+#include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
-
-#include "gtest/gtest.h"
-
-#include <iostream>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cstddef>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include "device_fixture.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "umd/device/tt_core_coordinates.h"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt::tt_metal;
 
@@ -49,11 +64,11 @@ std::vector<std::shared_ptr<Buffer>> create_output_buffers(Program& program, IDe
 }
 
 std::vector<uint32_t> generate_rt_args(
-    uint32_t master_semaphore, uint32_t slave_semaphore, std::vector<std::shared_ptr<Buffer>> const& data_buffers) {
+    uint32_t master_semaphore, uint32_t subordinate_semaphore, std::vector<std::shared_ptr<Buffer>> const& data_buffers) {
     std::vector<uint32_t> rt_args;
     rt_args.reserve(2 + n_cbs);
     rt_args.push_back(master_semaphore);
-    rt_args.push_back(slave_semaphore);
+    rt_args.push_back(subordinate_semaphore);
     std::transform(data_buffers.begin(), data_buffers.end(), std::back_inserter(rt_args), [](auto const& buffer) {
         return buffer->address();
     });
@@ -65,7 +80,7 @@ TEST_F(DeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
     IDevice* device = devices_.at(0);
 
     auto const master_semaphore = CreateSemaphore(program, worker_core, 0, CoreType::WORKER);
-    auto const slave_semaphore = CreateSemaphore(program, worker_core, 0, CoreType::WORKER);
+    auto const subordinate_semaphore = CreateSemaphore(program, worker_core, 0, CoreType::WORKER);
 
     std::vector<CBHandle> cbs;
     cbs.reserve(n_cbs);
@@ -77,7 +92,7 @@ TEST_F(DeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
     }
 
     auto const& master_data_buffers = create_output_buffers(program, device);
-    auto const& slave_data_buffers = create_output_buffers(program, device);
+    auto const& subordinate_data_buffers = create_output_buffers(program, device);
 
     std::vector<uint32_t> const& kernel_ct_args{n_cbs, cb_n_pages};
 
@@ -86,17 +101,17 @@ TEST_F(DeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_non_blocking_master_test_kernel.cpp",
         worker_core,
         tt::tt_metal::ReaderDataMovementConfig{kernel_ct_args});
-    auto const slave_kernel_id = tt::tt_metal::CreateKernel(
+    auto const subordinate_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_non_blocking_slave_test_kernel.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_non_blocking_subordinate_test_kernel.cpp",
         worker_core,
         tt::tt_metal::WriterDataMovementConfig{kernel_ct_args});
 
-    auto const& master_rt_args = generate_rt_args(master_semaphore, slave_semaphore, master_data_buffers);
-    auto const& slave_rt_args = generate_rt_args(master_semaphore, slave_semaphore, slave_data_buffers);
+    auto const& master_rt_args = generate_rt_args(master_semaphore, subordinate_semaphore, master_data_buffers);
+    auto const& subordinate_rt_args = generate_rt_args(master_semaphore, subordinate_semaphore, subordinate_data_buffers);
 
     tt::tt_metal::SetRuntimeArgs(program, master_kernel_id, worker_core, master_rt_args);
-    tt::tt_metal::SetRuntimeArgs(program, slave_kernel_id, worker_core, slave_rt_args);
+    tt::tt_metal::SetRuntimeArgs(program, subordinate_kernel_id, worker_core, subordinate_rt_args);
 
     tt::tt_metal::detail::CompileProgram(device, program);
     tt::tt_metal::detail::LaunchProgram(device, program, true);
@@ -116,7 +131,7 @@ TEST_F(DeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
     }
 
     for (size_t i = 0; i < n_cbs; i++) {
-        tt::tt_metal::detail::ReadFromBuffer(slave_data_buffers[i], out_buf, true);
+        tt::tt_metal::detail::ReadFromBuffer(subordinate_data_buffers[i], out_buf, true);
 
         uint8_t const* raw_data = reinterpret_cast<uint8_t*>(out_buf.data());
         for (size_t pages_pushed = 0; pages_pushed < cb_n_pages; pages_pushed++) {

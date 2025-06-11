@@ -41,8 +41,8 @@ ttnn::Tensor ExecuteUpSample::invoke(
 
     if (input_tensor.is_sharded()) {
         // TT_FATAL(not input_tensor.is_sharded(), "Error");
-        int shard_height = input_tensor.memory_config().shard_spec.value().shape[0];
-        const auto& input_shape = input_tensor.get_logical_shape();
+        int shard_height = input_tensor.memory_config().shard_spec().value().shape[0];
+        const auto& input_shape = input_tensor.logical_shape();
         const auto batch_size = input_shape[0];
         const auto input_h = input_shape[1];
         const auto input_w = input_shape[2];

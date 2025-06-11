@@ -1,48 +1,55 @@
 [build-system]
 requires = [
-  "setuptools==69.5.1",
-  "setuptools-scm==7.1.0",
-  "wheel",
+  "setuptools==70.1.0",
+  "setuptools-scm==8.1.0"
 ]
 build-backend = "setuptools.build_meta"
 
 [project]
-# To change to eager, or something similar
 name = "ttnn"
 authors = [
     {name = "Tenstorrent"},
     {email = "info@tenstorrent.com"},
 ]
 dependencies = [
-  "pyyaml>=5.4",
   "numpy>=1.24.4,<2",
-  "loguru==0.6.0",
-  "toolz==0.12.0",
-  "matplotlib==3.7.1",
-  "Pillow==10.3.0",
-  "jupyterlab==4.2.5",
-  "ipywidgets==8.1.1",
-
-  # extra index required https://download.pytorch.org/whl/cpu
-  "torch==2.2.1+cpu",
-  "networkx==3.1",
-  "graphviz==0.20.3",
-  "bokeh==3.1.1",
-
-  # profiler
-  "click==8.1.7",
-  "dash==2.15.0",
-  "pandas==2.0.3",
-  "plotly==5.18.0",
-  "seaborn==0.13.2",
+  "loguru>=0.6.0",
+  "networkx>=3.1",
+  "graphviz>=0.20.3",
+  # The following dependencies are only needed when ENABLE_TRACY=ON (profiler builds)
+  # "pyyaml>=5.4",
+  # "click>=8.0",
+  # "pandas>=2.0.3",
+  # "seaborn>=0.13.2",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
+keywords = ["metalium", "ttnn", "tt-metal", "machine learning", "tenstorrent"]
+license = { text = "Apache-2.0" }
 description = "General compute framework for Tenstorrent devices"
-dynamic = ["version"]
+dynamic = ["version", "readme"]
+
+[project.urls]
+Homepage = "https://docs.tenstorrent.com/tt-metal/latest/ttnn"
+Documentation = "https://docs.tenstorrent.com/tt-metal/latest/ttnn"
+Repository = "https://github.com/tenstorrent/tt-metal"
+Issues = "https://github.com/tenstorrent/tt-metal/issues"
 
 [tool.black]
 line-length = 120
 include = '^.*(ttnn|tests/scripts|tests/ttnn|tests/tt_eager/python_api_testing|tt_eager/tt_lib|tests/scripts|models/demos|infra|.github)/.*\.py$'
 
+[tool.isort]
+profile = "black"
+line_length = 120
+skip_gitignore = true
+skip = ["__init__.py"]
+
 [tool.ruff]
 line-length = 120
+
+[tool.setuptools_scm]
+
+[tool.cibuildwheel]
+build = "cp310-manylinux_x86_64*"
+skip = "*-musllinux_*"
+build-verbosity = 2

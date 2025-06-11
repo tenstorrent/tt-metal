@@ -22,17 +22,17 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     const Tensor& input, const Tensor& output, bool keep_l1_aligned, uint32_t num_slices, uint32_t slice_index) {
     tt::tt_metal::Program program{};
     keep_l1_aligned = true;
-    uint32_t num_units, num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
+    uint32_t num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
         num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_per_shard_height_last,
         num_units_per_shard_width_last, padded_offset_bytes;
 
     tt::tt_metal::IDevice* device = input.device();
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     auto shard_spec = output.shard_spec().value();
-    auto shard_strategy = output.memory_config().memory_layout;
+    auto shard_strategy = output.memory_config().memory_layout();
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
@@ -41,11 +41,10 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     bool convert_df = input_cb_data_format != output_cb_data_format;
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
-    if (input.get_layout() == Layout::TILE) {
-        num_units = input.volume() / TILE_HW;
+    if (input.layout() == Layout::TILE) {
         input_unit_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
         output_unit_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
         TT_FATAL(
@@ -57,25 +56,23 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
         num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = input.get_padded_shape()[-1] / TILE_WIDTH;
+        num_units_per_row = input.padded_shape()[-1] / TILE_WIDTH;
         num_units_offset = num_units_per_row;
-        uint32_t num_units_height = input.volume() / input.get_padded_shape()[-1] / TILE_HEIGHT / num_slices;
+        uint32_t num_units_height = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT / num_slices;
         num_units_per_shard_height_last =
             num_units_per_shard_height - (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
             num_units_per_shard_width - (tt::round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
         padded_offset_bytes = (num_units_per_shard_width - num_units_per_shard_width_last) * input_unit_size;
     } else {
-        num_units = (input.volume() / input.get_padded_shape()[-1] / shard_spec.shape[0]) *
-                    (input.get_padded_shape()[-1] / shard_spec.shape[1]);
         input_unit_size = shard_spec.shape[1] * input.element_size();
         output_unit_size = shard_spec.shape[1] * output.element_size();
         num_units_per_shard_height = shard_spec.shape[0];
         num_units_per_shard_width = 1;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = input.get_padded_shape()[-1] * input.element_size();
+        num_units_per_row = input.padded_shape()[-1] * input.element_size();
         num_units_offset = 1;
-        uint32_t num_units_height = input.volume() / input.get_padded_shape()[-1];
+        uint32_t num_units_height = input.physical_volume() / input.padded_shape()[-1];
         num_units_per_shard_height_last =
             num_units_per_shard_height - (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         // TODO: Use a different variable name. Units refers to pages, but this is being used as size
@@ -126,7 +123,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     }
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id;
-    if (input.get_layout() == Layout::TILE) {
+    if (input.layout() == Layout::TILE) {
         std::vector<uint32_t> reader_compile_time_args = {
             (std::uint32_t)input_cb_index, (std::uint32_t)src_is_dram, all_cores.num_cores()};
 
@@ -176,7 +173,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     const auto cores = corerange_to_cores(shard_spec.grid, std::nullopt, rm_orientation);
     for (const auto& core : cores) {
         uint32_t curr_num_units_per_shard = num_units_per_shard;
-        if (input.get_layout() == Layout::TILE) {
+        if (input.layout() == Layout::TILE) {
             uint32_t shard_height = num_units_per_shard_height;
             uint32_t shard_width = num_units_per_shard_width;
             uint32_t padded_offset = 0;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -111,6 +111,10 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
     constexpr std::string_view compute = "{}/compute/{}";
 
     switch (kernel_name) {
+        case KernelName::ReaderNoBcastSplit:
+            return fmt::format(dataflow, root, "reader_interleaved_no_bcast_split.cpp");
+        case KernelName::WriterNoBcastSplit:
+            return fmt::format(dataflow, root, "writer_interleaved_no_bcast_split.cpp");
         case KernelName::ReaderNoBcast: return fmt::format(dataflow, root, "reader_interleaved_no_bcast.cpp");
         case KernelName::ReaderRowBcast: return fmt::format(dataflow, root, "reader_interleaved_row_bcast.cpp");
         case KernelName::ReaderColBcast: return fmt::format(dataflow, root, "reader_interleaved_col_bcast.cpp");
@@ -265,6 +269,34 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::MAXIMUM:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::MAXIMUM;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::MINIMUM:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::MINIMUM;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::GCD:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::GCD;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::LCM:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LCM;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -274,20 +306,65 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
     switch (sfpu_binary_op) {
         case ADD:
             if (dtype == DataType::INT32) {
-                return {"add_int32_tile_init();", "add_int32_tile"};
+                return {"add_int_tile_init();", "add_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"add_int_tile_init();", "add_uint32_tile"};
+            } else if (dtype == DataType::UINT16) {
+                return {"add_int_tile_init();", "add_uint16_tile"};
             } else {
                 return {"add_binary_tile_init();", "add_binary_tile"};
             }
-        case SUB: return {"sub_binary_tile_init();", "sub_binary_tile"};
-        case MUL: return {"mul_binary_tile_init();", "mul_binary_tile"};
+        case SUB:
+            if (dtype == DataType::INT32) {
+                return {"sub_int32_tile_init();", "sub_int32_tile"};
+            } else if (dtype == DataType::UINT16) {
+                return {"sub_uint16_tile_init();", "sub_uint16_tile"};
+            } else {
+                return {"sub_binary_tile_init();", "sub_binary_tile"};
+            }
+        case MUL:
+            if (dtype == DataType::UINT16) {
+                return {"mul_uint16_tile_init();", "mul_uint16_tile"};
+            } else {
+                return {"mul_binary_tile_init();", "mul_binary_tile"};
+            }
         case DIV: return {"div_binary_tile_init();", "div_binary_tile"};
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
         case RSUB: return {"rsub_binary_tile_init();", "rsub_binary_tile"};
+        case GCD: return {"gcd_tile_init();", "gcd_tile"};
+        case LCM: return {"lcm_tile_init();", "lcm_tile"};
         case LEFT_SHIFT: return {"binary_shift_tile_init();", "binary_left_shift_tile"};
         case RIGHT_SHIFT: return {"binary_shift_tile_init();", "binary_right_shift_tile"};
-        case BITWISE_AND: return {"binary_bitwise_tile_init();", "and_binary_tile"};
-        case BITWISE_OR: return {"binary_bitwise_tile_init();", "or_binary_tile"};
-        case BITWISE_XOR: return {"binary_bitwise_tile_init();", "xor_binary_tile"};
+        case BITWISE_AND:
+            if (dtype == DataType::UINT16) {
+                return {"binary_bitwise_tile_init();", "bitwise_and_uint16_binary_tile"};
+            } else {
+                return {"binary_bitwise_tile_init();", "bitwise_and_binary_tile"};
+            }
+        case BITWISE_OR:
+            if (dtype == DataType::UINT16) {
+                return {"binary_bitwise_tile_init();", "bitwise_or_uint16_binary_tile"};
+            } else {
+                return {"binary_bitwise_tile_init();", "bitwise_or_binary_tile"};
+            }
+        case BITWISE_XOR:
+            if (dtype == DataType::UINT16) {
+                return {"binary_bitwise_tile_init();", "bitwise_xor_uint16_binary_tile"};
+            } else {
+                return {"binary_bitwise_tile_init();", "bitwise_xor_binary_tile"};
+            }
+        case MAXIMUM:
+            if (dtype == DataType::INT32) {
+                return {"binary_max_tile_init();", "binary_max_int32_tile"};
+            } else {
+                return {"binary_max_tile_init();", "binary_max_tile"};
+            }
+        case MINIMUM:
+            if (dtype == DataType::INT32) {
+                return {"binary_min_tile_init();", "binary_min_int32_tile"};
+            } else {
+                return {"binary_min_tile_init();", "binary_min_tile"};
+            }
         case QUANT: return {"quant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "quant_tile"};
         case REQUANT:
             return {"requant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "requant_tile"};
@@ -317,13 +394,14 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
 void add_activation_defines(
     std::map<std::string, std::string>& defines,
     tt::stl::Span<const unary::UnaryWithParam> activations,
-    std::string_view operand) {
+    std::string_view operand,
+    std::optional<DataType> dtype) {
     defines[fmt::format("PROCESS_{}_ACTIVATIONS(i)", operand)] = std::accumulate(
         activations.begin(),
         activations.end(),
         std::string{},
         [&](std::string&& process, const unary::UnaryWithParam& a) {
-            const auto& [op_init, op_func] = unary::utils::get_op_init_and_func(a.op_type, a.params, "i");
+            const auto& [op_init, op_func] = unary::utils::get_op_init_and_func(a.op_type, a.params, "i", dtype);
             process += op_init;
             process += op_func;
             unary::utils::update_macro_defines(a.op_type, defines);
@@ -331,16 +409,46 @@ void add_activation_defines(
         });
 }
 
+std::map<std::string, std::string> make_dataflow_defines(const DataType dtype) {
+    std::map<std::string, std::string> defines;
+    if (dtype == DataType::FLOAT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
+        defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
+    } else if (dtype == DataType::INT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<int32_t>";
+        defines["FILL_WITH_VALUE"] = "fill_with_val<1024, int32_t>";
+    } else if (dtype == DataType::UINT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<uint32_t>";
+        defines["FILL_WITH_VALUE"] = "fill_with_val<1024, uint32_t>";
+    } else {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";
+        defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
+    }
+    return defines;
+}
+
 bool OpConfig::is_sfpu_op() const { return std::holds_alternative<SfpuBinaryOp>(binary_op); }
 
 uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const bool is_quant_op) {
-    if (dtype == DataType::FLOAT32) {
+    // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
+    if ((dtype == DataType::FLOAT32) || is_quant_op) {
         return std::bit_cast<uint32_t>(scalar);
-    } else if ((dtype != DataType::INT32) || is_quant_op) {
-        return pack_two_bfloat16_into_uint32({scalar, scalar});
-    } else {
+    }
+    if (dtype == DataType::INT32) {
         return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
     }
+    if (dtype == DataType::UINT32) {
+        return std::bit_cast<uint32_t>(scalar);
+    }
+    return pack_two_bfloat16_into_uint32({scalar, scalar});
 }
 
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>);

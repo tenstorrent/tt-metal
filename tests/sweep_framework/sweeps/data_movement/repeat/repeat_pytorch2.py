@@ -58,8 +58,6 @@ def run(
     *,
     device,
 ):
-    device.enable_async(False)
-
     # Extract the shape and repeat dimensions from repeat_specs
     shape = repeat_specs["shape"]
     repeat_dims = repeat_specs["repeats"]  # Number of repetitions for each dimension

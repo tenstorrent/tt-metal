@@ -4,26 +4,25 @@
 
 #include "tlb_config.hpp"
 
-#include "umd/device/blackhole_implementation.h"
-#include "umd/device/grayskull_implementation.h"
-#include "umd/device/wormhole_implementation.h"
 #include <assert.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "core_coord.hpp"
+#include "metal_soc_descriptor.h"
+#include "tt_backend_api_types.hpp"
+#include <umd/device/blackhole_implementation.h>
+#include <umd/device/cluster.h>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/arch.h>
+#include <umd/device/types/xy_pair.h>
+#include <umd/device/wormhole_implementation.h>
 
 namespace ll_api {
-
-namespace grayskull {
-
-static constexpr unsigned int DYNAMIC_TLB_BASE_INDEX = tt::umd::grayskull::MEM_LARGE_READ_TLB + 1;
-
-int32_t get_static_tlb_index(CoreCoord target) {
-    int flat_index = target.y * tt::umd::grayskull::GRID_SIZE_X + target.x;
-    if (flat_index == 0) {
-        return -1;
-    }
-    return flat_index;
-}
-
-}  // namespace grayskull
 
 namespace wormhole {
 
@@ -135,7 +134,7 @@ tt_xy_pair ddr_to_noc0(unsigned i) {
 }  // namespace blackhole
 
 void configure_static_tlbs(
-    tt::ARCH arch, chip_id_t mmio_device_id, const metal_SocDescriptor& sdesc, tt_device& device_driver) {
+    tt::ARCH arch, chip_id_t mmio_device_id, const metal_SocDescriptor& sdesc, tt::umd::Cluster& device_driver) {
     using get_static_tlb_index_ptr = std::int32_t (*)(tt_xy_pair);
     get_static_tlb_index_ptr get_static_tlb_index;
 
@@ -145,14 +144,6 @@ void configure_static_tlbs(
 
     // Need to set these values based on arch because UMD does not expose architecture_implementation
     switch (arch) {
-        case tt::ARCH::GRAYSKULL:
-            get_static_tlb_index = grayskull::get_static_tlb_index;
-            dynamic_tlb_base_index = grayskull::DYNAMIC_TLB_BASE_INDEX;  // not defined in grayskull_implementation.h
-            dynamic_tlb_16m_size = tt::umd::grayskull::DYNAMIC_TLB_16M_SIZE;
-            dram_channel_0_peer2peer_region_start = tt::umd::grayskull::DRAM_CHANNEL_0_PEER2PEER_REGION_START;
-            dram_channel_0_x = tt::umd::grayskull::DRAM_CHANNEL_0_X;
-            dram_channel_0_y = tt::umd::grayskull::DRAM_CHANNEL_0_Y;
-            break;
         case tt::ARCH::WORMHOLE_B0:
             get_static_tlb_index = wormhole::get_static_tlb_index;
             dynamic_tlb_base_index = tt::umd::wormhole::DYNAMIC_TLB_BASE_INDEX;

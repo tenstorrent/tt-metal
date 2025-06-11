@@ -52,7 +52,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import (
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])
-@pytest.mark.parametrize("enable_async", [True, False])
 def test_all_gather_on_n300_post_commit(
     n300_mesh_device,
     num_devices,
@@ -65,7 +64,6 @@ def test_all_gather_on_n300_post_commit(
     num_iters,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_on_n300_impl(
         n300_mesh_device,
@@ -80,7 +78,6 @@ def test_all_gather_on_n300_post_commit(
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
-        enable_async=enable_async,
     )
 
 
@@ -117,7 +114,6 @@ def test_all_gather_on_n300_post_commit(
         ),
     ),
 )
-@pytest.mark.parametrize("enable_async", [True])
 def test_all_gather_sharded_n300_post_commit(
     n300_mesh_device,
     num_devices,
@@ -133,7 +129,6 @@ def test_all_gather_sharded_n300_post_commit(
     # num_cores,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_sharded_n300(
         n300_mesh_device,
@@ -151,5 +146,4 @@ def test_all_gather_sharded_n300_post_commit(
         use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
-        enable_async=enable_async,
     )

@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-
 from typing import List
-from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, determine_tensor_deallocation
 
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
+import torch
+
+import ttnn
+from models.demos.t3000.falcon40b.tt.model_utils import determine_tensor_deallocation, falcon_prefill_matmul
+from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
 class TtFalconMLP:
@@ -117,21 +117,13 @@ class TtFalconMLP:
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, memory_config=self.model_config["DEFAULT_MEMCFG"])
 
-        hidden_states = ttnn.get_device_tensors(
-            hidden_states
-        )  # Workaround for reduce_scatter only taking a vector of tensors and not mesh_device
-
-        hidden_states = ttnn.get_device_tensors(
-            ttnn.reduce_scatter(
-                ttnn.aggregate_as_tensor(hidden_states),
-                dim=3,
-                math_op=ttnn.ReduceType.Sum,
-                num_links=1,  # only unidirectional supported for now
-                memory_config=self.model_config["DEFAULT_MEMCFG"],
-            )
+        hidden_states = ttnn.reduce_scatter(
+            hidden_states,
+            dim=3,
+            math_op=ttnn.ReduceType.Sum,
+            num_links=1,  # only unidirectional supported for now
+            memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
-
-        hidden_states = ttnn.aggregate_as_tensor(hidden_states)  # Workaround reverse
 
         hidden_states = ttnn.interleaved_to_sharded(
             hidden_states, self.model_config["MLP_REDUCE_SCATTER_OUTPUT_MEMCFG"]
@@ -193,21 +185,10 @@ class TtFalconMLP:
         if should_deallocate_ln_tensors:
             x.deallocate(True)
 
-        hidden_states = ttnn.get_device_tensors(
-            self.output
-        )  # Workaround for reduce_scatter only taking a vector of tensors and not mesh_device
-
-        hidden_states = ttnn.get_device_tensors(
-            ttnn.reduce_scatter(
-                ttnn.aggregate_as_tensor(hidden_states),
-                dim=3,
-                math_op=ttnn.ReduceType.Sum,
-                num_links=1,  # only one link supported for now
-                memory_config=self.model_config["DEFAULT_MEMCFG"],
-            )
+        return ttnn.reduce_scatter(
+            self.output,
+            dim=3,
+            math_op=ttnn.ReduceType.Sum,
+            num_links=1,  # only one link supported for now
+            memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
-
-        hidden_states = ttnn.aggregate_as_tensor(hidden_states)  # Workaround reverse
-
-        # return TT Tensor
-        return hidden_states

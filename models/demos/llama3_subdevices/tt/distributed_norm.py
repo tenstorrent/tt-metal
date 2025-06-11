@@ -65,6 +65,7 @@ class DistributedNorm(LightweightModule):
                     ln_sharded_progcfg=self.ln_prg_cfg,
                     ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
                     tt_ccl=self.tt_ccl,
+                    output_mem_config=self.norm.output_mem_config,
                 )
             else:
                 return tt_distributed_rmsnorm(

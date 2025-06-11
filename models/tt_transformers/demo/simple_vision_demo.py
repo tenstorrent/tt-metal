@@ -1,30 +1,32 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
 from typing import Optional
-from loguru import logger
-
-from PIL import Image as PIL_Image
 
 import llama_models.llama3.reference_impl.generation as llama_reference_generation
-from llama_models.llama3.api.tokenizer import Tokenizer
 from llama_models.llama3.api.chat_format import ChatFormat
 from llama_models.llama3.api.datatypes import ImageMedia, UserMessage
-
+from llama_models.llama3.api.tokenizer import Tokenizer
+from loguru import logger
+from PIL import Image as PIL_Image
 from pkg_resources import resource_filename
+
+from models.tt_transformers.tt.generator import create_submeshes
 
 IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
 
-import torch
-import pytest
 import os
-import ttnn
 import time
 
-from models.tt_transformers.tt.generator import Generator
-from models.perf.benchmarking_utils import BenchmarkProfiler
+import pytest
+import torch
+
+import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_transformers.tt.generator import Generator
 
 
 def get_batch_sampler(temperature, top_p, tokenizer):
@@ -45,17 +47,25 @@ def get_batch_sampler(temperature, top_p, tokenizer):
 def create_multimodal_model(
     mesh_device, max_batch_size, max_seq_len, dtype=ttnn.bfloat16, use_paged_kv_cache=False, checkpoint=None
 ):
-    from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
     from models.tt_transformers.tt.model_config import ModelArgs
+    from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size)
+    assert tt_model_args.is_vision(), "This model is multimodal"
+
     # limit length or we'll run out of space
     tt_model_args.max_seq_len = max_seq_len
+    if tt_model_args.is_90b:
+        assert tt_model_args.device_name == "T3K", "90B model only supported on T3K right now"
+        # for 90B model on T3K, use bfp8 and performance optimizations or the model won't fit in memory
+        dtype = ttnn.bfloat8_b
+        logger.info(f"Setting dtype to bfloat8_b for 90B model on T3K to fit model in memory")
+
     if checkpoint is None:
-        checkpoint = torch.load(tt_model_args.consolidated_weights_path, map_location="cpu", weights_only=True)
+        checkpoint = tt_model_args.load_state_dict()
     model = CrossAttentionTransformer(
         mesh_device,
-        checkpoint,
+        state_dict=checkpoint,
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         dtype=dtype,
         configuration=tt_model_args,
@@ -67,12 +77,7 @@ def create_multimodal_model(
 def prepare_generator_args(
     num_devices, data_parallel, mesh_device, max_batch_size, max_seq_len, dtype=ttnn.bfloat16, use_paged_kv_cache=False
 ):
-    # Partition the mesh, singular model implemented for TP on 1xN mesh
-    submesh_devices = (
-        mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
-        if isinstance(mesh_device, ttnn.MeshDevice) and data_parallel > 1
-        else [mesh_device]
-    )
+    submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
 
     model_args = []
@@ -96,7 +101,7 @@ def prepare_generator_args(
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -152,7 +157,6 @@ def test_multimodal_demo_text(
     tokenizer_path = str(Path(ckpt_dir) / "tokenizer.model")
 
     mesh_device.enable_program_cache()
-    mesh_device.enable_async(True)
 
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
@@ -369,13 +373,15 @@ def test_multimodal_demo_text(
         tt_device_name = model_args[0].device_name
         base_model_name = model_args[0].base_model_name
         target_prefill_tok_s = {
-            "N300_Llama3.2-11B": 8.1,
-            "T3K_Llama3.2-11B": 4.2,
+            "N300_Llama3.2-11B": 10.8,
+            "T3K_Llama3.2-11B": 6.5,
+            "T3K_Llama3.2-90B": 3,
         }[f"{tt_device_name}_{base_model_name}"]
 
         target_decode_tok_s_u = {
             "N300_Llama3.2-11B": 20,
             "T3K_Llama3.2-11B": 33,
+            "T3K_Llama3.2-90B": 6,
         }[f"{tt_device_name}_{base_model_name}"]
 
         target_decode_tok_s = target_decode_tok_s_u * max_batch_size
@@ -400,4 +406,4 @@ def test_multimodal_demo_text(
                 output_sequence_length=max_gen_len,
             )
 
-        verify_perf(measurements, targets)
+        verify_perf(measurements, targets, high_tol_percentage=1.15)

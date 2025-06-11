@@ -25,13 +25,12 @@ from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs
 )
 @pytest.mark.parametrize("all", (True, False))
 @pytest.mark.parametrize(
-    "enable_async, num_loops",
-    ((True, 5), (False, 1)),
+    "num_loops",
+    [5],
 )
 class TestArgmax:
-    def test_argmax(self, input_shapes, dim, all, device, enable_async, num_loops):
+    def test_argmax(self, input_shapes, dim, all, device, num_loops):
         torch.manual_seed(0)
-        device.enable_async(enable_async)
         for _ in range(num_loops):
             input_data = torch.randn(input_shapes).bfloat16()
             input_tensor = ttnn.Tensor(input_data, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
@@ -58,4 +57,3 @@ class TestArgmax:
             logger.info(comp_out)
             status = comp_pass | comp_all
             assert status
-        device.enable_async(False)

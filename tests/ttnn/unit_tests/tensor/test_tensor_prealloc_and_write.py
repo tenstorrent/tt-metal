@@ -16,14 +16,10 @@ from models.utility_functions import is_grayskull
 @pytest.mark.parametrize("mem_layout", [ttnn.TensorMemoryLayout.INTERLEAVED])
 @pytest.mark.parametrize("memory_location", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
 @pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("enable_async", (False, True))
-def test_tensor_preallocation_and_write_apis(
-    enable_async, shape, in_dtype, mem_layout, memory_location, tensor_layout, device
-):
+def test_tensor_preallocation_and_write_apis(shape, in_dtype, mem_layout, memory_location, tensor_layout, device):
     if in_dtype == ttnn.bfloat8_b and tensor_layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("Row Major Layout not supported for Bfp8")
     torch.manual_seed(0)
-    device.enable_async(enable_async)
 
     # Preallocate tensor on device
     preallocated_tensor = ttnn.allocate_tensor_on_device(
@@ -48,15 +44,11 @@ def test_tensor_preallocation_and_write_apis(
 @pytest.mark.parametrize("mem_layout", [ttnn.TensorMemoryLayout.INTERLEAVED])
 @pytest.mark.parametrize("memory_location", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
 @pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("enable_async", (False, True))
 @pytest.mark.parametrize("mesh_device", ((1, 1), 4), indirect=True)
-def test_tensor_preallocation_and_write_apis(
-    enable_async, shape, in_dtype, mem_layout, memory_location, tensor_layout, mesh_device
-):
+def test_tensor_preallocation_and_write_apis(shape, in_dtype, mem_layout, memory_location, tensor_layout, mesh_device):
     if in_dtype == ttnn.bfloat8_b and tensor_layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("Row Major Layout not supported for Bfp8")
     torch.manual_seed(0)
-    mesh_device.enable_async(enable_async)
     shapes = [(1, 10, 64, 96), (32, 1, 64, 64), (32, 3, 256, 256), (16, 1, 1024, 1024)]
 
     # Preallocate tensor on device

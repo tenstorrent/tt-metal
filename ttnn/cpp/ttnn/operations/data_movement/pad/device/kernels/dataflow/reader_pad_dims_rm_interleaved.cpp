@@ -41,8 +41,7 @@ void kernel_main() {
     const uint32_t padded_X_nbytes = get_arg_val<uint32_t>(11);
     const uint32_t padded_X_diff_nbytes = get_arg_val<uint32_t>(12);
     const uint32_t pad_value_const_buffer_addr = get_arg_val<uint32_t>(13);
-    const uint32_t pad_value_const_buffer_nbytes =
-        get_arg_val<uint32_t>(14);  // assumed to be 64 bytes. TODO: generalize?
+    const uint32_t pad_value_const_buffer_nbytes = 64;  // assumed to be 64 bytes, fails on BH when > 64. TODO: generalize? (Issue #21978)
     const uint32_t pad_value_packed = get_arg_val<uint32_t>(15);
     const uint32_t start_src_stick_id = get_arg_val<uint32_t>(16);
     const uint32_t start_src_stick_wi = get_arg_val<uint32_t>(18);
@@ -53,7 +52,7 @@ void kernel_main() {
     const uint32_t num_local_W = get_arg_val<uint32_t>(26);
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-#define src_stick_size_is_pow2 get_compile_time_arg_val(2) == 1
+    constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(2) == 1;
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
 

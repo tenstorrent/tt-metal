@@ -4,12 +4,19 @@
 
 #pragma once
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "mesh_coord.hpp"
-#include "mesh_device.hpp"
-#include "mesh_device_view.hpp"
-#include "shape2d.hpp"
+#include <stdint.h>
+#include <memory>
+#include <optional>
+#include <utility>
+#include <variant>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/shape2d.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -24,10 +31,13 @@ struct DeviceLocalBufferConfig {
     TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED;
 
     // Must be set for sharded buffer layouts.
-    std::optional<ShardSpecBuffer> shard_parameters;
+    std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>> shard_parameters;
 
     // The direction in which memory for this buffer is allocated.
     std::optional<bool> bottom_up;
+
+    // Optional: Specify the worker sub device this buffer will be allocated on
+    std::optional<SubDeviceId> sub_device_id = std::nullopt;
 };
 
 // Specifies MeshBuffer that is replicated across the virtual mesh.
@@ -72,7 +82,7 @@ class MeshBuffer {
 public:
     static std::shared_ptr<MeshBuffer> create(
         const MeshBufferConfig& mesh_buffer_config,
-        const DeviceLocalBufferConfig& device_local_layout,
+        const DeviceLocalBufferConfig& device_local_config,
         MeshDevice* mesh_device,
         std::optional<DeviceAddr> address = std::nullopt);
     ~MeshBuffer();
@@ -98,10 +108,17 @@ public:
     const ShardedBufferConfig& global_shard_spec() const;
     const DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
 
-    std::shared_ptr<Buffer> get_device_buffer(const MeshCoordinate& device_coord) const;
+    Buffer* get_device_buffer(const MeshCoordinate& device_coord) const;
 
     // TODO: Remove this method, once there is no need to interop MeshBuffer with Buffer.
-    std::shared_ptr<Buffer> get_reference_buffer() const;
+    // The reference buffer allows "casting" the MeshBuffer to a buffer allocated on a
+    // single device. This allows users of this object that only need to query single device
+    // attributes to do so without having to keep track of MeshDevice attributes.
+    Buffer* get_reference_buffer() const;
+    // The backing buffer represents the buffer object keeping the MeshBuffer alive/allocated
+    // at its specific address. The backing buffer will not be populated if an address was passed
+    // into the creation API.
+    Buffer* get_backing_buffer() const;
 
     uint32_t datum_size_bytes() const;
     Shape2D physical_shard_shape() const;
@@ -165,8 +182,10 @@ private:
 class AnyBuffer {
 public:
     AnyBuffer() = default;
-    static AnyBuffer create(const tt::tt_metal::ShardedBufferConfig& config);
-    static AnyBuffer create(const tt::tt_metal::InterleavedBufferConfig& config);
+    static AnyBuffer create(
+        const tt::tt_metal::ShardedBufferConfig& config, std::optional<uint64_t> address = std::nullopt);
+    static AnyBuffer create(
+        const tt::tt_metal::InterleavedBufferConfig& config, std::optional<uint64_t> address = std::nullopt);
 
     Buffer* get_buffer() const;
     bool is_mesh_buffer() const;

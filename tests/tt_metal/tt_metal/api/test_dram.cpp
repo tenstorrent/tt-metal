@@ -2,16 +2,36 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dispatch_fixture.hpp"
-#include "device_fixture.hpp"
-#include "gtest/gtest.h"
-#include "kernel_types.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/command_queue.hpp>
+#include <chrono>
+#include <fmt/base.h>
+#include <stddef.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <string>
+#include <type_traits>
+#include <unordered_set>
 #include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "dispatch_fixture.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_align.hpp>
+#include "umd/device/types/xy_pair.h"
 
 using namespace tt;
 
@@ -124,10 +144,10 @@ bool dram_single_core(
     auto output_dram_buffer = tt_metal::CreateBuffer(dram_config);
     uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
-    tt::log_info("Creating kernel at {}", cfg.core_range.str());
-    tt::log_info("Input DRAM Address  = {:#x}", input_dram_buffer_addr);
-    tt::log_info("Output DRAM Address = {:#x}", output_dram_buffer_addr);
-    tt::log_info("L1 Buffer Address   = {:#x}", cfg.l1_buffer_addr);
+    log_info(tt::LogTest, "Creating kernel at {}", cfg.core_range.str());
+    log_info(tt::LogTest, "Input DRAM Address  = {:#x}", input_dram_buffer_addr);
+    log_info(tt::LogTest, "Output DRAM Address = {:#x}", output_dram_buffer_addr);
+    log_info(tt::LogTest, "L1 Buffer Address   = {:#x}", cfg.l1_buffer_addr);
     // Create the kernel
     tt::tt_metal::KernelHandle kernel = CreateKernelFromVariant(program, cfg);
 
@@ -240,7 +260,7 @@ TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCorePreAllocated) {
 
 TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCoreDB) {
     if (!this->IsSlowDispatch()) {
-        tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
+        log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
     }
     for (unsigned int id = 0; id < devices_.size(); id++) {
@@ -252,7 +272,7 @@ TEST_F(DispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
 
     if (!this->IsSlowDispatch()) {
-        tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
+        log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
     }
 
@@ -261,14 +281,14 @@ TEST_F(DispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
         .dram_buffer_size = buffer_size,
         .l1_buffer_addr = tt::align(
-            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED),
-            hal_ref.get_alignment(HalMemType::DRAM)),
+            tt::tt_metal::hal::get_erisc_l1_unreserved_base(),
+            MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
         .kernel_cfg = tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0},
     };
 
     for (unsigned int id = 0; id < devices_.size(); id++) {
         for (auto active_eth_core : devices_.at(id)->get_active_ethernet_cores(true)) {
-            tt::log_info("Active Eth Loopback. Logical core {}", active_eth_core.str());
+            log_info(tt::LogTest, "Active Eth Loopback. Logical core {}", active_eth_core.str());
             dram_test_config.core_range = {active_eth_core, active_eth_core};
             ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, devices_.at(id), dram_test_config));
         }
@@ -279,7 +299,7 @@ TEST_F(DispatchFixture, IdleEthDRAMLoopbackSingleCore) {
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
 
     if (!this->IsSlowDispatch()) {
-        tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
+        log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
     }
 
@@ -288,14 +308,14 @@ TEST_F(DispatchFixture, IdleEthDRAMLoopbackSingleCore) {
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
         .dram_buffer_size = buffer_size,
         .l1_buffer_addr = tt::align(
-            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED),
-            hal_ref.get_alignment(HalMemType::DRAM)),
+            tt::tt_metal::hal::get_erisc_l1_unreserved_base(),
+            MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
         .kernel_cfg = tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0},
     };
 
     for (unsigned int id = 0; id < devices_.size(); id++) {
         for (auto idle_eth_core : devices_.at(id)->get_inactive_ethernet_cores()) {
-            tt::log_info("Single Idle Eth Loopback. Logical core {}", idle_eth_core.str());
+            log_info(tt::LogTest, "Single Idle Eth Loopback. Logical core {}", idle_eth_core.str());
             dram_test_config.core_range = {idle_eth_core, idle_eth_core};
             unit_tests_common::dram::test_dram::dram_single_core(this, devices_.at(id), dram_test_config);
         }

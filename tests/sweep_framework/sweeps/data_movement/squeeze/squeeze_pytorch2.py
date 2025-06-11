@@ -89,8 +89,6 @@ def run(
     *,
     device,
 ):
-    device.enable_async(False)
-
     # Extract the shape from squeeze_specs
     shape = squeeze_specs["shape"]
     dim = squeeze_specs.get("dim")  # Get the dimension to squeeze, if specified

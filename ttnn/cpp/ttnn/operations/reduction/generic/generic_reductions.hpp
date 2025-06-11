@@ -27,10 +27,11 @@ struct Reduce {
     static Tensor invoke(
         const Tensor& input_tensor_arg,
         const std::optional<std::variant<int, ttnn::SmallVector<int>>>& dim_arg = std::nullopt,
-        const bool keepdim = true,
+        const bool keepdim = false,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-        float scalar = 1.0f);
+        float scalar = 1.0f,
+        bool correction = true);
 };
 
 // Entry point for pool op, which uses non-standard tensors that cannot be padded.
@@ -45,27 +46,27 @@ Tensor pool_sum(
 }  // namespace operations::reduction
 
 // Generic reductions
-constexpr auto sum = ttnn::register_operation_with_auto_launch_op<
+constexpr auto sum = ttnn::register_operation<
     "ttnn::sum",
     ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Sum>>();
 
-constexpr auto mean = ttnn::register_operation_with_auto_launch_op<
+constexpr auto mean = ttnn::register_operation<
     "ttnn::mean",
     ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Mean>>();
 
-constexpr auto max = ttnn::register_operation_with_auto_launch_op<
+constexpr auto max = ttnn::register_operation<
     "ttnn::max",
     ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Max>>();
 
-constexpr auto min = ttnn::register_operation_with_auto_launch_op<
+constexpr auto min = ttnn::register_operation<
     "ttnn::min",
     ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Min>>();
 
-constexpr auto std = ttnn::register_operation_with_auto_launch_op<
+constexpr auto std = ttnn::register_operation<
     "ttnn::std",
     ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Std>>();
 
-constexpr auto var = ttnn::register_operation_with_auto_launch_op<
+constexpr auto var = ttnn::register_operation<
     "ttnn::var",
     ttnn::operations::reduction::Reduce<ttnn::operations::reduction::ReduceType::Var>>();
 

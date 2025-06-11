@@ -2,17 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <memory>
-
-#include "multi_command_queue_fixture.hpp"
-#include <tt-metalium/logger.hpp>
-#include "gtest/gtest.h"
-#include <tt-metalium/host_api.hpp>
-#include "dispatch_test_utils.hpp"
-#include <tt-metalium/event.hpp>
+#include <chrono>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <sys/types.h>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <functional>
+#include <memory>
+#include <unordered_map>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/dispatch_settings.hpp"
+#include "impl/dispatch/system_memory_manager.hpp"
+#include "dispatch_test_utils.hpp"
+#include "gtest/gtest.h"
+#include "multi_command_queue_fixture.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "umd/device/types/arch.h"
 
 namespace tt::tt_metal {
 
@@ -33,7 +48,7 @@ namespace basic_tests {
 // wrap issue queue)
 TEST_F(MultiCommandQueueMultiDeviceEventFixture, TestEventsEventSynchronizeSanity) {
     for (IDevice* device : devices_) {
-        tt::log_info("Running On Device {}", device->id());
+        log_info(tt::LogTest, "Running On Device {}", device->id());
         vector<std::reference_wrapper<CommandQueue>> cqs = {device->command_queue(0), device->command_queue(1)};
         vector<uint32_t> cmds_issued_per_cq = {0, 0};
 
@@ -67,7 +82,7 @@ TEST_F(MultiCommandQueueMultiDeviceEventFixture, TestEventsEventSynchronizeSanit
 
         local_test_functions::FinishAllCqs(cqs);
         std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-        tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+        log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
     }
 }
 
@@ -107,7 +122,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEventSynchronizeSani
 
     local_test_functions::FinishAllCqs(cqs);
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
 // Simplest test to record and wait-for-events on same CQ.
@@ -135,7 +150,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEnqueueWaitForEventS
     }
     local_test_functions::FinishAllCqs(cqs);
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
 // Record event on one CQ, wait-for-that-event on another CQ. Then do the flip. Occasionally insert
@@ -188,8 +203,10 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEnqueueWaitForEventC
     local_test_functions::FinishAllCqs(cqs);
 
     // Check that completion queue per device is correct. Ensure expected event_ids seen in order.
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_->id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
+    uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());
     constexpr uint32_t completion_queue_event_alignment = 32;
     uint32_t event;
     // Iterate through all CQs, and verify that the events returned by EnqueueRecordEvent are in order.
@@ -197,7 +214,8 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEnqueueWaitForEventC
         for (size_t i = 0; i < num_cmds_per_cq * num_events_per_cq; i++) {
             uint32_t host_addr =
                 completion_queue_base[cq_id] + i * DispatchSettings::TRANSFER_PAGE_SIZE + sizeof(CQDispatchCmd);
-            tt::Cluster::instance().read_sysmem(&event, 4, host_addr, mmio_device_id, channel);
+            tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+                &event, 4, host_addr, mmio_device_id, channel);
             log_debug(
                 tt::LogTest,
                 "Checking completion queue. cq_id: {} i: {} host_addr: {}. Got event_id: {}",
@@ -210,7 +228,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEnqueueWaitForEventC
     }
 
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
 // Simple 2CQ test to mix reads, writes, record-event, wait-for-event in a basic way. It's simple because
@@ -263,7 +281,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
 
     local_test_functions::FinishAllCqs(cqs);
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
     EXPECT_TRUE(pass);
 }
 
@@ -271,7 +289,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
 // ordered via events. Do many loops, occasionally increasing size of buffers (page size, num pages).
 // Ensure read back data is correct, data is different for each write.
 TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQs) {
-    if (tt::Cluster::instance().arch() == tt::ARCH::GRAYSKULL) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP() << "Skipping for GS due to readback mismatch under debug Github issue #6281 ";
     }
 
@@ -335,7 +353,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
 
     auto end = std::chrono::system_clock::now();
     std::chrono::duration<double> elapsed_seconds = (end - start);
-    tt::log_info(tt::LogTest, "Test Finished in {}us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {}us", elapsed_seconds.count() * 1000 * 1000);
     EXPECT_TRUE(pass);
 }
 
@@ -343,7 +361,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
 // Read to Bufffer via CQ1. Ping-Pongs between Writes and Reads to same buffer. Use events to synchronze read after
 // write and write after read before checking correct data read at the end after all cmds finished on device.
 TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQsPingPong) {
-    if (tt::Cluster::instance().arch() == tt::ARCH::GRAYSKULL) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP() << "Skipping for GS due to readback mismatch under debug Github issue #6281 ";
     }
 
@@ -462,7 +480,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
 
     auto end = std::chrono::system_clock::now();
     std::chrono::duration<double> elapsed_seconds = (end - start);
-    tt::log_info(tt::LogTest, "Test Finished in {}us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {}us", elapsed_seconds.count() * 1000 * 1000);
 
     EXPECT_TRUE(pass);
 }

@@ -2,11 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from diffusers import StableDiffusionPipeline
 import pytest
 import torch
-import ttnn
+from diffusers import StableDiffusionPipeline
+from ttnn.model_preprocessing import preprocess_model_parameters
 
+import ttnn
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attn_upblock_new_conv import (
     cross_attention_upblock2d,
@@ -15,7 +16,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     preprocess_and_push_input_to_device,
 )
 from models.utility_functions import skip_for_grayskull, torch_random
-from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -113,7 +113,6 @@ def test_cross_attn_up_block_2d_512x512(
     cross_attention_kwargs = None
     upsample_size = None
     attention_mask = None
-    reader_patterns_cache = {}
 
     # execute pytorch
     torch_output = unet_upblock(
@@ -133,7 +132,7 @@ def test_cross_attn_up_block_2d_512x512(
         packer_l1_acc=False,
     )
     N, _, H, W = input_shape
-    model = cross_attention_upblock2d(device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config)
+    model = cross_attention_upblock2d(device, parameters, N, H, W, compute_kernel_config)
 
     timestep = (None,)
     class_labels = (None,)

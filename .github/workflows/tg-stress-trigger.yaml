@@ -1,4 +1,4 @@
-name: "TG Stress"
+name: "Galaxy Stress"
 
 on:
   schedule:
@@ -8,12 +8,14 @@ on:
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       build-wheel: true
       version: 22.04
 
-  tg-quick-test:
+  tg-stress-test:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tg-stress.yaml

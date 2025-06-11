@@ -2,25 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_new_conv import (
-    transformer_2d_model,
-)
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_downsample_2d_new_conv import downsample_2d
 from loguru import logger
+
+import ttnn
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_downsample_2d_new_conv import downsample_2d
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_new_conv import transformer_2d_model
 
 
 class cross_attention_down_block_2d:
-    def __init__(
-        self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
-    ):
+    def __init__(self, device, parameters, batch_size, input_height, input_width, compute_kernel_config):
         self.device = device
         self.parameters = parameters
         self.resnets = [
-            resnetBlock2D(
-                device, resnet, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
-            )
+            resnetBlock2D(device, resnet, batch_size, input_height, input_width, compute_kernel_config)
             for i, resnet in enumerate(parameters.resnets)
         ]
         self.attentions = [
@@ -30,7 +25,6 @@ class cross_attention_down_block_2d:
         self.downsample_2d = downsample_2d(
             device,
             parameters.downsamplers[0],
-            reader_patterns_cache,
             batch_size,
             input_height,
             input_width,

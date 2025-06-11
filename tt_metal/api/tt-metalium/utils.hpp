@@ -4,8 +4,11 @@
 
 #pragma once
 
-#include <string>
+#include <cstddef>
+#include <functional>
 #include <map>
+#include <string>
+#include <type_traits>
 
 using std::string;
 
@@ -21,11 +24,6 @@ void hash_combine(std::size_t& seed, const T& value) {
     std::hash<T> hasher;
     seed ^= hasher(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 }
-
-struct DefinesHash {
-    DefinesHash() {}
-    size_t operator()(const std::map<std::string, std::string>& c_defines) const;
-};
 
 template <typename E, std::enable_if_t<std::is_enum<E>::value, bool> = true>
 auto underlying_type(const E& e) {

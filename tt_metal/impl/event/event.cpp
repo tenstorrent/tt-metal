@@ -2,12 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <event.hpp>
-
-#include <thread>
-
 #include <assert.hpp>
-#include <logger.hpp>
+#include <event.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <chrono>
+#include <thread>
 
 namespace tt::tt_metal {
 

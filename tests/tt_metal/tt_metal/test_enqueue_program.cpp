@@ -12,7 +12,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 uint32_t NUM_TILES = 2048;
 
-tt_metal::Program generate_eltwise_unary_program(IDevice* device) {
+std::pair<tt_metal::Program, std::vector<KernelHandle>> generate_eltwise_unary_program(IDevice* device) {
     // TODO(agrebenisan): This is directly copy and pasted from test_eltwise_binary.
     // We need to think of a better way to generate test data, so this section needs to be heavily refactored.
 
@@ -75,14 +75,16 @@ tt_metal::Program generate_eltwise_unary_program(IDevice* device) {
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 
-    return program;
+    return {
+        std::move(program), std::vector<KernelHandle>{unary_writer_kernel, unary_reader_kernel, eltwise_binary_kernel}};
 }
 
-void test_enqueue_program(std::function<tt_metal::Program(tt_metal::IDevice* device)> create_program) {
+void test_enqueue_program(
+    std::function<std::pair<tt_metal::Program, std::vector<KernelHandle>>(tt_metal::IDevice* device)> create_program) {
     int device_id = 0;
     tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
-    tt_metal::Program program = create_program(device);
+    auto [program, kernels] = create_program(device);
 
     CoreCoord worker_core(0, 0);
     vector<uint32_t> inp = create_random_vector_of_bfloat16(NUM_TILES * 2048, 100, 0);
@@ -95,10 +97,8 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::IDevice* dev
         Buffer buf(device, NUM_TILES * 2048, 2048, BufferType::DRAM);
         Buffer out(device, NUM_TILES * 2048, 2048, BufferType::DRAM);
 
-        // Absolutely disgusting way to query for the kernel I want to set runtime args for... needs to be cleaned up
-        const KernelGroup *kernel_group = program.kernels_on_core(worker_core, CoreType::WORKER);
-        SetRuntimeArgs(program, kernel_group->riscv0_id.value(), worker_core, {out.address(), 0, NUM_TILES});
-        SetRuntimeArgs(program, kernel_group->riscv1_id.value(), worker_core, {buf.address(), 0, NUM_TILES});
+        SetRuntimeArgs(program, kernels[0], worker_core, {out.address(), 0, NUM_TILES});
+        SetRuntimeArgs(program, kernels[1], worker_core, {buf.address(), 0, NUM_TILES});
 
         EnqueueWriteBuffer(cq, std::ref(buf), inp, false);
         EnqueueProgram(cq, program, false);

@@ -5,7 +5,7 @@
 #include "bernoulli_pybind.hpp"
 
 #include "bernoulli.hpp"
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 
 namespace ttnn::operations::bernoulli {
 void bind_bernoulli_operation(py::module& module) {

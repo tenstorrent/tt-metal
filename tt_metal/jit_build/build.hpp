@@ -3,20 +3,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <stdint.h>
+#include <tt_stl/aligned_allocator.hpp>
+#include <functional>
+#include <future>
+#include <map>
+#include <memory>
+#include <string>
 #include <string_view>
 #include <thread>
-#include <string>
-#include <future>
+#include <vector>
 
-#include "tt_backend_api_types.hpp"
-#include "utils.hpp"
 #include "core_coord.hpp"
 #include "data_format.hpp"
-#include "jit_build_options.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include "jit_build_options.hpp"
 #include "tracy/Tracy.hpp"
-#include <tt_stl/aligned_allocator.hpp>
-#include "rtoptions.hpp"
+#include "tt_backend_api_types.hpp"
+#include "utils.hpp"
+
+namespace tt {
+enum class ARCH;
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -70,7 +78,8 @@ private:
     string out_kernel_root_;
 
     // Tools
-    string gpp_;
+    string gpp_ = "";
+    string gpp_include_dir_ = "";
 
     // Compilation options
     string cflags_;
@@ -133,14 +142,14 @@ public:
 
     const string& get_out_path() const { return this->out_path_; };
     const string& get_target_name() const { return this->target_name_; };
-    const string get_target_out_path(const string& kernel_name) const {
+    string get_target_out_path(const string& kernel_name) const {
         return this->out_path_ + kernel_name + target_full_path_;
     }
 };
 
 // Set of build states
 // Used for parallel builds, builds all members in one call
-typedef std::vector<std::shared_ptr<JitBuildState>> JitBuildStateSet;
+using JitBuildStateSet = std::vector<std::shared_ptr<JitBuildState>>;
 
 // Exracts a slice of builds from a JitBuildState
 // Used for parallel building a subset of the builds in a JitBuildStateSet

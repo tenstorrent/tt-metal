@@ -2,34 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import collections
 import logging
 from functools import partial
 from typing import List, Tuple
 
+import llama_models.llama3.reference_impl.multimodal.image_transform as llama_reference_image_transforms
 import torch
-import collections
-
 from PIL import Image as PIL_Image
-
 from torch import Tensor
 
-import llama_models.llama3.reference_impl.multimodal.image_transform as llama_reference_image_transforms
-
 import ttnn
-from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_vision import (
-    TtLlamaCrossAttentionTransformerVision,
-)
+from models.tt_transformers.tt.common import copy_host_to_device, get_padded_prefill_len, get_prefill_rot_mat
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
 )
-from models.tt_transformers.tt.common import (
-    get_prefill_rot_mat,
-    copy_host_to_device,
-    get_padded_prefill_len,
+from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_vision import (
+    TtLlamaCrossAttentionTransformerVision,
 )
-from models.utility_functions import (
-    nearest_32,
-)
+from models.utility_functions import nearest_32
 
 logger = logging.getLogger(__name__)
 MP_SCALE = 8
@@ -216,7 +207,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             # TT vision_model
             vision_tokens = self.vision_model(stacked_images, aspect_ratios)
             # Back to torch
-            vision_tokens = ttnn.to_torch(vision_tokens, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+            vision_tokens = ttnn.to_torch(ttnn.get_device_tensors(vision_tokens)[0])
             chunk_seq_len = self.configuration.vision_chunk_ntok
             # NOTE: slicing up to chunk_seq_len is necessary because padding information is lost by this point
             vision_tokens = (
@@ -633,7 +624,10 @@ class CrossAttentionTransformer(torch.nn.Module):
         tt_out = tt_out[0, 0, last_token_idx, :]
         return tt_out
 
-    def process_output_decode(self, tt_out, B, S, argmax_on_device=False):
+    def process_output_decode(self, tt_out, B, S, is_tokens=False):
+        """
+        Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
+        """
         tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         tt_out = tt_out[:, :, :B, :].reshape(B, S, -1)
         return tt_out

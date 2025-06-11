@@ -118,7 +118,7 @@ def run_grok_demo(user_input, batch_size, mesh_device, instruct_mode):
         input_prompts = load_inputs(user_input, 32)
 
     # Load model args, weights, and tokenizer
-    model_args = TtModelArgs(mesh_device.get_device(0), instruct=instruct_mode)
+    model_args = TtModelArgs(mesh_device, instruct=instruct_mode)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     model_args.n_layers = 32  # Full model
@@ -201,7 +201,7 @@ def run_grok_demo(user_input, batch_size, mesh_device, instruct_mode):
 
     # TODO Debug (only device 0 is doing argmax, otherwise it throws an error)
     # Alternatively, send the output back to device: ttnn.Tensor.to()
-    ttnn.SetDefaultDevice(mesh_device.get_device(0))
+    ttnn.SetDefaultDevice(mesh_device)
 
     # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
     for iteration in range(max_generated_tokens):
@@ -248,7 +248,7 @@ def run_grok_demo(user_input, batch_size, mesh_device, instruct_mode):
             pt_decode_input = embd(tt_token_batch).view(batch_size, seqlen, -1)
         else:  # Embedding/argmax on device
             # TODO Update argmax to ttnn when OP becomes available
-            tt_out_B11B = ttnn.argmax(tt_out_11BH, dim=-1)
+            tt_out_B11B = ttnn.argmax(tt_out_11BH, keepdim=True, dim=-1)
             tt_out_1B = ttnn.reshape(tt_out_B11B[:1, :, :, :], ttnn.Shape([1, batch_size]))  # [1, 32] Bfloat16
             # Update the users that are still in prefill and the ones generating new tokens
             if iteration < max_prompt_len:

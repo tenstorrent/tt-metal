@@ -17,10 +17,10 @@ using namespace ckernel;
 // We do this so that not all cores start at once, therefore reducing the chance of di/dt problems.
 // MM_STAGGER_ODD_ROWS is an externally controlled define, set up in program compilation.
 inline __attribute__((__always_inline__)) void apply_mm_stagger(int operand) {
-#ifdef MM_STAGGER_ODD_ROWS
+#if MM_STAGGER_TYPE == 1  // first block stagger
     static bool stagger_applied = false;
     constexpr int stagger_operand = 1;
-    constexpr int stagger_delay_in_cycles = 12288;
+    constexpr int stagger_delay_in_cycles = MM_STAGGER_VALUE;
     if (stagger_applied == false && operand == stagger_operand) {
         stagger_applied = true;
         constexpr uint32_t noc_id = 0;
@@ -30,6 +30,34 @@ inline __attribute__((__always_inline__)) void apply_mm_stagger(int operand) {
         if (my_logical_y & 0x1) {
             wait(stagger_delay_in_cycles);
         }
+    }
+#elif MM_STAGGER_TYPE == 2  // every block stagger
+    constexpr int stagger_operand = 1;
+    constexpr int stagger_delay_in_cycles = MM_STAGGER_VALUE;
+    if (operand == stagger_operand) {
+        constexpr uint32_t noc_id = 0;
+        uint32_t noc_id_logical_reg = NOC_CFG_READ_REG(noc_id, NOC_ID_LOGICAL);
+        uint32_t my_logical_y = (noc_id_logical_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+        // Apply stagger on odd rows only
+        if (my_logical_y & 0x1) {
+            wait(stagger_delay_in_cycles);
+        }
+    }
+#elif MM_STAGGER_TYPE == 3  // hybrid stagger - apply stagger every 20th block
+    constexpr int stagger_operand = 1;
+    constexpr int stagger_delay_in_cycles = MM_STAGGER_VALUE;
+    static int stagger_counter = 0;
+    if (operand == stagger_operand) {
+        if ((stagger_counter % 20) == 0) {
+            constexpr uint32_t noc_id = 0;
+            uint32_t noc_id_logical_reg = NOC_CFG_READ_REG(noc_id, NOC_ID_LOGICAL);
+            uint32_t my_logical_y = (noc_id_logical_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+            // Apply stagger on odd rows only
+            if (my_logical_y & 0x1) {
+                wait(stagger_delay_in_cycles);
+            }
+        }
+        stagger_counter++;
     }
 #endif
 }

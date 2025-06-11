@@ -2,19 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Union
-import time
-import ttnn
-import torch
-import numpy as np
-from loguru import logger
 import math
 import struct
+import time
+from typing import Union
+
+import numpy as np
 import pytest
-
+import torch
+from loguru import logger
 from ttnn.device import Arch
-
 from typing_extensions import deprecated
+
+import ttnn
 
 
 ### Math operations ###
@@ -559,6 +559,56 @@ def comp_pcc(golden, calculated, pcc=0.99):
     return cal_pcc >= pcc, cal_pcc
 
 
+def ulp(x: Union[ttnn.Tensor, torch.Tensor]) -> Union[ttnn.Tensor, torch.Tensor]:
+    "Return Unit of Least Precision for each element of a given tensor"
+
+    received_ttnn_input = False
+    if isinstance(x, ttnn.Tensor):
+        x = ttnn.to_torch(x)
+        received_ttnn_input = True
+
+    max_value = torch.full(x.size(), torch.finfo(x.dtype).max, dtype=x.dtype)
+
+    # Notes:
+    # - This should be identical to the definition of ULP by Goldberg
+    #   "What every computer scientist should know about floating-point arithmetic"
+    #   https://docs.oracle.com/cd/E19957-01/806-3568/ncg_goldberg.html
+    # - We use torch.abs(x) to ensure symmetry ULP(-x) == ULP(x)
+    # - For x powers of 2, x + ULP(x) is not closest number but second closest (previous number is 2x closer)
+    #   However, this avoids rounding-to-nearest-tie-to-even issues on addition (i.e. x + ULP(x) != x)
+    abs_x = torch.abs(x)
+    next = torch.nextafter(abs_x, max_value)  # 1 ULP ~ Difference between two consecutive floating point numbers
+    ulp_value = next - abs_x
+
+    if received_ttnn_input:  # Ensures that type(input) == type(output)
+        ulp_value = ttnn.from_torch(ulp_value)
+
+    return ulp_value
+
+
+def comp_ulp(golden, calculated, ulp_threshold):
+    """
+    Compute absolute error between two tensors in Units of Least Precision (ULP)
+    """
+
+    # ULP is measured according to the golden tensor
+    # In most cases, data type of golden tensor should be the same as calculated tensor.
+    # However, in some cases, we may want to measure < 1 ULP differences, which requires golden tensor
+    # to have higher precision than calculated tensor.
+    # If we passed golden tensor to ulp() as is, we would get ULP of higher precision.
+    # e.g. ulp of float32 rather bfloat16 calculation, which would give us a wrong value.
+
+    ulp_value = ulp(golden.type(calculated.dtype))
+
+    if golden.dtype != calculated.dtype:  # Note: assumes that golden has higher precision than calculated tensor
+        calculated = calculated.type(golden.dtype)
+        ulp_value = ulp_value.type(golden.dtype)  # Convert ULP to higher precision (for sub-1 ULP measurements)
+
+    ulp_delta = torch.max(torch.abs(calculated - golden) / ulp_value)
+
+    return (ulp_delta <= ulp_threshold, f"Max ULP Delta: {ulp_delta}")
+
+
 def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
@@ -845,6 +895,10 @@ def is_e75(device):
 def is_x2_harvested(device):
     grid = device.compute_with_storage_grid_size()
     return device.arch() == Arch.WORMHOLE_B0 and (grid.x, grid.y) == (8, 7)
+
+
+def is_single_chip():
+    return ttnn.GetNumAvailableDevices() == 1
 
 
 def is_blackhole():

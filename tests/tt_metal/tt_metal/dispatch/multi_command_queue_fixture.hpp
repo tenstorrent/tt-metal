@@ -7,15 +7,14 @@
 #include "gtest/gtest.h"
 #include "dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/device_impl.hpp>
-#include "llrt/hal.hpp"
+#include <tt-metalium/device.hpp>
 #include "umd/device/types/cluster_descriptor_types.h"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "rtoptions.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -24,9 +23,9 @@ protected:
     void SetUp() override {
         this->validate_dispatch_mode();
 
-        this->num_cqs_ = tt::llrt::RunTimeOptions::get_instance().get_num_hw_cqs();
+        this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
         if (this->num_cqs_ != 2) {
-            tt::log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
+            log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
         }
 
@@ -47,8 +46,7 @@ protected:
         this->slow_dispatch_ = false;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            tt::log_info(
-                tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
             GTEST_SKIP();
         }
@@ -58,7 +56,7 @@ protected:
         DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
         if (this->arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
             if (!tt::tt_metal::IsGalaxyCluster()) {
-                tt::log_warning(
+                log_warning(
                     tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in SetUp()");
                 dispatch_core_type = DispatchCoreType::ETH;
             }
@@ -90,9 +88,9 @@ protected:
     void SetUp() override {
         this->validate_dispatch_mode();
 
-        this->num_cqs_ = tt::llrt::RunTimeOptions::get_instance().get_num_hw_cqs();
+        this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
         if (this->num_cqs_ != 2) {
-            tt::log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
+            log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
         }
 
@@ -114,15 +112,14 @@ protected:
         this->slow_dispatch_ = false;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            tt::log_info(
-                tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
             GTEST_SKIP();
         }
 
-        auto num_cqs = tt::llrt::RunTimeOptions::get_instance().get_num_hw_cqs();
+        auto num_cqs = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
         if (num_cqs != 2) {
-            tt::log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
+            log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
         }
 
@@ -131,7 +128,7 @@ protected:
         DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
         if (arch == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
             if (!tt::tt_metal::IsGalaxyCluster()) {
-                tt::log_warning(
+                log_warning(
                     tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
                 dispatch_core_type = DispatchCoreType::ETH;
             }

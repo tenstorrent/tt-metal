@@ -2,27 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/dispatch_mem_map.hpp>
+#include <magic_enum/magic_enum.hpp>
+#include <tt-metalium/fabric_edm_packet_header.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include <tt-metalium/fabric_host_interface.h>
-#include "indestructible.hpp"
-#include "rtoptions.hpp"
-#include "llrt/hal.hpp"
+
+#include "dispatch_mem_map.hpp"
+#include "assert.hpp"
+#include "command_queue_common.hpp"
+#include "control_plane.hpp"
+#include "dispatch_settings.hpp"
+#include "fabric/fabric_context.hpp"
+#include "hal_types.hpp"
+#include "impl/context/metal_context.hpp"
+#include "utils.hpp"
 
 namespace tt::tt_metal {
 
-const DispatchMemMap& DispatchMemMap::get(
-    const CoreType& core_type, const uint32_t num_hw_cqs, const bool force_reinit_with_settings) {
-    auto& instance = get_instance();
-
-    if (num_hw_cqs > 0 && (core_type != instance.last_core_type || num_hw_cqs != instance.hw_cqs) ||
-        force_reinit_with_settings) {
-        instance.reset(core_type, num_hw_cqs);
-    }
-
-    TT_FATAL(
-        instance.hw_cqs > 0, "Command Queue is not initialized. Call DispatchMemMap::get with non zero num_hw_cqs.");
-    return instance;
+DispatchMemMap::DispatchMemMap(const CoreType& core_type, const uint32_t num_hw_cqs) {
+    this->reset(core_type, num_hw_cqs);
 }
 
 uint32_t DispatchMemMap::prefetch_q_entries() const { return settings.prefetch_q_entries_; }
@@ -38,6 +35,8 @@ uint32_t DispatchMemMap::cmddat_q_size() const { return settings.prefetch_cmddat
 uint32_t DispatchMemMap::scratch_db_base() const { return scratch_db_base_; }
 
 uint32_t DispatchMemMap::scratch_db_size() const { return settings.prefetch_scratch_db_size_; }
+
+uint32_t DispatchMemMap::ringbuffer_size() const { return settings.prefetch_ringbuffer_size_; }
 
 uint32_t DispatchMemMap::dispatch_buffer_block_size_pages() const { return dispatch_buffer_block_size_pages_; }
 
@@ -71,21 +70,24 @@ uint32_t DispatchMemMap::get_device_command_queue_addr(const CommandQueueDeviceA
 
 uint32_t DispatchMemMap::get_host_command_queue_addr(const CommandQueueHostAddrType& host_addr) const {
     return tt::utils::underlying_type<CommandQueueHostAddrType>(host_addr) *
-           tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::HOST);
+           tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
 }
 
 uint32_t DispatchMemMap::get_sync_offset(uint32_t index) const {
     TT_ASSERT(index < tt::tt_metal::DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
-    uint32_t offset = index * hal_ref.get_alignment(HalMemType::L1);
+    uint32_t offset = index * MetalContext::instance().hal().get_alignment(HalMemType::L1);
     return offset;
 }
 
 uint32_t DispatchMemMap::get_dispatch_message_addr_start() const {
     // Address of the first dispatch message entry. Remaining entries are each offset by
     // get_noc_stream_reg_space_size() bytes.
-    return tt::tt_metal::hal_ref.get_noc_overlay_start_addr() +
-           tt::tt_metal::hal_ref.get_noc_stream_reg_space_size() * get_dispatch_stream_index(0) +
-           tt::tt_metal::hal_ref.get_noc_stream_remote_dest_buf_space_available_update_reg_index() * sizeof(uint32_t);
+    return tt::tt_metal::MetalContext::instance().hal().get_noc_overlay_start_addr() +
+           tt::tt_metal::MetalContext::instance().hal().get_noc_stream_reg_space_size() * get_dispatch_stream_index(0) +
+           tt::tt_metal::MetalContext::instance()
+                   .hal()
+                   .get_noc_stream_remote_dest_buf_space_available_update_reg_index() *
+               sizeof(uint32_t);
 }
 
 uint32_t DispatchMemMap::get_dispatch_stream_index(uint32_t index) const {
@@ -105,11 +107,6 @@ uint8_t DispatchMemMap::get_dispatch_message_update_offset(uint32_t index) const
     return index;
 }
 
-DispatchMemMap& DispatchMemMap::get_instance() {
-    static tt::stl::Indestructible<DispatchMemMap> instance;
-    return instance.get();
-}
-
 // Reset the instance using the settings for the core_type and num_hw_cqs.
 void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs) {
     const auto dispatch_settings = DispatchSettings::get(core_type, num_hw_cqs);
@@ -119,8 +116,9 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
 
     const auto dispatch_buffer_block_size = settings.dispatch_size_;
     const auto [l1_base, l1_size] = get_device_l1_info(settings.core_type_);
-    const auto pcie_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::HOST);
-    const auto l1_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::L1);
+    const auto pcie_alignment =
+        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
+    const auto l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
 
     TT_ASSERT(settings.prefetch_cmddat_q_size_ >= 2 * settings.prefetch_max_cmd_size_);
     TT_ASSERT(settings.prefetch_scratch_db_size_ % 2 == 0);
@@ -129,7 +127,7 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
         DispatchSettings::DISPATCH_MESSAGE_ENTRIES <= DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET / l1_alignment + 1,
         "Number of dispatch message entries exceeds max representable offset");
 
-    uint8_t num_dev_cq_addrs = magic_enum::enum_count<CommandQueueDeviceAddrType>();
+    constexpr uint8_t num_dev_cq_addrs = magic_enum::enum_count<CommandQueueDeviceAddrType>();
     std::vector<uint32_t> device_cq_addr_sizes_(num_dev_cq_addrs, 0);
     for (auto dev_addr_idx = 0; dev_addr_idx < num_dev_cq_addrs; dev_addr_idx++) {
         CommandQueueDeviceAddrType dev_addr_type =
@@ -140,12 +138,14 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
             device_cq_addr_sizes_[dev_addr_idx] = settings.prefetch_q_pcie_rd_ptr_size_;
         } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM) {
             device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_s_sync_sem_;
-        } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_INTERFACE) {
-            if (llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
-                device_cq_addr_sizes_[dev_addr_idx] = tt_fabric::PACKET_HEADER_SIZE_BYTES;
-            } else {
-                device_cq_addr_sizes_[dev_addr_idx] = 0;
-            }
+        } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_HEADER_RB) {
+            // At this point fabric context is not initialized yet
+            // Hardcode to 64B (more than enough space) for now
+            // const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+            // const auto& fabric_context = control_plane.get_fabric_context();
+            device_cq_addr_sizes_[dev_addr_idx] = tt::tt_metal::DispatchSettings::FABRIC_HEADER_RB_ENTRIES * 64;
+        } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS) {
+            device_cq_addr_sizes_[dev_addr_idx] = sizeof(uint32_t);
         } else {
             device_cq_addr_sizes_[dev_addr_idx] = settings.other_ptrs_size;
         }
@@ -158,7 +158,9 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
         CommandQueueDeviceAddrType dev_addr_type = magic_enum::enum_value<CommandQueueDeviceAddrType>(dev_addr_idx);
         if (dev_addr_type == CommandQueueDeviceAddrType::UNRESERVED) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], pcie_alignment);
-        } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_INTERFACE) {
+        } else if (
+            dev_addr_type == CommandQueueDeviceAddrType::FABRIC_HEADER_RB ||
+            dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], l1_alignment);
         }
     }
@@ -173,6 +175,13 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
     const uint32_t dispatch_cb_end = dispatch_buffer_base_ + settings.dispatch_size_;
 
     TT_ASSERT(scratch_db_base_ + settings.prefetch_scratch_db_size_ < l1_size);
+    TT_FATAL(
+        scratch_db_base_ + settings.prefetch_ringbuffer_size_ <= l1_size,
+        "Ringbuffer (start: {}, end: {}) extends past L1 end (size: {})",
+        scratch_db_base_,
+        scratch_db_base_ + settings.prefetch_scratch_db_size_,
+        l1_size);
+
     TT_ASSERT(dispatch_cb_end < l1_size);
 }
 
@@ -180,15 +189,15 @@ std::pair<uint32_t, uint32_t> DispatchMemMap::get_device_l1_info(const CoreType&
     uint32_t l1_base;
     uint32_t l1_size;
     if (core_type == CoreType::WORKER) {
-        l1_base = hal_ref.get_dev_addr(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
-        l1_size =
-            hal_ref.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE);
+        l1_base = MetalContext::instance().hal().get_dev_addr(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
+        l1_size = MetalContext::instance().hal().get_dev_size(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE);
     } else if (core_type == CoreType::ETH) {
-        l1_base = hal_ref.get_dev_addr(
+        l1_base = MetalContext::instance().hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
-        l1_size =
-            hal_ref.get_dev_size(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE);
+        l1_size = MetalContext::instance().hal().get_dev_size(
+            tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE);
     } else {
         TT_THROW("get_base_device_command_queue_addr not implemented for core type");
     }

@@ -2,39 +2,50 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/host_buffer/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
+#include <functional>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using tt::tt_metal::DataType;
-using tt::tt_metal::IDevice;
 using tt::tt_metal::Layout;
-using tt::tt_metal::OwnedStorage;
 using tt::tt_metal::Tensor;
+using tt::tt_metal::distributed::MeshDevice;
 
 template <typename BinaryFunction>
 Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
-    auto input_a_buffer = tt::tt_metal::owned_buffer::get_as<bfloat16>(input_tensor_a);
-    auto input_b_buffer = tt::tt_metal::owned_buffer::get_as<bfloat16>(input_tensor_b);
+    auto input_a_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(input_tensor_a);
+    auto input_b_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(input_tensor_b);
 
-    auto output_buffer = tt::tt_metal::owned_buffer::create<bfloat16>(input_tensor_a.volume());
+    auto output_buffer = std::vector<bfloat16>(input_tensor_a.physical_volume());
 
     for (auto index = 0; index < output_buffer.size(); index++) {
         auto value = BinaryFunction{}(input_a_buffer[index].to_float(), input_b_buffer[index].to_float());
         output_buffer[index] = bfloat16(value);
     }
     return Tensor(
-        OwnedStorage{output_buffer},
-        input_tensor_a.get_logical_shape(),
-        input_tensor_a.get_dtype(),
-        input_tensor_a.get_layout());
+        tt::tt_metal::HostBuffer(std::move(output_buffer)),
+        input_tensor_a.logical_shape(),
+        input_tensor_a.dtype(),
+        input_tensor_a.layout());
 }
 
 template <auto HostFunction, typename DeviceFunction, typename... Args>
-bool run_test(const ttnn::Shape& shape, const DeviceFunction& device_function, IDevice* device, Args... args) {
+bool run_test(const ttnn::Shape& shape, const DeviceFunction& device_function, MeshDevice* device, Args... args) {
     auto input_tensor_a = ttnn::random::random(shape, DataType::BFLOAT16);
     auto input_tensor_b = ttnn::random::random(shape, DataType::BFLOAT16);
 
@@ -53,7 +64,8 @@ int main() {
     using tt::constants::TILE_WIDTH;
 
     int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(device_id);
+    auto device_owner = MeshDevice::create_unit_mesh(device_id);
+    auto device = device_owner.get();
 
     {
         ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
@@ -123,8 +135,6 @@ int main() {
     device->disable_and_clear_program_cache();
 
     TT_FATAL(device->num_program_cache_entries() == 0, "Error");
-
-    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 
     return 0;
 }

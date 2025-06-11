@@ -25,7 +25,9 @@ enum class KernelName {
     WriterScalar,
     ComputeNoBcast,
     ComputeBcast,
-    ComputeScalar
+    ComputeScalar,
+    ReaderNoBcastSplit,
+    WriterNoBcastSplit,
 };
 
 struct BinaryNgKernelConfig {
@@ -50,6 +52,8 @@ struct OpConfig {
         DIV,
         POWER,
         RSUB,
+        GCD,
+        LCM,
         LEFT_SHIFT,
         RIGHT_SHIFT,
         BITWISE_AND,
@@ -57,7 +61,9 @@ struct OpConfig {
         BITWISE_XOR,
         QUANT,
         REQUANT,
-        DEQUANT
+        DEQUANT,
+        MAXIMUM,
+        MINIMUM
     };
 
     template <class EnumT>
@@ -75,8 +81,11 @@ struct OpConfig {
 void add_activation_defines(
     std::map<std::string, std::string>& defines,
     tt::stl::Span<const unary::UnaryWithParam> activations,
-    std::string_view operand);
+    std::string_view operand,
+    std::optional<DataType> dtype = std::nullopt);
 
 uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const bool is_quant_op);
+
+std::map<std::string, std::string> make_dataflow_defines(const DataType dtype);
 
 }  // namespace ttnn::operations::binary_ng

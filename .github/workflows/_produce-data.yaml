@@ -38,12 +38,15 @@ on:
       - "(TG) TG frequent tests"
       - "(TG) TG model perf tests"
       - "(TG) TG nightly tests"
+      - "Galaxy Quick"
       - "ttnn - Run sweeps"
       - "Blackhole post-commit tests"
-      - "Custom test dispatch"
+      - "(Blackhole) Blackhole nightly tests"
+      - "(Blackhole) Demo tests"
       - "PR Gate"
       - "Nightly tt-metal L2 tests"
       - "Package and release"
+      - "Build test and publish upstream tests"
     types:
       - completed
 
@@ -97,14 +100,16 @@ jobs:
           echo "::notice title=target-workflow-link::The workflow being analyzed is available at https://github.com/tenstorrent/tt-metal/actions/runs/$run_id/attempts/$attempt_number"
       - name: Get API rate limit status
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.TTBOT_DOCS_ACCESS }}
         run: |
           echo "[Info] Grabbing API rate limit status"
           gh api rate_limit
       - name: Output auxiliary values
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.TTBOT_DOCS_ACCESS }}
         run: |
+          echo "Sleeping for 60 seconds for github to fully sync the workflow run before calling the API"
+          sleep 60
           echo "[Info] Workflow run attempt"
           gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
           gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} > workflow.json
@@ -115,13 +120,13 @@ jobs:
       - name: Collect workflow artifact and job logs
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.TTBOT_DOCS_ACCESS }}
         run: |
           ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --workflow-run-id ${{ steps.get-run-id-and-attempt.outputs.run-id }} --attempt-number ${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
           find generated/cicd/ -type f
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.8'
+          python-version: '3.10'
           cache: 'pip'
           cache-dependency-path: 'infra/requirements-infra.txt'
       - name: Install infra dependencies
@@ -152,11 +157,11 @@ jobs:
               pipelinecopy_*.json
               workflow.json
               workflow_jobs.json
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: U014XCQ9CF8 # tt-rkim
+          owner: U0883RN6CRE # William Ly
   test-produce-complete-benchmark-with-environment:
     if: |
       # Check if triggered by `workflow_run` with specific conclusion states,

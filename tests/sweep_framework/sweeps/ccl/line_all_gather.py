@@ -37,7 +37,6 @@ parameters = {
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
         "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
-        "enable_async": [True, False],
         "num_iters": [1],
         "tile": [(32, 32)],
     },
@@ -72,8 +71,7 @@ def mesh_device_fixture():
     yield (mesh_device, "T3000 Mesh")
 
     print("ALL GATHER: Closing device mesh")
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(mesh_device)
     ttnn.close_mesh_device(mesh_device)
     del mesh_device
 
@@ -89,14 +87,12 @@ def run(
     input_dtype,
     layout,
     mem_config,
-    enable_async,
     num_iters,
     tile,
     *,
     device,
 ) -> list:
     t3k_mesh_device = device
-    t3k_mesh_device.enable_async(enable_async)
 
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")

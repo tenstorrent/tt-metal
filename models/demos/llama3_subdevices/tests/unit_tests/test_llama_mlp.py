@@ -18,6 +18,8 @@ from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
+
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -38,12 +40,19 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
     "batch_size",
     (1,),
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
 def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
-
-    mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, dummy_weights=False, max_seq_len=128)
     model_args.n_layers = 1
@@ -91,6 +100,8 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
     prev_pcc = None
 
     logger.info("Run Llama_MLP_PF")
+    # Explicitly allocate global CB to avoid memory fragmentation
+    prefetcher_setup.create_global_cb()
     for i in range(20):
         ttnn.dram_prefetcher(
             prefetcher_setup.get_input_tensors(),

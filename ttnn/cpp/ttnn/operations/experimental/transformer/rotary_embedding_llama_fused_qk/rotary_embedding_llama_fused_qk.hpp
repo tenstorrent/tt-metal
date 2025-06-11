@@ -25,7 +25,7 @@ struct RotaryEmbeddingLlamaFusedQKOperation {
 
 namespace experimental {
 
-constexpr auto rotary_embedding_llama_fused_qk = ttnn::register_operation_with_auto_launch_op<
+constexpr auto rotary_embedding_llama_fused_qk = ttnn::register_operation<
     "ttnn::experimental::rotary_embedding_llama_fused_qk",
     ttnn::operations::experimental::transformer::RotaryEmbeddingLlamaFusedQKOperation>();
 

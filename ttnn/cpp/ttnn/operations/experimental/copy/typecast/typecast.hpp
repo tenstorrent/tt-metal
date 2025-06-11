@@ -28,8 +28,7 @@ struct TypecastOperation {
 }  // namespace operations::experimental::copy
 
 namespace experimental {
-constexpr auto typecast = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::experimental::typecast",
-    ttnn::operations::experimental::copy::TypecastOperation>();
+constexpr auto typecast =
+    ttnn::register_operation<"ttnn::experimental::typecast", ttnn::operations::experimental::copy::TypecastOperation>();
 }  // namespace experimental
 }  // namespace ttnn

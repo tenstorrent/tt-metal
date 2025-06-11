@@ -24,6 +24,5 @@ struct BatchNorm {
 };
 }  // namespace operations::normalization
 
-constexpr auto batch_norm =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::batch_norm", ttnn::operations::normalization::BatchNorm>();
+constexpr auto batch_norm = ttnn::register_operation<"ttnn::batch_norm", ttnn::operations::normalization::BatchNorm>();
 }  // namespace ttnn

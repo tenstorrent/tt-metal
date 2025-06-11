@@ -3,19 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from loguru import logger
+
 import ttnn
-
-
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_nearest_2d import upsample_nearest2d
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    conv_cache,
-)
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     get_default_compute_config,
     permute_conv_parameters,
 )
-from loguru import logger
-
 
 config_override = {
     (320, 320, 64, 64): {"act_block_h": 64},
@@ -32,9 +27,7 @@ config_override = {
 
 
 class upsample2d:
-    def __init__(
-        self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
-    ):
+    def __init__(self, device, parameters, batch_size, input_height, input_width, compute_kernel_config):
         self.input_height = input_height
         self.input_width = input_width
         self.device = device
@@ -89,8 +82,6 @@ class upsample2d:
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            input_channels_alignment=32,
-            transpose_shards=False,
             reshard_if_not_optimal=False,  # Reshard has error : 1616 Bytes unique+common runtime args targeting kernel reshard_reader on (x=0,y=0) are too large. Cannot be written as they will run into memory region reserved for result. Max allowable size is 1024 Bytes
         )
         compute_config = get_default_compute_config(self.device)
@@ -136,6 +127,5 @@ class upsample2d:
             bias_tensor=self.conv_bias_tensor,
             **conv_kwargs,
             compute_config=compute_config,
-            conv_op_cache=conv_cache,
         )
         return tt_out

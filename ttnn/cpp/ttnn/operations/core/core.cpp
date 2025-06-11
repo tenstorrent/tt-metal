@@ -7,7 +7,6 @@
 #include <utility>
 
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/trace.hpp>
 #include "cpp/ttnn/operations/data_movement/move/move.hpp"
 #include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -19,11 +18,11 @@
 namespace ttnn::operations::core {
 
 ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
-    if (distributed::is_multi_device_tensor(tensor)) {
+    if (tt::tt_metal::is_multi_device_host_tensor(tensor)) {
         return transform(tensor, [&](const Tensor& device_tensor) { return unsqueeze_to_4D(device_tensor); });
     }
 
-    const auto rank = tensor.get_logical_shape().rank();
+    const auto rank = tensor.logical_shape().rank();
     if (rank == 4) {
         return tensor;
     }
@@ -31,11 +30,11 @@ ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
         TT_THROW("Tensor rank is greater than 4");
     }
 
-    return ttnn::reshape(tensor, tensor.get_logical_shape().to_rank(4), tensor.get_padded_shape().to_rank(4));
+    return ttnn::reshape(tensor, tensor.logical_shape().to_rank(4), tensor.padded_shape().to_rank(4));
 }
 
 ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) {
-    if (tensor.get_logical_shape().rank() != 4) {
+    if (tensor.logical_shape().rank() != 4) {
         TT_THROW("Tensor has to be of rank 4!");
     }
     if (rank < 1 or rank > 4) {
@@ -45,7 +44,7 @@ ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) {
     if (rank == 4) {
         return tensor;
     }
-    return ttnn::reshape(tensor, tensor.get_logical_shape().to_rank(rank), tensor.get_padded_shape().to_rank(rank));
+    return ttnn::reshape(tensor, tensor.logical_shape().to_rank(rank), tensor.padded_shape().to_rank(rank));
 }
 
 ttnn::Tensor to_device(
@@ -66,23 +65,9 @@ ttnn::Tensor allocate_tensor_on_device(
     const Shape& shape,
     DataType data_type,
     Layout layout,
-    IDevice* device,
-    const std::optional<MemoryConfig>& memory_config) {
-    return allocate_tensor_on_device(
-        TensorSpec(
-            shape,
-            tt::tt_metal::TensorLayout(
-                data_type, tt::tt_metal::PageConfig(layout), memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG))),
-        device);
-}
-
-ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
-    DataType data_type,
-    Layout layout,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config) {
-    return allocate_tensor_on_device(
+    return allocate_tensor_on_mesh(
         TensorSpec(
             shape,
             tt::tt_metal::TensorLayout(
@@ -90,16 +75,8 @@ ttnn::Tensor allocate_tensor_on_device(
         mesh_device);
 }
 
-ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, IDevice* device) {
-    return tt::tt_metal::allocate_tensor_on_devices(spec, {device});
-}
-
 ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, MeshDevice* mesh_device) {
-    return tt::tt_metal::allocate_tensor_on_devices(spec, mesh_device->get_devices());
-}
-
-void copy_host_to_device_tensor(const ttnn::Tensor& host_tensor, ttnn::Tensor device_tensor, QueueId cq_id) {
-    tt::tt_metal::write_tensor(std::move(host_tensor), std::move(device_tensor), cq_id);
+    return tt::tt_metal::allocate_tensor_on_mesh(spec, mesh_device);
 }
 
 ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, QueueId cq_id) {

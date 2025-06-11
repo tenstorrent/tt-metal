@@ -17,7 +17,7 @@
 #include "hostdevcommon/profiler_common.h"
 #include "risc_attribs.h"
 
-#include <dev_msgs.h>
+#include "dev_msgs.h"
 
 #define DO_PRAGMA(x) _Pragma(#x)
 
@@ -43,6 +43,16 @@ extern uint32_t sums[SUM_COUNT];
 extern uint32_t sumIDs[SUM_COUNT];
 
 constexpr uint32_t QUICK_PUSH_MARKER_COUNT = 2;
+constexpr uint32_t DISPATCH_META_DATA_COUNT = 2;
+constexpr uint32_t DISPATCH_META_DATA_UINT32_SIZE = 4;
+constexpr uint32_t DISPATCH_PARENT_ZONE_MARKER_COUNT = 2;
+// Space has to be left in the buffer in order to guarantee
+// that the next dispatch command can make it fully populated
+// with its meta data (op id + command type)
+constexpr uint32_t DISPATCH_HEADROOM_SIZE =
+    PROFILER_L1_MARKER_UINT32_SIZE * (DISPATCH_PARENT_ZONE_MARKER_COUNT + QUICK_PUSH_MARKER_COUNT) +
+    DISPATCH_META_DATA_UINT32_SIZE * DISPATCH_META_DATA_COUNT;
+
 constexpr int WALL_CLOCK_HIGH_INDEX = 1;
 constexpr int WALL_CLOCK_LOW_INDEX = 0;
 
@@ -77,7 +87,7 @@ constexpr uint32_t Hash16_CT(const char (&s)[N]) {
     return ((res & 0xFFFF) ^ ((res & 0xFFFF0000) >> 16)) & 0xFFFF;
 }
 
-enum class DoingDispatch { DISPATCH, NOT_DISPATCH };
+enum class DoingDispatch { DISPATCH, DISPATCH_META, NOT_DISPATCH };
 
 __attribute__((noinline)) void init_profiler(
     uint16_t briscKernelID = 0, uint16_t ncriscKernelID = 0, uint16_t triscsKernelID = 0) {
@@ -109,8 +119,6 @@ __attribute__((noinline)) void init_profiler(
             // TODO(MO): Clean up magic numbers
             profiler_data_buffer[riscID][i] = 0x80000000;
         }
-        profiler_data_buffer[riscID][ID_LL] =
-            (runCounter & 0xFFFF) | (profiler_data_buffer[riscID][ID_LL] & 0xFFFF0000);
     }
 #endif
 }
@@ -125,6 +133,8 @@ template <DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
 inline __attribute__((always_inline)) bool bufferHasRoom() {
     bool bufferHasRoom = false;
     if constexpr (dispatch == DoingDispatch::DISPATCH) {
+        bufferHasRoom = wIndex < (PROFILER_L1_VECTOR_SIZE - stackSize - DISPATCH_HEADROOM_SIZE);
+    } else if constexpr (dispatch == DoingDispatch::DISPATCH_META) {
         bufferHasRoom =
             wIndex < (PROFILER_L1_VECTOR_SIZE - stackSize - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE));
     } else {
@@ -155,7 +165,7 @@ inline __attribute__((always_inline)) void mark_dropped_timestamps(uint32_t inde
 
 inline __attribute__((always_inline)) void set_host_counter(uint32_t counterValue) {
     for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
-        profiler_data_buffer[riscID][ID_LL] = (counterValue << 16) | (profiler_data_buffer[riscID][ID_LL] & 0xFFFF);
+        profiler_data_buffer[riscID][ID_LL] = counterValue;
     }
 }
 
@@ -182,6 +192,42 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC)
+
+#if (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
+
+// Saves several NoC register states that may be setup by dispatch kernels and restores them
+// when the NocDestinationStateSaver is destroyed
+struct NocDestinationStateSaver {
+    uint32_t noc_ctrl_state;
+    uint32_t noc_ret_addr_coord_state;
+#ifdef ARCH_BLACKHOLE
+    uint32_t noc_ret_addr_mid_state;
+#endif
+
+    inline __attribute__((always_inline)) NocDestinationStateSaver() {
+        noc_ctrl_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_CTRL);
+        noc_ret_addr_coord_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE);
+#ifdef ARCH_BLACKHOLE
+        noc_ret_addr_mid_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID);
+#endif
+    }
+
+    inline __attribute__((always_inline)) ~NocDestinationStateSaver() {
+        while (!noc_cmd_buf_ready(noc_index, write_cmd_buf));
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_CTRL, noc_ctrl_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE, noc_ret_addr_coord_state);
+#ifdef ARCH_BLACKHOLE
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID, noc_ret_addr_mid_state);
+#endif
+    }
+};
+
+#else
+
+struct NocDestinationStateSaver {};
+
+#endif
+
 inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
     WAYPOINT("NAWW");
@@ -206,12 +252,16 @@ __attribute__((noinline)) void finish_profiler() {
     if (profiler_control_buffer[PROFILER_DONE] == 1) {
         return;
     }
-    while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]);
+    bool do_noc = true;
+    if (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
+        do_noc = false;
+    }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 
     uint32_t pageSize = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram;
 
+    NocDestinationStateSaver noc_state;
     for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
         profiler_data_buffer[riscID][ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
         int hostIndex = riscID;
@@ -219,7 +269,6 @@ __attribute__((noinline)) void finish_profiler() {
         if (profiler_control_buffer[deviceIndex]) {
             uint32_t currEndIndex = profiler_control_buffer[deviceIndex] + profiler_control_buffer[hostIndex];
 
-            bool do_noc = false;
             uint32_t dram_offset = 0;
             uint32_t send_size = 0;
             if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
@@ -230,7 +279,6 @@ __attribute__((noinline)) void finish_profiler() {
 
                 send_size = profiler_control_buffer[deviceIndex] * sizeof(uint32_t);
 
-                do_noc = true;
                 profiler_control_buffer[hostIndex] = currEndIndex;
             } else if (profiler_control_buffer[RUN_COUNTER] < 1) {
                 dram_offset = (core_flat_id % profiler_core_count_per_dram) * MAX_RISCV_PER_CORE *
@@ -239,9 +287,9 @@ __attribute__((noinline)) void finish_profiler() {
 
                 send_size = CUSTOM_MARKERS * sizeof(uint32_t);
 
-                do_noc = true;
                 mark_dropped_timestamps(hostIndex);
             } else {
+                do_noc = false;
                 mark_dropped_timestamps(hostIndex);
             }
 
@@ -255,7 +303,6 @@ __attribute__((noinline)) void finish_profiler() {
                 profiler_noc_async_write_posted(
                     reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex]), dram_bank_dst_noc_addr, send_size);
             }
-            profiler_control_buffer[deviceIndex] = 0;
         }
     }
 
@@ -270,11 +317,24 @@ __attribute__((noinline)) void quick_push() {
     defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC))
 
+    // tt-metal/issues/22578 - forbid quick_push if any cmd buffer has NOC_CMD_VC_LINKED bit set
+    auto linked_bit_is_set = [](const uint32_t reg_val) { return reg_val & NOC_CMD_VC_LINKED; };
+    uint32_t read_buf_reg = NOC_CMD_BUF_READ_REG(noc_index, read_cmd_buf, NOC_CTRL);
+    uint32_t write_buf_reg = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_CTRL);
+    uint32_t write_reg_buf_reg = NOC_CMD_BUF_READ_REG(noc_index, write_reg_cmd_buf, NOC_CTRL);
+    uint32_t write_at_buf_reg = NOC_CMD_BUF_READ_REG(noc_index, write_at_cmd_buf, NOC_CTRL);
+    if (linked_bit_is_set(read_buf_reg) || linked_bit_is_set(write_buf_reg) || linked_bit_is_set(write_reg_buf_reg) ||
+        linked_bit_is_set(write_at_buf_reg)) {
+        return;
+    }
+
     SrcLocNameToHash("PROFILER-NOC-QUICK-SEND");
     mark_time_at_index_inlined(wIndex, hash);
     wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
 
-    while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]);
+    if (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
+        return;
+    }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 
@@ -300,6 +360,7 @@ __attribute__((noinline)) void quick_push() {
     uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] + wIndex;
 
     if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
+        NocDestinationStateSaver noc_state;
         profiler_noc_async_write_posted(
             reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID]),
             dram_bank_dst_noc_addr,
@@ -307,13 +368,31 @@ __attribute__((noinline)) void quick_push() {
 
         profiler_noc_async_flush_posted_write();
         profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] = currEndIndex;
-
     } else {
         mark_dropped_timestamps(HOST_BUFFER_END_INDEX_BR_ER + myRiscID);
     }
 
     wIndex = CUSTOM_MARKERS;
 
+#endif
+}
+
+// Initiates a quick_push() if the specified cmd buf is NOT currently in linked
+// state, and linked arg is set to true. Useful for preemptively flushing to
+// DRAM in the event that a long series of linked multicast will prevent
+// flushing and cause dropped events.
+void quick_push_if_linked(uint32_t cmd_buf, bool linked) {
+#if (                                                                                          \
+    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
+    defined(COMPILE_FOR_IDLE_ERISC))
+    if (!linked) {
+        return;
+    }
+    uint32_t cmd_buf_reg_val = NOC_CMD_BUF_READ_REG(noc_index, cmd_buf, NOC_CTRL);
+    bool cmd_buf_currently_linked = cmd_buf_reg_val & NOC_CMD_VC_LINKED;
+    if (!cmd_buf_currently_linked) {
+        kernel_profiler::quick_push();
+    }
 #endif
 }
 
@@ -335,11 +414,10 @@ struct profileScope {
             wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
             start_marked = false;
             stackSize -= PROFILER_L1_MARKER_UINT32_SIZE;
-        }
-
-        if constexpr (dispatch == DoingDispatch::DISPATCH) {
-            if (wIndex >= (PROFILER_L1_VECTOR_SIZE - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE))) {
-                quick_push();
+            if constexpr (dispatch == DoingDispatch::DISPATCH) {
+                if (wIndex >= (PROFILER_L1_VECTOR_SIZE - DISPATCH_HEADROOM_SIZE)) {
+                    quick_push();
+                }
             }
         }
     }
@@ -435,11 +513,11 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
         kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>();
 
-#define DeviceTimestampedData(name, data)                                                       \
-    {                                                                                           \
-        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                            \
-        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));              \
-        kernel_profiler::timeStampedData<hash, kernel_profiler::DoingDispatch::DISPATCH>(data); \
+#define DeviceTimestampedData(name, data)                                                            \
+    {                                                                                                \
+        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                                 \
+        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));                   \
+        kernel_profiler::timeStampedData<hash, kernel_profiler::DoingDispatch::DISPATCH_META>(data); \
     }
 
 #define DeviceRecordEvent(event_id) kernel_profiler::recordEvent<kernel_profiler::DoingDispatch::DISPATCH>(event_id);
@@ -503,5 +581,6 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 #define RECORD_NOC_EVENT_WITH_ADDR(type, noc_addr, num_bytes, vc)
 #define RECORD_NOC_EVENT_WITH_ID(type, noc_id, num_bytes, vc)
 #define RECORD_NOC_EVENT(type)
+#define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
 
 #endif

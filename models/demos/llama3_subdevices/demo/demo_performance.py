@@ -3,29 +3,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from time import time, perf_counter
+from time import perf_counter
 from datetime import datetime
 from loguru import logger
 import os
 import ttnn
 import pytest
-from pathlib import Path
 
-from models.utility_functions import nearest_32
+is_RING_6U = os.environ.get("RING_6U", "0") == "1"
+
 from models.demos.llama3_subdevices.tt.llama_common import (
-    HostEmbedding,
-    encode_prompt_llama_instruct,
     PagedAttentionConfig,
-    sample_host,
 )
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
-from models.demos.llama3_subdevices.tt.sampling import TTSampling
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 
 from .demo_decode import load_inputs
@@ -204,7 +199,7 @@ def run_llama3_decode_performance(
     logger.info("Current pos tensor done")
 
     # Get cos/sin matrices for the current position of each user
-    rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
+    rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
 
     logger.info("Rot mats done")
 
@@ -249,7 +244,7 @@ def run_llama3_decode_performance(
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
         ttnn.deallocate(tt_out_gathered)
         tt_out_tok = ttnn.argmax(
-            tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
+            tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
         )
         logger.info(f"sampling done")
 
@@ -267,7 +262,7 @@ def run_llama3_decode_performance(
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
     # Get cos/sin matrices for the current position of each user
-    rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
+    rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
     tt_decode_input = tt_embd(tt_out_tok)
     tt_out = tt_model(
         tt_decode_input,
@@ -282,7 +277,7 @@ def run_llama3_decode_performance(
     tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
     ttnn.deallocate(tt_out_gathered)
     tt_out_tok = ttnn.argmax(
-        tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
+        tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
     )
 
     ttnn.plus_one(
@@ -314,7 +309,7 @@ def run_llama3_decode_performance(
     # Reset the current position and output token tensors for the real decode run
     ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
     ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
-    rot_mat_idxs_reset = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
+    rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
     ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
     profiler.end(f"capture_trace")
@@ -322,8 +317,7 @@ def run_llama3_decode_performance(
     ttnn.synchronize_device(mesh_device)
 
     # When getting dispatch device perf, pushing weights fills up profiler buffers.
-    for device in mesh_device.get_devices():
-        ttnn.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     # Sync after dump or execute trace will launch on devices with huge skew
     ttnn.synchronize_device(mesh_device)
@@ -390,7 +384,7 @@ def run_llama3_decode_performance(
             (118, 128),
             10,
             10,
-            False,
+            True,
             None,
         ),
         (
@@ -402,7 +396,7 @@ def run_llama3_decode_performance(
             (127, 128),
             0,
             1,
-            False,
+            True,
             None,
         ),
     ],
@@ -439,7 +433,15 @@ def run_llama3_decode_performance(
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}], indirect=True
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "trace_region_size": 23887872,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
 )
 def test_llama_decode_performance(
     input_prompts,
@@ -466,8 +468,6 @@ def test_llama_decode_performance(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
-
-    mesh_device.enable_async(True)
 
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(

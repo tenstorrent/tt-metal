@@ -2,24 +2,24 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import os
-import torch
+
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
-
+from models.demos.t3000.mixtral8x7b.reference.model import Transformer
+from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
-    prepare_inputs_ttnn_prefill,
     get_prefill_rot_mat,
     get_rot_transformation_mat,
+    prepare_inputs_ttnn_prefill,
     set_model_args,
 )
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
-from models.demos.t3000.mixtral8x7b.reference.model import Transformer
-from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
-from models.utility_functions import comp_pcc, comp_allclose
+from models.utility_functions import comp_allclose, comp_pcc
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 class Emb(torch.nn.Module):
@@ -45,8 +45,6 @@ def test_mixtral_model_inference_CI(t3k_mesh_device, use_program_cache, reset_se
     if is_ci_env:
         os.environ["MIXTRAL_REF_OUTPUT_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/prefill/"
 
-    t3k_mesh_device.enable_async(True)
-
     n_layers = 32
 
     pcc = 0.91
@@ -63,7 +61,7 @@ def test_mixtral_model_inference_CI(t3k_mesh_device, use_program_cache, reset_se
             ref_out_file
         ), f"Reference output file not found: {ref_out_file}. Please set the flag 'MIXTRAL_REF_OUTPUT_PATH' correctly."
 
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device)
     model_args = set_model_args(model_args, seq_len)
     model_args.n_layers = n_layers
 

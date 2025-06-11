@@ -10,51 +10,6 @@
 
 namespace ttnn {
 namespace operations::data_movement {
-namespace detail {
-ttnn::Tensor host_reshape(
-    const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape);
-ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
-    const ttnn::Tensor& tensor,
-    const ttnn::Shape& logical_shape,
-    const ttnn::Shape& padded_shape,
-    const uint32_t tile_first_dim,
-    const uint32_t tile_second_dim,
-    const MemoryConfig& memory_config,
-    const QueueId queue_id,
-    const PadValue& pad_value);
-ttnn::Tensor fix_shape_and_perform_reshape_on_2D_RM(
-    const ttnn::Tensor& tensor,
-    const ttnn::Shape& logical_shape,
-    const ttnn::Shape& padded_shape,
-    const uint32_t tile_first_dim,
-    const uint32_t tile_second_dim,
-    const MemoryConfig& memory_config,
-    const QueueId queue_id);
-ttnn::Tensor fix_shape_and_perform_reshape_on_3D_TILE(
-    const ttnn::Tensor& tensor,
-    const ttnn::Shape& logical_shape,
-    const ttnn::Shape& padded_shape,
-    const uint32_t tile_first_dim,
-    const uint32_t tile_second_dim,
-    const MemoryConfig& memory_config,
-    const QueueId queue_id,
-    const PadValue& pad_value);
-ttnn::Tensor perform_reshape_on_2D_RM(
-    const ttnn::Tensor& tensor,
-    const ttnn::Shape& logical_shape,
-    const ttnn::Shape& padded_shape,
-    const MemoryConfig& memory_config,
-    const QueueId queue_id);
-ttnn::Tensor convert_tile_to_rm(
-    const ttnn::Tensor& tensor,
-    const ttnn::Shape& logical_shape,
-    const ttnn::Shape& padded_shape,
-    const uint32_t tile_first_dim,
-    const uint32_t tile_second_dim,
-    const MemoryConfig& memory_config,
-    const QueueId queue_id,
-    const PadValue& pad_value);
-}
 
 std::pair<ttnn::Shape, ttnn::Shape> shape_corrector(
     const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape);

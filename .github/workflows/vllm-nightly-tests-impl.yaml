@@ -1,0 +1,234 @@
+name: "[internal] vLLM nightly tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      vllm-commit:
+        description: "vLLM branch or sha"
+        required: false
+        default: dev
+        type: string
+
+jobs:
+  vllm-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          {
+            name: "[T3K] Llama-3.1-8B-Instruct",
+            model: "meta-llama/Llama-3.1-8B-Instruct",
+            server-timeout: 5,
+            benchmark-timeout: 5,
+            runner-label: config-t3000,
+            mesh-device: T3K,
+            tt-llama-text-ver: tt_transformers,
+            wh-arch-yaml: wormhole_b0_80_arch_eth_dispatch.yaml,
+            co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
+            co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
+          },
+          {
+            name: "[TG] Llama-3.3-70B-Instruct",
+            model: "meta-llama/Llama-3.3-70B-Instruct",
+            server-timeout: 35,
+            benchmark-timeout: 10,
+            runner-label: config-tg,
+            mesh-device: TG,
+            tt-llama-text-ver: llama3_subdevices,
+            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D\", \"worker_l1_size\": 1344544, \"trace_region_size\": 95693824}",
+            co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
+            co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
+          },
+        ]
+    runs-on:
+      - ${{ matrix.test-group.runner-label }}
+      - in-service
+      - pipeline-functional
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        vllm_dir: /work/vllm
+        VLLM_TARGET_DEVICE: "tt"
+        PYTHONPATH: /work:/work/vllm
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        HF_HUB_OFFLINE: 1
+        HF_HOME: /mnt/MLPerf/huggingface
+        FILE_SERVER_PID: "./server.pid"
+        FILE_SERVER_LOG: "./output/vllm_server.log"
+        FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: ⬇️ Setup Metal
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
+      - name: ⬇️ Checkout vLLM
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/vllm
+          path: docker-job/vllm
+          ref: ${{ inputs.vllm-commit }}
+          fetch-depth: 0
+
+      - name: 📀 Install vLLM
+        run: |
+          pip3 install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu
+
+      - name: 📂 Create output directory
+        run: |
+          mkdir -p output
+
+      - name: 🚀 Run server
+        timeout-minutes: 1
+        run: |
+          if [ -n "${{ matrix.test-group.wh-arch-yaml }}" ]; then
+            export WH_ARCH_YAML=${{ matrix.test-group.wh-arch-yaml }}
+          fi
+
+          if [ -n "${{ matrix.test-group.override-tt-config }}" ]; then
+            export OVERRIDE_TT_CONFIG=(--override-tt-config "$(printf "%s" '${{ matrix.test-group.override-tt-config }}')")
+          else
+            export OVERRIDE_TT_CONFIG=()
+          fi
+
+          echo "Override config: ${OVERRIDE_TT_CONFIG[@]}"
+
+          export MESH_DEVICE=${{ matrix.test-group.mesh-device }}
+          export TT_LLAMA_TEXT_VER=${{ matrix.test-group.tt-llama-text-ver }}
+
+          # Keep TT cache separate from HF hub
+          export HF_MODEL="${{ matrix.test-group.model }}"
+          MODEL_NAME="${HF_MODEL/\//--}"
+          export TT_CACHE_PATH="$HF_HOME/tt_cache/$MODEL_NAME"
+
+          # vLLM environment variables
+          export VLLM_RPC_TIMEOUT=300000
+
+          python3 vllm/examples/server_example_tt.py \
+            --model ${{ matrix.test-group.model }} \
+            "${OVERRIDE_TT_CONFIG[@]}" \
+            > "${FILE_SERVER_LOG}" 2>&1 &
+
+          # Store server's pid for cleanup
+          echo $! > ${FILE_SERVER_PID}
+
+      - name: ⏰ Wait for server to be ready
+        run: |
+          echo "Waiting for server..."
+
+          timeout_seconds=$(( ${{ matrix.test-group.server-timeout }} * 60 ))
+          elapsed=0
+          interval=20
+
+          while [ $elapsed -lt $timeout_seconds ]; do
+            if curl -sf http://localhost:8000/health; then
+              echo "Server is up! 🚀 [$elapsed sec]"
+              exit 0
+            fi
+            sleep $interval
+            elapsed=$((elapsed + interval))
+          done
+
+          echo "❌ Server did not become ready in time (${timeout_seconds}s)."
+          echo "Check out the server log in a step below."
+          exit 1
+
+      - name: 📐 Run benchmark
+        timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
+        run: |
+          python3 vllm/benchmarks/benchmark_serving.py \
+            --backend vllm \
+            --model ${{ matrix.test-group.model }} \
+            --dataset-name random \
+            --num-prompts 32 \
+            --random-input-len 100 \
+            --random-output-len 100 \
+            --ignore-eos \
+            --percentile-metrics ttft,tpot,itl,e2el \
+            --save-result \
+            --result-filename output/vllm_result.json \
+            2>&1 | tee ${FILE_BENCHMARK_LOG}
+
+          # If the backend fails, the benchmark will still complete successfully but with all-zero results.
+          # It will contain a warning message, though
+          warning_message="All requests failed"
+          if grep -q "$warning_message" "${FILE_BENCHMARK_LOG}"; then
+            echo "❌ All requests failed"
+            echo "Check out the server log in a step below."
+            exit 1
+          fi
+
+      - name: 🧹 Cleanup server process
+        if: always()
+        run: |
+          if [ -f "${FILE_SERVER_PID}" ]; then
+            pid=$(cat "${FILE_SERVER_PID}")
+            if kill -0 "$pid" 2>/dev/null; then
+              kill "$pid"
+              echo "✅ Server process with PID $pid terminated."
+              rm -f "${FILE_SERVER_PID}"
+            else
+              echo "❌ Server process already down!"
+              echo "Check out the server log in a step below."
+              exit 1
+            fi
+          else
+            echo "❌ PID file not found. Server may not have started correctly."
+            exit 1
+          fi
+
+      - name: Show server log
+        if: ${{ failure() }}
+        continue-on-error: true
+        run: |
+          cat "${FILE_SERVER_LOG}"
+
+      - name: Show report
+        if: always()
+        continue-on-error: true
+        run: |
+          cat output/vllm_result.json
+
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.co-owner-1-id }}
+
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.co-owner-2-id }}
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: docker-job/output/
+          prefix: "vllm_output_"
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

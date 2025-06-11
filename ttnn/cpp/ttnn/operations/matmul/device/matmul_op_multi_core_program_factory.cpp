@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,11 +21,11 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
     const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
     tt_metal::Program program{};
 
-    const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
+    const auto &ashape = a.padded_shape(), bshape = b.padded_shape();
 
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
-    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
@@ -36,7 +36,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
-    const auto& cshape = output.get_padded_shape();  // C=A*B, N1MK*11KN->N1MN
+    const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -90,11 +90,13 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
             .set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    uint32_t last_ktile_w = a.logical_shape()[-1] % TILE_WIDTH;
+    std::vector<uint32_t> reader_compile_time_args = {
+        (uint32_t)src0_is_dram, (uint32_t)src1_is_dram, (uint32_t)last_ktile_w};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
     auto reader_id = tt_metal::CreateKernel(
@@ -174,13 +176,15 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
 
     auto override_runtime_args_callback =
         [reader_kernel_id = reader_id, writer_kernel_id = writer_id, num_cores, num_cores_y](
+            const void* operation,
             const Program& program,
-            const std::vector<tt_metal::Buffer*>& input_buffers,
-            const std::vector<tt_metal::Buffer*>& output_buffers) {
-            auto src_dram_buffer_a = input_buffers.at(0);
-            auto src_dram_buffer_b = input_buffers.at(1);
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>&,
+            const std::vector<Tensor>& output_tensors) {
+            auto src_dram_buffer_a = input_tensors.at(0).buffer();
+            auto src_dram_buffer_b = input_tensors.at(1).buffer();
 
-            auto dst_dram_buffer = output_buffers.at(0);
+            auto dst_dram_buffer = output_tensors.at(0).buffer();
 
             for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -198,7 +202,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
             }
         };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 }  // namespace matmul

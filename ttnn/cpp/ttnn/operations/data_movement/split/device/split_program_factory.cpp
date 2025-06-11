@@ -87,11 +87,11 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     uint32_t dim = 3;
     uint32_t num_chunks = 2;
 
-    auto input_shape = input_tensor.get_padded_shape();
+    auto input_shape = input_tensor.padded_shape();
 
     Program program{};
     tt::tt_metal::IDevice* device = input_tensor.device();
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
@@ -143,9 +143,9 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_r - 1, (std::size_t)start_core_y + num_cores_c - 1});
 
-    bool tile_dtype_is_bfloat16 = input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
-    bool in0_is_dram = in0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = out0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool tile_dtype_is_bfloat16 = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16;
+    bool in0_is_dram = in0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool out_is_dram = out0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(out0_buffer->buffer_type() == out1_buffer->buffer_type(), "Output buffers should be the same type");
 
     uint32_t num_tiles_per_z = (per_core_tiles_x * num_cores_x) * (per_core_tiles_y * num_cores_y);
@@ -218,13 +218,15 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     auto override_runtime_args_callback =
         [reader_kernel_id, writer_kernel_id, num_cores_r, num_cores_c, start_core_x, start_core_y](
-            const Program& program,
-            const std::vector<Buffer*>& input_buffers,
-            const std::vector<Buffer*>& output_buffers) {
-            auto src_dram_buffer = input_buffers.at(0);
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            auto src_dram_buffer = input_tensors.at(0).buffer();
 
-            auto dst_0_dram_buffer = output_buffers.at(0);
-            auto dst_1_dram_buffer = output_buffers.at(0);
+            auto dst_0_dram_buffer = output_tensors.at(0).buffer();
+            auto dst_1_dram_buffer = output_tensors.at(0).buffer();
 
             for (int core_idx_y = 0; core_idx_y < num_cores_c; core_idx_y++) {
                 for (int core_idx_x = 0; core_idx_x < num_cores_r; core_idx_x++) {

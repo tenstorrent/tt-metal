@@ -2,26 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 from diffusers import StableDiffusionPipeline
-import ttnn
-import pytest
-
-from models.utility_functions import torch_random
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import (
-    skip_for_grayskull,
-)
-
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_downsample_2d_new_conv import downsample_2d
-from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from ttnn.model_preprocessing import preprocess_model_parameters
+
+import ttnn
+from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.tests.parameterizations import CROSS_DOWN_BLOCKS_HIDDEN_STATES_INFO
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_downsample_2d_new_conv import downsample_2d
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     get_default_compute_config,
-    preprocess_and_push_input_to_device,
     post_process_output_and_move_to_host,
+    preprocess_and_push_input_to_device,
 )
-from models.demos.wormhole.stable_diffusion.tests.parameterizations import CROSS_DOWN_BLOCKS_HIDDEN_STATES_INFO
+from models.utility_functions import skip_for_grayskull, torch_random
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_grayskull()
@@ -44,7 +40,6 @@ def test_downsample_512x512(
     torch_downsample = pipe.unet.down_blocks[block_index].downsamplers[0]
 
     # Initialize ttnn component
-    reader_patterns_cache = {}
     parameters = preprocess_model_parameters(
         initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
     )
@@ -52,7 +47,7 @@ def test_downsample_512x512(
     N, _, H, W = hidden_states
     compute_kernel_config = get_default_compute_config(device)
 
-    ttnn_downsample = downsample_2d(device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config)
+    ttnn_downsample = downsample_2d(device, parameters, N, H, W, compute_kernel_config)
 
     # Prepare inputs
     in_channels = hidden_states[1]

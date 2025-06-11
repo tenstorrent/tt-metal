@@ -57,10 +57,8 @@ def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, convert_to
 
     tt_tensor = ttnn.Tensor(py_tensor, tt_dtype)
     if tt_dtype in {ttnn.bfloat8_b, ttnn.bfloat4_b}:
-        assert tt_tensor.storage_type() == ttnn.StorageType.OWNED
         assert tt_tensor.layout == ttnn.TILE_LAYOUT
     else:
-        assert tt_tensor.storage_type() == ttnn.StorageType.BORROWED
         assert tt_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
 
     if convert_to_device:
@@ -146,7 +144,6 @@ def test_tensor_conversion_with_python_dtype(python_lib, shape, python_dtype_str
         from numpy import allclose
 
     tt_tensor = ttnn.Tensor(py_tensor)
-    assert tt_tensor.storage_type() == ttnn.StorageType.BORROWED
 
     if convert_to_device:
         tt_tensor = tt_tensor.to(device)

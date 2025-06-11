@@ -24,15 +24,15 @@ namespace ckernel {
  */
  // clang-format on
 ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(true, true, icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(true, true, icb)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(icb, icb)));
 
-    PACK((llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
     PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<false, DST_ACCUM_MODE>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 
-    UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(0, true)));
+    UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(icb, true)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true)));
 }
 
@@ -41,7 +41,7 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
  * correctly.
  */
 ALWI void transpose_wh_init_short(uint32_t icb) {
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(true, true, icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(true, true, icb)));
 
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true)));
 }
@@ -60,19 +60,13 @@ ALWI void transpose_wh_init_short(uint32_t icb) {
  * | Argument       | Description                                             | Type     | Valid Range                                    | Required |
  * |----------------|---------------------------------------------------------|----------|------------------------------------------------|----------|
  * | in_cb_id       | The identifier of the circular buffer (CB) containing A | uint32_t | 0 to 31                                        | True     |
- * | in_tile_index  | The index of tile A within the first CB                 | uint32_t | Must be less than the size of the CB           | True     | 
+ * | in_tile_index  | The index of tile A within the first CB                 | uint32_t | Must be less than the size of the CB           | True     |
  * | dst_tile_index | The index of the tile in DST REG for the result B       | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
  // clang-format on
 ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
-    UNPACK((
-#ifdef ARCH_GRAYSKULL
-        llk_unpack_A<BroadcastType::NONE, false>(icb, itile, true)
-#else
-        llk_unpack_A<BroadcastType::NONE, false>(icb, itile, false)
-#endif
-            ));
-    MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(idst)));
+    UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile, false)));
+    MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(idst)));
 }
 
 }  // namespace ckernel

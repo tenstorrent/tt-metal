@@ -1,0 +1,29 @@
+name: Support - Request Github permissions
+description: Request new or an issue with permissions with repos.
+labels: ["support"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        :star2: Thanks for requesting support! :star2:
+  - type: textarea
+    id: gh-permissions
+    attributes:
+      label: Describe what you are trying to do
+      description: |
+        Describe the task you're working on. For example, push a branch,
+        run a workflow, view private data etc.
+  - type: textarea
+    id: permission-group
+    attributes:
+      label: List who needs permissions
+      description: |
+        Provide details about who will need permissions. For example, for the author, team,
+        org...etc.
+  - type: textarea
+    id: additional-info
+    attributes:
+      label: Include additional details (optional)
+      description: |
+        If there is more information that would help with your request,
+        include it here.

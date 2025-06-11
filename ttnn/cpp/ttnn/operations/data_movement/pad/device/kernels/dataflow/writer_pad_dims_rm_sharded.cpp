@@ -55,12 +55,15 @@ void kernel_main() {
     constexpr uint32_t num_zero_pad_sticks_read = get_compile_time_arg_val(7);
     constexpr uint32_t zero_pad_stick_size = get_compile_time_arg_val(8);
 
-#define not_pad_by_zero get_compile_time_arg_val(9) == 1
-#if (not_pad_by_zero)
-    constexpr uint32_t packed_pad_value = get_compile_time_arg_val(10);
-    constexpr uint32_t row_major_min_bytes = get_compile_time_arg_val(11);
-    constexpr uint32_t num_sticks_padded_read = get_compile_time_arg_val(12);
-#endif
+    constexpr bool not_pad_by_zero = get_compile_time_arg_val(9) == 1;
+    uint32_t packed_pad_value = 0;
+    uint32_t row_major_min_bytes = 0;
+    uint32_t num_sticks_padded_read = 0;
+    if constexpr (not_pad_by_zero) {
+        packed_pad_value = kernel_compile_time_args[10];
+        row_major_min_bytes = kernel_compile_time_args[11];
+        num_sticks_padded_read = kernel_compile_time_args[12];
+    }
 
     constexpr auto cb_pad = tt::CBIndex::c_1;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
@@ -68,11 +71,11 @@ void kernel_main() {
     uint32_t pad_val_addr = get_read_ptr(cb_pad);
     uint64_t pad_val_noc_addr = get_noc_addr(pad_val_addr);
 
-#if (not_pad_by_zero)
-    fill_pad_cb_with_val(cb_pad, row_major_min_bytes, num_sticks_padded_read, packed_pad_value);
-#else
-    fill_pad_cb_with_zero(cb_pad, zero_pad_stick_size, num_zero_pad_sticks_read);
-#endif
+    if constexpr (not_pad_by_zero) {
+        fill_pad_cb_with_val(cb_pad, row_major_min_bytes, num_sticks_padded_read, packed_pad_value);
+    } else {
+        fill_pad_cb_with_zero(cb_pad, zero_pad_stick_size, num_zero_pad_sticks_read);
+    }
 
     uint32_t l1_write_addr = get_write_ptr(cb_out0);
 

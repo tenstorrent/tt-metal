@@ -40,6 +40,7 @@ def get_tensors(input_shape, output_shape, device):
         ([1, 1, 32, 32]),
         ([1, 4, 32, 32]),
         ([2, 2, 32, 32]),
+        ([16, 16]),
         # ([6, 4, 32, 32]), #Fails : expected result is inf but the result generated in nan
         # ([1, 1, 320, 320]), #Fails : expected result is inf but the result generated in nan
         # ([1, 3, 320, 64]), #Fails : expected result is inf but the result generated in nan
@@ -53,15 +54,13 @@ def test_prod(shapes, device):
     torch_output = torch.prod(torch_input)
 
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_output_cpu = (
-        ttnn.prod(tt_input, all_dimensions=True).cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
-    )
-    N, C, H, W = tt_output_cpu.shape
+    tt_output_cpu = ttnn.prod(tt_input).cpu().to(cpu_layout).to_torch()
+    N = tt_output_cpu.shape
     torch.set_printoptions(threshold=10000, precision=5, sci_mode=False)
     logger.info("Input shape")
     logger.info(torch_input.shape)
     logger.info("TT Output")
-    logger.info(tt_output_cpu[0, 0, 0, 0])
+    logger.info(tt_output_cpu)
     logger.info("Torch Output")
     logger.info(torch_output)
 
@@ -69,9 +68,7 @@ def test_prod(shapes, device):
     # TODO(Dongjin) : check while changing rtol after enabling fp32_dest_acc_en
     rtol = atol = 0.12
     # passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
-    passing, output_pcc = comp_allclose_and_pcc(
-        torch_output, tt_output_cpu[0, 0, 0, 0], pcc=0.999, rtol=rtol, atol=atol
-    )
+    passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
     logger.info(f"Out passing={passing}")
     logger.info(f"Output pcc={output_pcc}")

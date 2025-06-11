@@ -9,6 +9,7 @@ import sqlite3
 from types import ModuleType
 import zlib
 from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec
 
 import enlighten
 import pandas as pd
@@ -22,7 +23,9 @@ DATABASE_FILE_NAME = SWEEP_RESULTS_DIR / "db.sqlite"
 
 class SweepFileLoader(SourceFileLoader):
     def load_module(self) -> ModuleType:
-        module = super().load_module()
+        spec = self.spec
+        module = module_from_spec(spec)
+        self.exec_module(module)
 
         if not hasattr(module, "skip"):
             setattr(module, "skip", lambda **kwargs: (False, None))

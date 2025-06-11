@@ -4,13 +4,13 @@
 
 #include "metal_soc_descriptor.h"
 
-#include <fstream>
-#include <iostream>
+#include <assert.hpp>
+#include <yaml-cpp/yaml.h>
 #include <string>
 
-#include <assert.hpp>
-#include "umd/device/cluster.h"
-#include "yaml-cpp/yaml.h"
+#include <umd/device/types/arch.h>
+
+enum BoardType : uint32_t;
 
 CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view) const {
     TT_ASSERT(
@@ -120,9 +120,8 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         size_t address_offset = dram_view["address_offset"].as<size_t>();
 
         if (channel >= get_grid_size(CoreType::DRAM).x) {
-            TT_THROW(
-                "DRAM channel {} does not exist in the device descriptor, but is specified in dram_view.channel",
-                channel);
+            // DRAM can be harvested and we don't create unique soc desc for diff harvesting
+            break;
         }
         if (eth_endpoint >= get_grid_size(CoreType::DRAM).y) {
             TT_THROW(
@@ -139,10 +138,10 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
 
         this->dram_view_channels.push_back(channel);
         tt::umd::CoreCoord eth_dram_endpoint_coord =
-            get_dram_core_for_channel(channel, eth_endpoint, CoordSystem::VIRTUAL);
+            get_dram_core_for_channel(channel, eth_endpoint, CoordSystem::TRANSLATED);
         this->dram_view_eth_cores.push_back({eth_dram_endpoint_coord.x, eth_dram_endpoint_coord.y});
         tt::umd::CoreCoord worker_endpoint_coord =
-            get_dram_core_for_channel(channel, worker_endpoint, CoordSystem::VIRTUAL);
+            get_dram_core_for_channel(channel, worker_endpoint, CoordSystem::TRANSLATED);
         this->dram_view_worker_cores.push_back({worker_endpoint_coord.x, worker_endpoint_coord.y});
         this->dram_view_address_offsets.push_back(address_offset);
     }
@@ -156,7 +155,7 @@ tt_cxy_pair metal_SocDescriptor::convert_to_umd_coordinates(const tt_cxy_pair& p
 }
 
 CoordSystem metal_SocDescriptor::get_umd_coord_system() const {
-    return (this->arch == tt::ARCH::GRAYSKULL) ? CoordSystem::PHYSICAL : CoordSystem::VIRTUAL;
+    return CoordSystem::VIRTUAL;
 }
 
 void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
@@ -194,11 +193,11 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
 // For architectures with translation tables enabled, UMD will remove the last x rows from the descriptors in
 // tt_SocDescriptor (workers list and worker_log_to_routing_x/y maps) This creates a virtual coordinate system, where
 // translation tables are used to convert virtual core coordinates to the true harvesting state. For architectures
-// without translation tables enabled (Grayskull), UMD updates tt_SocDescriptor to contain the true harvesting state by
+// without translation tables enabled, UMD updates tt_SocDescriptor to contain the true harvesting state by
 // removing the harvested physical coordiniates Metal needs the true harvesting state so we generate physical
 // descriptors from virtual coordinates We also initialize additional lookup tables to translate physical coordinates to
 // virtual coordinates because UMD APIs expect virtual coordinates.
-metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, const BoardType& board_type) :
+metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, const BoardType& /*board_type*/) :
     tt_SocDescriptor(other) {
     this->load_dram_metadata_from_device_descriptor();
     this->generate_logical_eth_coords_mapping();

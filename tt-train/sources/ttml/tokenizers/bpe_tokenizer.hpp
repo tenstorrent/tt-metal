@@ -5,6 +5,9 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
 
 #include "tokenizer_base.hpp"
 

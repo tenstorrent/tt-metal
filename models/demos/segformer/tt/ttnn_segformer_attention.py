@@ -1,12 +1,10 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.demos.segformer.tt.ttnn_segformer_efficient_selfattention import (
-    TtSegformerEfficientSelfAttention,
-)
-from models.demos.segformer.tt.ttnn_segformer_selfoutput import TtSegformerSelfOutput
 import ttnn
+from models.demos.segformer.tt.ttnn_segformer_efficient_selfattention import TtSegformerEfficientSelfAttention
+from models.demos.segformer.tt.ttnn_segformer_selfoutput import TtSegformerSelfOutput
 
 
 class TtSegformerAttention:
@@ -20,9 +18,11 @@ class TtSegformerAttention:
         )
         self.output = TtSegformerSelfOutput()
 
-    def __call__(self, hidden_states: ttnn.Tensor, height: int, width: int, parameters, output_attentions=False):
-        self_outputs = self.self(hidden_states, height, width, parameters.self, output_attentions)
-        attention_output = self.output(self_outputs[0], parameters.output)
+    def __call__(
+        self, device, hidden_states: ttnn.Tensor, height: int, width: int, parameters, output_attentions=False
+    ):
+        self_outputs = self.self(device, hidden_states, height, width, parameters.self, output_attentions)
+        attention_output = self.output(device, self_outputs[0], parameters.output)
         outputs = (attention_output,) + self_outputs[1:]
         ttnn.deallocate(self_outputs[0])
 

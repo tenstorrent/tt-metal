@@ -2,25 +2,49 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <cctype>
 #include <chrono>
-#include <functional>
-#include <random>
-#include <stdexcept>
-#include <string>
-#include <vector>
-
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdlib.h>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <functional>
+#include <map>
+#include <memory>
+#include <optional>
+#include <random>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "test_common.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include "umd/device/types/arch.h"
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -98,7 +122,7 @@ uint32_t get_dram_bandwidth(tt::ARCH arch);
 
 int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        log_error("Test not supported w/ slow dispatch, exiting");
+        log_error(tt::LogTest, "Test not supported w/ slow dispatch, exiting");
     }
 
     bool pass = true;
@@ -304,7 +328,7 @@ int main(int argc, char** argv) {
 
     // Determine if it passes performance goal
     auto avg_dram_bandwidth = calculate_average(dram_bandwidth);
-    if (pass && bypass_check == false) {
+    if (pass && !bypass_check) {
         // goal is 90% of peak DRAM bandwidth performance
         double target_bandwidth = static_cast<double>(dram_bandwidth_spec) * 0.9;
         if (avg_dram_bandwidth < target_bandwidth) {
@@ -319,14 +343,15 @@ int main(int argc, char** argv) {
     }
 
     // for csv
-    log_info("CSV_MICROBENCHMARK:title:test_dram_offchip");
+    log_info(tt::LogTest, "CSV_MICROBENCHMARK:title:test_dram_offchip");
     log_info(
+        tt::LogTest,
         "CSV_INPUT:input-size:{}:access-type:{}:use-device-profiler:{}",
         input_size,
         ACCESS_TYPEToString(static_cast<ACCESS_TYPE>(access_type)),
         use_device_profiler);
-    log_info("CSV_OUTPUT:Bandwidth(GB/s):{:.3f}", avg_dram_bandwidth);
-    log_info("CSV_RESULT:pass:{}", pass);
+    log_info(tt::LogTest, "CSV_OUTPUT:Bandwidth(GB/s):{:.3f}", avg_dram_bandwidth);
+    log_info(tt::LogTest, "CSV_RESULT:pass:{}", pass);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

@@ -2,14 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <boost/move/utility_core.hpp>
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <cstddef>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <utility>
+#include <vector>
 
-#include "tests/tt_metal/tt_metal/dispatch/dispatch_test_utils.hpp"
-#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_event.hpp>
+#include <tt-metalium/shape2d.hpp>
+#include <tt_stl/span.hpp>
 #include "tests/tt_metal/distributed/utils.hpp"
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/util.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -314,6 +332,21 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
         EXPECT_EQ(dst_vec, input_shard_data[idx / num_devices]);
         idx++;
     }
+}
+
+TEST_F(MeshEventsTestSuite, EventQuery) {
+    uint32_t NUM_ITERS = 500;
+    // Stress EventQuery API and ensure that an event is marked as completed post synchronization.
+    for (auto i = 0; i < NUM_ITERS; i++) {
+        auto event = EnqueueRecordEventToHost(mesh_device_->mesh_command_queue(0));
+        if (i % 10 == 0) {
+            EventSynchronize(event);
+            EXPECT_TRUE(EventQuery(event));
+        }
+    }
+    // Create a dummy event from the future that has not been issued yet.
+    auto event = MeshEvent(0xffff, mesh_device_.get(), 0, MeshCoordinateRange(mesh_device_->shape()));
+    EXPECT_FALSE(EventQuery(event));  // Querying an event that has not been issued should return false.
 }
 
 }  // namespace

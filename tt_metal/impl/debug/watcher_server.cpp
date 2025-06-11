@@ -4,38 +4,63 @@
 
 #include "watcher_server.hpp"
 
+#include "dev_msgs.h"
 #include <unistd.h>
-
+#include <algorithm>
+#include <atomic>
 #include <chrono>
-#include <ctime>
+#include <cstdio>
+#include <condition_variable>
 #include <filesystem>
+#include <functional>
+#include <initializer_list>
+#include <map>
 #include <mutex>
+#include <set>
+#include <stdexcept>
+#include <string_view>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
-#include "llrt/hal.hpp"
-#include <dev_msgs.h>
-#include "llrt.hpp"
-#include <rtoptions.hpp>
+#include "assert.hpp"
+#include "core_coord.hpp"
 #include "debug/ring_buffer.h"
-#include "watcher_device_reader.hpp"
 #include "debug_helpers.hpp"
+#include "hal_types.hpp"
+#include "llrt.hpp"
+#include <tt-logger/tt-logger.hpp>
+#include "metal_soc_descriptor.h"
+#include <tt_stl/span.hpp>
+#include "impl/context/metal_context.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/xy_pair.h>
+#include "utils.hpp"
+#include "watcher_device_reader.hpp"
 
 using namespace tt::tt_metal;
 
 namespace tt {
 namespace watcher {
 
-#define GET_WATCHER_TENSIX_DEV_ADDR() hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::WATCHER)
+#define GET_WATCHER_TENSIX_DEV_ADDR() \
+    MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::WATCHER)
 
 #define GET_WATCHER_ERISC_DEV_ADDR() \
-    hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::WATCHER)
+    MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::WATCHER)
 
-#define GET_WATCHER_IERISC_DEV_ADDR() hal_ref.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::WATCHER)
+#define GET_WATCHER_IERISC_DEV_ADDR() \
+    MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::WATCHER)
 
 static std::atomic<bool> enabled = false;
 static std::atomic<bool> server_running = false;
 static std::atomic<int> dump_count = 0;
 static std::mutex watch_mutex;
+static std::condition_variable enabled_cv;
+
 static std::map<chip_id_t, watcher::WatcherDeviceReader> devices;
 static string logfile_path = "generated/watcher/";
 static string logfile_name = "watcher.log";
@@ -44,6 +69,8 @@ static std::chrono::time_point start_time = std::chrono::system_clock::now();
 static std::vector<string> kernel_names;
 static FILE* kernel_file = nullptr;
 static string kernel_file_name = "kernel_names.txt";
+static FILE* kernel_elf_file = nullptr;
+static string kernel_elf_file_name = "kernel_elf_paths.txt";
 
 // Flag to signal whether the watcher server has been killed due to a thrown exception.
 static std::atomic<bool> watcher_killed_due_to_error = false;
@@ -72,10 +99,14 @@ static double get_elapsed_secs() {
 void create_log_file() {
     FILE* f;
 
-    const char* fmode = tt::llrt::RunTimeOptions::get_instance().get_watcher_append() ? "a" : "w";
-    std::filesystem::path output_dir(tt::llrt::RunTimeOptions::get_instance().get_root_dir() + watcher::logfile_path);
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
+    std::filesystem::path output_dir(rtoptions.get_root_dir() + watcher::logfile_path);
     std::filesystem::create_directories(output_dir);
     string fname = output_dir.string() + watcher::logfile_name;
+    if (rtoptions.get_watcher_skip_logging()) {
+        fname = "/dev/null";
+    }
     if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
         TT_THROW("Watcher failed to create log file\n");
     }
@@ -93,14 +124,11 @@ void create_log_file() {
     fprintf(f, "\tA single character status is in the FW, other characters clarify where, eg:\n");
     fprintf(f, "\t\tNRW is \"noc read wait\"\n");
     fprintf(f, "\t\tNWD is \"noc write done\"\n");
-    fprintf(f, "\tnoc<n>:<risc>{a, l}=an L1 address used by NOC<n> by <riscv> (eg, local src address)\n");
-    fprintf(f, "\tnoc<n>:<riscv>{(x,y), a, l}=NOC<n> unicast address used by <riscv>\n");
-    fprintf(f, "\tnoc<n>:<riscv>{(x1,y1)-(x2,y2), a, l}=NOC<n> multicast address used by <riscv>\n");
     fprintf(
         f,
-        "\trmsg:<c>=brisc host run message, D/H device/host dispatch; brisc NOC ID; I/G/D init/go/done; | separator; "
+        "\trmsg(brisc host run message): D/H device/host dispatch; brisc NOC ID; I/G/D init/go/done; | separator; "
         "B/b enable/disable brisc; N/n enable/disable ncrisc; T/t enable/disable TRISC\n");
-    fprintf(f, "\tsmsg:<c>=slave run message, I/G/D for NCRISC, TRISC0, TRISC1, TRISC2\n");
+    fprintf(f, "\tsmsg(subordinate run message): I/G/D for NCRISC, TRISC0, TRISC1, TRISC2\n");
     fprintf(f, "\tk_ids:<brisc id>|<ncrisc id>|<trisc id> (ID map to file at end of section)\n");
     fprintf(f, "\n");
     fflush(f);
@@ -110,8 +138,9 @@ void create_log_file() {
 
 void create_kernel_file() {
     FILE* f;
-    const char* fmode = tt::llrt::RunTimeOptions::get_instance().get_watcher_append() ? "a" : "w";
-    std::filesystem::path output_dir(tt::llrt::RunTimeOptions::get_instance().get_root_dir() + watcher::logfile_path);
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
+    std::filesystem::path output_dir(rtoptions.get_root_dir() + watcher::logfile_path);
     std::filesystem::create_directories(output_dir);
     string fname = output_dir.string() + watcher::kernel_file_name;
     if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
@@ -125,6 +154,20 @@ void create_kernel_file() {
     watcher::kernel_file = f;
 }
 
+void create_kernel_elf_file() {
+    FILE* f;
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    std::filesystem::path output_dir(rtoptions.get_root_dir() + watcher::logfile_path);
+    std::filesystem::create_directories(output_dir);
+    string fname = output_dir.string() + watcher::kernel_elf_file_name;
+    if ((f = fopen(fname.c_str(), "w")) == nullptr) {
+        TT_THROW("Watcher failed to create kernel ELF file\n");
+    }
+    watcher::kernel_elf_file = f;
+    fprintf(f, "0: blank\n");
+    fflush(f);
+}
+
 // noinline so that this fn exists to be called from dgb
 static void __attribute__((noinline)) dump(FILE* f) {
     for (auto& device_and_reader : devices) {
@@ -132,14 +175,15 @@ static void __attribute__((noinline)) dump(FILE* f) {
     }
 }
 
-static void watcher_loop(int sleep_usecs) {
+static void watcher_loop(std::chrono::microseconds sleep_duration) {
     TT_ASSERT(watcher::server_running == false);
     watcher::server_running = true;
     watcher::dump_count = 1;
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
     // Print to the user which features are disabled via env vars.
     string disabled_features = "";
-    auto& disabled_features_set = tt::llrt::RunTimeOptions::get_instance().get_watcher_disabled_features();
+    auto& disabled_features_set = rtoptions.get_watcher_disabled_features();
     if (!disabled_features_set.empty()) {
         for (auto& feature : disabled_features_set) {
             disabled_features += feature + ",";
@@ -151,20 +195,11 @@ static void watcher_loop(int sleep_usecs) {
     log_info(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
 
     while (true) {
-        // Delay the amount of time specified by the user. Don't include watcher polling time to avoid the case where
-        // watcher dominates the communication links due to heavy traffic.
-        double last_elapsed_time = watcher::get_elapsed_secs();
-        while ((watcher::get_elapsed_secs() - last_elapsed_time) < ((double)sleep_usecs) / 1000000.) {
-            // Odds are this thread will be killed during the usleep, the kill signal is
-            // watcher::enabled = false from the main thread.
-            if (!watcher::enabled) {
-                break;
-            }
-            usleep(1);
+        std::unique_lock<std::mutex> lock(watch_mutex);
+        if (enabled_cv.wait_for(lock, sleep_duration, [&] { return !watcher::enabled.load(); })) {
+            // Watcher has been disabled
+            break;
         }
-
-        {
-            const std::lock_guard<std::mutex> lock(watch_mutex);
 
             // If all devices are detached, we can turn off the server, it will be turned back on
             // when a new device is attached.
@@ -183,9 +218,10 @@ static void watcher_loop(int sleep_usecs) {
                 dump(logfile);
             } catch (std::runtime_error& e) {
                 // Depending on whether test mode is enabled, catch and stop server, or re-throw.
-                if (tt::llrt::RunTimeOptions::get_instance().get_test_mode_enabled()) {
+                if (rtoptions.get_test_mode_enabled()) {
                     watcher::watcher_killed_due_to_error = true;
                     watcher::enabled = false;
+                    enabled_cv.notify_all();
                     break;
                 } else {
                     throw e;
@@ -193,9 +229,8 @@ static void watcher_loop(int sleep_usecs) {
             }
 
             fprintf(logfile, "Dump #%d completed at %.3lfs\n", watcher::dump_count.load(), watcher::get_elapsed_secs());
-        }
-        fflush(logfile);
-        watcher::dump_count++;
+            fflush(logfile);
+            watcher::dump_count++;
     }
 
     log_info(LogLLRuntime, "Watcher thread stopped watching...");
@@ -208,9 +243,10 @@ void watcher_init(chip_id_t device_id) {
     std::vector<uint32_t> watcher_init_val;
     watcher_init_val.resize(sizeof(watcher_msg_t) / sizeof(uint32_t), 0);
     watcher_msg_t* data = reinterpret_cast<watcher_msg_t*>(&(watcher_init_val[0]));
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
     // Initialize watcher enable flag according to user setting.
-    data->enable = (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) ? WatcherEnabled : WatcherDisabled;
+    data->enable = (rtoptions.get_watcher_enabled()) ? WatcherEnabled : WatcherDisabled;
 
     // Initialize debug status values to "unknown"
     for (int idx = 0; idx < MAX_RISCV_PER_CORE; idx++) {
@@ -218,7 +254,7 @@ void watcher_init(chip_id_t device_id) {
     }
 
     // Initialize debug sanity L1/NOC addresses to sentinel "all ok"
-    const auto NUM_NOCS = tt::tt_metal::hal_ref.get_num_nocs();
+    const auto NUM_NOCS = tt::tt_metal::MetalContext::instance().hal().get_num_nocs();
     for (int i = 0; i < NUM_NOCS; i++) {
         data->sanitize_noc[i].noc_addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_64;
         data->sanitize_noc[i].l1_addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
@@ -242,7 +278,7 @@ void watcher_init(chip_id_t device_id) {
 
     // Initialize stack usage data to unset
     for (int idx = 0; idx < DebugNumUniqueRiscs; idx++) {
-        data->stack_usage.max_usage[idx] = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
+        data->stack_usage.cpu[idx].min_free = 0;
     }
 
     // Initialize debug ring buffer to a known init val, we'll check against this to see if any
@@ -257,15 +293,15 @@ void watcher_init(chip_id_t device_id) {
     for (tt::llrt::RunTimeDebugFeatures delay_feature = tt::llrt::RunTimeDebugFeatureReadDebugDelay;
          (int)delay_feature <= tt::llrt::RunTimeDebugFeatureAtomicDebugDelay;
          delay_feature = (tt::llrt::RunTimeDebugFeatures)((int)delay_feature + 1)) {
-        std::vector<chip_id_t> chip_ids = tt::llrt::RunTimeOptions::get_instance().get_feature_chip_ids(delay_feature);
-        bool this_chip_enabled = tt::llrt::RunTimeOptions::get_instance().get_feature_all_chips(delay_feature) ||
+        std::vector<chip_id_t> chip_ids = rtoptions.get_feature_chip_ids(delay_feature);
+        bool this_chip_enabled = rtoptions.get_feature_all_chips(delay_feature) ||
                                  std::find(chip_ids.begin(), chip_ids.end(), device_id) != chip_ids.end();
         if (this_chip_enabled) {
             static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
             debug_insert_delays_msg_t delay_setup;
 
             // Create the mask based on the feature
-            uint32_t hart_mask = tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(delay_feature);
+            uint32_t hart_mask = rtoptions.get_feature_riscv_mask(delay_feature);
             switch (delay_feature) {
                 case tt::llrt::RunTimeDebugFeatureReadDebugDelay: delay_setup.read_delay_riscv_mask = hart_mask; break;
                 case tt::llrt::RunTimeDebugFeatureWriteDebugDelay:
@@ -278,14 +314,18 @@ void watcher_init(chip_id_t device_id) {
             }
 
             for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
-                std::vector<CoreCoord> delayed_cores =
-                    tt::llrt::RunTimeOptions::get_instance().get_feature_cores(delay_feature)[core_type];
-                for (tt_xy_pair logical_core : delayed_cores) {
+                const auto& delayed_cores = rtoptions.get_feature_cores(delay_feature);
+                if (delayed_cores.count(core_type) == 0) {
+                    continue;
+                }
+                for (tt_xy_pair logical_core : delayed_cores.at(core_type)) {
                     CoreCoord virtual_core;
                     bool valid_logical_core = true;
                     try {
-                        virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
-                            device_id, logical_core, core_type);
+                        virtual_core =
+                            tt::tt_metal::MetalContext::instance()
+                                .get_cluster()
+                                .get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, core_type);
                     } catch (std::runtime_error& error) {
                         valid_logical_core = false;
                     }
@@ -327,7 +367,7 @@ void watcher_init(chip_id_t device_id) {
             delay.second.read_delay_riscv_mask,
             delay.second.write_delay_riscv_mask,
             delay.second.atomic_delay_riscv_mask,
-            tt::llrt::RunTimeOptions::get_instance().get_watcher_debug_delay());
+            rtoptions.get_watcher_debug_delay());
     }
 
     debug_insert_delays_msg_t debug_delays_val_zero = {0, 0, 0, 0};
@@ -336,12 +376,14 @@ void watcher_init(chip_id_t device_id) {
     // cores from that to consolidate the loops below
 
     // Initialize worker cores debug values
-    CoreCoord grid_size = tt::Cluster::instance().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+    CoreCoord grid_size =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
-            CoreCoord worker_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
-                device_id, logical_core, CoreType::WORKER);
+            CoreCoord worker_core =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                    device_id, logical_core, CoreType::WORKER);
             if (debug_delays_val.find(worker_core) != debug_delays_val.end()) {
                 data->debug_insert_delays = debug_delays_val[worker_core];
             } else {
@@ -358,7 +400,8 @@ void watcher_init(chip_id_t device_id) {
     // Initialize ethernet cores debug values
     auto init_eth_debug_values = [&](const CoreCoord& eth_core, bool is_active_eth_core) {
         CoreCoord virtual_core =
-            tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                device_id, eth_core, CoreType::ETH);
         if (debug_delays_val.find(virtual_core) != debug_delays_val.end()) {
             data->debug_insert_delays = debug_delays_val[virtual_core];
         } else {
@@ -370,10 +413,12 @@ void watcher_init(chip_id_t device_id) {
             watcher_init_val,
             is_active_eth_core ? GET_WATCHER_ERISC_DEV_ADDR() : GET_WATCHER_IERISC_DEV_ADDR());
     };
-    for (const CoreCoord& active_eth_core : tt::Cluster::instance().get_active_ethernet_cores(device_id)) {
+    for (const CoreCoord& active_eth_core :
+         tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
         init_eth_debug_values(active_eth_core, true);
     }
-    for (const CoreCoord& inactive_eth_core : tt::Cluster::instance().get_inactive_ethernet_cores(device_id)) {
+    for (const CoreCoord& inactive_eth_core :
+         tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(device_id)) {
         init_eth_debug_values(inactive_eth_core, false);
     }
 
@@ -382,8 +427,9 @@ void watcher_init(chip_id_t device_id) {
 
 void watcher_attach(chip_id_t device_id) {
     const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
+    auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
 
-    if (!watcher::enabled && tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
+    if (!watcher::enabled && rtoptions.get_watcher_enabled()) {
         watcher::create_log_file();
         if (!watcher::kernel_file) {
             watcher::create_kernel_file();
@@ -392,9 +438,12 @@ void watcher_attach(chip_id_t device_id) {
         watcher::set_watcher_exception_message("");
 
         watcher::enabled = true;
+        watcher::enabled_cv.notify_all();
 
-        int sleep_usecs = tt::llrt::RunTimeOptions::get_instance().get_watcher_interval() * 1000;
-        std::thread watcher_thread = std::thread(&watcher::watcher_loop, sleep_usecs);
+        rtoptions.set_disable_dma_ops(true);
+
+        auto sleep_duration = std::chrono::milliseconds(rtoptions.get_watcher_interval());
+        std::thread watcher_thread = std::thread(&watcher::watcher_loop, sleep_duration);
         watcher_thread.detach();
     }
 
@@ -427,6 +476,7 @@ void watcher_detach(chip_id_t device_id) {
         if (watcher::enabled && watcher::devices.empty()) {
             // If no devices remain, shut down the watcher server.
             watcher::enabled = false;
+            watcher::enabled_cv.notify_all();
             if (watcher::logfile != nullptr) {
                 std::fclose(watcher::logfile);
                 watcher::logfile = nullptr;
@@ -444,6 +494,8 @@ void watcher_detach(chip_id_t device_id) {
         while (watcher::server_running) {
             ;
         }
+
+        tt::tt_metal::MetalContext::instance().rtoptions().set_disable_dma_ops(false);
     }
 }
 
@@ -461,6 +513,19 @@ int watcher_register_kernel(const string& name) {
     return k_id;
 }
 
+void watcher_register_kernel_elf_paths(int id, std::vector<std::string> paths) {
+    const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
+    if (!watcher::kernel_elf_file) {
+        watcher::create_kernel_elf_file();
+    }
+    std::string combined_paths = paths[0];
+    for (int i = 1; i < paths.size(); i++) {
+        combined_paths += ":" + paths[i];
+    }
+    fprintf(watcher::kernel_elf_file, "%d: %s\n", id, combined_paths.c_str());
+    fflush(watcher::kernel_elf_file);
+}
+
 bool watcher_server_killed_due_to_error() { return watcher::watcher_killed_due_to_error; }
 
 void watcher_server_set_error_flag(bool val) { watcher::watcher_killed_due_to_error = val; }
@@ -468,7 +533,8 @@ void watcher_server_set_error_flag(bool val) { watcher::watcher_killed_due_to_er
 void watcher_clear_log() { watcher::create_log_file(); }
 
 string watcher_get_log_file_name() {
-    return tt::llrt::RunTimeOptions::get_instance().get_root_dir() + watcher::logfile_path + watcher::logfile_name;
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + watcher::logfile_path +
+           watcher::logfile_name;
 }
 
 int watcher_get_dump_count() { return watcher::dump_count; }
@@ -481,7 +547,8 @@ void watcher_dump() {
 }
 
 void watcher_read_kernel_ids_from_file() {
-    std::filesystem::path output_dir(tt::llrt::RunTimeOptions::get_instance().get_root_dir() + watcher::logfile_path);
+    std::filesystem::path output_dir(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + watcher::logfile_path);
     string fname = output_dir.string() + watcher::kernel_file_name;
     FILE* f;
     if ((f = fopen(fname.c_str(), "r")) == nullptr) {

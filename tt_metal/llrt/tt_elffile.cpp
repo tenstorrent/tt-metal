@@ -4,21 +4,20 @@
 
 #include "tt_elffile.hpp"
 
-#include <algorithm>
-#include <array>
-
 #include <assert.hpp>
-// C++
-#include <map>
-// C
-#include <errno.h>
-// OS
 #include <elf.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <algorithm>
+#include <cstring>
+#include <iterator>
+#include <map>
+
+#include <tt-logger/tt-logger.hpp>
 
 // Verify some knowledge of, and compatibilty with, RiscV
 #ifndef EM_RISCV
@@ -57,14 +56,14 @@ class ElfFile::Impl {
 private:
     std::span<Elf32_Phdr> phdrs_;
     std::span<Elf32_Shdr> shdrs_;
-    std::string const& path_;
+    const std::string path_;
     ElfFile& owner_;
 
 private:
     class Weakener;
 
 public:
-    Impl(ElfFile& owner, std::string const& path) : owner_(owner), path_(path) {}
+    Impl(ElfFile& owner, std::string_view path) : owner_(owner), path_(std::string(path)) {}
     ~Impl() = default;
 
 public:
@@ -163,8 +162,8 @@ void ElfFile::ReleaseImpl() {
     pimpl_ = nullptr;
 }
 
-void ElfFile::ReadImage(std::string const& path) {
-    int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+void ElfFile::ReadImage(std::string_view path) {
+    int fd = open(path.data(), O_RDONLY | O_CLOEXEC);
     struct stat st;
     void* buffer = MAP_FAILED;
     if (fd >= 0 && fstat(fd, &st) >= 0) {
@@ -331,6 +330,38 @@ void ElfFile::Impl::LoadImage() {
             constexpr auto* prefix = ".empty.";
             if (std::strncmp(name, prefix, std::strlen(prefix)) == 0) {
                 TT_THROW("{}: {} section has contents (namespace-scope constructor present?)", path_, name);
+            }
+        }
+        if (!(section.sh_flags & SHF_ALLOC) && section.sh_type == SHT_PROGBITS &&
+             std::strcmp(GetName(section), ".phdrs") == 0) {
+            // Specifies phdr size limits
+            auto bytes = GetContents(section);
+            auto words = std::span(reinterpret_cast<uint32_t const *>(bytes.data()), bytes.size() / sizeof(uint32_t));
+            for (unsigned ix = 0; ix != words.size(); ix++) {
+                if (ix >= GetSegments().size())
+                    continue;
+                uint32_t limit = words[ix];
+                auto const &seg = GetSegments()[ix];
+                if (seg.membytes > limit) {
+                    TT_THROW("{}: phdr[{}] [{},+{}) overflows limit of {} bytes, {}",
+                             path_, ix, seg.address, seg.membytes, limit,
+                             ix == 0 ? "reduce the code size" :
+                             ix == 1 ? "reduce the number of statically allocated variables (e.g, globals)" :
+                             "examine executable for segment details"
+                        );
+                }
+            }
+        }
+        if (std::strcmp(GetName(section), ".data") == 0) {
+            // Verify this is at the start of segment 1 -- we had a
+            // linker script bug at one point.
+            bool in_range = GetSegments().size() >= 2;
+            if (!in_range || section.sh_addr != GetSegments()[1].address) {
+                TT_THROW("{}: .data section at [{},+{}) not at start of data segment at [{},+{})",
+                         path_,
+                         section.sh_addr, section.sh_size,
+                         in_range ? GetSegments()[1].address : 0,
+                         in_range ? GetSegments()[1].membytes : 0);
             }
         }
     }

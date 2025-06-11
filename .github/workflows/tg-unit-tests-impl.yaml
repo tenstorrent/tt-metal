@@ -12,6 +12,14 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
+      topology:
+        required: false
+        type: string
+        default: "config-tg"
 
 jobs:
   TG-UMD-tests:
@@ -20,9 +28,9 @@ jobs:
       matrix:
         test-group: [
           {
-            name: "TG UMD unit tests",
+            name: "Galaxy UMD unit tests",
             arch: wormhole_b0,
-            runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-functional"],
+            runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-functional"],
             cmd: "./build/test/umd/galaxy/unit_tests_glx"
           },  # Bojan Roško
         ]
@@ -36,7 +44,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -47,11 +55,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 500 # Need enough history for `git describe`
+          fetch-tags: true # Need tags for `git describe`
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
 
       - name: Build UMD device and tests
         run: |
-          cmake -B build -G Ninja -DTT_UMD_BUILD_TESTS=ON -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake
+          cmake -B build -G Ninja -DTT_UMD_BUILD_TESTS=ON -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
           cmake --build build --target umd_tests
 
       - name: Run UMD unit regression tests
@@ -67,20 +77,20 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "TG unit tests", arch: wormhole_b0, model: unit, timeout: 30, owner_id: XXXXX},  # Add owner
-          { name: "TG Fabric tests", arch: wormhole_b0, model: fabric, timeout: 30, owner_id: UJ45FEC7M},  # Allan Liu
-          { name: "TG Llama3-70b unit tests", arch: wormhole_b0, model: llama3-70b, timeout: 45, owner_id: U044T8U8DEF}, # Johanna Rock
-          { name: "TG DRAM Prefetcher unit tests", arch: wormhole_b0, model: prefetcher, timeout: 30, owner_id: U071CKL4AFK}, # Ammar Vora, Yu Gao
-          { name: "TG distributed ops tests", arch: wormhole_b0, model: distributed-ops, timeout: 15, owner_id: U044T8U8DEF},  # Johanna Rock
-          { name: "TG distributed runtime tests", arch: wormhole_b0, model: distributed-runtime, timeout: 45, owner_id: U03NG0A5ND7},  # Aditya Saigal
+          { name: "Galaxy unit tests", arch: wormhole_b0, model: unit, timeout: 45, owner_id: XXXXX},  # Add owner
+          { name: "Galaxy Fabric tests", arch: wormhole_b0, model: fabric, timeout: 40, owner_id: UJ45FEC7M},  # Allan Liu
+          { name: "Galaxy Llama3-70b unit tests", arch: wormhole_b0, model: llama3-70b, timeout: 30, owner_id: U053W15B6JF, mlperf: true}, # Djordje Ivanovic
+          { name: "Galaxy DRAM Prefetcher unit tests", arch: wormhole_b0, model: prefetcher, timeout: 30, owner_id: U071CKL4AFK}, # Ammar Vora, Yu Gao
+          { name: "Galaxy distributed ops tests", arch: wormhole_b0, model: distributed-ops, timeout: 15, owner_id: U044T8U8DEF},  # Johanna Rock
+          { name: "Galaxy distributed runtime tests", arch: wormhole_b0, model: distributed-runtime, timeout: 45, owner_id: U03NG0A5ND7},  # Aditya Saigal
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
       - arch-wormhole_b0
-      - config-tg
-      - in-service
+      - ${{ inputs.topology }}
       - bare-metal
       - pipeline-functional
+      - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -93,7 +103,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf
+        - ${{ matrix.test-group.mlperf && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -113,7 +123,7 @@ jobs:
           mkdir -p generated/test_reports
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type unit_tg_device --dispatch-mode "" --model ${{ matrix.test-group.model }}
 
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -123,16 +133,11 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            /work/generated/test_reports/
           prefix: "test_reports_"
 
       - name: Generate gtest annotations on failure
-        uses: ./.github/actions/generate-gtest-failure-message
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
-        with:
-          path: |
-            generated/test_reports/
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

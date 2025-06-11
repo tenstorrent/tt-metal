@@ -29,7 +29,12 @@ public:
         bool enable_persistent_mode,
         std::optional<size_t> desired_num_links = std::nullopt,
         bool build_in_worker_connection_mode = false,
-        Topology topology = Topology::Linear);
+        Topology topology = Topology::Linear,
+        bool is_galaxy = false,
+        bool en_dateline_sender_extra_buffer = false,
+        bool en_dateline_receiver_extra_buffer = false,
+        bool en_dateline_upstream_sender_extra_buffer = false,
+        bool en_dateline_upstream_receiver_extra_buffer = false);
 
     // Invocable per chip if we want to collectively build the fabric by building this separately per chip
     // (and implicitly building the fabric that way)

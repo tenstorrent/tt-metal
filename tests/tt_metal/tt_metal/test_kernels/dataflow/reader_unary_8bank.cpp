@@ -7,6 +7,14 @@
 
 // #include "debug/dprint.h"
 
+constexpr bool get_read_from_dram() {
+    if constexpr (kernel_compile_time_args.size() > 0) {
+        return get_compile_time_arg_val(0);
+    } else {
+        return true;
+    }
+}
+
 void generate_bcast_scaler() {
     constexpr uint32_t cb_in_2 = 2;
     uint32_t scaler = get_arg_val<uint32_t>(8);
@@ -39,15 +47,13 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    constexpr uint32_t log_2_tile_bytes = tile_bytes == 2048 ? 11 : (tile_bytes == 1024 ? 10 : 0);
+    static_assert(log_2_tile_bytes);  // catch invalid tile size
 
-#ifdef KERNEL_COMPILE_TIME_ARG_0
-    constexpr bool read_from_dram = get_compile_time_arg_val(0);
-#else
-    constexpr bool read_from_dram = true;
-#endif
+    constexpr bool read_from_dram = get_read_from_dram();
 
-    const InterleavedPow2AddrGen<read_from_dram> src_a = {src_addr, 11};
+    const InterleavedPow2AddrGen<read_from_dram> src_a = {src_addr, log_2_tile_bytes};
 
 #if GENERATE_BCAST_SCALER
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
@@ -74,7 +80,7 @@ void kernel_main() {
         for (uint32_t r = 0; r < rem; r++) {
             uint64_t src_noc_addr =
                 get_noc_addr(i + r + tile_offset, src_a);  // not contiguous for sequential r, can be banked
-            auto addr = l1_write_addr + (r << 11);
+            auto addr = l1_write_addr + (r << log_2_tile_bytes);
             noc_async_read(src_noc_addr, addr, tile_bytes);  // TODO(AP): data type size
         }
         noc_async_read_barrier();

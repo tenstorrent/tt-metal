@@ -10,6 +10,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 // #include "debug/dprint.h"
+#include "compute_kernel_api/untilize.h"
 
 #ifdef FUSE_BIAS
 #include "compute_kernel_api/bcast.h"
@@ -18,7 +19,6 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
 #define DEBUG_PRINT 0
-// #include "debug_macros.h"
 
 inline void tilize_in(
     uint32_t in_cb_id, uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
@@ -434,6 +434,8 @@ void MAIN {
 #ifndef FUSE_BIAS
                 reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
 #endif
+
+#ifdef PACKER_UNTILIZE
                 pack_untilize_dst_init_short<out_subblock_w, out_block_w>(out_cb_id);
                 copy_tile_to_dst_init_short(matmul_partials_cb);
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
@@ -441,6 +443,19 @@ void MAIN {
                         in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, matmul_partials_cb, out_cb_id);
                 }
                 pack_untilize_uninit(matmul_partials_cb);
+#else
+                untilize_init_short(matmul_partials_cb);
+                for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
+                    for (uint32_t out_block_h_i = 0; out_block_h_i < out_subblock_h; ++out_block_h_i) {
+                        cb_wait_front(matmul_partials_cb, out_block_w);
+                        cb_reserve_back(out_cb_id, out_block_w);
+                        untilize_block(matmul_partials_cb, out_block_w, out_cb_id);
+                        cb_push_back(out_cb_id, out_block_w);
+                        cb_pop_front(matmul_partials_cb, out_block_w);
+                    }
+                }
+                untilize_uninit(matmul_partials_cb);
+#endif
             }
             if constexpr ((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
 #ifdef FUSE_BIAS

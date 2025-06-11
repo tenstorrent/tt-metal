@@ -70,7 +70,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import run_all_gather_
     ),
 )
 @pytest.mark.parametrize("num_iter", [1000])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 17068032}], indirect=True)
 def test_all_gather_sharded_post_commit(
     t3k_mesh_device,
@@ -89,7 +88,6 @@ def test_all_gather_sharded_post_commit(
     # num_cores,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iter,
 ):
     logger.info(f"Running for n_worker={n_worker}, n_buffer={n_buffer}:")
@@ -109,7 +107,6 @@ def test_all_gather_sharded_post_commit(
         use_program_cache,
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
-        enable_async=enable_async,
         n_worker=n_worker,
         n_buffer=n_buffer,
         num_iter=num_iter,

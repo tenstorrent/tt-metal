@@ -1,12 +1,8 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
-#include <cstdint>
-#include <sys/param.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 #define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
@@ -14,8 +10,8 @@
 #include "debug/dprint_pages.h"
 #endif
 
-constexpr uint32_t weight_size_h = get_compile_time_arg_val(7);
-constexpr uint32_t weight_size_w = get_compile_time_arg_val(8);
+constexpr uint32_t weight_size_h = get_compile_time_arg_val(6);
+constexpr uint32_t weight_size_w = get_compile_time_arg_val(7);
 // Only a part of the total channel depth (width) is used in one block.
 template <int window_height, int window_width>
 FORCE_INLINE void read_channels(
@@ -44,27 +40,28 @@ FORCE_INLINE void read_channels(
 }
 
 void kernel_main() {
-    constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t stride_h = get_compile_time_arg_val(1);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(2);
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(3);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(4);
-    constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(5);
-    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(6);
+    constexpr uint32_t stride_h = get_compile_time_arg_val(0);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(1);
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(2);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(3);
+    constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(4);
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(5);
 
-    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(9);
-    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(10);
-    constexpr uint32_t num_input_cores = get_compile_time_arg_val(11);
-    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(12);
-    constexpr uint32_t act_num_blocks_w = get_compile_time_arg_val(13);
-    const uint32_t act_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
-    const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
-    constexpr uint32_t act_mcast_dest_noc_start_x = get_compile_time_arg_val(16);
-    constexpr uint32_t act_mcast_dest_noc_start_y = get_compile_time_arg_val(17);
-    constexpr uint32_t act_mcast_dest_noc_end_x = get_compile_time_arg_val(18);
-    constexpr uint32_t act_mcast_dest_noc_end_y = get_compile_time_arg_val(19);
-    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(20);
-    constexpr uint32_t num_output_cores = get_compile_time_arg_val(21);
+    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(8);
+    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(9);
+    constexpr uint32_t num_input_cores = get_compile_time_arg_val(10);
+    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(11);
+    constexpr uint32_t act_num_blocks_w = get_compile_time_arg_val(12);
+    const uint32_t act_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(13));
+    const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
+    constexpr uint32_t act_mcast_dest_noc_start_x = get_compile_time_arg_val(15);
+    constexpr uint32_t act_mcast_dest_noc_start_y = get_compile_time_arg_val(16);
+    constexpr uint32_t act_mcast_dest_noc_end_x = get_compile_time_arg_val(17);
+    constexpr uint32_t act_mcast_dest_noc_end_y = get_compile_time_arg_val(18);
+    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(19);
+    constexpr uint32_t num_output_cores = get_compile_time_arg_val(20);
+    constexpr uint32_t num_reader_cores = get_compile_time_arg_val(21);
+
     constexpr uint32_t cb_id_act = get_compile_time_arg_val(22);
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(23);
     constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(24);
@@ -73,7 +70,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(27);
     constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(28);
 
-    constexpr uint32_t num_mcast_cores = MAX(num_input_cores, num_output_cores);
+    constexpr uint32_t num_mcast_cores = num_input_cores > num_output_cores ? num_input_cores : num_output_cores;
     uint32_t i = 0;  // Runtime arg index
 
     uint32_t this_core_x = get_arg_val<uint32_t>(i);
@@ -95,6 +92,9 @@ void kernel_main() {
     // Equivalent to Core Index.
     uint32_t this_core_id = this_core_x + (num_cores_x * this_core_y);
 
+    if (this_core_id >= num_mcast_cores) {
+        return;
+    }
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 
@@ -139,43 +139,56 @@ void kernel_main() {
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
     noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), conv_act_c_read_bytes);
 
+    constexpr uint32_t TILE_HEIGHT = 32;
+    constexpr uint32_t ntile_height = act_block_h_datums / TILE_HEIGHT;
+    constexpr uint32_t block_width = act_block_num_tiles / ntile_height;
+    constexpr uint32_t act_block_h_datums_per_tile_half = (act_block_h_datums / ntile_height) / 2;
+
     // Reset reader_idx to finish act_block_h_datums
     for (uint32_t block_h_index = 0; block_h_index < act_num_blocks_h; block_h_index++) {
         act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
         for (uint32_t block_w_index = 0; block_w_index < act_num_blocks_w; block_w_index++) {
             uint32_t reader_idx = block_h_index * (act_block_h_datums / 2);
-            cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
-            if (this_core_id < num_input_cores) {
-                uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
-                for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
-                    uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-                    read_channels<weight_size_h, weight_size_w>(
-                        l1_write_addr_act,
-                        act_l1_read_addr,
-                        two_reader_indices & 0xffff,
-                        conv_act_c_bytes,
-                        conv_act_c_read_bytes,
-                        stride_h_bytes,
-                        stride_w_bytes);
-                    read_channels<weight_size_h, weight_size_w>(
-                        l1_write_addr_act,
-                        act_l1_read_addr,
-                        two_reader_indices >> 16,
-                        conv_act_c_bytes,
-                        conv_act_c_read_bytes,
-                        stride_h_bytes,
-                        stride_w_bytes);
 
-                    reader_idx++;
+            if (this_core_id < num_input_cores) {
+                for (uint32_t tile_h_index = 0; tile_h_index < ntile_height; tile_h_index++) {
+                    cb_reserve_back(cb_id_act_row_major_bfloat16, block_width);
+                    uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
+                    for (uint32_t bh = 0; bh < act_block_h_datums_per_tile_half; bh++) {
+                        uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+                        read_channels<weight_size_h, weight_size_w>(
+                            l1_write_addr_act,
+                            act_l1_read_addr,
+                            two_reader_indices & 0xffff,
+                            conv_act_c_bytes,
+                            conv_act_c_read_bytes,
+                            stride_h_bytes,
+                            stride_w_bytes);
+                        read_channels<weight_size_h, weight_size_w>(
+                            l1_write_addr_act,
+                            act_l1_read_addr,
+                            two_reader_indices >> 16,
+                            conv_act_c_bytes,
+                            conv_act_c_read_bytes,
+                            stride_h_bytes,
+                            stride_w_bytes);
+
+                        reader_idx++;
+                    }
+
+                    noc_async_read_barrier();
+                    cb_push_back(cb_id_act_row_major_bfloat16, block_width);
                 }
 
                 // After reading one block, increment the starting read pointer by the width of the block.
                 // Next read uses the next set of channels.
                 act_l1_read_addr += conv_act_c_read_bytes;
-
-                noc_async_read_barrier();
+            } else {
+                for (uint32_t tile_h_index = 0; tile_h_index < ntile_height; tile_h_index++) {
+                    cb_reserve_back(cb_id_act_row_major_bfloat16, block_width);
+                    cb_push_back(cb_id_act_row_major_bfloat16, block_width);
+                }
             }
-            cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
 
             // Round robin self-mcast and receive tilized act matrix in cb_id_act
             // Compute should function like regular mm
@@ -198,41 +211,38 @@ void kernel_main() {
 
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-                    // // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
+                    // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
                     cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
 
-                    // // Now we have the block in the CB address, we can mcast to dests!
+                    // Now we have the block in the CB address, we can mcast to dests!
                     uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
 
-                    // // num_dests will source, since we are copying to a different local CB as well
+                    // num_dests will source, since we are copying to a different local CB as well
                     uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
 
                     noc_async_write_multicast_loopback_src(
                         tilized_act_start_address,
                         act_multicast_data_addr,
                         act_mcast_sender_size_bytes,
-                        num_mcast_cores,
-                        false,
-                        false);
+                        num_reader_cores,
+                        true);
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and same
                     // vc even though cmd bufs are different Also, this only works because we are setting VCs statically
                     // (using NOC_CMD_STATIC_VC).
+
 #ifdef ARCH_BLACKHOLE
                     // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may
                     // not be sent in order they are issued
                     noc_async_writes_flushed();
 #endif
-                    // // We should also multicast VALID flag to destinations for receiver semaphore
+                    // We should also multicast VALID flag to destinations for receiver semaphore
                     noc_semaphore_set_multicast_loopback_src(
                         act_mcast_sender_semaphore_valid_addr,
                         act_mcast_receiver_semaphore_noc_addr,
-                        num_mcast_cores,
-                        false,
+                        num_reader_cores,
                         false);
-
                     noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
-
                 } else {
                     // MCAST RECEIVER: receive entire tilized input from sender core
                     // Set act semaphore value to INVALID
@@ -262,4 +272,6 @@ void kernel_main() {
             cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
         }
     }
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
-from ttnn import ReplicateTensorToMesh
 
+import ttnn
 from models.utility_functions import is_wormhole_b0
+from ttnn import ReplicateTensorToMesh
 
 
 def get_weights_cached(

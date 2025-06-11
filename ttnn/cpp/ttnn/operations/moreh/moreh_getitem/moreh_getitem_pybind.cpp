@@ -4,7 +4,7 @@
 
 #include "moreh_getitem_pybind.hpp"
 
-#include "pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_getitem/moreh_getitem.hpp"
 
 namespace ttnn::operations::moreh::moreh_getitem {

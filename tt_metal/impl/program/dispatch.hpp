@@ -7,13 +7,36 @@
 #include <circular_buffer.hpp>
 #include <device.hpp>
 #include <kernel.hpp>
-#include <program_impl.hpp>
+#include <tt-metalium/program.hpp>
+#include <stdint.h>
 #include <vector_aligned.hpp>
-#include <worker_config_buffer.hpp>
+#include <array>
+#include <memory>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include "core_coord.hpp"
+#include "dev_msgs.h"
+#include "dispatch/dispatch_settings.hpp"
+#include "kernel_types.hpp"
+#include "program_impl.hpp"
+#include "sub_device_types.hpp"
+#include "dispatch/worker_config_buffer.hpp"
+#include "trace/trace_node.hpp"
+
+enum class CoreType;
 
 namespace tt {
 
 namespace tt_metal {
+class IDevice;
+class Program;
+class Semaphore;
+class SystemMemoryManager;
+enum class ProgramBinaryStatus : uint8_t;
+struct KernelGroup;
+struct ProgramCommandSequence;
 
 namespace program_dispatch {
 
@@ -86,7 +109,7 @@ void reserve_space_in_kernel_config_buffer(
     ProgramDispatchMetadata& dispatch_md);
 
 void update_program_dispatch_commands(
-    Program& program,
+    detail::ProgramImpl& program,
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t unicast_cores_launch_message_wptr,
@@ -98,20 +121,36 @@ void update_program_dispatch_commands(
     ProgramBinaryStatus program_binary_status,
     std::pair<bool, int> unicast_go_signal_update = {false, -1});
 
+void update_traced_program_dispatch_commands(
+    const TraceNode& node,
+    ProgramCommandSequence& cached_program_command_sequence,
+    uint32_t multicast_cores_launch_message_wptr,
+    uint32_t unicast_cores_launch_message_wptr,
+    uint32_t expected_num_workers_completed,
+    CoreCoord dispatch_core,
+    CoreType dispatch_core_type,
+    SubDeviceId sub_device_id,
+    ProgramBinaryStatus program_binary_status,
+    std::pair<bool, int> unicast_go_signal_update = {false, -1});
+
+TraceNode create_trace_node(detail::ProgramImpl& program, IDevice* device);
+
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
     SystemMemoryManager& manager,
     uint32_t command_queue_id,
     CoreType dispatch_core_type,
     bool stall_first,
-    bool stall_before_program);
+    bool stall_before_program,
+    bool send_binary = true);
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 
 void reset_config_buf_mgrs_and_expected_workers(
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
     DispatchArray<uint32_t>& expected_num_workers_completed,
-    uint32_t num_entries_to_reset);
+    uint32_t num_entries_to_reset,
+    uint32_t worker_l1_unreserved_start);
 
 void reset_worker_dispatch_state_on_device(
     IDevice* device,

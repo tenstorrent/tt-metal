@@ -19,7 +19,6 @@ struct MorehMeanBackward {
 }  // namespace ttnn::operations::moreh::moreh_mean_backward
 
 namespace ttnn {
-constexpr auto moreh_mean_backward = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::moreh_mean_backward",
-    ttnn::operations::moreh::moreh_mean_backward::MorehMeanBackward>();
+constexpr auto moreh_mean_backward = ttnn::
+    register_operation<"ttnn::moreh_mean_backward", ttnn::operations::moreh::moreh_mean_backward::MorehMeanBackward>();
 }

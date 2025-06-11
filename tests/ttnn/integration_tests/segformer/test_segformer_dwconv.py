@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -45,9 +45,6 @@ def create_custom_preprocessor(device):
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_segformer_dw_conv(device, batch_size, seq_len, dim, height, width, block_i, dwconv_i, reset_seeds, is_ci_env):
-    if is_ci_env:
-        pytest.skip("Skip in CI, model is WIP, issue# 13357")
-
     torch_input_tensor = torch.randn(batch_size, seq_len, dim)
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -73,10 +70,10 @@ def test_segformer_dw_conv(device, batch_size, seq_len, dim, height, width, bloc
     ttnn_model = TtSegformerDWConv(parameters, dim)
 
     ttnn_output = ttnn_model(
+        device,
         ttnn_input_tensor,
         height,
         width,
-        device,
     )
     ttnn_output = ttnn.from_device(ttnn_output[0])
     ttnn_output = ttnn.to_torch(ttnn_output)[0]

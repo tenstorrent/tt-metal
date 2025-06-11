@@ -11,10 +11,10 @@
 #include <optional>
 #include <functional>
 
-#include "device.hpp"
-#include "mesh_config.hpp"
-#include "mesh_coord.hpp"
-#include "shape2d.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/shape2d.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -96,7 +96,8 @@ public:
     //
     // Important: these utilities currently only support 2D meshes.
     // TODO: #17477 - Remove the methods that assume 2D mesh.
-    [[nodiscard]] static std::vector<MeshCoordinate> get_line_coordinates(size_t length, const Shape2D& mesh_shape);
+    [[nodiscard]] static std::vector<MeshCoordinate> get_line_coordinates(
+        size_t length, const Shape2D& mesh_shape, const Shape2D& mesh_offset);
     [[nodiscard]] static std::vector<MeshCoordinate> get_ring_coordinates(
         const Shape2D& ring_shape, const Shape2D& mesh_shape);
     [[nodiscard]] std::vector<IDevice*> get_ring_devices() const;

@@ -46,7 +46,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import 
     ],
 )
 @pytest.mark.parametrize("num_iters", [20])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 1824800}], indirect=True)
 def test_all_gather_on_n300(
     n300_mesh_device,
@@ -60,7 +59,6 @@ def test_all_gather_on_n300(
     num_iters,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_on_n300_impl(
         n300_mesh_device,
@@ -75,7 +73,6 @@ def test_all_gather_on_n300(
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
-        enable_async=enable_async,
         trace_mode=True,
     )
 
@@ -103,7 +100,6 @@ def test_all_gather_on_n300(
     ],
 )
 @pytest.mark.parametrize("num_iters", [20])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Ring, ttnn.Topology.Linear])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 266240}], indirect=True)
 def test_all_gather_on_t3000(
@@ -119,7 +115,6 @@ def test_all_gather_on_t3000(
     num_iters,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     run_all_gather_on_t3000_impl_tight_loop(
         t3k_mesh_device,
@@ -134,7 +129,6 @@ def test_all_gather_on_t3000(
         function_level_defaults,
         all_gather_topology=topology,
         num_iters=num_iters,
-        enable_async=enable_async,
         trace_mode=True,
     )
 
@@ -170,7 +164,6 @@ def test_all_gather_on_t3000(
 )
 @pytest.mark.parametrize("num_iters", [20])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear, ttnn.Topology.Ring])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 266240}], indirect=True)
 def test_reduce_scatter_on_t3000(
@@ -185,7 +178,6 @@ def test_reduce_scatter_on_t3000(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters,
     topology,
 ):
@@ -202,7 +194,6 @@ def test_reduce_scatter_on_t3000(
         use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
-        enable_async=enable_async,
         topology=topology,
         trace_mode=True,
     )
@@ -239,7 +230,6 @@ def test_reduce_scatter_on_t3000(
 )
 @pytest.mark.parametrize("num_iters", [20])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 266240}], indirect=True)
 def test_reduce_scatter_on_n300(
     n300_mesh_device,
@@ -253,7 +243,6 @@ def test_reduce_scatter_on_n300(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters,
 ):
     run_reduce_scatter_test(
@@ -269,7 +258,6 @@ def test_reduce_scatter_on_n300(
         use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
-        enable_async=enable_async,
         trace_mode=True,
     )
 
@@ -299,7 +287,6 @@ def test_reduce_scatter_on_n300(
 )
 @pytest.mark.parametrize("replication_factor", [8])
 @pytest.mark.parametrize("num_iters", [20])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 532480}], indirect=True)
 def test_all_gather_on_tg(
@@ -313,11 +300,10 @@ def test_all_gather_on_tg(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters,
 ):
-    if len(mesh_device.get_devices()) != 32:
+    if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -331,7 +317,6 @@ def test_all_gather_on_tg(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
         cluster_axis=1,
@@ -362,7 +347,6 @@ def test_all_gather_on_tg(
     ],
 )
 @pytest.mark.parametrize("replication_factor", [8])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("num_iters", [20])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
@@ -379,7 +363,6 @@ def test_reduce_scatter_on_tg(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters,
 ):
@@ -396,7 +379,6 @@ def test_reduce_scatter_on_tg(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=1,

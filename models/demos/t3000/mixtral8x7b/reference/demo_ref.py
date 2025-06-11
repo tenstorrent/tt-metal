@@ -4,10 +4,10 @@
 import torch
 from loguru import logger
 
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import load_inputs
-from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.demos.t3000.mixtral8x7b.reference.model import Transformer
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import load_inputs
+from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 
 
 class Emb(torch.nn.Module):

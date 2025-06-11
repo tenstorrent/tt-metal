@@ -2,16 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/dispatch_settings.hpp>
-#include <tt-metalium/dev_msgs.h>
+#include <limits.h>
+#include "dev_msgs.h"
+#include <cstddef>
 #include <cstdint>
-#include "llrt/hal.hpp"
-#include <tt_cluster.hpp>
+#include <functional>
+#include <limits>
+#include <string_view>
+#include <unordered_map>
+
+#include "assert.hpp"
+#include "fmt/base.h"
+#include "hal_types.hpp"
+#include "impl/context/metal_context.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "magic_enum/magic_enum.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include <dispatch_settings.hpp>
 #include "size_literals.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include <umd/device/tt_core_coordinates.h>
 
 namespace tt::tt_metal {
 
@@ -68,19 +76,20 @@ DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, c
         .prefetch_max_cmd_size(128_KB)
         .prefetch_cmddat_q_size(256_KB)
         .prefetch_scratch_db_size(128_KB)
+        .prefetch_ringbuffer_size(1024_KB)
         .prefetch_d_buffer_size(256_KB)
 
         .dispatch_size(512_KB)
         .dispatch_s_buffer_size(32_KB)
 
-        .with_alignment(hal_ref.get_alignment(HalMemType::L1))
+        .with_alignment(MetalContext::instance().hal().get_alignment(HalMemType::L1))
 
         .tunneling_buffer_size(256_KB)  // same as prefetch_d_buffer_size
 
         .build();
 }
 
-DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs) {
+DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& /*cluster*/, const uint32_t num_hw_cqs) {
     return DispatchSettings()
         .num_hw_cqs(num_hw_cqs)
         .core_type(CoreType::ETH)
@@ -88,6 +97,7 @@ DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& cluster, cons
         .prefetch_max_cmd_size(32_KB)
         .prefetch_cmddat_q_size(64_KB)
         .prefetch_scratch_db_size(19_KB)
+        .prefetch_ringbuffer_size(90_KB)
         .prefetch_d_buffer_size(128_KB)
 
         .dispatch_size(128_KB)
@@ -95,7 +105,7 @@ DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& cluster, cons
 
         .tunneling_buffer_size(128_KB)  // same as prefetch_d_buffer_size
 
-        .with_alignment(hal_ref.get_alignment(HalMemType::L1))
+        .with_alignment(MetalContext::instance().hal().get_alignment(HalMemType::L1))
 
         .build();
 }
@@ -231,6 +241,12 @@ DispatchSettings& DispatchSettings::prefetch_cmddat_q_size(uint32_t val) {
 // Trivial setter for prefetch_scratch_db_size
 DispatchSettings& DispatchSettings::prefetch_scratch_db_size(uint32_t val) {
     this->prefetch_scratch_db_size_ = val;
+    return *this;
+}
+
+// Trivial setter for prefetch_ringbuffer_size
+DispatchSettings& DispatchSettings::prefetch_ringbuffer_size(uint32_t val) {
+    this->prefetch_ringbuffer_size_ = val;
     return *this;
 }
 

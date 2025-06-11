@@ -1,10 +1,19 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #pragma once
+#include <stdint.h>
+#include <array>
+#include <optional>
+
+#include "dispatch/kernels/packet_queue_ctrl.hpp"
 #include "fd_kernel.hpp"
 
-typedef struct demux_static_config {
+namespace tt {
+namespace tt_metal {
+
+struct demux_static_config_t {
     std::optional<uint32_t> endpoint_id_start_index;
     std::optional<uint32_t> rx_queue_start_addr_words;
     std::optional<uint32_t> rx_queue_size_words;
@@ -23,9 +32,9 @@ typedef struct demux_static_config {
         output_depacketize_local_sem_id;  // [26:29]
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT>
         output_depacketize_remove_header;  // [26:29]
-} demux_static_config_t;
+};
 
-typedef struct demux_dependent_config {
+struct demux_dependent_config_t {
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT> remote_tx_x;  // [4:7], dependent
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT> remote_tx_y;  // [4:7], dependent
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT>
@@ -41,7 +50,7 @@ typedef struct demux_dependent_config {
     std::optional<uint32_t> output_depacketize;                                                    // Dependent
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_SWITCH_FAN_OUT>
         output_depacketize_downstream_sem_id;  // [26:29], dependent
-} demux_dependent_config_t;
+};
 
 class DemuxKernel : public FDKernel {
 public:
@@ -59,3 +68,6 @@ private:
     demux_dependent_config_t dependent_config_;
     int placement_cq_id_;  // TODO: remove channel hard-coding for dispatch core manager
 };
+
+}  // namespace tt_metal
+}  // namespace tt

@@ -1,0 +1,29 @@
+name: Documentation request
+description: File a documentation request
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        :star2: Thanks for taking the time to file a documentation request! :star2:
+
+  - type: textarea
+    id: doc-issue
+    attributes:
+      label: Describe the documentation issue
+      description: |
+        A clear and concise description of the required documentation. If you have suggestions for placement, include a link to the page or page section.
+
+  - type: textarea
+    id: describe-doc
+    attributes:
+      label: Describe the documentation solution you want to see
+      description: |
+        If you have suggestions for what to write up, or how to present the documentation, include it here.
+
+  - type: textarea
+    id: describe-diagrams
+    attributes:
+      label: Describe the diagrams or screenshots (if any) that the documentation should have
+      description: |
+        Include a description of the desired images, or links to sketched diagrams if you have them.

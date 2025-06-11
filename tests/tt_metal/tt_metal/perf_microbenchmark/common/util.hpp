@@ -11,7 +11,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/dprint_common.h"
-#include "llrt/hal.hpp"
+#include "impl/context/metal_context.hpp"
 #include "llrt.hpp"
 
 inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, const tt::tt_metal::Program& program) {
@@ -20,12 +20,12 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
     enum BufferIndex { BUFFER_END_INDEX, DROPPED_MARKER_COUNTER, MARKER_DATA_START };
     enum TimerDataIndex { TIMER_ID, TIMER_VAL_L, TIMER_VAL_H, TIMER_DATA_UINT32_SIZE };
     auto worker_cores_used_in_program = device->worker_cores_from_logical_cores(
-        program.logical_cores()[tt::tt_metal::hal_ref.get_programmable_core_type_index(
+        program.logical_cores()[tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
             tt::tt_metal::HalProgrammableCoreType::TENSIX)]);
     auto device_id = device->id();
     uint64_t min_cycle = -1;
     uint64_t max_cycle = 0;
-    dprint_buf_msg_t* dprint_msg = tt::tt_metal::hal_ref.get_dev_addr<dprint_buf_msg_t*>(
+    dprint_buf_msg_t* dprint_msg = tt::tt_metal::MetalContext::instance().hal().get_dev_addr<dprint_buf_msg_t*>(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DPRINT);
 
     // This works for tensix only, will need to be updated for eth
@@ -40,13 +40,11 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
         for (const auto& buffer_addr : print_buffer_addrs) {
             std::vector<std::uint32_t> profile_buffer;
             uint32_t end_index;
-            uint32_t dropped_marker_counter;
             profile_buffer = tt::llrt::read_hex_vec_from_core(device_id, worker_core, buffer_addr, DPRINT_BUFFER_SIZE);
 
             end_index = profile_buffer[BUFFER_END_INDEX];
 
             TT_ASSERT(end_index < (DPRINT_BUFFER_SIZE / sizeof(uint32_t)));
-            dropped_marker_counter = profile_buffer[DROPPED_MARKER_COUNTER];
 
             uint32_t step = (end_index - MARKER_DATA_START) / TIMER_DATA_UINT32_SIZE;
             uint32_t timer_id = 1;
@@ -74,7 +72,7 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
 }
 
 inline int get_tt_npu_clock(tt::tt_metal::IDevice* device) {
-    return tt::Cluster::instance().get_device_aiclk(device->id());
+    return tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
 }
 
 template <typename T>

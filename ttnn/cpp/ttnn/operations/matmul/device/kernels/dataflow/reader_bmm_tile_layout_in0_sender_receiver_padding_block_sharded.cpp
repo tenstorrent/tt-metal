@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "pad_tile.hpp"
 
 void kernel_main() {
     constexpr bool core_has_output_block_work = (bool)get_compile_time_arg_val(0);
@@ -14,25 +15,27 @@ void kernel_main() {
 
     constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t in0_block_size_bytes = get_compile_time_arg_val(3);
-    // in0/in1 common args
-    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(4);
-    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(5);
-    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(6);
-    // in0 mcast args
-    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(7));
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));
-    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(9);
-    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(10);
-    constexpr uint32_t num_x = get_compile_time_arg_val(11);
-    constexpr uint32_t num_y = get_compile_time_arg_val(12);
-    constexpr bool transpose_mcast = (bool)get_compile_time_arg_val(13);
-    constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(14);
-    constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(15);
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(16);
-    constexpr uint32_t in0_block_h = get_compile_time_arg_val(17);
+    constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(4);
 
-    constexpr uint32_t batch = get_compile_time_arg_val(18);
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(19);
+    // in0/in1 common args
+    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(5);
+    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(6);
+    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(7);
+    // in0 mcast args
+    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));
+    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
+    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(10);
+    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(11);
+    constexpr uint32_t num_x = get_compile_time_arg_val(12);
+    constexpr uint32_t num_y = get_compile_time_arg_val(13);
+    constexpr bool transpose_mcast = (bool)get_compile_time_arg_val(14);
+    constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(15);
+    constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(16);
+    constexpr uint32_t in0_block_w = get_compile_time_arg_val(17);
+    constexpr uint32_t in0_block_h = get_compile_time_arg_val(18);
+
+    constexpr uint32_t batch = get_compile_time_arg_val(19);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(20);
 
     uint32_t rt_args_idx = 0;
     const uint32_t sender_id = get_arg_val<uint32_t>(rt_args_idx++);
@@ -53,6 +56,7 @@ void kernel_main() {
     // In case we need to send multiple blocks per shard, and shard height in tiles is greater than 1
     // Than we first need to extract the sub-blocks from the shard, and then send them to the destinations
     constexpr bool extract_shard_sub_blocks = shard_height_in_tiles > 1 && num_blocks_per_shard > 1;
+    constexpr uint32_t out_block_h = shard_height_in_tiles / num_blocks_h_dim;
     constexpr uint32_t shard_read_stride = shard_width_in_tiles * in0_single_tile_size_bytes;
     constexpr uint32_t shard_read_width = in0_single_tile_size_bytes * in0_block_w;
     constexpr uint32_t in0_tensor_next_h_dim_block_stride = shard_read_stride * in0_block_h;
@@ -156,9 +160,8 @@ void kernel_main() {
                             uint32_t l1_write_extract_shard_in0 = in0_tensor_local_l1_write_addr;
                             uint64_t noc_shard_read_addr = get_noc_addr(in0_tensor_current_inner_dim_block_start_addr);
 
-                            for (uint32_t i = 0; i < shard_height_in_tiles; i++) {
+                            for (uint32_t i = 0; i < out_block_h; i++) {
                                 noc_async_read(noc_shard_read_addr, l1_write_extract_shard_in0, shard_read_width);
-
                                 l1_write_extract_shard_in0 += shard_read_width;
                                 noc_shard_read_addr += shard_read_stride;
                             }
@@ -166,9 +169,24 @@ void kernel_main() {
                             in0_tensor_current_inner_dim_block_start_addr += shard_read_width;
 
                             noc_async_read_barrier();
+
+                            if constexpr (in0_last_ktile_w > 0) {
+                                if ((block == num_blocks_inner_dim - 1)) {
+                                    auto in0_last_ktile_w_ptr = l1_write_extract_shard_in0 - in0_single_tile_size_bytes;
+                                    pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_w_ptr);
+                                }
+                            }
                         } else {
                             in0_tensor_read_addr = in0_tensor_current_inner_dim_block_start_addr;
                             in0_tensor_current_inner_dim_block_start_addr += in0_block_size_bytes;
+
+                            if constexpr (in0_last_ktile_w > 0) {
+                                if ((block == num_blocks_inner_dim - 1)) {
+                                    auto in0_last_ktile_w_ptr =
+                                        in0_tensor_read_addr + in0_block_size_bytes - in0_single_tile_size_bytes;
+                                    pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_w_ptr);
+                                }
+                            }
                         }
 
                         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
@@ -198,7 +216,6 @@ void kernel_main() {
                                         in0_multicast_data_addr,
                                         in0_block_size_bytes,
                                         in0_mcast_num_cores - 1,
-                                        true,
                                         true);
                                 }
                             }
@@ -215,7 +232,6 @@ void kernel_main() {
                                         in0_multicast_data_addr,
                                         in0_block_size_bytes,
                                         in0_mcast_num_cores,
-                                        true,
                                         true);
                                 }
                             }
@@ -225,7 +241,7 @@ void kernel_main() {
                                 // All work is done on one core (the current one).
                                 // noc_semaphore_set_multicast_loopback_src is a no-op in this case.
                                 // Data needs to be written directly in the core.
-                                in0_mcast_receiver_semaphore_addr_ptr[0] = in0_mcast_sender_semaphore_valid_addr_ptr[0];
+                                in0_mcast_receiver_semaphore_addr_ptr[0] = VALID;
                             } else {
                                 noc_semaphore_set_multicast_loopback_src(
                                     in0_mcast_sender_semaphore_valid_addr,
@@ -240,7 +256,6 @@ void kernel_main() {
                                 in0_multicast_data_addr,
                                 in0_block_size_bytes,
                                 in0_mcast_num_cores,
-                                true,
                                 true);
 
                             // We should also multicast the flag to destinations

@@ -2,17 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <assert.h>
+#include <chrono>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/device.hpp>
-#include "rtoptions.hpp"
-#include <tt-metalium/allocator.hpp>
+#include <exception>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <variant>
+#include <vector>
 
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "test_common.hpp"
-#include "routing_test_common.hpp"
-#include "utils.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include "routing_test_common.hpp"
+#include "impl/context/metal_context.hpp"
+#include "test_common.hpp"
+#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
+#include <tt-metalium/utils.hpp>
 
 int main(int argc, char **argv) {
     using std::vector;
@@ -244,10 +262,10 @@ int main(int argc, char **argv) {
 
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

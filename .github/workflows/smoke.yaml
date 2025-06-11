@@ -12,17 +12,20 @@ on:
       runner:
         required: true
         type: string
+      per-test-timeout:
+        required: false
+        type: string
+        default: 3.5
 
 jobs:
   metalium-smoke:
     runs-on: >-
       ${{
-        startsWith(inputs.runner, 'tt-beta-ubuntu')
-        && fromJSON(format('["{0}"]', inputs.runner))
+        ((inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox') && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner))
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner))
       }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      image: ${{ (inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"
@@ -53,8 +56,10 @@ jobs:
           GTEST_COLOR: yes
           GTEST_OUTPUT: xml:/work/test-reports/
           TT_METAL_HOME: /usr/libexec/tt-metalium # TODO: Need to get away from env vars!
+          TT_METAL_WATCHER: 5
+          TT_METAL_WATCHER_TEST_MODE: 1
         run: |
-          /usr/libexec/tt-metalium/validation/tt-metalium-validation-smoke
+          /usr/bin/tt-metalium-validation-smoke
 
       - name: workaround
         run: |
@@ -67,7 +72,7 @@ jobs:
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         uses: phoenix-actions/test-reporting@f957cd93fc2d848d556fa0d03c57bc79127b6b5e # v15
         with:
-          name: Metalium ${{ matrix.platform }} smoke tests
+          name: Metalium ${{ inputs.runner }} smoke tests (${{ github.workflow }}, attempt ${{ github.run_attempt }})
           path: /work/test-reports/*.xml
           reporter: jest-junit
           working-directory: /work
@@ -76,39 +81,10 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         with:
-          path: |
-            /work/test-reports/
+          path: /work/test-reports/
           prefix: "test_reports_"
 
-      # Arbitrary limit that's higher than we would like, but the JIT build seems inconsistent.
-      # Keep it here as a guardrail to keep Smoke tests fast.  We can adjust as needed.
       - name: Check for slow tests
-        shell: python3 {0}
-        run: |
-          import os
-          import xml.etree.ElementTree as ET
-          import sys
-
-          # Find all XML files in the /work/test-reports directory
-          report_files = [os.path.join(root, file) for root, dirs, files in os.walk("/work/test-reports/") for file in files if file.endswith(".xml")]
-          if not report_files:
-              print("No test reports found.")
-              sys.exit(1)
-
-          slow_tests = []
-
-          for report_file in report_files:
-              try:
-                  tree = ET.parse(report_file)
-                  root = tree.getroot()
-                  for tc in root.findall(".//testcase"):
-                      time = float(tc.get("time", 0))
-                      if time > 3.5:
-                          slow_tests.append(f"{report_file}: {tc.get('classname', 'Unknown')}.{tc.get('name', 'Unknown')} ({time:.3f}s)")
-              except Exception as e:
-                  print(f"Error parsing {report_file}: {e}")
-                  sys.exit(2)
-
-          if slow_tests:
-              print("Some tests exceeded 3.5s:\n" + "\n".join(slow_tests))
-              sys.exit(3)
+        uses: tenstorrent/tt-metal/.github/actions/detect-slow-tests@main
+        with:
+          threshold: ${{ inputs.per-test-timeout }}

@@ -52,8 +52,6 @@ def run(
     *,
     device,
 ):
-    device.enable_async(False)
-
     dims = slice_specs["dims"]
     begins = slice_specs["begins"]
     ends = slice_specs["ends"]

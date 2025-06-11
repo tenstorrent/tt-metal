@@ -3,12 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <sys/types.h>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <vector>
 #include <optional>
+#include <ostream>
+#include <utility>
+#include <vector>
 
 #include "allocator_algorithm.hpp"
+#include "allocator_types.hpp"
+#include "hal_types.hpp"
 
 namespace tt {
 namespace tt_metal {

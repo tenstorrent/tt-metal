@@ -14,14 +14,12 @@
 #include <unordered_set>
 #include <vector>
 
-#include "hostdevcommon/common_values.hpp"
-#include "hostdevcommon/kernel_structs.h"  // Not used here, but leaked to programming examples
-#include "work_executor_types.hpp"
-#include "data_types.hpp"
-#include "program_device_map.hpp"
-#include "hal_types.hpp"
-#include "command_queue_interface.hpp"
-#include "sub_device_types.hpp"
+#include <hostdevcommon/common_values.hpp>
+#include <hostdevcommon/kernel_structs.h>  // Not used here, but leaked to programming examples
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/command_queue_interface.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/allocator_types.hpp>
 
 #include <tt_stl/span.hpp>
@@ -47,8 +45,13 @@ class Program;
 class SubDevice;
 
 class CommandQueue;
+class SystemMemoryManager;
 class TraceBuffer;
 struct TraceDescriptor;
+
+namespace distributed {
+class MeshDevice;
+}
 
 class IDevice {
 public:
@@ -128,6 +131,7 @@ public:
 
     virtual CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const = 0;
     virtual uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const = 0;
+    virtual uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const = 0;
 
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const = 0;
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const = 0;
@@ -166,6 +170,7 @@ public:
         const uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
+        size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) = 0;
     virtual void reset_cores() = 0;
@@ -177,25 +182,20 @@ public:
     // Puts device into reset
     virtual bool close() = 0;
 
-    virtual void enable_async(bool enable) = 0;
-    virtual void synchronize() = 0;
-    virtual WorkExecutorMode get_worker_mode() = 0;
-    virtual bool is_worker_queue_empty() const = 0;
-
-    virtual void push_work(std::function<void()> work, bool blocking = false) = 0;
-
     // Program cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     virtual void enable_program_cache() = 0;
     virtual void disable_and_clear_program_cache() = 0;
+    void set_program_cache_misses_allowed(bool allowed);
     virtual program_cache::detail::ProgramCache& get_program_cache() = 0;
     virtual std::size_t num_program_cache_entries() = 0;
 
     virtual HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const = 0;
+    virtual HalMemType get_mem_type_of_core(CoreCoord virtual_core) const = 0;
 
+    // Returns the starting address and memory region size on the device for a given virtual core and L1 memory type
     uint64_t get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
-
-    virtual std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) = 0;
+    uint64_t get_dev_size(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
 
     virtual uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;
     virtual uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const = 0;
@@ -213,12 +213,17 @@ public:
     virtual void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
     virtual void reset_sub_device_stall_group() = 0;
     virtual uint32_t num_sub_devices() const = 0;
+    virtual uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) = 0;
 
     // TODO #15944: Temporary api until migration to actual fabric is complete
     virtual std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
 
     virtual bool is_mmio_capable() const = 0;
+
+    // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
+    // it. This is currently used exclusively by profiler.
+    virtual std::shared_ptr<distributed::MeshDevice> get_mesh_device() = 0;
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 };

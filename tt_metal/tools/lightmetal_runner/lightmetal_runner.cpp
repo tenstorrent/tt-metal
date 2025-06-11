@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/logger.hpp>
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/lightmetal_replay.hpp>
 #include <tt-metalium/lightmetal_binary.hpp>
+#include <tt-metalium/lightmetal_replay.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <string>
+#include <utility>
 
 using namespace tt;
 
@@ -36,7 +38,7 @@ int main(int argc, char* argv[]) {
     tt::tt_metal::LightMetalReplay lm_replay(std::move(binary));
 
     if (!lm_replay.run()) {
-        log_fatal("Light Metal Binary {} failed to execute or encountered errors.", binary_filename);
+        log_fatal(tt::LogMetalTrace, "Light Metal Binary {} failed to execute or encountered errors.", binary_filename);
         return 1;
     } else {
         log_info(tt::LogMetalTrace, "Light Metal Binary {} executed successfully", binary_filename);

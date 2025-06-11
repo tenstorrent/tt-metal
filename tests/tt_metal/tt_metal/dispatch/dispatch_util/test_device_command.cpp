@@ -3,10 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <tt-metalium/vector_aligned.hpp>
+#include <utility>
+#include <vector>
+
+#include <tt_stl/span.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include <tt-metalium/vector_aligned.hpp>
 
 namespace tt::tt_metal {
 
@@ -123,10 +129,11 @@ TEST(DeviceCommandTest, AddDispatchSetGoSignalNocData) {
 
 TEST(DeviceCommandTest, AddDispatchSetWriteOffsets) {
     DeviceCommandCalculator calculator;
-    calculator.add_dispatch_set_write_offsets();
+    calculator.add_dispatch_set_write_offsets(CQ_DISPATCH_MAX_WRITE_OFFSETS);
 
     HostMemDeviceCommand command(calculator.write_offset_bytes());
-    command.add_dispatch_set_write_offsets(0, 0, 0);
+    std::vector<uint32_t> offsets(CQ_DISPATCH_MAX_WRITE_OFFSETS, 0);
+    command.add_dispatch_set_write_offsets(offsets);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
@@ -145,7 +152,7 @@ TEST(DeviceCommandTest, AddDispatchWritePaged) {
         calculator.add_dispatch_write_paged<false>(1, 5);
 
         HostMemDeviceCommand command(calculator.write_offset_bytes());
-        command.add_dispatch_write_paged<false>(0, 0, 0, 0, 1, 5);
+        command.add_dispatch_write_paged<false>(false, 0, 0, 0, 1, 5);
         EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
     }
     {
@@ -154,7 +161,7 @@ TEST(DeviceCommandTest, AddDispatchWritePaged) {
 
         HostMemDeviceCommand command(calculator.write_offset_bytes());
         uint32_t data[2] = {};
-        command.add_dispatch_write_paged<true>(0, 0, 0, 0, 1, 5, data);
+        command.add_dispatch_write_paged<true>(false, 0, 0, 0, 1, 5, data);
         EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
     }
 }
@@ -193,7 +200,7 @@ TYPED_TEST(WritePackedCommandTest, AddDispatchWritePacked) {
         std::vector<TypeParam> sub_cmds(2);
         uint32_t data[1] = {};
         std::vector<std::pair<const void*, uint32_t>> data_collection{{data, 4}, {data, 4}};
-        command.add_dispatch_write_packed<TypeParam>(2, 0, 5, 0, sub_cmds, data_collection, 100, 0, false);
+        command.add_dispatch_write_packed<TypeParam>(0, 2, 0, 5, 0, sub_cmds, data_collection, 100, 0, false);
         EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
     }
     {
@@ -204,7 +211,7 @@ TYPED_TEST(WritePackedCommandTest, AddDispatchWritePacked) {
         std::vector<TypeParam> sub_cmds(2);
         uint32_t data[1] = {};
         std::vector<std::pair<const void*, uint32_t>> data_collection{{data, 4}};
-        command.add_dispatch_write_packed<TypeParam>(2, 0, 5, 0, sub_cmds, data_collection, 100, 0, true);
+        command.add_dispatch_write_packed<TypeParam>(0, 2, 0, 5, 0, sub_cmds, data_collection, 100, 0, true);
         EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
     }
 }
@@ -216,7 +223,7 @@ TEST(DeviceCommandTest, AddDispatchWritePackedLarge) {
 
         HostMemDeviceCommand command(calculator.write_offset_bytes());
         std::vector<CQDispatchWritePackedLargeSubCmd> sub_cmds(1);
-        command.add_dispatch_write_packed_large(0, 1, sub_cmds);
+        command.add_dispatch_write_packed_large(CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN, 0, 1, sub_cmds);
         EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
     }
     {
@@ -228,7 +235,8 @@ TEST(DeviceCommandTest, AddDispatchWritePackedLarge) {
 
         uint8_t data[4] = {};
         std::vector<tt::stl::Span<const uint8_t>> data_collection{{data, 4}};
-        command.add_dispatch_write_packed_large(0, 1, sub_cmds, data_collection, nullptr);
+        command.add_dispatch_write_packed_large(
+            CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_UNKNOWN, 0, 1, sub_cmds, data_collection, nullptr);
         EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
     }
 }
@@ -264,6 +272,7 @@ TYPED_TEST(WritePackedCommandTest, RandomAddDispatchWritePacked) {
         for (const auto& [sub_cmd_ct, payload_size] : packed_cmd_payloads) {
             std::vector<TypeParam> sub_cmds(sub_cmd_ct);
             command.add_dispatch_write_packed<TypeParam>(
+                0,
                 sub_cmd_ct,
                 0,
                 sub_cmd_sizeB,

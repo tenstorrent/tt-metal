@@ -69,20 +69,13 @@ uint32_t get_erisc_l1_unreserved_base();
 uint32_t get_erisc_l1_unreserved_size();
 
 /**
- * @brief Uses the hardware abstraction layer to inform client of architecture specific address.
- * this address corresponds to the beginning of free space in the TENSIX core's L1 SRAM
- *
- * @return address
- */
-uint32_t get_tensix_l1_unreserved_base();
-
-/**
  * @brief Uses the hardware abstraction layer to inform client of architecture specific size.
- * this size corresponds to the total free space in the TENSIX core's L1 SRAM for host usage
+ * This size corresponds to the maximum size of the L1 SRAM buffer that can be
+ * used by the application, if the ringbuffer size is set to 0.
  *
  * @return size in bytes
  */
-uint32_t get_tensix_l1_unreserved_size();
+uint32_t get_max_worker_l1_unreserved_size();
 
 /**
  * @brief Uses the hardware abstraction layer to fetch the representable epsilon value.

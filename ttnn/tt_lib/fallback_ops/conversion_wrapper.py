@@ -85,7 +85,7 @@ def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
 
     if output_format["on_device"]:
         assert "device" in output_format
-        assert isinstance(output_format["device"], ttnn.Device)
+        assert isinstance(output_format["device"], ttnn.MeshDevice)
         if (
             tt_tensor.get_layout() == ttnn.TILE_LAYOUT
             or tt_tensor.get_layout() == ttnn.ROW_MAJOR_LAYOUT

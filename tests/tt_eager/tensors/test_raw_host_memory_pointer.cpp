@@ -2,21 +2,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
+#include <fmt/base.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
-#include "ttnn/tensor/enum_types.hpp"
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/host_buffer/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <algorithm>
+#include <cstdlib>
+#include <functional>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include <tt-metalium/host_api.hpp>
-#include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 /*
 
@@ -55,40 +65,28 @@ struct NDArray {
 };
 
 void test_raw_host_memory_pointer() {
-    using tt::tt_metal::BorrowedStorage;
     using tt::tt_metal::DataType;
+    using tt::tt_metal::HostBuffer;
     using tt::tt_metal::Layout;
-    using tt::tt_metal::OwnedStorage;
     using tt::tt_metal::Tensor;
-    using namespace tt::tt_metal::borrowed_buffer;
-    using namespace tt::tt_metal::owned_buffer;
 
     int device_id = 0;
-    tt::tt_metal::IDevice* device = tt::tt_metal::CreateDevice(device_id);
+    auto device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
     ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
 
     // Host tensor to print the output
     Tensor tensor_for_printing = Tensor(
-        OwnedStorage{tt::tt_metal::owned_buffer::create<bfloat16>(shape.volume())},
-        shape,
-        DataType::BFLOAT16,
-        Layout::TILE);
+        tt::tt_metal::HostBuffer(std::vector<bfloat16>(shape.volume())), shape, DataType::BFLOAT16, Layout::TILE);
 
     /* Borrow Data from Numpy Start */
     // Create some
     auto a_np_array = NDArray<bfloat16>(shape);
     void* a_np_array_data = a_np_array.data;
-    auto on_creation_callback = [] {};
-    auto on_destruction_callback = [] {};
-    Tensor a_cpu = Tensor(
-        BorrowedStorage{
-            tt::tt_metal::borrowed_buffer::Buffer(static_cast<bfloat16*>(a_np_array_data), a_np_array.size()),
-            on_creation_callback,
-            on_destruction_callback},
-        shape,
-        DataType::BFLOAT16,
-        Layout::TILE);
+    HostBuffer a_cpu_buffer(
+        tt::stl::Span<bfloat16>(static_cast<bfloat16*>(a_np_array_data), a_np_array.size()),
+        tt::tt_metal::MemoryPin([]() {}, []() {}));
+    Tensor a_cpu = Tensor(std::move(a_cpu_buffer), shape, DataType::BFLOAT16, Layout::TILE);
     /* Borrow Data from Numpy End */
 
     /* Sanity Check Start */
@@ -98,7 +96,7 @@ void test_raw_host_memory_pointer() {
     // Set every value of tt Tensor to the same non-zero number
     bfloat16 a_value = 4.0f;
 
-    for (auto& element : tt::tt_metal::borrowed_buffer::get_as<bfloat16>(a_cpu)) {
+    for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(a_cpu)) {
         element = a_value;
     }
 
@@ -110,7 +108,7 @@ void test_raw_host_memory_pointer() {
     /* Sanity Check End */
 
     /*  Run and Print Start   */
-    Tensor a_dev = a_cpu.to_device(device);
+    Tensor a_dev = a_cpu.to_device(device.get());
 
     Tensor c_dev = ttnn::sqrt(a_dev);
 
@@ -118,7 +116,7 @@ void test_raw_host_memory_pointer() {
 
     // Check that cpu tensor has correct data
     bfloat16 output_value = 1.99219f;  // Not exactly 2.0f because of rounding errors
-    for (auto& element : tt::tt_metal::owned_buffer::get_as<bfloat16>(tensor_for_printing)) {
+    for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
         TT_ASSERT(element == output_value);
     }
 
@@ -126,23 +124,20 @@ void test_raw_host_memory_pointer() {
     /*  Run and Print End   */
 
     /* Alternative Way to Print Start */
-    // Alternatively, we could allocate memory manually and create Tensors with BorrowedStorage on the fly to print the
+    // Alternatively, we could allocate memory manually and create Tensors with borrowed storage on the fly to print the
     // data
     void* storage_of_alternative_tensor_for_printing = malloc(shape.volume() * sizeof(bfloat16));
     tt::tt_metal::memcpy(storage_of_alternative_tensor_for_printing, c_dev);
 
-    Tensor alternative_tensor_for_printing = Tensor(
-        BorrowedStorage{
-            tt::tt_metal::borrowed_buffer::Buffer(
-                static_cast<bfloat16*>(storage_of_alternative_tensor_for_printing), shape.volume()),
-            on_creation_callback,
-            on_destruction_callback},
-        shape,
-        DataType::BFLOAT16,
-        Layout::TILE);
+    HostBuffer alternative_tensor_for_printing_buffer(
+        tt::stl::Span<bfloat16>(static_cast<bfloat16*>(storage_of_alternative_tensor_for_printing), shape.volume()),
+        tt::tt_metal::MemoryPin([]() {}, []() {}));
+
+    Tensor alternative_tensor_for_printing =
+        Tensor(std::move(alternative_tensor_for_printing_buffer), shape, DataType::BFLOAT16, Layout::TILE);
     alternative_tensor_for_printing.print();
 
-    for (auto& element : tt::tt_metal::borrowed_buffer::get_as<bfloat16>(alternative_tensor_for_printing)) {
+    for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(alternative_tensor_for_printing)) {
         TT_ASSERT(element == output_value);
     }
 
@@ -151,17 +146,13 @@ void test_raw_host_memory_pointer() {
 
     auto d_np_array = NDArray<bfloat16>(shape);
     void* d_np_array_data = d_np_array.data;
-    Tensor d_cpu = Tensor(
-        BorrowedStorage{
-            tt::tt_metal::borrowed_buffer::Buffer(static_cast<bfloat16*>(d_np_array_data), d_np_array.size()),
-            on_creation_callback,
-            on_destruction_callback},
-        shape,
-        DataType::BFLOAT16,
-        Layout::TILE);
+    HostBuffer d_data_buffer(
+        tt::stl::Span<bfloat16>(static_cast<bfloat16*>(d_np_array_data), d_np_array.size()),
+        tt::tt_metal::MemoryPin([]() {}, []() {}));
+    Tensor d_cpu = Tensor(std::move(d_data_buffer), shape, DataType::BFLOAT16, Layout::TILE);
 
     bfloat16 d_value = 8.0f;
-    for (auto& element : tt::tt_metal::borrowed_buffer::get_as<bfloat16>(d_cpu)) {
+    for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(d_cpu)) {
         element = d_value;
     }
 
@@ -172,11 +163,9 @@ void test_raw_host_memory_pointer() {
 
     tt::tt_metal::memcpy(tensor_for_printing, e_dev);
 
-    for (auto& element : tt::tt_metal::owned_buffer::get_as<bfloat16>(tensor_for_printing)) {
+    for (auto& element : tt::tt_metal::host_buffer::get_as<bfloat16>(tensor_for_printing)) {
         TT_ASSERT(element == bfloat16(10.0f));
     }
-
-    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }
 
 int main() {

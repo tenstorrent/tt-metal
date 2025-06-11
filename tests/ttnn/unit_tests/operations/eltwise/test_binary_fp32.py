@@ -6,114 +6,51 @@ import torch
 import ttnn
 
 import pytest
-from models.utility_functions import skip_for_grayskull
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
         ttnn.sub,
-    ],
-)
-def test_sub_fp32(device, ttnn_function):
-    x_torch = torch.tensor([[1]], dtype=torch.float32)
-    y_torch = torch.tensor([[0.00030171126]], dtype=torch.float32)
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_sub = ttnn.subtract(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_sub)
-
-    status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
-    assert status
-
-
-@skip_for_grayskull("Unsupported dtype for Grayskull")
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
         ttnn.rsub,
+        ttnn.add,
     ],
 )
-def test_rsub_fp32(device, ttnn_function):
+def test_fp32(device, ttnn_function):
     x_torch = torch.tensor([[1]], dtype=torch.float32)
     y_torch = torch.tensor([[0.00030171126]], dtype=torch.float32)
     golden_fn = ttnn.get_golden_function(ttnn_function)
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_sub = ttnn.rsub(x_tt, y_tt)
+    z_tt_sub = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_sub)
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
         ttnn.add,
-    ],
-)
-def test_add_fp32(device, ttnn_function):
-    x_torch = torch.tensor([[1]], dtype=torch.float32)
-    y_torch = torch.tensor([[0.00030171126]], dtype=torch.float32)
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_add = ttnn.add(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_add)
-
-    status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
-    assert status
-
-
-@skip_for_grayskull("Unsupported dtype for Grayskull")
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
-        ttnn.add,
-    ],
-)
-def test_add_int32(device, ttnn_function):
-    x_torch = torch.tensor([[11, 23, 0, -23, -1, -100]], dtype=torch.int32)
-    y_torch = torch.tensor([[78, 99, 34, -33, -1, 100]], dtype=torch.int32)
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_add = ttnn.add(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_add)
-
-    status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
-    assert status
-
-
-@skip_for_grayskull("Unsupported dtype for Grayskull")
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
         ttnn.sub,
     ],
 )
-def test_sub_int32(device, ttnn_function):
+def test_int32(device, ttnn_function):
     x_torch = torch.tensor([[11, 23, 0, -23, -1, -100]], dtype=torch.int32)
     y_torch = torch.tensor([[78, 99, 34, -33, -1, 100]], dtype=torch.int32)
     golden_fn = ttnn.get_golden_function(ttnn_function)
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_sub = ttnn.sub(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_sub)
-    assert torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
+    z_tt_add = ttnn_function(x_tt, y_tt)
+    tt_out = ttnn.to_torch(z_tt_add)
+
+    status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
+    assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -127,14 +64,13 @@ def test_mul_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.mul(x_tt, y_tt)
+    z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -154,14 +90,13 @@ def test_div_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_div = ttnn.divide(x_tt, y_tt)
+    z_tt_div = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_div)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -212,15 +147,13 @@ def test_div_bf16(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_div = ttnn.divide(x_tt, y_tt)  # bf16 runs FPU
+    z_tt_div = ttnn_function(x_tt, y_tt)  # bf16 runs FPU
     tt_out = ttnn.to_torch(z_tt_div)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -234,21 +167,14 @@ def test_pow_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_pow = ttnn.pow(x_tt, y_tt)
+    z_tt_pow = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_pow)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.99
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
-        ttnn.add,
-    ],
-)
-def test_add_fp32_activ(device, ttnn_function):
+def test_squared_sum_fp32_activ(device):
     x_torch = torch.ones([1, 1, 64, 64], dtype=torch.float32)
     y_torch = torch.ones([1, 1, 64, 64], dtype=torch.float32) * 4
     z_torch = torch.square(x_torch + y_torch)
@@ -261,7 +187,6 @@ def test_add_fp32_activ(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -287,7 +212,7 @@ def test_add_fp32_input_activ(device, ttnn_function, shape):
         x_tt,
         y_tt,
         activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.POWER, 2)],
-        input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+        input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
     )
     tt_out = ttnn.to_torch(z_tt_add)
 
@@ -295,7 +220,6 @@ def test_add_fp32_input_activ(device, ttnn_function, shape):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -316,7 +240,6 @@ def test_logaddexp_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -337,7 +260,6 @@ def test_logaddexp2_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -351,14 +273,13 @@ def test_ldexp_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.ldexp(x_tt, y_tt)
+    z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -372,14 +293,13 @@ def test_bias_gelu_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.bias_gelu(x_tt, y_tt)
+    z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -393,77 +313,35 @@ def test_squared_difference_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.squared_difference(x_tt, y_tt)
+    z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
         ttnn.logical_or,
-    ],
-)
-def test_logical_or_fp32(device, ttnn_function):
-    x_torch = torch.tensor([[1.509009, 2, 3.33, 4, 0, -11]], dtype=torch.float32)
-    y_torch = torch.tensor([[0, 3, 4, 5, 0, -9999]], dtype=torch.float32)
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.logical_or(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_out)
-
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
-
-
-@skip_for_grayskull("Unsupported dtype for Grayskull")
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
         ttnn.logical_xor,
-    ],
-)
-def test_logical_xor_fp32(device, ttnn_function):
-    x_torch = torch.tensor([[1.509009, 2, 3.33, 4, 0, -11]], dtype=torch.float32)
-    y_torch = torch.tensor([[0, 3, 4, 5, 0, -9999]], dtype=torch.float32)
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.logical_xor(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_out)
-
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
-
-
-@skip_for_grayskull("Unsupported dtype for Grayskull")
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
         ttnn.logical_and,
     ],
 )
-def test_logical_and_fp32(device, ttnn_function):
+def test_logical_fp32(device, ttnn_function):
     x_torch = torch.tensor([[1.509009, 2, 3.33, 4, 0, -11]], dtype=torch.float32)
     y_torch = torch.tensor([[0, 3, 4, 5, 0, -9999]], dtype=torch.float32)
     golden_fn = ttnn.get_golden_function(ttnn_function)
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.logical_and(x_tt, y_tt)
+    z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -489,70 +367,28 @@ def test_relational_fp32(device, ttnn_function):
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
         ttnn.bitwise_and,
-    ],
-)
-def test_bitwise_and(device, ttnn_function):
-    x_torch = torch.tensor([[1, 2, 3, 4, 5]], dtype=torch.int32)
-    y_torch = torch.tensor([[9, 3, 0, 1, 7]], dtype=torch.int32)
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.bitwise_and(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_out)
-
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.9999
-    assert status
-
-
-@skip_for_grayskull("Unsupported dtype for Grayskull")
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
         ttnn.bitwise_or,
-    ],
-)
-def test_bitwise_or(device, ttnn_function):
-    x_torch = torch.tensor([[1, 2, 3, 4, 5, 0]], dtype=torch.int32)
-    y_torch = torch.tensor([[9, 3, 0, 1, 7, 0]], dtype=torch.int32)
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.bitwise_or(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_out)
-
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.9999
-    assert status
-
-
-@skip_for_grayskull("Unsupported dtype for Grayskull")
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
         ttnn.bitwise_xor,
     ],
 )
-def test_bitwise_xor(device, ttnn_function):
+def test_bitwise(device, ttnn_function):
     x_torch = torch.tensor([[1, 2, 3, 4, 5, 0]], dtype=torch.int32)
     y_torch = torch.tensor([[9, 3, 0, 1, 7, 0]], dtype=torch.int32)
     golden_fn = ttnn.get_golden_function(ttnn_function)
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.bitwise_xor(x_tt, y_tt)
+    z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
+    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.9999
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -566,14 +402,13 @@ def test_bitwise_left_shift(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.bitwise_left_shift(x_tt, y_tt)
+    z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
     assert status
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -587,7 +422,7 @@ def test_bitwise_right_shift(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.bitwise_right_shift(x_tt, y_tt)
+    z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999

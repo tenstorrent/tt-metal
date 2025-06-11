@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
 #include "ttnn/types.hpp"
 
@@ -122,17 +122,12 @@ void py_bind_reduce_scatter(pybind11::module& module) {
         Example:
 
             >>> full_tensor = torch.randn([1, 1, 256, 256], dtype=torch.bfloat16)
-            >>> num_devices = 8
-            >>> dim = 3
-            >>> input_tensors = torch.chunk(full_tensor, num_devices, dim)
-            >>> physical_device_ids = ttnn.get_t3k_physical_device_ids_ring()
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
-            >>> tt_input_tensors = []
-            >>> for i, t in enumerate(input_tensors):
-                    tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], mem_config))
-            >>> input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
-
-            >>> output = ttnn.reduce_scatter(input_tensor_mesh, dim=0, topology=ttnn.Topology.Linear)
+            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
+            >>> input_tensor = ttnn.from_torch(
+                    full_tensor,
+                    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+                )
+            >>> output = ttnn.reduce_scatter(input_tensor, dim=0, topology=ttnn.Topology.Linear)
 
         )doc");
 }

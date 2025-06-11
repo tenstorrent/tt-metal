@@ -36,8 +36,8 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.get_padded_shape();
-    const auto output_grad_shape_without_padding = output_grad.get_logical_shape();
+    const auto output_grad_shape = output_grad.padded_shape();
+    const auto output_grad_shape_without_padding = output_grad.logical_shape();
     const auto output_grad_rank = output_grad_shape.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;
@@ -52,8 +52,8 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     const bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
     const uint32_t mask_w = do_mask_w ? origin_W % TILE_WIDTH : TILE_WIDTH;
 
-    const auto mean_rstd_shape = mean.get_padded_shape();
-    const auto mean_rstd_shape_without_padding = mean.get_logical_shape();
+    const auto mean_rstd_shape = mean.padded_shape();
+    const auto mean_rstd_shape_without_padding = mean.logical_shape();
     auto mean_rstd_height = mean_rstd_shape_without_padding[-2];
     auto mean_rstd_width = mean_rstd_shape_without_padding[-1];
 
@@ -109,7 +109,7 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     const uint32_t im6_t = 1;
     uint32_t im7_t = 1;
 
-    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_grad.get_dtype());
+    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
     const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
     auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
     const auto intermed_single_tile_size = tt::tt_metal::detail::TileSize(intermed_cb_format);

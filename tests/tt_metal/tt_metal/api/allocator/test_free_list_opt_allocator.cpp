@@ -3,13 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <tt-metalium/allocator.hpp>
+#include <stddef.h>
+#include <optional>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/allocator_types.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
 // UDL to convert integer literals to SI units
-constexpr size_t operator"" _KiB(unsigned long long x) { return x * 1024; }
-constexpr size_t operator"" _MiB(unsigned long long x) { return x * 1024 * 1024; }
-constexpr size_t operator"" _GiB(unsigned long long x) { return x * 1024 * 1024 * 1024; }
+constexpr size_t operator""_KiB(unsigned long long x) { return x * 1024; }
+constexpr size_t operator""_MiB(unsigned long long x) { return x * 1024 * 1024; }
+constexpr size_t operator""_GiB(unsigned long long x) { return x * 1024 * 1024 * 1024; }
 
 TEST(FreeListOptTest, Allocation) {
     auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);

@@ -53,7 +53,6 @@ from models.utility_functions import skip_for_grayskull
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
 def test_reduce_scatter_t3k_8chip_nightly(
     t3k_mesh_device,
     num_devices,
@@ -66,7 +65,6 @@ def test_reduce_scatter_t3k_8chip_nightly(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=1,
 ):
     run_reduce_scatter_test(
@@ -82,7 +80,6 @@ def test_reduce_scatter_t3k_8chip_nightly(
         use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
-        enable_async=enable_async,
     )
 
 
@@ -131,7 +128,6 @@ def test_reduce_scatter_t3k_8chip_nightly(
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
 def test_reduce_scatter_t3k_4chip_nightly(
     pcie_mesh_device,
     num_devices,
@@ -144,7 +140,6 @@ def test_reduce_scatter_t3k_4chip_nightly(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=1,
 ):
     run_reduce_scatter_test(
@@ -160,5 +155,4 @@ def test_reduce_scatter_t3k_4chip_nightly(
         use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
-        enable_async=enable_async,
     )

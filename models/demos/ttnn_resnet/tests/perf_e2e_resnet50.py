@@ -2,21 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 from loguru import logger
 from transformers import AutoImageProcessor
-import pytest
+
 import ttnn
-
-from models.utility_functions import (
-    profiler,
-)
-
-from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
-
+from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra, load_resnet50_model
 from models.perf.perf_utils import prep_perf_report
-
-from models.demos.ttnn_resnet.tests.resnet50_test_infra import load_resnet50_model
+from models.utility_functions import profiler
 
 try:
     from tracy import signpost
@@ -26,19 +20,8 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-def buffer_address(tensor):
-    addr = []
-    for ten in ttnn.get_device_tensors(tensor):
-        addr.append(ten.buffer_address())
-    return addr
-
-
 def dump_device_profiler(device):
-    if isinstance(device, ttnn.Device):
-        ttnn.DumpDeviceProfiler(device)
-    else:
-        for dev in device.get_device_ids():
-            ttnn.DumpDeviceProfiler(device.get_device(dev))
+    ttnn.DumpDeviceProfiler(device)
 
 
 # TODO: Create ttnn apis for this
@@ -49,9 +32,6 @@ model_config = {
     "WEIGHTS_DTYPE": ttnn.bfloat8_b,
     "ACTIVATIONS_DTYPE": ttnn.bfloat8_b,
 }
-
-# TODO: Create ttnn apis for this
-ttnn.buffer_address = buffer_address
 
 
 def run_model(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
@@ -167,12 +147,12 @@ def run_trace_model(device, tt_inputs, test_infra, num_warmup_iterations, num_me
     # Capture
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     test_infra.output_tensor.deallocate(force=True)
-    trace_input_addr = ttnn.buffer_address(test_infra.input_tensor)
+    trace_input_addr = test_infra.input_tensor.buffer_address()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     tt_output_res = test_infra.run()
     tt_image_res = ttnn.allocate_tensor_on_device(spec, device)
     ttnn.end_trace_capture(device, tid, cq_id=0)
-    assert trace_input_addr == ttnn.buffer_address(tt_image_res)
+    assert trace_input_addr == tt_image_res.buffer_address()
     ttnn.dump_device_profiler(device)
 
     for iter in range(0, num_warmup_iterations):
@@ -240,13 +220,13 @@ def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, nu
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     op_event = ttnn.record_event(device, 0)
     test_infra.output_tensor.deallocate(force=True)
-    trace_input_addr = ttnn.buffer_address(test_infra.input_tensor)
+    trace_input_addr = test_infra.input_tensor.buffer_address()
 
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     tt_output_res = test_infra.run()
     input_tensor = ttnn.allocate_tensor_on_device(spec, device)
     ttnn.end_trace_capture(device, tid, cq_id=0)
-    assert trace_input_addr == ttnn.buffer_address(input_tensor)
+    assert trace_input_addr == input_tensor.buffer_address()
     ttnn.dump_device_profiler(device)
 
     for iter in range(0, num_warmup_iterations):
@@ -296,8 +276,7 @@ def run_perf_resnet(
     if device_batch_size <= 2:
         pytest.skip("Batch size 1 and 2 are not supported with sharded data")
 
-    is_mesh_device = isinstance(device, ttnn.MeshDevice)
-    num_devices = device.get_num_devices() if is_mesh_device else 1
+    num_devices = device.get_num_devices()
     batch_size = device_batch_size * num_devices
     first_key = f"first_iter_batchsize{batch_size}"
     second_key = f"second_iter_batchsize{batch_size}"

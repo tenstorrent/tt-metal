@@ -34,7 +34,7 @@ void MAIN {
     binary_op_init_common(cb_inp0, cb_inp1, cb_out0);
 
 #if not PRE_SCALE
-    binary_op_specific_init<false, ELTWISE_OP_TYPE>(cb_inp0, cb_inp1);
+    binary_tiles_init<false, ELTWISE_OP_TYPE>(cb_inp0, cb_inp1);
 #endif
 
 #ifdef PACK_RELU
@@ -110,7 +110,7 @@ void MAIN {
         cb_reserve_back(cb_out0, per_core_block_size);
 
 #if PRE_SCALE
-        binary_op_specific_init<true, ELTWISE_OP_TYPE>(cb_inp0, cb_inp1);
+        binary_tiles_init<true, ELTWISE_OP_TYPE>(cb_inp0, cb_inp1);
 #endif
 
         tile_regs_acquire();

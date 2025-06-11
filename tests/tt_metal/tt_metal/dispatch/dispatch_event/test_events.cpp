@@ -2,16 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <future>
-
-#include "command_queue_fixture.hpp"
-#include "gtest/gtest.h"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include "impl/debug/watcher_server.hpp"
-#include <tt-metalium/event.hpp>
+#include <chrono>
+#include <fmt/base.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <future>
+#include <initializer_list>
+#include <memory>
+#include <thread>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include "command_queue_fixture.hpp"
+#include <tt-metalium/device.hpp>
+#include "impl/dispatch/dispatch_settings.hpp"
+#include "impl/dispatch/system_memory_manager.hpp"
+#include "gtest/gtest.h"
+#include "impl/debug/watcher_server.hpp"
+#include <tt-logger/tt-logger.hpp>
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
 namespace tt::tt_metal {
@@ -34,8 +48,10 @@ TEST_F(CommandQueueEventFixture, TestEventsDataMovementWrittenToCompletionQueueI
         auto start = std::chrono::system_clock::now();
 
         uint32_t completion_queue_base = this->device_->sysmem_manager().get_completion_queue_read_ptr(0);
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_->id());
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
+        chip_id_t mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());
 
         vector<std::shared_ptr<Buffer>> buffers;
         for (size_t i = 0; i < num_buffers; i++) {
@@ -50,14 +66,15 @@ TEST_F(CommandQueueEventFixture, TestEventsDataMovementWrittenToCompletionQueueI
         Finish(this->device_->command_queue());
 
         std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-        tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+        log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 
         // Read completion queue and ensure we see events 0-99 inclusive in order
         uint32_t event;
         if (data_movement_mode == DataMovementMode::WRITE) {
             for (size_t i = 0; i < num_buffers; i++) {
                 uint32_t host_addr = last_read_address + i * completion_queue_page_size + completion_queue_event_offset;
-                tt::Cluster::instance().read_sysmem(&event, 4, host_addr, mmio_device_id, channel);
+                tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+                    &event, 4, host_addr, mmio_device_id, channel);
                 EXPECT_EQ(event, ++expected_event_id);  // Event ids start at 1
             }
         } else if (data_movement_mode == DataMovementMode::READ) {
@@ -65,7 +82,8 @@ TEST_F(CommandQueueEventFixture, TestEventsDataMovementWrittenToCompletionQueueI
                 // Extra entry in the completion queue is from the buffer read data.
                 uint32_t host_addr =
                     completion_queue_base + (2 * i + 1) * completion_queue_page_size + completion_queue_event_offset;
-                tt::Cluster::instance().read_sysmem(&event, 4, host_addr, mmio_device_id, channel);
+                tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+                    &event, 4, host_addr, mmio_device_id, channel);
                 EXPECT_EQ(event, ++expected_event_id);  // Event ids start at 1
                 last_read_address = host_addr - completion_queue_event_offset + completion_queue_page_size;
             }
@@ -90,7 +108,7 @@ TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
     Finish(this->device_->command_queue());
 
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
 // Test where Host synchronously waits for event to be completed.
@@ -121,13 +139,14 @@ TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronize) {
     Finish(this->device_->command_queue());
 
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
 // Negative test. Host syncing on a future event that isn't actually issued.
 // Ensure that expected hang is seen, which indicates event sync feature is working properly.
 TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronizeHang) {
-    tt::llrt::RunTimeOptions::get_instance().set_test_mode_enabled(true);  // Required for finish hang breakout.
+    tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(
+        true);  // Required for finish hang breakout.
 
     auto future_event = std::make_shared<Event>();
     EnqueueRecordEvent(this->device_->command_queue(), future_event);
@@ -158,7 +177,8 @@ TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronizeHang)
 TEST_F(CommandQueueEventFixture, TestEventsQueueWaitForEventHang) {
     // Skip this test until #7216 is implemented.
     GTEST_SKIP();
-    tt::llrt::RunTimeOptions::get_instance().set_test_mode_enabled(true);  // Required for finish hang breakout.
+    tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(
+        true);  // Required for finish hang breakout.
 
     auto future_event = std::make_shared<Event>();
     EnqueueRecordEvent(this->device_->command_queue(), future_event);
@@ -211,7 +231,7 @@ TEST_F(CommandQueueEventFixture, TestEventsQueueWaitForEventBasic) {
     Finish(this->device_->command_queue());
 
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
 // Device sync. Single CQ here, less interesting than 2CQ but still useful. Ensure no hangs.
@@ -255,7 +275,7 @@ TEST_F(CommandQueueEventFixture, TestEventsEventsQueryBasic) {
 
     Finish(this->device_->command_queue());
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
 // Mix of WritesBuffers, RecordEvent, WaitForEvent, EventSynchronize with some checking.
@@ -270,8 +290,10 @@ TEST_F(CommandQueueEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize
     auto start = std::chrono::system_clock::now();
 
     uint32_t completion_queue_base = this->device_->sysmem_manager().get_completion_queue_read_ptr(0);
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_->id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
+    uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());
     constexpr uint32_t completion_queue_event_alignment = 32;
     for (size_t i = 0; i < num_buffers; i++) {
         log_debug(tt::LogTest, "i: {} - Going to record event, write, wait, synchronize.", i);
@@ -295,12 +317,13 @@ TEST_F(CommandQueueEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize
     uint32_t event_id;
     for (size_t i = 0; i < num_buffers * num_events_per_cq; i++) {
         uint32_t host_addr = completion_queue_base + i * completion_queue_page_size + completion_queue_event_offset;
-        tt::Cluster::instance().read_sysmem(&event_id, 4, host_addr, mmio_device_id, channel);
+        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+            &event_id, 4, host_addr, mmio_device_id, channel);
         EXPECT_EQ(event_id, ++expected_event_id);
     }
 
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
-    tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
 
 }  // namespace tt::tt_metal

@@ -20,7 +20,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     ReduceOpMath reduce_op,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     float scaler) {
-    const auto shape = a.get_padded_shape();
+    const auto shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
 
     uint32_t Wt = W / TILE_WIDTH;
@@ -32,14 +32,14 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
     tt::DataFormat scaler_cb_data_format = DataFormat::Float16_b;
     uint32_t scaler_single_tile_size = tt_metal::detail::TileSize(scaler_cb_data_format);
-    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
 
-    uint32_t num_tiles = a.volume() / TILE_HW;
+    uint32_t num_tiles = a.physical_volume() / TILE_HW;
 
     tt_metal::IDevice* device = a.device();
 
@@ -63,7 +63,6 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     }
 
     uint32_t src0_cb_index = CBIndex::c_0;
-    CBHandle cb_src0;
     uint32_t src1_cb_index = CBIndex::c_1;
     CBHandle cb_src1 = 0;
     if (in_sharded) {
@@ -73,7 +72,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             tt_metal::CircularBufferConfig(
                 num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
                 .set_page_size(src0_cb_index, src0_single_tile_size);
-        cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
         tt_metal::CircularBufferConfig cb_src1_config =
             tt_metal::CircularBufferConfig(
@@ -87,7 +86,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             tt_metal::CircularBufferConfig(
                 num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
                 .set_page_size(src0_cb_index, src0_single_tile_size);
-        cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
     }
 
     uint32_t scaler_cb_index = CBIndex::c_2;
@@ -133,7 +132,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
-        bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+        bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
         std::vector<uint32_t> reader_compile_time_args = {
             (std::uint32_t)src0_is_dram, Ht, Wt, HtWt, chunk_size, packed_scaler_value};
 
@@ -161,7 +160,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     } else {
-        bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+        bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
         writer_kernel_id = tt_metal::CreateKernel(
@@ -228,7 +227,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             } else if (core_group_2.contains(core)) {
                 num_cols_per_core = num_cols_per_core_group_2;
             } else {
-                TT_ASSERT(false, "Core not in specified core ranges");
+                TT_THROW("Core not in specified core ranges");
             }
             tt_metal::SetRuntimeArgs(
                 program,

@@ -17,8 +17,8 @@ using namespace tt::constants;
 namespace ttnn::operations::data_movement {
 operation::ProgramWithCallbacks bcast_sharded_h_optimised(
     const Tensor& a, const Tensor& b, const Tensor& output, BcastOpMath bcast_math /*, BcastOpDim bcast_dim*/) {
-    const auto ashape = a.get_padded_shape();
-    const auto bshape = b.get_padded_shape();
+    const auto ashape = a.padded_shape();
+    const auto bshape = b.padded_shape();
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1, C = ashape.rank() >= 3 ? ashape[-3] : 1, H = ashape[-2],
              W = ashape[-1];
     uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1, bC = bshape.rank() >= 3 ? bshape[-3] : 1, bH = bshape[-2],
@@ -41,26 +41,26 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(
         out_shard_spec.num_cores(),
         ncores);
 
-    auto act_df = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    auto b_df = tt::tt_metal::datatype_to_dataformat_converter(b.get_dtype());
-    auto out_df = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    auto act_df = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    auto b_df = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
+    auto out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
     uint32_t input1_tile_size = tt::tt_metal::detail::TileSize(b_df);
     uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
 
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
-    uint32_t shard_size_in_bytes = shard_spec.numel() * a.element_size();
 
-    uint32_t num_tile_per_core = (shard_size_in_bytes + input_tile_size - 1) / TILE_HW;  // ceil value
-    TT_FATAL(input_tile_size <= shard_size_in_bytes, "Input tile size should be less than shard size");
+    uint32_t ntiles_along_width = std::ceil(shard_spec.shape[1] / (float)tt::constants::TILE_WIDTH);
+    uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float)tt::constants::TILE_HEIGHT);
+    uint32_t num_tile_per_core = ntiles_along_width * ntiles_along_height;
 
     uint32_t Wt, Ht;
-    if (a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+    if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
         ncores_x = all_cores.ranges().begin()->end_coord.y + 1;
         Wt = shard_spec.shape[1] / TILE_WIDTH;
         Ht = shard_spec.shape[0] / TILE_HEIGHT;
-    } else if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+    } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         Wt = shard_spec.shape[1] / TILE_WIDTH;
         Ht = shard_spec.shape[0] / TILE_HEIGHT;
         TT_ASSERT(
@@ -107,10 +107,10 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(
     auto src0_buffer = a.buffer();
     auto src1_buffer = b.buffer();
     auto dst_buffer = output.buffer();
-    bool src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index, (uint32_t)src1_is_dram};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
 
     KernelHandle binary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -133,6 +133,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(
     uint32_t batch_b = Ht / Ht_per_batch_b;
 
     log_debug(
+        tt::LogOp,
         "ncores {}, ncores_x {}, Wt {}, Ht {}, h_blk {}, w_blk {}, src0_cb_index {}, src1_cb_index {}, output_cb_index "
         "{}, src1_is_dram {}, dst_is_dram {}, Ht_per_batch_b {}, batch_b {}",
         ncores,
@@ -152,14 +153,14 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(
     for (uint32_t i = 0; i < ncores; i++) {
         CoreCoord core;
         uint32_t offset = 0;
-        if (a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
             core = {i / ncores_x, i % ncores_x};
             if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
                 offset = Wt * (i / ncores_x) + Wt * ncores_y * ((i % ncores_x) / (ncores_x / bN));
             } else {
                 offset = Wt * (i % ncores_x) + Wt * ncores_x * ((i / ncores_x) / (ncores_y / bN));
             }
-        } else if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
             core = {i % ncores_x, i / ncores_x};
             if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
                 offset = Wt * (core.x + core.y * ncores_x);
@@ -215,14 +216,14 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(
         auto all_cores = shard_spec.grid;
         uint32_t ncores = shard_spec.num_cores();
         uint32_t Wt = 0, Ht = 0;
-        const auto ashape = input_tensors.at(0).get_padded_shape();
+        const auto ashape = input_tensors.at(0).padded_shape();
         uint32_t N = ashape[0], C = ashape[1], H = ashape[2], W = ashape[3];
-        uint32_t bN = input_tensors.at(1).get_padded_shape()[0];
+        uint32_t bN = input_tensors.at(1).padded_shape()[0];
         uint32_t NC = N * C;
-        if (a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
             Wt = shard_spec.shape[1] / TILE_WIDTH;
             Ht = shard_spec.shape[0] / TILE_HEIGHT;
-        } else if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
             Wt = shard_spec.shape[1] / TILE_WIDTH;
             Ht = shard_spec.shape[0] / TILE_HEIGHT;
         } else {
@@ -233,7 +234,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(
         for (uint32_t i = 0; i < ncores; i++) {
             CoreCoord core;
             uint32_t offset = 0;
-            if (a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
                 core = {i / ncores_x, i % ncores_x};
                 Ht_per_b1 = Ht;
                 if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
@@ -241,7 +242,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(
                 } else {
                     offset = Wt * (i % ncores_x) + Wt * ncores_x * ((i / ncores_x) / (ncores_y / bN));
                 }
-            } else if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+            } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
                 core = {i % ncores_x, i / ncores_x};
                 if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
                     offset = Wt * (core.x + core.y * ncores_x);

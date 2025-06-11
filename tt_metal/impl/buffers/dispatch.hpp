@@ -4,11 +4,27 @@
 
 #pragma once
 
-#include <command_queue_interface.hpp>
-#include <sub_device_types.hpp>
 #include <command_queue.hpp>
+#include <command_queue_interface.hpp>
+#include <stdint.h>
+#include <sub_device_types.hpp>
+#include <atomic>
+#include <memory>
+#include <variant>
+#include <vector>
+
 #include "buffer.hpp"
-#include "tt_metal/impl/event/dispatch.hpp"
+#include "core_coord.hpp"
+#include <tt_stl/span.hpp>
+#include "dispatch/system_memory_manager.hpp"
+
+enum class CoreType;
+namespace tt {
+namespace tt_metal {
+class IDevice;
+enum class TensorMemoryLayout;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -45,7 +61,8 @@ struct ReadBufferDescriptor {
         starting_host_page_id(starting_host_page_id) {}
 };
 
-using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor>;
+using CompletionReaderVariant =
+    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadCoreDataDescriptor>;
 
 // Contains helper functions to interface with buffers on device
 namespace buffer_dispatch {

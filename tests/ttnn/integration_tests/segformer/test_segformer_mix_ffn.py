@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -71,9 +71,6 @@ def test_segformer_mix_ffn(
     reset_seeds,
     is_ci_env,
 ):
-    if is_ci_env:
-        pytest.skip("Skip in CI, model is WIP, issue# 13357")
-
     torch_input_tensor = torch.randn(batch_size, seq_len, in_features)
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -107,7 +104,7 @@ def test_segformer_mix_ffn(
 
     ttnn_model = TtSegformerMixFFN(parameters, hidden_features)
 
-    ttnn_output = ttnn_model(ttnn_input_tensor, height=height, width=width, parameters=parameters, device=device)
+    ttnn_output = ttnn_model(device, ttnn_input_tensor, height=height, width=width, parameters=parameters)
     ttnn_output = ttnn.from_device(ttnn_output)
     ttnn_output = ttnn.to_torch(ttnn_output)[0]
 

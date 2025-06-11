@@ -4,7 +4,7 @@ on:
   schedule:
     # Create rc every day at EOD of PST Mon-Fri + night of Sunday to kick off
     # releases for beginning of work week
-    - cron: "0 1,14 * * *"
+    - cron: "0 0 * * *"
 
 permissions:
   contents: write
@@ -14,12 +14,17 @@ jobs:
   build-artifact:
     needs: create-tag
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
     with:
       version: 22.04
       build-wheel: true
-    secrets: inherit
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
     with:
       version: 22.04
       tracy: true
@@ -38,6 +43,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      arch: wormhole_b0
   t3000-demos:
     needs: build-artifact
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
@@ -56,7 +62,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
       build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-  tg-demos:
+  galaxy-4u-demos:
     needs: build-artifact
     uses: ./.github/workflows/tg-demo-tests-impl.yaml
     secrets: inherit
@@ -64,6 +70,24 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  galaxy-6u-demos:
+    needs: build-artifact
+    uses: ./.github/workflows/tg-demo-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      topology: topology-6u
+  blackhole-demos:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
+    with:
+      runner-label: BH
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   get-params:
     runs-on: ubuntu-latest
     outputs:
@@ -174,7 +198,7 @@ jobs:
         with:
           name: changelog
       - name: Assert wheels exist
-        run: ls -arhl ttnn-*+*.whl
+        run: ls -arhl ttnn-*.whl
       - name: Release
         # A major release has not been tagged yet, so we need to do this to avoid
         # Node 16 deprecation warning message
@@ -191,7 +215,7 @@ jobs:
             README.md
             INSTALLING.md
             models/MODEL_UPDATES.md
-            ttnn-*+*.whl
+            ttnn-*.whl
             tt-metalium.tar.gz
           fail_on_unmatched_files: true
   create-docker-release-image:
@@ -221,3 +245,23 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     secrets: inherit
+  publish-to-test-pypi:
+    name: >-
+      Publish Python 🐍 distribution 📦 to Test PyPI
+    needs: [build-artifact, test-wheels]
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/ttnn
+    permissions:
+      id-token: write  # IMPORTANT: mandatory for trusted publishing
+    steps:
+    - name: Download all the dists
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+        path: dist/
+    - name: Publish distribution 📦 to Test PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        repository-url: https://test.pypi.org/legacy/

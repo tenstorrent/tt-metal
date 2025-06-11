@@ -25,25 +25,23 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
     MATH((llk_math_hw_configure_disaggregated(icb, icb_scaler)));
 
     PACK((llk_pack_init()));
-    PACK((llk_pack_reduce_config_v2<reduce_dim, at_start, false, DST_ACCUM_MODE>(ocb)));
-    PACK((llk_pack_dest_init<false, DST_ACCUM_MODE>()));
+    PACK((llk_pack_reduce_config_v2<reduce_dim, DST_ACCUM_MODE, at_start, false>(ocb)));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 }
 
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
 ALWI void reduce_init_short(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>()));
-    PACK((llk_pack_reduce_config_v2<reduce_dim, false, false, DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_reduce_config_v2<reduce_dim, DST_ACCUM_MODE, false, false>(ocb)));
 }
 
 template <bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
 ALWI void reduce_init_delta(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb0, icb1)));
-
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>()));
-
-    PACK((llk_pack_reduce_config_v2<reduce_dim, at_start, false, DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_reduce_config_v2<reduce_dim, DST_ACCUM_MODE, at_start, false>(ocb)));
 }
 
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
@@ -61,7 +59,7 @@ ALWI void reduce_init_delta_math() {
 
 template <ReduceDim reduce_dim = REDUCE_DIM>
 ALWI void reduce_revert_delta(uint32_t ocb) {
-    PACK((llk_pack_reduce_config_v2<reduce_dim, false, true, DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_reduce_config_v2<reduce_dim, DST_ACCUM_MODE, false, true>(ocb)));
 }
 
 // clang-format off
@@ -85,20 +83,20 @@ ALWI void reduce_revert_delta(uint32_t ocb) {
  * |----------------|-----------------------------------------------------------------|----------|------------------------------------------------|----------|
  * | icb0           | The identifier of the circular buffer (CB) containing A         | uint32_t | 0 to 31                                        | True     |
  * | icb1           | CB for Scaling factor applied to each element of the result.    | uint32_t | 0 to 31                                        | True     |
- * | itile0         | The index of the tile within the first CB                       | uint32_t | Must be less than the size of the CB           | True     | 
- * | itile1         | The index of the tile within the scaling factor CB.             | uint32_t | Must be less than the size of the CB           | True     | 
+ * | itile0         | The index of the tile within the first CB                       | uint32_t | Must be less than the size of the CB           | True     |
+ * | itile1         | The index of the tile within the scaling factor CB.             | uint32_t | Must be less than the size of the CB           | True     |
  * | idst           | The index of the tile in DST REG for the result                 | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
- // clang-format on
+// clang-format on
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
 ALWI void reduce_tile(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    MATH((llk_math_reduce<reduce_type, reduce_dim, MATH_FIDELITY, DST_ACCUM_MODE>(idst)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(icb0, icb1, idst)));
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
 }
 
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
 ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
-    MATH((llk_math_reduce<reduce_type, reduce_dim, MATH_FIDELITY, DST_ACCUM_MODE>(idst, num_faces)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, num_faces)));
 }
 
 }  // namespace ckernel

@@ -20,11 +20,11 @@ inline void calculate_right_shift(const uint shift_amt) {
         vInt input = dst_reg[0];
         vUInt val = reinterpret<vUInt>(input);
 
-        v_if(input < 0) { val = setsgn(val - 1, 0); }
+        v_if(input < 0) { val = ~val; }
         v_endif;
         vInt res = reinterpret<vInt>(val >> shift_amt);
 
-        v_if(input < 0) { res = setsgn(res + 1, input); }
+        v_if(input < 0) { res = ~res; }
         v_endif;
 
         dst_reg[0] = res;

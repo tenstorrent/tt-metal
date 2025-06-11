@@ -2,24 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <gtest/gtest.h>
-
-#include <algorithm>
-#include <functional>
-#include <random>
-#include <utility>
-
-#include "command_queue_fixture.hpp"
-#include "device_fixture.hpp"
-#include "multi_device_fixture.hpp"
-#include "env_lib.hpp"
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <cstdint>
+#include <cstdlib>
+#include <map>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "device_fixture.hpp"
+#include "env_lib.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/df/float32.hpp"
 
 namespace tt::tt_metal {
 
@@ -115,7 +120,7 @@ void build_and_run_program(
                 (std::uint32_t)neighbour_core_physical.x,
                 (std::uint32_t)neighbour_core_physical.y,
                 // mcast
-                (core_idx_x == 0 && core_idx_y == 0) ? true : false,
+                core_idx_x == 0 && core_idx_y == 0,
                 top_left_core_physical.x,
                 top_left_core_physical.y,
                 bottom_right_core_physical.x,

@@ -4,6 +4,43 @@
 
 #include "test_utils.hpp"
 
+#include <fmt/base.h>
+#include <algorithm>
+#include <array>
+#include <functional>
+#include <iterator>
+#include <utility>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace unary {
+enum class UnaryOpType;
+struct UnaryWithParam;
+}  // namespace unary
+}  // namespace operations
+}  // namespace ttnn
+namespace tt {
+namespace tt_metal {
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::distributed::test {
 
 static constexpr size_t TEST_WORKERS_SUBDEVICE_INDEX = 0;
@@ -104,7 +141,7 @@ void persistent_fabric_teardown_sequence(
     std::optional<SubdeviceInfo>& subdevice_managers,
     ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
     tt::tt_fabric::TerminationSignal termination_mode) {
-    log_info("Tearing down fabric");
+    log_info(tt::LogTest, "Tearing down fabric");
 
     // Wait for workers to finish
     auto d0_worker_subdevice = devices[0]->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];
@@ -125,7 +162,7 @@ std::tuple<
     ttnn::global_semaphore::MultiDeviceGlobalSemaphore>
 create_global_semaphores(std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, IDevice* device) {
     auto from_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        mesh_device.get(),
+        mesh_device->get_devices(),
         device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
         0,                             // initial value
         tt::tt_metal::BufferType::L1,  // buffer type
@@ -133,7 +170,7 @@ create_global_semaphores(std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&
     );
 
     auto to_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        mesh_device.get(),
+        mesh_device->get_devices(),
         device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
         0,                             // initial value
         tt::tt_metal::BufferType::L1,  // buffer type
@@ -141,7 +178,7 @@ create_global_semaphores(std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&
     );
 
     auto multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        mesh_device.get(),
+        mesh_device->get_devices(),
         device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
         0,                             // initial value
         tt::tt_metal::BufferType::L1,  // buffer type

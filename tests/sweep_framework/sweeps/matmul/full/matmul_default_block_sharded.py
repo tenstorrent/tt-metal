@@ -15,12 +15,12 @@ import ttnn
 
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.ttnn.utils_for_testing import (
-    check_with_pcc,
     get_per_core_size_and_num_cores,
     start_measuring_time,
     stop_measuring_time,
 )
 from models.utility_functions import torch_random
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 TIMEOUT = 15
 
@@ -113,7 +113,7 @@ def run_matmul(
             (per_core_height, per_core_width),
             ttnn.ShardOrientation.ROW_MAJOR,
         )
-    input_a_memory_config.shard_spec = input_a_shard_spec
+    input_a_memory_config = input_a_memory_config.with_shard_spec(input_a_shard_spec)
 
     input_shape_a = (*batch_sizes, m_size, k_size)
     input_shape_b = (k_size, n_size)
@@ -143,18 +143,20 @@ def run_matmul(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.matmul(
+    op_output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
         memory_config=output_memory_config,
         dtype=output_dtype,
         compute_kernel_config=compute_kernel_config,
     )
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
     expected_pcc = 0.989
-    return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
+    tensors = [input_tensor_a, input_tensor_b, op_output_tensor]
+    flop_counts = list(batch_sizes) + [m_size, n_size, 2, k_size]
+    return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf, flop_counts)
 
 
 @pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))

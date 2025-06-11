@@ -24,6 +24,22 @@ class default_setup(metaclass=MergeMetaclass):
     ]
 
     timerAnalysis = {
+        "op2op": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {
+                "core": "ANY",
+                "risc": "ANY",
+                "zone_phase": "ZONE_END",
+                "zone_name": [f"{risc}-KERNEL" for risc in riscTypes],
+            },
+            "end": {
+                "core": "ANY",
+                "risc": "ANY",
+                "zone_phase": "ZONE_START",
+                "zone_name": [f"{risc}-KERNEL" for risc in ["BRISC", "NCRISC"]],
+            },
+        },
         "device_kernel_first_to_last_start": {
             "across": "ops",
             "type": "op_first_last",
@@ -56,6 +72,16 @@ class default_setup(metaclass=MergeMetaclass):
             "across": "ops",
             "type": "op_first_last",
             "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
+            "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
+        },
+        "device_kernel_duration_dm_start": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {
+                "core": "ANY",
+                "risc": "ANY",
+                "zone_name": [f"{risc}-KERNEL" for risc in ["BRISC", "NCRISC", "ERISC"]],
+            },
             "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
         },
         "device_brisc_kernel_duration": {
@@ -103,6 +129,18 @@ class default_setup(metaclass=MergeMetaclass):
             "across": "ops",
             "type": "sum",
             "marker": {"risc": "TRISC_2", "zone_name": "CB-COMPUTE-RESERVE-BACK"},
+        },
+        "dispatch_total_cq_cmd_op_time": {
+            "across": "dispatch_ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "BRISC", "zone_name": "CQ_DISPATCH_*"},
+            "end": {"core": "ANY", "risc": "BRISC", "zone_name": "CQ_DISPATCH_*"},
+        },
+        "dispatch_go_send_wait_time": {
+            "across": "dispatch_ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "NCRISC", "zone_name": "CQ_DISPATCH_CMD_SEND_GO_SIGNAL"},
+            "end": {"core": "ANY", "risc": "NCRISC", "zone_name": "CQ_DISPATCH_CMD_SEND_GO_SIGNAL"},
         },
     }
 
@@ -240,14 +278,14 @@ class test_dispatch_cores(default_setup):
         "Tensix CQ Dispatch": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "NCRISC", "zone_name": "CQ-DISPATCH"},
-            "end": {"risc": "NCRISC", "zone_name": "CQ-DISPATCH"},
+            "start": {"risc": "BRISC", "zone_name": "CQ-DISPATCH"},
+            "end": {"risc": "BRISC", "zone_name": "CQ-DISPATCH"},
         },
         "Tensix CQ Prefetch": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "NCRISC", "zone_name": "KERNEL-MAIN-HD"},
-            "end": {"risc": "NCRISC", "zone_name": "KERNEL-MAIN-HD"},
+            "start": {"risc": "BRISC", "zone_name": "CQ-PREFETCH"},
+            "end": {"risc": "BRISC", "zone_name": "CQ-PREFETCH"},
         },
     }
     detectOps = False

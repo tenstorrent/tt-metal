@@ -1,5 +1,4 @@
 # This VERSION file is not the official source of the software version
 # This is solely for helping with version management via our release system
 # as of this writing
-# change
-v0.57.0
+v0.59.0

@@ -1,12 +1,13 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+
+from dataclasses import dataclass
+from typing import Optional, Tuple, Union
 
 import ttnn
 from models.demos.segformer.tt.ttnn_segformer_decode_head import TtSegformerDecodeHead
 from models.demos.segformer.tt.ttnn_segformer_model import TtSegformerModel
-from typing import Tuple, Union, Optional
-from dataclasses import dataclass
 
 
 @dataclass
@@ -26,6 +27,7 @@ class TtSegformerForSemanticSegmentation:
 
     def __call__(
         self,
+        device,
         pixel_values: ttnn.bfloat16,
         labels=None,
         output_attentions=None,
@@ -42,6 +44,7 @@ class TtSegformerForSemanticSegmentation:
             raise ValueError(f"Number of labels should be >=0: {self.config.num_labels}")
 
         outputs = self.segformer(
+            device,
             pixel_values,
             output_attentions=output_attentions,
             output_hidden_states=True,  # we need the intermediate hidden states
@@ -51,7 +54,7 @@ class TtSegformerForSemanticSegmentation:
 
         encoder_hidden_states = outputs.hidden_states if return_dict else outputs[1]
 
-        logits = self.decode_head(encoder_hidden_states, parameters=parameters.decode_head)
+        logits = self.decode_head(device, encoder_hidden_states, parameters=parameters.decode_head)
 
         loss = None
 

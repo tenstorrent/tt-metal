@@ -4,24 +4,21 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d.hpp"
-#include "cpp/ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/pool/pool_utils.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations {
 namespace pool {
-
-enum class Pool2DType {
-    MAX_POOL2D,
-};
-
 // Generic pool uop -- called from the macro-ops
 struct Pool2D {
     struct operation_attributes_t {
@@ -29,6 +26,8 @@ struct Pool2D {
         Pool2DType pool_type_;
         DataType output_dtype_;
         MemoryConfig memory_config_;
+        bool count_include_pad_;
+        std::optional<int32_t> divisor_override_;
     };
 
     struct tensor_args_t {
@@ -46,7 +45,8 @@ struct Pool2D {
             tt::tt_metal::CBHandle cb_out;
             uint32_t ncores;
             uint32_t ncores_w;
-            std::shared_ptr<Buffer> reader_indices_buffer;
+            tt::tt_metal::DeviceStorage reader_indices_storage;
+            tt::tt_metal::DeviceStorage scalar_config_storage;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -70,7 +70,7 @@ struct Pool2D {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static Tensor create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-    static tt::tt_metal::operation::OpPerformanceModel create_op_performance_model(
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
@@ -78,7 +78,9 @@ struct Pool2D {
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         Pool2DType pool_type,
         DataType output_dtype,
-        MemoryConfig memory_config);
+        MemoryConfig memory_config,
+        bool count_include_pad,
+        std::optional<int32_t> divisor_override);
 };
 
 }  // namespace pool

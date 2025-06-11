@@ -66,7 +66,6 @@ def run_full(
     groups,
     override_sharding_config,
     core_grid,
-    use_shallow_conv_variant,
     deallocate_activation,
     enable_auto_formatting,
     device,
@@ -140,7 +139,7 @@ def run_full(
                 {ttnn.CoreRange(core_grid[0], core_grid[1]), ttnn.CoreRange(core_grid[2], core_grid[3])}
             )
     start_time = start_measuring_time()
-    [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv_transpose2d(
+    [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv_transpose2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -158,7 +157,6 @@ def run_full(
         conv_config=conv_config,
         groups=groups,
         return_output_dim=True,
-        return_weights_device=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -230,7 +228,7 @@ def run_short(
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
 
     start_time = start_measuring_time()
-    [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv_transpose2d(
+    [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv_transpose2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -246,6 +244,7 @@ def run_short(
         input_height=input_height,
         input_width=input_width,
         groups=groups,
+        return_output_dim=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)

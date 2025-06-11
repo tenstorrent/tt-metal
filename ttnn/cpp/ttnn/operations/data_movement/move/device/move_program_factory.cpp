@@ -67,13 +67,14 @@ std::vector<CoreRange> get_multicast_regions(
 operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input, Tensor& output) {
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
 
-    bool tilized = input.get_layout() == Layout::TILE;
+    bool tilized = input.layout() == Layout::TILE;
 
     uint32_t page_size = input.buffer()->page_size();
 
-    uint32_t num_pages = tilized ? output.volume() / TILE_HW : output.volume() / output.get_padded_shape()[-1];
+    uint32_t num_pages =
+        tilized ? output.physical_volume() / TILE_HW : output.physical_volume() / output.padded_shape()[-1];
     tt::tt_metal::IDevice* device = output.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -98,8 +99,8 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
 
     uint32_t log2_page_size = 0;
     std::vector<uint32_t> compile_time_args = {cb_index, (uint32_t)src_is_dram, (uint32_t)dst_is_dram};
@@ -184,11 +185,13 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
     }
 
     auto override_runtime_args_callback = [kernel_id, num_cores, num_cores_y](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_buffer = input_buffers.at(0);
-        auto dst_buffer = output_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         for (uint32_t i = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -207,16 +210,16 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
 operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Tensor& output) {
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     auto shard_spec = input.shard_spec().value();
     auto shard_shape = shard_spec.shape;
     auto shard_grid = shard_spec.grid;
-    auto input_shape = input.get_logical_shape();
-    auto input_dtype = input.get_dtype();
-    auto input_layout = input.get_layout();
+    auto input_shape = input.logical_shape();
+    auto input_dtype = input.dtype();
+    auto input_layout = input.layout();
     TT_FATAL(
-        input_layout == output.get_layout() && input_dtype == output.get_dtype() &&
-            shard_shape == output.shard_spec().value().shape && input_shape == output.get_logical_shape(),
+        input_layout == output.layout() && input_dtype == output.dtype() &&
+            shard_shape == output.shard_spec().value().shape && input_shape == output.logical_shape(),
         "Error");
     const uint32_t src_cb_sharded = tt::CBIndex::c_0;
     const uint32_t dst_cb_sharded = tt::CBIndex::c_1;
@@ -239,9 +242,6 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
     auto input_buffer_address = input.buffer()->address();
     auto output_buffer_address = output.buffer()->address();
 
-    TT_FATAL(
-        output_buffer_address > input_buffer_address,
-        "Expected output buffer to be allocated at a higher address than input buffer");
     uint32_t move_chunk_size_bytes = output_buffer_address - input_buffer_address;
     TT_FATAL(
         input.buffer()->alignment() == output.buffer()->alignment(),

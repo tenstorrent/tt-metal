@@ -2,17 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/move/utility_core.hpp>
+#include <memory>
+#include <optional>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "gtest/gtest.h"
-
-#include <tt-metalium/bfloat16.hpp>
-#include "ttnn/device.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/async_runtime.hpp"
-#include "ttnn/operations/functions.hpp"
-#include <tt-metalium/logger.hpp>
-
-#include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/shape.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
@@ -40,8 +43,8 @@ TEST_P(CreateTensorWithLayoutTest, Tile) {
     CreateTensorParams params = GetParam();
 
     auto tensor = tt::tt_metal::create_device_tensor(TensorSpec(params.inputs.shape, params.inputs.layout), device_);
-    EXPECT_EQ(tensor.get_padded_shape(), params.expected.padded_shape);
-    EXPECT_EQ(tensor.get_logical_shape(), params.inputs.shape);
+    EXPECT_EQ(tensor.padded_shape(), params.expected.padded_shape);
+    EXPECT_EQ(tensor.logical_shape(), params.inputs.shape);
 }
 
 namespace {

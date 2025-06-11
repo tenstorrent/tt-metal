@@ -26,11 +26,13 @@ After setting up the environment correctly, run a demo to test the environment.
 
 ### Implementation
 
-- For transformer based models, use [models/demos/llama3](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3) codebase as reference implementation. For other models, choose the model from [/models](https://github.com/tenstorrent/tt-metal/tree/main/models) that is the most similar:
+- For transformer based models, use [models/tt_transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers) codebase as reference implementation.
+
+- For other models, choose the model from [/models](https://github.com/tenstorrent/tt-metal/tree/main/models) that is the most similar:
   - Most transformer based models can be run by changing the tensor dimensions of llama3 and can be added as a new model configuration to the existing codebase. For other models, make a copy of the model codebase for advanced changes.
   - Modify modules with model dimensions as needed.
   - First use a single device for simpler bring-up if models can fit on that single device; Wormhole has 12 GB DRAM storage and can support models of up to roughly 12B parameters in BFP8. If possible, use a smaller version of the model that fits on a single device. The model can be scaled up in size and on more devices.
- 
+
 > [!NOTE]
 > In the llama3 demo implementation the decode stage supports batch=32. Each row is a separate user in 32x32 tiles used by the TT-Metalium stack. The prefill stage supports batch=1 where rows map to different iput tokens. Because prefill is compute-bound, multiple batches do not benefit performance. See [Converting Torch Model to TT-NN](https://docs.tenstorrent.com/docs-test/ttnn/latest/ttnn/converting_torch_model_to_ttnn.html) for model conversion.
 
@@ -56,7 +58,7 @@ After setting up the environment correctly, run a demo to test the environment.
     - Meaningful and coherent.
     - Similar to reference model tokens.
     - Measure the top1/top5 accuracy of the generated tokens w.r.t. to the reference tokens.
-   
+
 > [!NOTE]
 > Due to differences in floating point arithmetic and non-linear approximations, tokens may not be exact matches.
 
@@ -82,7 +84,8 @@ Determine how many copies of a model can be run by dividing the model size by th
   - Each Wormhole n150 can run a copy of the llama3.1 8B model using BFP8 weights (~8GB of model weights).
   - A TT-LoudBox (TW-02001) has four Wormhole n300s. Using data parallel scaling, eight independent instances of the llama3.1 8B model can be run.
   - Large models like Falcon 40B do not fit on a single device. At least two Wormhole n300s (24GB each) are required to run in tensor parallel scaling where single operations are distributed across devices.
-  - TT-QuietBox and TT-LoudBox Systems have four Wormhole n300s; each system can run two copies of Falcon 40B with each copy running on two Wormhole n300 cards.
+  - TT-LoudBox and the TT-QuietBox (Wormhole) Systems have four Wormhole n300s; each system can run two copies of Falcon 40B with each copy running on two Wormhole n300 cards.
+  - The TT-QuietBox (Blackhole) System has four p150cs; this system can run two copies of Falcon 40B with each copy running on two Blackhole p150c cards.
   - How to Run a Model Data Parallel:
     - Weights must be replicated on different devices.
     - Different inputs must be sent to different devices.

@@ -232,7 +232,6 @@ class Conv:
             fp32_dest_acc_enabled=False,
             act_block_w_div=1,
             packer_l1_accum_enabled=False,
-            input_channels_alignment=16 if self.input_params[3] < 16 else 32,
             transpose_shards=False,
             reshard_if_not_optimal=self.reshard,
             deallocate_activation=self.deallocate,
@@ -1690,7 +1689,7 @@ fi
 # Google Drive file ID
 FILE_ID="1wv_LiFeCRYwtpkqREPeI13-gPELBDwuJ"
 # Output filename
-OUTPUT="tests/ttnn/integration_tests/yolov4/yolov4.pth"
+OUTPUT="models/demos/yolov4/tests/pcc/yolov4.pth"
 
 # Download the file
 gdown "https://drive.google.com/uc?id=${FILE_ID}" -O "${OUTPUT}"

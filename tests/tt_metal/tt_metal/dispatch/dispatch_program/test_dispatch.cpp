@@ -4,10 +4,33 @@
 
 // This file contains dispatch tests that are (generally) dispatch mode agnostic
 
-#include "dispatch_fixture.hpp"
-
-#include "llrt/hal.hpp"
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/allocator.hpp>
+#include <map>
+#include <memory>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "dispatch_fixture.hpp"
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/xy_pair.h"
 
 namespace tt::tt_metal {
 
@@ -33,8 +56,10 @@ static void test_sems_across_core_types(
             continue;
         }
 
-        const auto& eth_cores =
+        const auto& eth_cores_unordered =
             active_eth ? device->get_active_ethernet_cores() : device->get_inactive_ethernet_cores();
+
+        std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
         if (eth_cores.size() > 0) {
             auto program = tt::tt_metal::CreateProgram();
 
@@ -66,7 +91,7 @@ static void test_sems_across_core_types(
 
             // Set up args
             vector<uint32_t> eth_rtas = {
-                tt::tt_metal::hal_ref.noc_xy_encoding(phys_tensix_core.x, phys_tensix_core.y),
+                tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_tensix_core.x, phys_tensix_core.y),
                 eth_sem_id,
                 tensix_sem_id,
                 eth_sem_init_val,
@@ -82,7 +107,7 @@ static void test_sems_across_core_types(
             SetRuntimeArgs(program, eth_kernel, eth_core, eth_rtas);
 
             vector<uint32_t> tensix_rtas = {
-                tt::tt_metal::hal_ref.noc_xy_encoding(phys_eth_core.x, phys_eth_core.y),
+                tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_eth_core.x, phys_eth_core.y),
                 tensix_sem_id,
                 eth_sem_id,
                 tensix_sem_init_val,
@@ -99,8 +124,10 @@ TEST_F(DispatchFixture, EthTestBlank) {
     Program program = CreateProgram();
 
     // TODO: tweak when FD supports idle eth
-    const auto& eth_cores =
+    const auto& eth_cores_unordered =
         this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores();
+
+    std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
 
     if (eth_cores.size() > 0) {
         CoreCoord eth_core = *eth_cores.begin();
@@ -145,7 +172,7 @@ TEST_F(DispatchFixture, EthTestInitLocalMemory) {
     // This test will hang/assert if there is a failure
 
     if (not this->slow_dispatch_) {
-        tt::log_warning("Skipping fast dispatch test until active eth memory map is fixed");
+        log_warning(tt::LogTest, "Skipping fast dispatch test until active eth memory map is fixed");
         return;
     }
 
@@ -269,12 +296,12 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 
 class EarlyReturnFixture : public DispatchFixture {
     void SetUp() override {
-        tt::llrt::RunTimeOptions::get_instance().set_kernels_early_return(true);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(true);
         DispatchFixture::SetUp();
     }
     void TearDown() override {
         DispatchFixture::TearDown();
-        tt::llrt::RunTimeOptions::get_instance().set_kernels_early_return(false);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(false);
     }
 };
 

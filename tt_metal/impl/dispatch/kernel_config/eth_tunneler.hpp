@@ -1,10 +1,19 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include "fd_kernel.hpp"
+#include <stdint.h>
+#include <array>
+#include <optional>
 
-typedef struct eth_tunneler_static_config {
+#include "dispatch/kernels/packet_queue_ctrl.hpp"
+#include "fd_kernel.hpp"
+#include <umd/device/tt_core_coordinates.h>
+
+namespace tt {
+namespace tt_metal {
+
+struct eth_tunneler_static_config_t {
     std::optional<uint32_t> endpoint_id_start_index;
     std::optional<uint32_t> vc_count;  // Set from arch level
     std::optional<uint32_t> in_queue_start_addr_words;
@@ -13,9 +22,9 @@ typedef struct eth_tunneler_static_config {
     std::optional<uint32_t> kernel_status_buf_addr_arg;
     std::optional<uint32_t> kernel_status_buf_size_bytes;
     std::optional<uint32_t> timeout_cycles;
-} eth_tunneler_static_config_t;
+};
 
-typedef struct eth_tunneler_dependent_config {
+struct eth_tunneler_dependent_config_t {
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_TUNNEL_LANES> remote_receiver_x;  // [4:13], dependent
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_TUNNEL_LANES> remote_receiver_y;  // [4:13], dependent
     std::array<std::optional<uint32_t>, tt::packet_queue::MAX_TUNNEL_LANES>
@@ -34,7 +43,7 @@ typedef struct eth_tunneler_dependent_config {
         remote_sender_network_type;  // [34:43], dependent
 
     std::optional<uint32_t> inner_stop_mux_d_bypass;  // Dependent
-} eth_tunneler_dependent_config_t;
+};
 
 class EthTunnelerKernel : public FDKernel {
 public:
@@ -49,7 +58,7 @@ public:
     void CreateKernel() override;
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;
-    CoreType GetCoreType() override {
+    CoreType GetCoreType() const override {
         // Tunneler kernel is the exception in that it's always on ethernet core even if dispatch is on tensix.
         return CoreType::ETH;
     }
@@ -64,3 +73,6 @@ private:
     eth_tunneler_dependent_config_t dependent_config_;
     bool is_remote_;
 };
+
+}  // namespace tt_metal
+}  // namespace tt

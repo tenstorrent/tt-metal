@@ -2,25 +2,53 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <cstdint>
-#include <functional>
-#include <random>
-#include <string>
-
-#include "core_coord.hpp"
-#include "logger.hpp"
+#include <chrono>
+#include <emmintrin.h>
+#include <fmt/base.h>
+#include <stdlib.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/event.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "test_common.hpp"
-#include "rtoptions.hpp"
 #include <tt-metalium/metal_soc_descriptor.h>
-#include <tt-metalium/event.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <exception>
+#include <iomanip>
+#include <map>
+#include <memory>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "tt_cluster.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include "test_common.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "impl/context/metal_context.hpp"
+#include "impl/dispatch/command_queue_common.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/tt_xy_pair.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 constexpr uint32_t DEFAULT_ITERATIONS = 1000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 2;
@@ -53,6 +81,7 @@ bool hammer_pcie_g = false;
 bool hammer_pcie_type_g = false;
 bool test_write = false;
 bool linked = false;
+bool dump_profiler_results = false;
 uint32_t nop_count_g = 0;
 
 void init(int argc, char** argv) {
@@ -94,6 +123,7 @@ void init(int argc, char** argv) {
         log_info(LogTest, " -hpt:hammer hugepage PCIe hammer type: 0:32bit writes 1:128bit non-temporal writes");
         log_info(LogTest, "  -psrta: pass page size as a runtime argument (default compile time define)");
         log_info(LogTest, " -nop: time loop of <n> nops");
+        log_info(LogTest, "-profdump: dump profiler results before closing device");
         exit(0);
     }
 
@@ -131,6 +161,8 @@ void init(int argc, char** argv) {
     }
 
     linked = test_args::has_command_option(input_args, "-link");
+
+    dump_profiler_results = test_args::has_command_option(input_args, "-profdump");
 
     worker_g = CoreRange({core_x, core_y}, {core_x, core_y});
     src_worker_g = {src_core_x, src_core_y};
@@ -198,13 +230,18 @@ int main(int argc, char** argv) {
         uint32_t mcast_noc_addr_end_x = 0;
         uint32_t mcast_noc_addr_end_y = 0;
 
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-        void* host_pcie_base = (void*)tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
-        uint64_t dev_pcie_base = tt::Cluster::instance().get_pcie_base_addr_from_device(device->id());
+        chip_id_t mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+        void* host_pcie_base =
+            (void*)tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
+        uint64_t dev_pcie_base =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_pcie_base_addr_from_device(device->id());
         uint64_t pcie_offset = 1024 * 1024 * 50;  // beyond where FD will write...maybe
 
-        const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
+        const metal_SocDescriptor& soc_d =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
         switch (source_mem_g) {
             case 0:
             default: {
@@ -374,7 +411,8 @@ int main(int argc, char** argv) {
                 uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
                 while (!done) {
                     if (hammer_write_reg_g) {
-                        tt::Cluster::instance().write_reg(&addr, tt_cxy_pair(device->id(), w), l1_unreserved_base);
+                        tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
+                            &addr, tt_cxy_pair(device->id(), w), l1_unreserved_base);
                     }
                     if (hammer_pcie_g) {
                         if (page == page_count_g) {
@@ -405,35 +443,33 @@ int main(int argc, char** argv) {
             vector<std::uint32_t> vec;
             vec.resize(page_size_g / sizeof(uint32_t));
 
-            CoreType core_type = get_dispatch_core_type();
             uint32_t dispatch_l1_unreserved_base =
-                DispatchMemMap::get(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+                MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
+                    CommandQueueDeviceAddrType::UNRESERVED);
             for (int i = 0; i < warmup_iterations_g; i++) {
                 if (source_mem_g == 4) {
-                    tt::Cluster::instance().read_core(
+                    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                         vec, sizeof(uint32_t), tt_cxy_pair(device->id(), w), dispatch_l1_unreserved_base);
                 } else {
-                    tt::Cluster::instance().write_core(
+                    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                         vec.data(),
                         vec.size() * sizeof(uint32_t),
                         tt_cxy_pair(device->id(), w),
-                        dispatch_l1_unreserved_base,
-                        vec.size() == 1);
+                        dispatch_l1_unreserved_base);
                 }
             }
 
             auto start = std::chrono::system_clock::now();
             for (int i = 0; i < iterations_g; i++) {
                 if (source_mem_g == 4) {
-                    tt::Cluster::instance().read_core(
+                    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                         vec, page_size_g, tt_cxy_pair(device->id(), w), dispatch_l1_unreserved_base);
                 } else {
-                    tt::Cluster::instance().write_core(
+                    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                         vec.data(),
                         vec.size() * sizeof(uint32_t),
                         tt_cxy_pair(device->id(), w),
-                        dispatch_l1_unreserved_base,
-                        vec.size() == 1);
+                        dispatch_l1_unreserved_base);
                 }
             }
             auto end = std::chrono::system_clock::now();
@@ -456,10 +492,14 @@ int main(int argc, char** argv) {
             log_info(LogTest, "BW: {} GB/s", ss.str());
         }
 
+        if (dump_profiler_results) {
+            tt_metal::detail::DumpDeviceProfileResults(device);
+        }
+
         pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception& e) {
         pass = false;
-        log_fatal(e.what());
+        log_fatal(tt::LogTest, "{}", e.what());
     }
 
     if (pass) {
