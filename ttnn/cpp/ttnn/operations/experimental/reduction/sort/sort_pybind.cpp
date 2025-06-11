@@ -31,7 +31,7 @@ void bind_reduction_sort_operation(py::module& module) {
                 descending (bool, optional): If `True`, sorts in descending order. Defaults to `False`.
                 stable (bool, optional): If `True`, ensures the original order of equal elements is preserved. Defaults to `False`.
                 memory_config (ttnn.MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
-                out (tuple of ttnn.Tensor, optional): Preallocated output tensors for the sorted values and indices. Defaults to `None`.
+                out (tuple of ttnn.Tensor, optional): Preallocated output tensors for the sorted values and indices. Defaults to `None`. The index tensor must be of type uint16 or uint32.
 
             Additional info:
                 * For now the `stable` argument is not supported.
