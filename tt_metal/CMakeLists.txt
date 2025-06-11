@@ -161,6 +161,7 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_addr_map.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_addrmod.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_common.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_debug.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_defs.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_globals.h
@@ -207,7 +208,7 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_sign.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_sqrt.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_square.h
-            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_sub_int32.h
+            third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_sub_int.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_tanh.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_tanh_derivative.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_topk.h
@@ -236,6 +237,7 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_addr_map.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_addrmod.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_common.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_debug.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_defs.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_globals.h
@@ -283,7 +285,7 @@ target_sources(
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_sign.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_sqrt.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_square.h
-            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_sub_int32.h
+            third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_sub_int.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_tanh.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_tanh_derivative.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_topk.h
