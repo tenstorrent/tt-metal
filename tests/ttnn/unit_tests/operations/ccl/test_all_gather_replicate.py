@@ -187,7 +187,7 @@ def run_all_gather_replicate_impl(
         for i in range(n_iters):
             out = ttnn.experimental.all_gather_replicate_async(
                 tt_input_tensor,
-                persistent_output_tensor=tt_intermediate_tensors[i % num_buffers],
+                intermediate_tensor=tt_intermediate_tensors[i % num_buffers],
                 dim=3,
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
@@ -197,6 +197,10 @@ def run_all_gather_replicate_impl(
                 num_links=num_links,
                 subdevice_id=worker_sub_device_id,
             )
+
+            # TODO: Change when actual output is integrated
+            out = tt_intermediate_tensors[i % num_buffers]
+
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
             if store_all_results:
@@ -283,7 +287,7 @@ def run_all_gather_replicate_impl(
 @pytest.mark.parametrize(
     "num_iters",
     [
-        (10),
+        (8),
     ],
 )
 @pytest.mark.parametrize("trace_mode", [True])

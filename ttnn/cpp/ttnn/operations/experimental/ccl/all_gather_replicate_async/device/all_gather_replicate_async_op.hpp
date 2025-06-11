@@ -78,8 +78,7 @@ struct AllGatherReplicateAsync {
         return attrs;
     }
 
-    void validate_with_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
+    void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload(
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
@@ -100,10 +99,10 @@ struct AllGatherReplicateAsync {
 // All Gather Replicate Variants
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded(
     const Tensor& input_tensor,
+    const Tensor& intermediate_tensor,
     IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
-    Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
     const uint32_t ring_size,
@@ -118,12 +117,12 @@ namespace ccl {
 
 Tensor all_gather_replicate_async(
     const Tensor& input_tensor,
+    const Tensor& intermediate_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const GlobalSemaphore& multi_device_global_semaphore,
-    const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);

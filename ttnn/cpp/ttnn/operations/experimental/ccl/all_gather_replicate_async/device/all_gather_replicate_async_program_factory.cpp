@@ -37,10 +37,10 @@ using namespace ccl;
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded(
     const Tensor& input_tensor,
+    const Tensor& intermediate_tensor,
     IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
-    Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
     const uint32_t ring_size,
@@ -55,7 +55,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
         mesh_device = input_tensor.device();
     }
 
-    const bool enable_async_output_tensor = false;
+    const bool enable_async_intermediate_tensor = false;
     const bool enable_persistent_fabric_mode = true;
 
     bool is_first_chip = ring_index == 0;
@@ -69,8 +69,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
-    std::vector<Tensor> output_tensors = {output_tensor};
-    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
+    std::vector<Tensor> intermediate_tensors = {intermediate_tensor};
+    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, intermediate_tensors, topology);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
 
@@ -84,17 +84,18 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
     const auto input_tensor_cores = input_tensor.memory_config().shard_spec()->grid;
     const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec()->shape;
     const auto input_tensor_shard_num_pages = input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / TILE_HW;
-    const auto output_tensor_cores = output_tensor.memory_config().shard_spec()->grid;
-    const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec()->shape;
-    const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
+    const auto intermediate_tensor_cores = intermediate_tensor.memory_config().shard_spec()->grid;
+    const auto intermediate_tensor_shard_shape = intermediate_tensor.memory_config().shard_spec()->shape;
+    const auto intermediate_tensor_shard_num_pages =
+        intermediate_tensor_shard_shape[0] * intermediate_tensor_shard_shape[1] / TILE_HW;
 
     log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
     log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
     log_debug(tt::LogOp, "input_tensor_shard_shape: {}", input_tensor_shard_shape);
     log_debug(tt::LogOp, "input_tensor_shard_num_pages: {}", input_tensor_shard_num_pages);
-    log_debug(tt::LogOp, "output_tensor_cores: {}", output_tensor_cores);
-    log_debug(tt::LogOp, "output_tensor_shard_shape: {}", output_tensor_shard_shape);
-    log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
+    log_debug(tt::LogOp, "intermediate_tensor_cores: {}", intermediate_tensor_cores);
+    log_debug(tt::LogOp, "intermediate_tensor_shard_shape: {}", intermediate_tensor_shard_shape);
+    log_debug(tt::LogOp, "intermediate_tensor_shard_num_pages: {}", intermediate_tensor_shard_num_pages);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
@@ -165,25 +166,27 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
         writer_kernel_config);
 
     // Kernel Runtime Args
-    CoreCoord drain_sync_core;  // the first worker of each chip is the drain sync core, which contains the output ready
-                                // semaphore
+    CoreCoord drain_sync_core;  // the first worker of each chip is the drain sync core, which contains the intermediate
+                                // ready semaphore
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
-    auto output_cores_vec = corerange_to_cores(output_tensor_cores, std::nullopt, true);
-    auto cores_per_device = output_cores_vec.size() + ring_size - 1 / ring_size;
-    uint32_t start_core_index_for_device = output_cores_vec.size() / ring_size * ring_index;
+    auto intermediate_cores_vec = corerange_to_cores(intermediate_tensor_cores, std::nullopt, true);
+    auto cores_per_device = intermediate_cores_vec.size() + ring_size - 1 / ring_size;
+    uint32_t start_core_index_for_device = intermediate_cores_vec.size() / ring_size * ring_index;
     uint32_t end_core_index_for_device = start_core_index_for_device + cores_per_device;
     TT_FATAL(
-        output_cores_vec.size() % ring_size == 0 || output_cores_vec.size() == 1,
-        "output sharded cores ( {} ) must be divisible by num_links ( {} ) or 1 for this work distribution scheme",
-        output_cores_vec.size(),
+        intermediate_cores_vec.size() % ring_size == 0 || intermediate_cores_vec.size() == 1,
+        "intermediate sharded cores ( {} ) must be divisible by num_links ( {} ) or 1 for this work distribution "
+        "scheme",
+        intermediate_cores_vec.size(),
         ring_size);
-    auto output_cores_this_device = std::vector<CoreCoord>(
-        output_cores_vec.begin() + start_core_index_for_device, output_cores_vec.begin() + end_core_index_for_device);
-    log_trace(tt::LogOp, "output_cores_this_device: {}", output_cores_this_device);
+    auto intermediate_cores_this_device = std::vector<CoreCoord>(
+        intermediate_cores_vec.begin() + start_core_index_for_device,
+        intermediate_cores_vec.begin() + end_core_index_for_device);
+    log_trace(tt::LogOp, "intermediate_cores_this_device: {}", intermediate_cores_this_device);
     for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
 
-        // construct input and output core x and y
+        // construct input and intermediate core x and y
         uint32_t base_pages_per_worker = input_tensor_num_pages / num_links;
         uint32_t remainder = input_tensor_num_pages % num_links;
         uint32_t input_tile_id_start = link * base_pages_per_worker + std::min(link, remainder);
@@ -191,13 +194,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
 
         uint32_t worker_num_tiles_to_read = input_tile_id_end - input_tile_id_start;
         uint32_t input_first_core_tile_start_offset = input_tile_id_start % input_tensor_shard_num_pages;
-        uint32_t output_first_core_tile_start_offset =
-            (input_tensor_num_pages * ring_index + input_tile_id_start) % output_tensor_shard_num_pages;
+        uint32_t intermediate_first_core_tile_start_offset =
+            (input_tensor_num_pages * ring_index + input_tile_id_start) % intermediate_tensor_shard_num_pages;
 
         std::vector<uint32_t> input_tensor_cores_x;
         std::vector<uint32_t> input_tensor_cores_y;
-        std::vector<uint32_t> output_tensor_cores_x;
-        std::vector<uint32_t> output_tensor_cores_y;
+        std::vector<uint32_t> intermediate_tensor_cores_x;
+        std::vector<uint32_t> intermediate_tensor_cores_y;
         for (uint32_t i = input_tile_id_start / input_tensor_shard_num_pages;
              i < (input_tile_id_end + input_tensor_shard_num_pages - 1) / input_tensor_shard_num_pages;
              i++) {
@@ -205,23 +208,24 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
             input_tensor_cores_x.push_back(this_core.x);
             input_tensor_cores_y.push_back(this_core.y);
         }
-        for (uint32_t i = input_tile_id_start / output_tensor_shard_num_pages;
-             i < (input_tile_id_end + output_tensor_shard_num_pages - 1) / output_tensor_shard_num_pages;
+        for (uint32_t i = input_tile_id_start / intermediate_tensor_shard_num_pages;
+             i < (input_tile_id_end + intermediate_tensor_shard_num_pages - 1) / intermediate_tensor_shard_num_pages;
              i++) {
-            auto this_core = mesh_device->worker_core_from_logical_core(output_cores_this_device[i]);
-            output_tensor_cores_x.push_back(this_core.x);
-            output_tensor_cores_y.push_back(this_core.y);
+            auto this_core = mesh_device->worker_core_from_logical_core(intermediate_cores_this_device[i]);
+            intermediate_tensor_cores_x.push_back(this_core.x);
+            intermediate_tensor_cores_y.push_back(this_core.y);
         }
 
         log_debug(tt::LogOp, "input_tile_id_start: {}", input_tile_id_start);
         log_debug(tt::LogOp, "input_tile_id_end: {}", input_tile_id_end);
         log_debug(tt::LogOp, "worker_num_tiles_to_read: {}", worker_num_tiles_to_read);
         log_debug(tt::LogOp, "input_first_core_tile_start_offset: {}", input_first_core_tile_start_offset);
-        log_debug(tt::LogOp, "output_first_core_tile_start_offset: {}", output_first_core_tile_start_offset);
+        log_debug(
+            tt::LogOp, "intermediate_first_core_tile_start_offset: {}", intermediate_first_core_tile_start_offset);
         log_debug(tt::LogOp, "input_tensor_cores_x: {}", input_tensor_cores_x);
         log_debug(tt::LogOp, "input_tensor_cores_y: {}", input_tensor_cores_y);
-        log_debug(tt::LogOp, "output_tensor_cores_x: {}", output_tensor_cores_x);
-        log_debug(tt::LogOp, "output_tensor_cores_y: {}", output_tensor_cores_y);
+        log_debug(tt::LogOp, "intermediate_tensor_cores_x: {}", intermediate_tensor_cores_x);
+        log_debug(tt::LogOp, "intermediate_tensor_cores_y: {}", intermediate_tensor_cores_y);
 
         if (link == 0) {
             // drain sync core is the first worker core
@@ -244,24 +248,26 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
         // Set writer runtime args
-        bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
-        bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
+        bool wait_intermediate_semaphore = (link == 0) && !enable_async_intermediate_tensor;
+        bool reset_global_semaphore = (link == 0) && !enable_async_intermediate_tensor;
         uint32_t out_ready_sem_wait_value = (dynamic_alternate ? (ring_size + 1) : ring_size) * num_links;
         std::vector<uint32_t> writer_rt_args = {
-            output_tensor.buffer()->address(),    // tensor_address0
-            semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
-            output_tensor_shard_num_pages,        // num_tiles_per_core
-            worker_num_tiles_to_read,             // num_tiles_to_read
-            output_first_core_tile_start_offset,  // first_core_tile_start_offset
-            output_tensor_cores_x.size(),         // num_cores
-            wait_output_semaphore,                // wait_output_semaphore
-            reset_global_semaphore,               // reset_global_semaphore
-            drain_sync_core.x,                    // out_ready_sem_noc0_x
-            drain_sync_core.y,                    // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,             // out_ready_sem_wait_value
+            intermediate_tensor.buffer()->address(),    // tensor_address0
+            semaphore.address(),                        // out_ready_sem_bank_addr (absolute address)
+            intermediate_tensor_shard_num_pages,        // num_tiles_per_core
+            worker_num_tiles_to_read,                   // num_tiles_to_read
+            intermediate_first_core_tile_start_offset,  // first_core_tile_start_offset
+            intermediate_tensor_cores_x.size(),         // num_cores
+            wait_intermediate_semaphore,                // wait_intermediate_semaphore
+            reset_global_semaphore,                     // reset_global_semaphore
+            drain_sync_core.x,                          // out_ready_sem_noc0_x
+            drain_sync_core.y,                          // out_ready_sem_noc0_y
+            out_ready_sem_wait_value,                   // out_ready_sem_wait_value
         };
-        writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
-        writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
+        writer_rt_args.insert(
+            writer_rt_args.end(), intermediate_tensor_cores_x.begin(), intermediate_tensor_cores_x.end());
+        writer_rt_args.insert(
+            writer_rt_args.end(), intermediate_tensor_cores_y.begin(), intermediate_tensor_cores_y.end());
         log_trace(tt::LogOp, "Writer Runtime Args:");
         for (const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
@@ -289,7 +295,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
-            const auto& output = output_tensors[0];
+            const auto& intermediate = input_tensors[1];
 
             auto semaphore = static_cast<const ttnn::AllGatherReplicateAsync*>(operation)->semaphore;
 
@@ -304,7 +310,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
                 worker_reader_sender_runtime_args[0] = input.buffer()->address();
                 // writer
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-                worker_writer_sender_runtime_args[0] = output.buffer()->address();
+                worker_writer_sender_runtime_args[0] = intermediate.buffer()->address();
                 worker_writer_sender_runtime_args[1] = semaphore.address();
             }
         };
