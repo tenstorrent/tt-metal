@@ -21,11 +21,11 @@ public:
 template <class T, std::size_t Extent>
 class SpanBase<const T, Extent> : public boost::span<const T, Extent> {
 public:
-    using boost::span<const T>::span;
+    using boost::span<const T, Extent>::span;
 
     // expose constructor from initializer_list for const-qualified element_type
     explicit(Extent != dynamic_extent) constexpr SpanBase(std::initializer_list<T> ilist) noexcept :
-        boost::span<const T>(ilist) {}
+        boost::span<const T, Extent>(ilist.begin(), ilist.size()) {}
 };
 
 }  // namespace detail
