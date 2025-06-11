@@ -395,7 +395,7 @@ def test_ag_replicate_tg_llama_perf(
         f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_all_gather_replicate_tg_llama"
     )
     cols = ["DEVICE KERNEL"]
-    op_name = "AllGatherAsync"  # TODO: Update when new op is implemented
+    op_name = "AllGatherReplicateAsync"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
 
     profiler.start("run")
