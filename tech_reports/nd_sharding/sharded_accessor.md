@@ -2,7 +2,7 @@
 
 ## Overview
 
-The [ShardedAccessor](tt_metal/hw/inc/accessor/sharded_accessor.h) is a utility for efficiently accessing sharded tensors distributed across multiple memory banks. It provides an abstraction that handles the mapping from logical tensor indices to physical memory locations.
+The [ShardedAccessor](../../tt_metal/hw/inc/accessor/sharded_accessor.h) is a utility for efficiently accessing sharded tensors distributed across multiple memory banks. It provides an abstraction that handles the mapping from logical tensor indices to physical memory locations.
 
 The main thing to keep in mind when working with it is that developer can choose which arguments of accessor are passed through compile time arguments, which through common-runtime arguments.
 Parameters consist of [rank, number of banks, tensor shape, shard shape, banks coordinates]
@@ -129,4 +129,4 @@ Note: In case containers size is CTA, then shapes, strides, coords are `std::arr
 
 
 ## Examples:
-- Reshard [reader](tests/ttnn/unit_tests/gtests/accessor/kernels/reader_reshard.cpp), [writer](tests/ttnn/unit_tests/gtests/accessor/kernels/writer_reshard.cpp)
+- Reshard [reader](../../tests/ttnn/unit_tests/gtests/accessor/kernels/reader_reshard.cpp), [writer](../../tests/ttnn/unit_tests/gtests/accessor/kernels/writer_reshard.cpp)
