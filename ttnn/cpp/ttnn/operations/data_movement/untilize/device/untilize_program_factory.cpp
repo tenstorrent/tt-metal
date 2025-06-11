@@ -1187,13 +1187,17 @@ operation::ProgramWithCallbacks untilize_multi_core(
         }
 
         // Writer run-time args
+        uint32_t input_block_global_col_index = width_wise_input_block_index * num_cols_per_input_block;
+        uint32_t width_wise_output_block_start_index = input_block_global_col_index / num_cols_per_output_block;
+        uint32_t num_cols_already_processed_in_first_output_block =
+            input_block_global_col_index % num_cols_per_output_block;
         std::vector<uint32_t> writer_run_time_args = {
             dst_buffer->address(),
             num_input_blocks_to_process,
             height_wise_input_block_start_index,
             num_unpadded_cols_per_input_block,
-            (width_wise_input_block_index * num_cols_per_input_block) / num_cols_per_output_block,
-            (width_wise_input_block_index * num_cols_per_input_block) % num_cols_per_output_block};
+            width_wise_output_block_start_index,
+            num_cols_already_processed_in_first_output_block};
         if (output_is_sharded) {
             shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
         }
@@ -1230,13 +1234,17 @@ operation::ProgramWithCallbacks untilize_multi_core(
         uint32_t num_input_blocks_to_process = num_input_blocks_per_cliff_core;
 
         // Writer run-time args
+        uint32_t input_block_global_col_index = width_wise_input_block_index * num_cols_per_input_block;
+        uint32_t width_wise_output_block_start_index = input_block_global_col_index / num_cols_per_output_block;
+        uint32_t num_cols_already_processed_in_first_output_block =
+            input_block_global_col_index % num_cols_per_output_block;
         std::vector<uint32_t> writer_run_time_args = {
             dst_buffer->address(),
             num_input_blocks_to_process,
             height_wise_input_block_start_index,
             num_unpadded_cols_per_input_block,
-            (width_wise_input_block_index * num_cols_per_input_block) / num_cols_per_output_block,
-            (width_wise_input_block_index * num_cols_per_input_block) % num_cols_per_output_block};
+            width_wise_output_block_start_index,
+            num_cols_already_processed_in_first_output_block};
         if (output_is_sharded) {
             shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
         }

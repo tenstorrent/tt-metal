@@ -12,7 +12,7 @@ void kernel_main() {
     const uint32_t num_input_blocks_to_process = get_arg_val<uint32_t>(1);
     const uint32_t height_wise_input_block_start_index = get_arg_val<uint32_t>(2);
     const uint32_t num_unpadded_cols_per_input_block = get_arg_val<uint32_t>(3);
-    const uint32_t width_wise_initla_output_block_start_index = get_arg_val<uint32_t>(4);
+    const uint32_t width_wise_output_block_start_index = get_arg_val<uint32_t>(4);
     const uint32_t num_cols_already_processed_in_first_output_block = get_arg_val<uint32_t>(5);
 
     // compile-time args
@@ -70,7 +70,7 @@ void kernel_main() {
             uint32_t num_pages_already_processed_in_previous_rows =
                 num_rows_already_processed * num_output_blocks_across_width;
             uint32_t output_page_id =
-                num_pages_already_processed_in_previous_rows + width_wise_initla_output_block_start_index;
+                num_pages_already_processed_in_previous_rows + width_wise_output_block_start_index;
 
             // For the first output page that we write to in the current row, it's first x columns may have been
             // written to from a different input block. So we need to calculate the offset within this first output page
