@@ -83,6 +83,7 @@ class Generator:
 
         if self.model.is_prefill_setup is False:
             self.model.switch_mode("prefill")
+
         kv_cache = kv_cache[0]
         batch, batch_seq_len = tokens.shape
         output_logits = torch.zeros(batch, 1, 1)
@@ -103,6 +104,10 @@ class Generator:
             last_token_idx = seq_len - 1
 
             prefill_seq_len = get_padded_prefill_len(seq_len)
+            if prefill_seq_len not in self.model.tt_ccl.support_seqlens:
+                enable_trace = False
+            else:
+                enable_trace = True
             prefill_ids = torch.cat(
                 [tokens[id : id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
