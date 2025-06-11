@@ -124,8 +124,13 @@ SortDeviceOperation::spec_return_value_t SortDeviceOperation::compute_output_spe
     auto values_spec = TensorSpec(
         output_shape,
         TensorLayout(tensor_args.input_tensor.dtype(), PageConfig(Layout::TILE), attributes.output_mem_config));
-    auto index_spec = TensorSpec(
-        output_shape, TensorLayout(DataType::UINT16, PageConfig(Layout::TILE), attributes.output_mem_config));
+
+    DataType index_dtype = DataType::UINT16;
+    if (output_shape[-1] > std::numeric_limits<uint16_t>::max()) {
+        index_dtype = DataType::UINT32;
+    }
+    auto index_spec =
+        TensorSpec(output_shape, TensorLayout(index_dtype, PageConfig(Layout::TILE), attributes.output_mem_config));
 
     return {values_spec, index_spec};
 }
@@ -139,8 +144,8 @@ SortDeviceOperation::tensor_return_value_t SortDeviceOperation::create_output_te
     }
     auto output_specs = compute_output_specs(attributes, tensor_args);
     return {
-        create_device_tensor(output_specs[0], tensor_args.input_tensor.device()),
-        create_device_tensor(output_specs[1], tensor_args.input_tensor.device()),
+        create_device_tensor(output_specs[0], tensor_args.input_tensor.device()),  // Value tensor
+        create_device_tensor(output_specs[1], tensor_args.input_tensor.device()),  // Index tensor
     };
 }
 
