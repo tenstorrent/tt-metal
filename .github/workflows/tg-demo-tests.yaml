@@ -2,6 +2,17 @@ name: "(TG) TG demo tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      model_name:
+        description: "Select a model to run"
+        required: true
+        type: choice
+        options:
+          - all
+          - llama3_70b
+          - llama3_8b_dp
+          - llama3_70b_dp
+          - falcon7b
   schedule:
     - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
 
@@ -22,3 +33,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model_name: ${{ github.event.inputs.model_name || 'all' }}

@@ -71,7 +71,7 @@ run_tg_demo_tests() {
 
   if [[ "$1" == "falcon7b" ]]; then
     run_tg_falcon7b_tests
-  elif [[ "$1" == "llama3" ]]; then
+  elif [[ "$1" == "llama3_70b" ]]; then
     run_tg_llama3_tests
   elif [[ "$1" == "llama3_8b_dp" ]]; then
     run_tg_llama3_8b_dp_tests

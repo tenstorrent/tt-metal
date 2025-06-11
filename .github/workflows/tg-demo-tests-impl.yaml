@@ -20,6 +20,10 @@ on:
         required: false
         type: string
         default: "config-tg"
+      model_name:
+        required: false
+        type: string
+        default: "all"
 
 jobs:
   tg-demo-tests:
@@ -27,7 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "Galaxy Llama3 demo tests", arch: wormhole_b0, model: llama3, timeout: 30, owner_id: U053W15B6JF}, # Djordje Ivanovic
+          { name: "Galaxy Llama3 demo tests", arch: wormhole_b0, model: llama3_70b, timeout: 30, owner_id: U053W15B6JF}, # Djordje Ivanovic
           { name: "Galaxy Llama3 8B data-parallel demo tests", arch: wormhole_b0, model: llama3_8b_dp, timeout: 30, owner_id: U08BH66EXAL}, # Radoica Draskic
           { name: "Galaxy Llama3 70B data-parallel demo tests", arch: wormhole_b0, model: llama3_70b_dp, timeout: 30, owner_id: U08BH66EXAL}, # Radoica Draskic
           { name: "Galaxy Falcon7b demo tests", arch: wormhole_b0, model: falcon7b, timeout: 30, owner_id: U05RWH3QUPM}, # Salar Hosseini
@@ -56,6 +60,9 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: ⏭️  Skip if not selected model
+        if: ${{ inputs.model_name != 'all' && inputs.model_name != matrix.test-group.model }}
+        run: echo "Skipping model ${{ matrix.test-group.model }} because input is ${{ inputs.model_name }}" && exit 0
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
