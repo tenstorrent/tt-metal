@@ -13,6 +13,7 @@
   - [Scaling beyond one chip](#scaling-beyond-one-chip)
 - [tt-Metalium](#tt-metalium)
   - [Running code on device](#running-code-on-device)
+  - [Register control and Data Flow within the Compute Kernels](#register-control-and-data-flow-within-the-compute-kernels)
   - [Low-Level Kernels (LLKs)](#low-level-kernels-llks)
   - [Fast dispatch](#fast-dispatch)
   - [SPMD in Metalium](#spmd-in-metalium)
@@ -70,6 +71,7 @@ This architecture, with its five RISC-V cores per Tensix, might initially sugges
 The following diagram illustrates how these kernel types are distributed across the Tensix architecture:
 
 <img width="900" alt="image" src="docs/source/common/images/tenstorrent-tensix-rough-kernel-blocks.webp">
+
 
 The three kernels - reader, compute, and writer - coordinate their execution using circular buffers, which are implemented in SRAM and facilitated by hardware metadata synchronization. These circular buffers act as producer-consumer queues, enabling safe and efficient data exchange between kernels.
 
