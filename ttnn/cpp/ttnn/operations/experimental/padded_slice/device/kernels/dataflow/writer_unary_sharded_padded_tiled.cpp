@@ -17,6 +17,8 @@ uint32_t round_down(uint32_t value, uint32_t multiple) {
     }
     return value;
 }
+
+#define CB_BUFFERING_SIZE 4
 void kernel_main() {
     const uint32_t total_num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t num_tiles_per_read = get_arg_val<uint32_t>(1);
@@ -26,12 +28,12 @@ void kernel_main() {
     constexpr uint32_t cb_out_id = get_compile_time_arg_val(1);
     constexpr uint32_t num_dims = get_compile_time_arg_val(2);
 
-    constexpr uint32_t tile_size = get_tile_size(cb_out_id);
-    const uint32_t read_size = tile_size * num_tiles_per_read;
-
     const uint32_t output_coord_addr = get_arg_addr(3);
     const uint32_t output_start_in_input_addr = get_arg_addr(3 + num_dims);
     const uint32_t output_end_addr = get_arg_addr(3 + 2 * num_dims);
+
+    constexpr uint32_t tile_size = get_tile_size(cb_out_id);
+    const uint32_t read_size = tile_size * num_tiles_per_read;
 
     volatile tt_l1_ptr uint32_t* output_coord = (tt_l1_ptr uint32_t*)(output_coord_addr);
 
@@ -82,7 +84,7 @@ void kernel_main() {
 
         noc_async_read(noc_read_addr, write_addr, read_rows_size * block_row_size);
         row_count++;
-        if (row_count == 4) {
+        if (row_count == CB_BUFFERING_SIZE) {
             noc_async_read_barrier();
             row_count = 0;
         }
