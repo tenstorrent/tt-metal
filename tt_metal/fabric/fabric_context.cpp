@@ -102,9 +102,14 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
     this->dateline_router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
         this->channel_buffer_size_bytes_, this->topology_, dateline_edm_options);
 
-    this->NumDevices = tt::tt_metal::GetNumAvailableDevices();
-    this->master_router_chans_.resize(NumDevices, UNINITIALIZED_MASTER_ROUTER_CHAN);
-    this->num_initialized_routers_.resize(NumDevices, UNINITIALIZED_ROUTERS);
+    this->num_devices = tt::tt_metal::GetNumAvailableDevices();
+    auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
+    if (this->num_devices != 4 && num_pcie_devices == 4) {
+        // adding TG's 4 dispatch devices
+        this->num_devices += num_pcie_devices;
+    }
+    this->master_router_chans_.resize(num_devices, UNINITIALIZED_MASTER_ROUTER_CHAN);
+    this->num_initialized_routers_.resize(num_devices, UNINITIALIZED_ROUTERS);
 
     set_routing_mode(this->topology_, this->fabric_config_);
 }
@@ -134,7 +139,7 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
 };
 
 void FabricContext::set_num_fabric_initialized_routers(chip_id_t chip_id, size_t num_routers) {
-    TT_FATAL(chip_id < NumDevices, "Device ID {} exceeds maximum supported devices {}", chip_id, NumDevices);
+    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
     TT_FATAL(
         this->num_initialized_routers_[chip_id] == UNINITIALIZED_ROUTERS,
         "Error, tried to set num initialized routers again for device {}",
@@ -143,7 +148,7 @@ void FabricContext::set_num_fabric_initialized_routers(chip_id_t chip_id, size_t
 }
 
 uint32_t FabricContext::get_num_fabric_initialized_routers(chip_id_t chip_id) const {
-    TT_FATAL(chip_id < NumDevices, "Device ID {} exceeds maximum supported devices {}", chip_id, NumDevices);
+    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
     TT_FATAL(
         this->num_initialized_routers_[chip_id] != UNINITIALIZED_ROUTERS,
         "Error, querying num initialized routers for an unknown device {}",
@@ -152,7 +157,7 @@ uint32_t FabricContext::get_num_fabric_initialized_routers(chip_id_t chip_id) co
 }
 
 void FabricContext::set_fabric_master_router_chan(chip_id_t chip_id, chan_id_t chan_id) {
-    TT_FATAL(chip_id < NumDevices, "Device ID {} exceeds maximum supported devices {}", chip_id, NumDevices);
+    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
     TT_FATAL(
         this->master_router_chans_[chip_id] == UNINITIALIZED_MASTER_ROUTER_CHAN,
         "Error, tried to set master router channel again for the same device {}",
@@ -161,7 +166,7 @@ void FabricContext::set_fabric_master_router_chan(chip_id_t chip_id, chan_id_t c
 }
 
 chan_id_t FabricContext::get_fabric_master_router_chan(chip_id_t chip_id) const {
-    TT_FATAL(chip_id < NumDevices, "Device ID {} exceeds maximum supported devices {}", chip_id, NumDevices);
+    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
     TT_FATAL(
         this->master_router_chans_[chip_id] != UNINITIALIZED_MASTER_ROUTER_CHAN,
         "Error, querying master router channel for an unknown device {}",
