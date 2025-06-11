@@ -23,7 +23,6 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     // figure out packets
-    // !TODO see what happens if page size is larger than packet size.
     const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
         compute_aligned_packet_dims(output_tensor.get_dtype(), output_page_size_bytes, output_num_pages, l1_alignment);
 
