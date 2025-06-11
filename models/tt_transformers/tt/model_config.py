@@ -1452,21 +1452,22 @@ class ModelArgs:
         rope_scaling_params = text_config.get("rope_scaling", None)
         if rope_scaling_params:
             self.rope_scaling_factor = rope_scaling_params.get("factor", None)
-            self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", self.max_context_len)
+            self.orig_context_len = rope_scaling_params.get(
+                "original_max_position_embeddings", text_config.get("original_max_position_embeddings", self.max_context_len)
+            )
             self.rope_ext_scaling_tensor = None
-            if self.base_model_name == "Phi-3-mini-128k-instruct":
-                # Phi3 specific scaling logic
-                if rope_scaling_params.get("type", None) == "longrope":
-                    if self.orig_context_len is None:
-                        self.orig_context_len = text_config.get("original_max_position_embeddings", self.max_context_len)
-                    assert self.orig_context_len is not None
-                    if self.max_seq_len > self.orig_context_len:
-                        ext_factor = rope_scaling_params.get("long_factor", None)
+            if rope_scaling_params.get("rope_type", rope_scaling_params.get("type", None)) == "longrope":
+                assert self.orig_context_len is not None
+                if self.max_seq_len > self.orig_context_len:
+                    ext_factor = rope_scaling_params.get("long_factor", None)
+                else:
+                    ext_factor = rope_scaling_params.get("short_factor", None)
+                if ext_factor:
+                    self.rope_ext_scaling_tensor = torch.tensor(ext_factor, dtype=torch.float32)
+                    scale = self.max_context_len / self.orig_context_len
+                    if scale <= 1.0:
+                        self.rope_scaling_factor = 1.0
                     else:
-                        ext_factor = rope_scaling_params.get("short_factor", None)
-                    if ext_factor is not None:
-                        self.rope_ext_scaling_tensor = torch.tensor(ext_factor, dtype=torch.float32)
-                        scale = self.max_context_len / self.orig_context_len
                         self.rope_scaling_factor = math.sqrt(1 + math.log(scale) / math.log(self.orig_context_len))
         else:
             self.rope_scaling_factor = None
