@@ -116,7 +116,7 @@ void Transpose::validate(const std::vector<Tensor>& input_tensors) const {
                 W * input_tensor.element_size(),
                 BUFFER_ALIGNMENT);
         }
-        TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::INT32, "Error");
+        TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32, "Error");
         TT_FATAL(
             !(input_tensor.is_sharded() && input_tensor.layout() == Layout::TILE),
             "HC transpose does not support sharded+tilized inputs");
