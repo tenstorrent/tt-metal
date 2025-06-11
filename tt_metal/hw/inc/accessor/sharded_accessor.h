@@ -13,8 +13,8 @@
 #endif
 
 namespace nd_sharding {
-template <size_t CTA_BASE, size_t CRTA_BASE = 0>
-using distribution_spec_t = typename detail::DistributionSpecWrapper<CTA_BASE, CRTA_BASE>::dspec;
+template <size_t CTA_BASE, size_t CRTA_BASE = detail::UNKNOWN>
+using distribution_spec_t = typename detail::BuildDistributionSpec<CTA_BASE, CRTA_BASE>::dspec;
 
 // compile_time_args_skip is required to be constexpr since cta argument index must be constexpr
 template <typename DSpec>
