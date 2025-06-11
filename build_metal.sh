@@ -87,7 +87,7 @@ fi
 configure_only="OFF"
 enable_coverage="OFF"
 enable_distributed="ON"
-enable_tcmalloc="ON"
+enable_tcmalloc="OFF"
 with_python_bindings="ON"
 
 declare -a cmake_args
