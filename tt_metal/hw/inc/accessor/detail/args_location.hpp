@@ -30,10 +30,10 @@ using std::size_t;
  * for CTA in compile time, and CRTA in compile time if possible.
  *
  * @tparam CTA_OFFSET_  Starting offset for compile-time arguments.
- * @tparam CRTA_OFFSET_ Starting offset for common runtime arguments. If set to -1, it means that there are no common
+ * @tparam CRTA_OFFSET_ Starting offset for common runtime arguments.
  * runtime arguments.
  */
-template <size_t CTA_OFFSET_, size_t CRTA_OFFSET_ = static_cast<size_t>(-1)>
+template <size_t CTA_OFFSET_, size_t CRTA_OFFSET_>
 struct ArgsLocation {
     static constexpr size_t CTA_OFFSET = CTA_OFFSET_;
     static constexpr size_t CRTA_OFFSET = CRTA_OFFSET_;

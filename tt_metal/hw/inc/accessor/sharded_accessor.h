@@ -20,7 +20,7 @@ using distribution_spec_t = typename detail::BuildDistributionSpec<CTA_BASE, CRT
  * @brief Calculates the number of compile-time arguments used when building a DistributionSpec. Note that
  * compile_time_args_skip is required to be constexpr since cta argument index must be constexpr
  *
- * @tparam DSpec                DistributionSpec type
+ * @tparam DSpec                DistributionSpec type.
  * @return constexpr size_t     Number of compile-time arguments used by the DistributionSpec.
  */
 template <typename DSpec>
@@ -31,7 +31,7 @@ constexpr size_t compile_time_args_skip() {
 /**
  * @brief Callculated number of common runtime arguments used when building a DistributionSpec.
  *
- * @tparam DSpec                DistributionSpec type
+ * @tparam DSpec                DistributionSpec type.
  * @return constexpr size_t     Number of common runtime arguments used by the DistributionSpec.
  */
 template <typename DSpec>
@@ -43,35 +43,33 @@ constexpr size_t runtime_args_skip() {
 /**
  * @brief Accessor that encapsulates the logic for accessing sharded tensors pages.
  *
- * @tparam DSpec
- * @tparam PageSize
+ * @tparam DSpec        DistributionSpec type.
+ * @tparam PageSize     Page size in bytes. If set to detail::UNKNOWN, it must be passed to constructor.
  */
 template <typename DSpec, size_t PageSize = detail::UNKNOWN>
 struct ShardedAccessor {
-    static constexpr auto page_size_ct = PageSize;
+    // DSpec can be static or dynamic, so we use a conditional instance
     using StaticDspec = detail::ConditionalStaticInstance<DSpec, DSpec::is_static>;
+    detail::ConditionalField<!DSpec::is_static, DSpec> dspec_instance;
 
-    mutable detail::ConditionalBuffer<!DSpec::has_static_rank, uint32_t, MAX_RANK> _page_coord_buffer;
-    detail::ConditionalField<!DSpec::is_static, DSpec> dspec_instance;  // Used only if DSpec is static
+    mutable detail::ConditionalField<!DSpec::has_static_rank, uint32_t[MAX_RANK]> _page_coord;
     const size_t bank_base_address;
+
+    // Page size is either compile-time constant or runtime value
+    static constexpr auto page_size_ct = PageSize;
     const detail::ConditionalField<PageSize == detail::UNKNOWN, uint32_t> page_size_rt;
 
-    constexpr explicit ShardedAccessor(
-        const DSpec& dspec, const size_t bank_base_address_in, uint32_t page_size_in = 0) :
-        dspec_instance(dspec), bank_base_address(bank_base_address_in), page_size_rt(page_size_in) {}
+    template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
+    constexpr explicit ShardedAccessor(DSpec_&& dspec, const size_t bank_base_address_in, uint32_t page_size_in = 0) :
+        dspec_instance(std::forward<DSpec_>(dspec)),
+        bank_base_address(bank_base_address_in),
+        page_size_rt(page_size_in) {}
 
-    constexpr explicit ShardedAccessor(DSpec&& dspec, const size_t bank_base_address_in, uint32_t page_size_in = 0) :
-        dspec_instance(std::move(dspec)), bank_base_address(bank_base_address_in), page_size_rt(page_size_in) {}
-
-    template <
-        typename DSpec_ = DSpec,
-        std::enable_if_t<(DSpec_::is_static or DSpec_::ArgsLoc::CRTA_OFFSET == static_cast<size_t>(-1)), int> = 0>
+    template <typename DSpec_ = DSpec, std::enable_if_t<DSpec_::is_static, int> = 0>
     ShardedAccessor(const size_t bank_base_address_in = 0, uint32_t page_size_in = 0) :
         bank_base_address(bank_base_address_in), page_size_rt(page_size_in) {}
 
-    template <
-        typename DSpec_ = DSpec,
-        std::enable_if_t<(!DSpec_::is_static and DSpec_::ArgsLoc::CRTA_OFFSET != static_cast<size_t>(-1)), int> = 0>
+    template <typename DSpec_ = DSpec, std::enable_if_t<!DSpec_::is_static, int> = 0>
     constexpr explicit ShardedAccessor(const size_t bank_base_address_in, uint32_t page_size_in = 0) :
         dspec_instance(detail::build_dspec_from_args<DSpec>()),
         bank_base_address(bank_base_address_in),
@@ -129,10 +127,10 @@ struct ShardedAccessor {
         if constexpr (!DSpec::has_static_rank) {
             // If rank is not known at compile time, we need to compute the page coordinates dynamically
             for (int i = get_dspec().get_rank() - 1; i >= 0; --i) {
-                _page_coord_buffer.value[i] = page_id % get_dspec().get_tensor_shape()[i];
+                _page_coord.value[i] = page_id % get_dspec().get_tensor_shape()[i];
                 page_id /= get_dspec().get_tensor_shape()[i];
             }
-            return get_bank_and_offset(_page_coord_buffer.value);
+            return get_bank_and_offset(_page_coord.value);
         } else {
             std::array<uint32_t, DSpec::rank_ct> page_coord;
             for (int i = DSpec::rank_ct - 1; i >= 0; --i) {

@@ -17,15 +17,6 @@ template <template <uint32_t...> class Wrapper, size_t base, uint32_t rank>
 using struct_cta_sequence_wrapper_t =
     decltype(make_struct_from_sequence_wrapper<Wrapper, base>(std::make_index_sequence<rank>{}));
 
-// Statically conditional static buffer
-template <bool Enable, typename T = void, std::size_t N = 0>
-struct ConditionalBuffer {
-    T value[N];  // when Enable == true
-};
-
-template <std::size_t N, typename T>
-struct ConditionalBuffer<false, T, N> {};
-
 // Statically conditional field of class with type T
 template <bool Emable, typename T = void>
 struct ConditionalField {

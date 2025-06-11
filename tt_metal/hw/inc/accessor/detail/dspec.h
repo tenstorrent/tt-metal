@@ -213,16 +213,16 @@ struct DistributionSpec {
     std::conditional_t<shapes_static, std::monostate, ShapeBase> shard_grid_strides_rt{};
 
     // Buffers to wrap around span in case of dynamic rank
-    mutable detail::ConditionalBuffer<!has_static_rank, uint32_t, MAX_RANK> shard_grid_rt_buf;
-    mutable detail::ConditionalBuffer<!has_static_rank, uint32_t, MAX_RANK> shard_grid_strides_rt_buf;
+    mutable detail::ConditionalField<!has_static_rank, uint32_t[MAX_RANK]> shard_grid_rt_buf;
+    mutable detail::ConditionalField<!has_static_rank, uint32_t[MAX_RANK]> shard_grid_strides_rt_buf;
 
     static constexpr ShapeBase shard_grid_ct =
         precompute_shard_grid_ct(TensorShapeWrapper::shape, ShardShapeWrapper::shape);
     static constexpr ShapeBase shard_grid_strides_ct =
         precompute_shard_grid_strides_ct(TensorShapeWrapper::shape, ShardShapeWrapper::shape);
 
-    mutable detail::ConditionalBuffer<!has_static_rank, uint32_t, MAX_RANK> tensor_strides_rt_buf;
-    mutable detail::ConditionalBuffer<!has_static_rank, uint32_t, MAX_RANK> shard_strides_rt_buf;
+    mutable detail::ConditionalField<!has_static_rank, uint32_t[MAX_RANK]> tensor_strides_rt_buf;
+    mutable detail::ConditionalField<!has_static_rank, uint32_t[MAX_RANK]> shard_strides_rt_buf;
     ShapeBase tensor_strides_rt = {};
     ShapeBase shard_strides_rt = {};
     static constexpr ShapeBase tensor_strides_ct = precompute_strides_ct(TensorShapeWrapper::shape);
