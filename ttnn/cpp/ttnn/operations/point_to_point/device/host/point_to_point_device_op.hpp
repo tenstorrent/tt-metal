@@ -13,22 +13,14 @@ namespace operations::point_to_point {
 
 struct PointToPointOp {
     struct operation_attributes_t {
-        MeshDevice* mesh_device_;
-
         const MeshCoordinate& send_coord;
         const MeshCoordinate& receive_coord;
-        MeshDevice* receive_device;
         const ccl::Topology topology;
 
         const tt::tt_metal::GlobalSemaphore receiver_semaphore;
 
-        static constexpr auto attribute_names =
-            std::forward_as_tuple("mesh_device", "receive_coord", "receive_device", "topology");
-        auto attribute_values() const {
-            return std::forward_as_tuple(mesh_device_, receive_coord, receive_device, topology);
-        };
-
-        MeshDevice* mesh_device() const { return mesh_device_; };
+        static constexpr auto attribute_names = std::forward_as_tuple("send_coord", "receive_coord", "topology");
+        auto attribute_values() const { return std::forward_as_tuple(send_coord, receive_coord, topology); };
     };
 
     struct tensor_args_t {
@@ -97,18 +89,14 @@ struct PointToPointOp {
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // !TODO
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
-        MeshDevice* mesh_device,
         const ccl::Topology& topology,
         const MeshCoordinate& send_coord,
         const MeshCoordinate& receive_coord,
-        MeshDevice* receive_device,
         const tt::tt_metal::GlobalSemaphore& receiver_semaphore) {
         return std::make_tuple(
-            operation_attributes_t{
-                mesh_device, send_coord, receive_coord, receive_device, topology, receiver_semaphore},
+            operation_attributes_t{send_coord, receive_coord, topology, receiver_semaphore},
             tensor_args_t{input_tensor});
     };
 

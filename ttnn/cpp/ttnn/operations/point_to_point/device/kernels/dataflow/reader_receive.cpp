@@ -45,9 +45,9 @@ void kernel_main() {
                 noc_async_read(packet_noc_addr, packet_l1_addr, packet_size_bytes);
                 noc_async_read_barrier();
 
-                ++packet_idx;
                 packet_page_idx = 0;
-                curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx - 1);
+                curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx);
+                ++packet_idx;
             }
 
             const uint32_t page_offset = page_segment_idx * packet_size_bytes;

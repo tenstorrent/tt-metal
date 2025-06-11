@@ -537,14 +537,6 @@ void launch_operation_with_adapter(
     }
 }
 
-template <class T, class... Args>
-using has_mesh_device_t = decltype(std::declval<T>().mesh_device(std::declval<Args>()...));
-
-template <class T>
-constexpr bool implements_mesh_device() {
-    return std::experimental::is_detected_v<has_mesh_device_t, T>;
-}
-
 template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch_on_single_device(
     QueueId cq_id,
@@ -560,10 +552,6 @@ typename device_operation_t::tensor_return_value_t launch_on_single_device(
 
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     if (auto mesh_device = first_tensor.mesh_device(); mesh_device != nullptr) {
-        if constexpr (implements_mesh_device<typename device_operation_t::operation_attributes_t>()) {
-            mesh_device = operation_attributes.mesh_device();
-        }
-
         using MeshCompatibleOp = MeshDeviceOperationAdapter<device_operation_t>;
         launch_operation_with_adapter<MeshCompatibleOp>(
             cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device);

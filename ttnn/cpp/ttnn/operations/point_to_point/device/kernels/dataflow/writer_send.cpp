@@ -98,8 +98,9 @@ void kernel_main() {
 
                 // reset counters
                 packet_page_idx = 0;
-                ++packet_idx;
                 curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx - 1);
+
+                ++packet_idx;
             }
         }
         cb_pop_front(sender_cb_id, 1);
