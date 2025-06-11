@@ -26,7 +26,7 @@ void kernel_main() {
         uint32_t bank_id = args[args_idx++];
         uint32_t addr = dst_addr + args[args_idx++];
         uint32_t units_to_transfer = args[args_idx++];
-        uint32_t read_size = units_to_transfer * unit_size;
+        uint32_t write_size = units_to_transfer * unit_size;
         noc_async_write(l1_read_addr, get_noc_addr_from_bank_id<write_to_dram>(bank_id, addr), write_size);
         l1_read_addr += write_size;
     }

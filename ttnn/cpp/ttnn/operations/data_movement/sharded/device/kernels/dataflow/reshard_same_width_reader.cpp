@@ -7,7 +7,6 @@
 #include "debug/dprint_pages.h"
 
 void kernel_main() {
-    DPRINT << "reader kernel" << ENDL();
     constexpr uint32_t shard_cb_id = get_compile_time_arg_val(0);
     constexpr bool read_from_dram = get_compile_time_arg_val(1);
     constexpr bool unaligned = get_compile_time_arg_val(2);
@@ -21,13 +20,6 @@ void kernel_main() {
     uint32_t num_reads = get_arg_val<uint32_t>(2);
     tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
     uint32_t args_idx = 0;
-    DPRINT << "src_addr: " << src_addr << ENDL();
-    DPRINT << "write_offset: " << write_offset << ENDL();
-    DPRINT << "num_reads: " << num_reads << ENDL();
-    DPRINT << "unit_size: " << unit_size << ENDL();
-    DPRINT << "local_unit_size_padded: " << local_unit_size_padded << ENDL();
-    DPRINT << "remote_unit_size_padded: " << remote_unit_size_padded << ENDL();
-    DPRINT << "cb_scratch_index: " << cb_scratch_index << ENDL();
 
     uint32_t l1_write_addr = get_write_ptr(shard_cb_id) + write_offset;
     if constexpr (unaligned) {
@@ -45,8 +37,8 @@ void kernel_main() {
                 l1_scratch_write_addr + src_offset,
                 read_size);
             noc_async_read_barrier();
-            tt::data_movement::common::print_bf16_pages(
-                l1_scratch_write_addr + src_offset, remote_unit_size_padded / 2, units_to_transfer);
+            // tt::data_movement::common::print_bf16_pages(
+            //     l1_scratch_write_addr + src_offset, remote_unit_size_padded / 2, units_to_transfer);
 
             // uint64_t pad_align_noc_addr = get_noc_addr(l1_scratch_read_addr + j * remote_unit_size_padded);
             uint64_t pad_align_noc_addr = get_noc_addr(l1_scratch_read_addr + src_offset);

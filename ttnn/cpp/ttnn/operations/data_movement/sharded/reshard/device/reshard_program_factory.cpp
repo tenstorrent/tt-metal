@@ -338,10 +338,10 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     if (remote_unit_size_padded != unit_size || local_unit_size_padded != unit_size) {
         unaligned = true;
     }
-    tt::log_info("local_unit_size_padded: {}", local_unit_size_padded);
-    tt::log_info("remote_unit_size_padded: {}", remote_unit_size_padded);
-    tt::log_info("unit_size: {}", unit_size);
-    tt::log_info("unaligned: {}", unaligned);
+    // tt::log_info("local_unit_size_padded: {}", local_unit_size_padded);
+    // tt::log_info("remote_unit_size_padded: {}", remote_unit_size_padded);
+    // tt::log_info("unit_size: {}", unit_size);
+    // tt::log_info("unaligned: {}", unaligned);
     const uint32_t total_size = std::min(local_units_per_shard, remote_units_per_shard) * unit_size;
     const std::string kernel_name =
         is_reader
@@ -381,11 +381,13 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
             .set_globally_allocated_address(*local_tensor.buffer());
     auto cb_0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
-    tt::tt_metal::CircularBufferConfig cb_scratch_config =
-        tt::tt_metal::CircularBufferConfig(
-            remote_units_per_shard * remote_unit_size_padded, {{cb_scratch_index, data_format}})
-            .set_page_size(cb_scratch_index, unit_size);
-    auto cb_scratch = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_scratch_config);
+    if (unaligned) {
+        tt::tt_metal::CircularBufferConfig cb_scratch_config =
+            tt::tt_metal::CircularBufferConfig(
+                remote_units_per_shard * remote_unit_size_padded, {{cb_scratch_index, data_format}})
+                .set_page_size(cb_scratch_index, unit_size);
+        auto cb_scratch = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_scratch_config);
+    }
 
     uint32_t remote_core_idx = 0;
     uint32_t remote_core_units_rem = remote_units_per_shard;
