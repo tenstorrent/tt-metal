@@ -18,8 +18,8 @@ public:
     void set_binaries(uint32_t build_key, std::vector<const ll_api::memory*>&& binaries);
 
     const string& get_full_kernel_name() const override;
-    void process_defines(const std::function<void(const string& define, const string& value)>) const override;
-    void process_compile_time_args(const std::function<void(const std::vector<uint32_t>& values)>) const override;
+    void process_defines(std::function<void(const string& define, const string& value)>) const override;
+    void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
 
     virtual void set_build_options(JitBuildOptions& build_options) const {}
     virtual void generate_binaries(IDevice* device, JitBuildOptions& build_options) const = 0;
@@ -78,7 +78,7 @@ public:
 
     Config config() const override { return this->config_; }
 
-    void process_defines(const std::function<void(const string& define, const string& value)>) const override;
+    void process_defines(std::function<void(const string& define, const string& value)>) const override;
 
     std::string_view get_compiler_opt_level() const override;
 
@@ -115,7 +115,7 @@ public:
 
     Config config() const override { return this->config_; }
 
-    void process_defines(const std::function<void(const string& define, const string& value)>) const override;
+    void process_defines(std::function<void(const string& define, const string& value)>) const override;
 
     std::string_view get_compiler_opt_level() const override;
 
@@ -151,7 +151,7 @@ public:
 
     Config config() const override { return this->config_; }
 
-    void process_defines(const std::function<void(const string& define, const string& value)>) const override;
+    void process_defines(std::function<void(const string& define, const string& value)>) const override;
 
     std::string_view get_compiler_opt_level() const override;
 
