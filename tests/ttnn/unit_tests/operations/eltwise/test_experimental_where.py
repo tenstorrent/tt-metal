@@ -24,15 +24,16 @@ def _ttt_where_test_impl(
     device, tensor_shape: tuple, tt_dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, mem_config=None
 ):
     torch.manual_seed(0)
-    torch_dtype = tt_dtype_to_torch_dtype[tt_dtype]
 
-    condition_torch, true_torch, false_torch = [
+    condition_torch = torch.rand(tensor_shape, dtype=torch.float) > 0.5
+
+    torch_dtype = tt_dtype_to_torch_dtype[tt_dtype]
+    true_torch, false_torch = [
         torch.rand(tensor_shape, dtype=torch_dtype)
         if is_ttnn_float_type(tt_dtype)
-        else torch.randint(0, 100, tensor_shape, dtype=torch_dtype)
-        for _ in range(3)
+        else torch.randint(torch.iinfo(torch_dtype).min, torch.iinfo(torch_dtype).max, tensor_shape, dtype=torch_dtype)
+        for _ in range(2)
     ]
-    condition_torch = condition_torch.to(torch.bool)
 
     golden_fn = ttnn.get_golden_function(ttnn.where)
     torch_output_tensor = golden_fn(condition_torch, true_torch, false_torch)
