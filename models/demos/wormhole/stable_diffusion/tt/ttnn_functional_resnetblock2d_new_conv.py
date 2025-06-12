@@ -440,7 +440,6 @@ class resnetBlock2D:
             hidden_states = ttnn.to_memory_config(hidden_states, self.conv1_input_memory_config)
 
             conv_config = ttnn.Conv2dConfig(
-                dtype=ttnn.bfloat8_b,
                 weights_dtype=ttnn.bfloat8_b,
                 activation="",
                 shard_layout=self.conv1_shard_layout,
@@ -501,6 +500,7 @@ class resnetBlock2D:
                 bias_tensor=self.conv1s_bias[0],
                 **conv_kwargs_1,
                 compute_config=compute_config,
+                dtype=ttnn.bfloat8_b,
             )
 
         else:
@@ -542,7 +542,6 @@ class resnetBlock2D:
                 # split_hidden_states[i] = self.conv1s[i](split_hidden_states[i])
 
                 conv_config = ttnn.Conv2dConfig(
-                    dtype=ttnn.bfloat8_b,
                     weights_dtype=ttnn.bfloat8_b,
                     activation="",
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -607,6 +606,7 @@ class resnetBlock2D:
                     compute_config=compute_config,
                     return_output_dim=True,
                     return_weights_and_bias=False,
+                    dtype=ttnn.bfloat8_b,
                 )
                 if i != 0:
                     split_hidden_states[i] = ttnn.add(
@@ -699,7 +699,6 @@ class resnetBlock2D:
         # hidden_states = self.conv2(hidden_states)
 
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -755,6 +754,7 @@ class resnetBlock2D:
             compute_config=compute_config,
             return_output_dim=True,
             return_weights_and_bias=False,
+            dtype=ttnn.bfloat8_b,
         )
         use_in_shortcut = in_channels != out_channels if use_in_shortcut is None else use_in_shortcut
 
@@ -770,7 +770,6 @@ class resnetBlock2D:
             #     )
             # input_tensor = self.conv_shortcut(input_tensor)
             conv_config = ttnn.Conv2dConfig(
-                dtype=ttnn.bfloat8_b,
                 weights_dtype=ttnn.bfloat8_b,
                 activation="",
                 shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -831,6 +830,7 @@ class resnetBlock2D:
                 compute_config=compute_config,
                 return_output_dim=True,
                 return_weights_and_bias=False,
+                dtype=ttnn.bfloat8_b,
             )
 
         if ttnn.get_memory_config(input_tensor) != ttnn.get_memory_config(hidden_states):
