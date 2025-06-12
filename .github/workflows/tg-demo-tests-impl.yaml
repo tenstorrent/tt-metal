@@ -37,7 +37,7 @@ jobs:
     steps:
       - id: set-matrix
         run: |
-          MODEL_NAME="${{ github.event.inputs.model_name || 'all' }}"
+          MODEL_NAME="${{ inputs.model_name }}"
           if [[ "$MODEL_NAME" == "all" ]]; then
             MATRIX='[
               {"name": "Galaxy Llama3 demo tests", "arch": "wormhole_b0", "model": "llama3_70b", "timeout": 30, "owner_id": "U053W15B6JF"},
