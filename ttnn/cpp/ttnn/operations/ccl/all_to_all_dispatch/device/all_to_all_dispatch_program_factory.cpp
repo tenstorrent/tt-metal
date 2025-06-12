@@ -24,6 +24,24 @@ namespace ttnn::operations::ccl {
 
 namespace detail {
 
+std::string stringify_vector(const std::vector<uint32_t>& vec) {
+    std::string result = "{";
+    for (const auto& elem : vec) {
+        result += std::to_string(elem) + ", ";
+    }
+    result += "}";
+    return result;
+}
+
+std::string stringify_array(const std::array<bool, 4>& arr) {
+    std::string result = "{";
+    for (const auto& elem : arr) {
+        result += std::to_string(elem) + ", ";
+    }
+    result += "}";
+    return result;
+}
+
 tt::tt_metal::Shape2D get_physical_size(const ttnn::Tensor& tensor) {
     auto memory_config = tensor.memory_config();
     auto tensor_spec = tensor.tensor_spec();
@@ -78,7 +96,9 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
     } else {
         directions = {false, false, false, false};
     }
+    auto control_plane = tt::tt_fabric::get_control_plane();
     auto src_device = mesh_view.get_device(mesh_coordinate);
+
     for (uint8_t axis = 0; axis < 2; axis++) {
         std::vector<tt::tt_metal::IDevice*> axis_neighbors;
         if (axis == 0) {
@@ -86,23 +106,131 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
         } else {
             axis_neighbors = mesh_view.get_devices_on_column(mesh_coordinate[1]);
         }
+        auto src_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(src_device->id());
+
         for (uint32_t i = 0; i < axis_neighbors.size(); i++) {
             if (axis_neighbors.at(i) == src_device) {
-                if (i != 0) {
-                    neighbors.push_back(axis_neighbors.at(i - 1));
-                    directions[axis] = true;
-                } else if (topology == ttnn::ccl::Topology::Ring) {
-                    neighbors.push_back(axis_neighbors.at(axis_neighbors.size() - 1));
-                }
-                if (i != axis_neighbors.size() - 1) {
-                    neighbors.push_back(axis_neighbors.at(i + 1));
-                    directions[2 + axis] = true;
-                } else if (topology == ttnn::ccl::Topology::Ring) {
-                    neighbors.push_back(axis_neighbors.at(0));
+                if (axis == 0) {
+                    // east
+                    if (i != axis_neighbors.size() - 1) {
+                        auto neighbor = axis_neighbors.at(i + 1);
+                        auto dest_fabric_node_id =
+                            control_plane->get_fabric_node_id_from_physical_chip_id(neighbor->id());
+                        auto src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
+                        auto dest_chip_id = (uint32_t)dest_fabric_node_id.chip_id;
+
+                        // row 0 to row 1
+                        if (src_chip_id <= 3 && dest_chip_id > 3) {
+                            directions[3] = true;
+                        }
+                        // row 1 to row 0
+                        else if (src_chip_id > 3 && dest_chip_id <= 3) {
+                            directions[2] = true;
+                        }
+                        // go east
+                        else if (dest_chip_id > src_chip_id) {
+                            directions[0] = true;
+                        }
+                        // go west
+                        else if (dest_chip_id < src_chip_id) {
+                            directions[1] = true;
+                        }
+                        neighbors.push_back(neighbor);
+                    }
+                    // west
+                    if (i != 0) {
+                        auto neighbor = axis_neighbors.at(i - 1);
+                        auto dest_fabric_node_id =
+                            control_plane->get_fabric_node_id_from_physical_chip_id(neighbor->id());
+                        auto src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
+                        auto dest_chip_id = (uint32_t)dest_fabric_node_id.chip_id;
+
+                        // row 0 to row 1
+                        if (src_chip_id <= 3 && dest_chip_id > 3) {
+                            directions[3] = true;
+                        }
+                        // row 1 to row 0
+                        else if (src_chip_id > 3 && dest_chip_id <= 3) {
+                            directions[2] = true;
+                        }
+                        // go east
+                        else if (dest_chip_id > src_chip_id) {
+                            directions[0] = true;
+                        }
+                        // go west
+                        else if (dest_chip_id < src_chip_id) {
+                            directions[1] = true;
+                        }
+                        neighbors.push_back(neighbor);
+                    }
+
+                } else if (axis == 1) {
+                    // north
+                    if (i != 0) {
+                        auto neighbor = axis_neighbors.at(i - 1);
+                        auto dest_fabric_node_id =
+                            control_plane->get_fabric_node_id_from_physical_chip_id(neighbor->id());
+                        auto src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
+                        auto dest_chip_id = (uint32_t)dest_fabric_node_id.chip_id;
+
+                        // row 0 to row 1
+                        if (src_chip_id <= 3 && dest_chip_id > 3) {
+                            directions[3] = true;
+                        }
+                        // row 1 to row 0
+                        else if (src_chip_id > 3 && dest_chip_id <= 3) {
+                            directions[2] = true;
+                        }
+                        // go east
+                        else if (dest_chip_id > src_chip_id) {
+                            directions[0] = true;
+                        }
+                        // go west
+                        else if (dest_chip_id < src_chip_id) {
+                            directions[1] = true;
+                        }
+                        neighbors.push_back(neighbor);
+                    }
+                    // south
+                    if (i != axis_neighbors.size() - 1) {
+                        auto neighbor = axis_neighbors.at(i + 1);
+                        auto dest_fabric_node_id =
+                            control_plane->get_fabric_node_id_from_physical_chip_id(neighbor->id());
+                        auto src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
+                        auto dest_chip_id = (uint32_t)dest_fabric_node_id.chip_id;
+
+                        // row 0 to row 1
+                        if (src_chip_id <= 3 && dest_chip_id > 3) {
+                            directions[3] = true;
+                        }
+                        // row 1 to row 0
+                        else if (src_chip_id > 3 && dest_chip_id <= 3) {
+                            directions[2] = true;
+                        }
+                        // go east
+                        else if (dest_chip_id > src_chip_id) {
+                            directions[0] = true;
+                        }
+                        // go west
+                        else if (dest_chip_id < src_chip_id) {
+                            directions[1] = true;
+                        }
+                        neighbors.push_back(neighbor);
+                    }
                 }
             }
         }
     }
+    std::vector<uint32_t> neighbor_ids;
+    for (const auto& neighbor : neighbors) {
+        auto fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(neighbor->id());
+        neighbor_ids.push_back((uint32_t)fabric_node_id.chip_id);
+    }
+    tt::log_info(
+        tt::LogAlways,
+        "directions: {}",
+        detail::stringify_vector(std::vector<uint32_t>(directions.begin(), directions.end())));
+    tt::log_info(tt::LogAlways, "neighbor_ids: {}", detail::stringify_vector(neighbor_ids));
     return {neighbors, directions};
 }
 
@@ -135,15 +263,6 @@ uint32_t select_link(
         }
         return (src[0] + (south ? 0 : 1)) % num_links;  // link id
     }
-}
-
-std::string stringify_vector(const std::vector<uint32_t>& vec) {
-    std::string result = "{";
-    for (const auto& elem : vec) {
-        result += std::to_string(elem) + ", ";
-    }
-    result += "}";
-    return result;
 }
 
 uint32_t get_route(
@@ -256,11 +375,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
-    tt::log_info(
-        tt::LogAlways,
-        "Creating all to all dispatch program for mesh coordinate: ({}, {})",
-        mesh_coordinate[0],
-        mesh_coordinate[1]);
 
     tt::tt_metal::Program program{};
 
@@ -276,6 +390,21 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     const auto& mesh_view = mesh_device->get_view();
     auto src_device = mesh_device->get_device(mesh_coordinate);
     auto src_physical_device_id = src_device->id();
+
+    auto control_plane = tt::tt_fabric::get_control_plane();
+    auto fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(src_device->id());
+    uint32_t src_mesh_id = *fabric_node_id.mesh_id;
+    uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
+
+    tt::log_info(
+        tt::LogAlways,
+        "Creating all to all dispatch program for mesh coordinate: ({}, {}) with physical device id: {} mesh id: {} "
+        "chip id: {}",
+        mesh_coordinate[0],
+        mesh_coordinate[1],
+        src_device->id(),
+        src_mesh_id,
+        src_chip_id);
 
     const auto [neighbors, directions] = detail::get_neighbors(mesh_view, mesh_coordinate, topology);
 
@@ -366,8 +495,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto subdevice_core_range_set =
         mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.subdevice_id);
 
-    auto control_plane = tt::tt_fabric::get_control_plane();
-
     auto subdevice_cores = corerange_to_cores(subdevice_core_range_set);
     TT_FATAL(
         subdevice_cores.size() >= num_links,
@@ -392,10 +519,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto send_preparation_buffer =
         tt::tt_metal::CreateCircularBuffer(program, sender_core, send_preparation_buffer_config);
 
-    auto fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(src_device->id());
-    uint32_t src_mesh_id = *fabric_node_id.mesh_id;
-    uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
-
     std::vector<uint32_t> dest_mesh_id, dest_chip_id, route;
     for (const auto& coord : tensor_coords.coords()) {
         auto device = mesh_device->get_device(coord);
@@ -404,9 +527,9 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         dest_chip_id.push_back((uint32_t)fabric_node_id.chip_id);
         route.push_back(detail::get_route(mesh_view, mesh_coordinate, coord, topology));
     }
-    tt::log_info(tt::LogAlways, "route: {}", detail::stringify_vector(route));
     tt::log_info(tt::LogAlways, "dest_chip_id: {}", detail::stringify_vector(dest_chip_id));
     tt::log_info(tt::LogAlways, "dest_mesh_id: {}", detail::stringify_vector(dest_mesh_id));
+    // tt::log_info(tt::LogAlways, "directions: {}", detail::stringify_array(directions));
 
     // TODO: add fabric node and mesh id to the compile time args
     // TODO: add an array mapping logical device id to physical device id
@@ -449,11 +572,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         (uint32_t)src_chip_id,
         mesh_view.num_rows(),
         mesh_view.num_cols(),
-        directions[0],  // north
-        directions[1],  // east
-        directions[2],  // south
-        directions[3]   // west
-
     };
 
     auto writer_compile_time_args = reader_compile_time_args;
@@ -473,7 +591,8 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     std::map<std::string, std::string> writer_defines = {
         {"DEST_CHIP_ID", detail::stringify_vector(dest_chip_id)},
         {"DEST_MESH_ID", detail::stringify_vector(dest_mesh_id)},
-        {"ROUTE", detail::stringify_vector(route)}};
+        {"ROUTE", detail::stringify_vector(route)},
+        {"DIRECTIONS", detail::stringify_array(directions)}};
 
     tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -502,21 +621,21 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     for (auto& neighbor : neighbors) {
         auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
         uint32_t link_id = detail::select_link(mesh_view, mesh_coordinate, neighbor_coordinate, num_links, topology);
-        tt::log_info(
-            tt::LogAlways,
-            "Connection between ({}, {}) and ({}, {}) will choose link_id: {}",
-            mesh_coordinate[0],
-            mesh_coordinate[1],
-            neighbor_coordinate[0],
-            neighbor_coordinate[1],
-            link_id);
+        // tt::log_info(
+        //     tt::LogAlways,
+        //     "Connection between ({}, {}) and ({}, {}) will choose link_id: {}",
+        //     mesh_coordinate[0],
+        //     mesh_coordinate[1],
+        //     neighbor_coordinate[0],
+        //     neighbor_coordinate[1],
+        //     link_id);
         tt::tt_fabric::append_fabric_connection_rt_args(
             src_physical_device_id, neighbor->id(), link_id, program, sender_core, writer_runtime_args);
     }
 
     tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, sender_cores.at(0), reader_runtime_args);
     tt::tt_metal::SetRuntimeArgs(program, binary_writer_kernel_id, sender_cores.at(0), writer_runtime_args);
-
+    std::cout << std::endl;
     return {
         std::move(program),
         {.ternary_reader_kernel_id = ternary_reader_kernel_id,

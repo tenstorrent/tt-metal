@@ -8,6 +8,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
+    DPRINT << "KERNEL START" << ENDL();
     constexpr bool input_is_dram = (bool)get_compile_time_arg_val(0);
     constexpr bool indices_is_dram = (bool)get_compile_time_arg_val(1);
     constexpr bool mapping_is_dram = (bool)get_compile_time_arg_val(2);
@@ -80,8 +81,7 @@ void kernel_main() {
     cb_push_back(indices_tensor_cb_id, indices_pages);
     cb_push_back(mapping_tensor_cb_id, mapping_pages);
     cb_push_back(input_tensor_cb_id, input_pages);
-    while (*(uint32_t*)global_semaphore_address != batch_size) {
-        DPRINT << "WAITING FOR SEMAPHORE WITH VALUE: " << *(uint32_t*)global_semaphore_address << ENDL();
-    }
-    noc_semaphore_wait((uint32_t*)global_semaphore_address, batch_size);
+    noc_semaphore_wait((uint32_t*)global_semaphore_address, 2);
+    noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
+    DPRINT << "KERNEL END" << ENDL();
 }
