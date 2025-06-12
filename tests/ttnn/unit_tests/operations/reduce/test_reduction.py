@@ -211,7 +211,7 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
 @pytest.mark.parametrize(
     # This test picks the maximum dim2 that will pick the singlecore implementation.
     # TopK multicore uses 8 cores in blackhole, so we need to double the dim to pick the singlecore implementation
-    # as compared to wormhole.
+    # as compared to wormhole. Issue #23465
     "dim2",
     [50257 * 2 if is_blackhole else 50257],
 )  # Need to resolve issue #20294 to verify 128256 for OXMIQ <- will need topk_local_sort to handle uint32_t
