@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,8 +8,7 @@ import timm
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
+from models.experimental.functional_vovnet.tt.model_preprocessing import custom_preprocessor
 from models.experimental.functional_vovnet.tt.separable_conv_norm_act import TtSeparableConvNormAct
 
 
@@ -17,23 +16,21 @@ from models.experimental.functional_vovnet.tt.separable_conv_norm_act import TtS
 def test_separable_conv_norm_act_inference(device, reset_seeds):
     base_address = f"stem.1"
 
-    model = timm.create_model("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True)
-
+    model = timm.create_model("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True).eval()
     torch_model = model.stem[1]
+    parameters = custom_preprocessor(device, model.state_dict())
 
     tt_model = TtSeparableConvNormAct(
         stride=1,
         padding=1,
-        torch_model=model.state_dict(),
+        parameters=parameters,
         base_address=base_address,
         device=device,
     )
 
     input = torch.randn(1, 64, 112, 112)
 
-    # run torch model
     model_output = torch_model(input)
-    # run tt model
 
     tt_input = ttnn.from_torch(input, device=device, dtype=ttnn.bfloat16)
     tt_output = tt_model.forward(tt_input)

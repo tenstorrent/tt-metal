@@ -1,9 +1,9 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch.nn as nn
+import math
 
 
 class Conv:
@@ -69,12 +69,9 @@ class Conv:
         self.out_channels = self.weights.shape[0]
         self.reader_patterns_cache = {}
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat16,
             weights_dtype=ttnn.bfloat8_b,
             activation=activation,
-            # shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             shard_layout=self.shard_layout,
-            input_channels_alignment=16,  # if self.input_params[-1] < 16 else 32,
             reshard_if_not_optimal=True,
             deallocate_activation=True,
             reallocate_halo_output=True,
@@ -95,8 +92,19 @@ class Conv:
         return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"
 
     def __call__(self, input_tensor):
-        N, C, H, W = input_tensor.shape
-        input_tensor = ttnn.permute(input_tensor, (0, 2, 3, 1))
+        if input_tensor.shape[1] != 1:
+            N, C, H, W = input_tensor.shape
+            input_tensor = ttnn.permute(input_tensor, (0, 2, 3, 1))
+            input_height = input_tensor.shape[1]
+            input_width = input_tensor.shape[2]
+        else:
+            input_height = int(math.sqrt((input_tensor.shape[2])))
+            input_width = int(math.sqrt((input_tensor.shape[2])))
+
+        if input_tensor.shape[-1] == 16:
+            in_channel = 3
+        else:
+            in_channel = input_tensor.shape[-1]
         compute_config = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -105,11 +113,10 @@ class Conv:
             packer_l1_acc=False,
         )
 
-        self.conv_config.input_channels_alignment = 16 if input_tensor.shape[-1] < 16 else 32
         output_tensor, [_out_height, _out_width], [self.weights, self.bias] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
-            in_channels=input_tensor.shape[-1],
+            in_channels=in_channel,
             out_channels=self.out_channels,
             device=self.device,
             bias_tensor=self.bias if self.bias else None,
@@ -117,11 +124,10 @@ class Conv:
             stride=(self.conv_params[0], self.conv_params[1]),
             padding=(self.conv_params[2], self.conv_params[-1]),
             batch_size=input_tensor.shape[0],
-            input_height=input_tensor.shape[1],
-            input_width=input_tensor.shape[2],
+            input_height=input_height,
+            input_width=input_width,
             conv_config=self.conv_config,
-            conv_op_cache=self.reader_patterns_cache,
-            debug=self.debug,
+            dtype=ttnn.bfloat16,
             groups=self.groups,
             compute_config=compute_config,
             return_output_dim=True,
@@ -130,11 +136,13 @@ class Conv:
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
 
-        output_tensor = ttnn.reshape(output_tensor, (N, _out_height, _out_width, output_tensor.shape[-1]))
+        output_tensor = ttnn.reshape(
+            output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[-1])
+        )
         output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2))
         if self.fused_op:
             output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
-            self.bn = ttnn.batch_norm(
+            bn = ttnn.batch_norm(
                 output_tensor,
                 running_mean=self.bn_running_mean,
                 running_var=self.bn_running_var,
@@ -142,5 +150,6 @@ class Conv:
                 bias=self.bn_bias,
                 training=False,
             )
-            output_tensor = ttnn.relu(output_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+            output_tensor = ttnn.relu(bn, memory_config=ttnn.L1_MEMORY_CONFIG)
+
         return output_tensor, _out_height, _out_width
