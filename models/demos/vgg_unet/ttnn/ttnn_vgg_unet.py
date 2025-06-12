@@ -52,8 +52,8 @@ class Conv:
             packer_l1_acc=False,
             math_approx_mode=True,
         )
+        self.conv_output_dtype = conv_param.dtype
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=conv_param.dtype,
             weights_dtype=ttnn.bfloat8_b,
             activation=conv_param.activation,
             shard_layout=conv_param.shard_layout,
@@ -102,6 +102,7 @@ class Conv:
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         return x
 
