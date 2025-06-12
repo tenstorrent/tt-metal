@@ -2530,7 +2530,7 @@ void Run1DFabricPacketSendTest(
         !(params.num_fabric_rows > 0 && params.num_fabric_cols > 0),
         "Only one of num_fabric_rows and num_fabric_cols may be greater than 0. Test support for both axes live at the "
         "same time is not yet supported");
-    if (use_device_init_fabric ^ (params.num_fabric_rows == 0 && params.num_fabric_cols == 0)) {
+    if (use_device_init_fabric && params.num_fabric_rows == 0 && params.num_fabric_cols == 0) {
         TT_FATAL(use_t3k, "Using the full mesh as one ring topoplogy is only supported for T3K");
     }
 
