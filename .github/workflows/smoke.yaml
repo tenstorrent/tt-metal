@@ -15,7 +15,10 @@ on:
       per-test-timeout:
         required: false
         type: string
-        default: 3.5
+        # We want to eventually bump this back down to 3.5, but because of
+        # https://github.com/tenstorrent/github-ci-infra/issues/876 tests
+        # are taking longer on host than we'd like on CIv2
+        default: 4.5
       product:
         required: true
         type: string # tt-metalium or tt-nn
