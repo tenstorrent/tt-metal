@@ -54,6 +54,7 @@ jobs:
         run: |
           set -euo pipefail
           for example in /usr/share/${{ inputs.product }}/examples/*; do
+            [ -f "$example/CMakeLists.txt" ] || continue
             example_name=$(basename "$example")
             # Wouldn't it be nice if we could have nested groups?
             # Yeah, others thought so, too. https://github.com/actions/toolkit/issues/1001
