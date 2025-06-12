@@ -11,6 +11,7 @@
 #include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
 #include <algorithm>
 #include <cstdlib>
+#include <future>
 #include <set>
 #include <utility>
 
@@ -38,6 +39,7 @@
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
+#include "tt_metal/common/executor.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
 using namespace tt::tt_metal;
@@ -316,6 +318,18 @@ void DevicePool::initialize_host(IDevice* dev) const {
     watcher_attach(dev->id());
 }
 
+void DevicePool::init_fabric(const std::vector<tt_metal::IDevice*>& active_devices) const {
+    std::vector<std::shared_future<void>> events;
+    for (uint32_t i = 0; i < active_devices.size(); i++) {
+        auto& dev = active_devices[i];
+        events.emplace_back(detail::async([dev]() { dev->init_fabric(); }));
+    }
+    for (const auto& event : events) {
+        // Wait for all fabric programs to be initialized
+        event.get();
+    }
+}
+
 void DevicePool::initialize_active_devices() const {
     const auto& active_devices = this->get_all_active_devices();
 
@@ -331,9 +345,7 @@ void DevicePool::initialize_active_devices() const {
         }
 
         // Initialize fabric on mmio device
-        for (const auto& dev : active_devices) {
-            dev->init_fabric();
-        }
+        init_fabric(active_devices);
         log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
     }
 
