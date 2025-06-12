@@ -1,8 +1,14 @@
 add_library(ttnn_op_reduction ${LIB_TYPE})
-add_library(TT::NN::Ops::Reduction ALIAS ttnn_op_reduction)
+add_library(TTNN::Ops::Reduction ALIAS ttnn_op_reduction)
 
 target_precompile_headers(ttnn_op_reduction REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_reduction)
+set_target_properties(
+    ttnn_op_reduction
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 
 target_sources(
     ttnn_op_reduction
@@ -32,12 +38,31 @@ target_sources(
         reduction_common/reduction_common.cpp
 )
 
+file(GLOB_RECURSE kernels argmax/device/kernels/*)
+target_sources(
+    ttnn_op_reduction
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
+)
+
 target_include_directories(ttnn_op_reduction PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
     ttnn_op_reduction
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_reduction
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/reduction
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_reduction LIBRARY COMPONENT tar)
