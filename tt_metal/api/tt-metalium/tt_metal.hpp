@@ -40,8 +40,22 @@ namespace detail {
 
 bool DispatchStateCheck(bool isFastDispatch);
 
-// Call before CreateDevices to enable fabric, which uses all free ethernet cores
-void InitializeFabricConfig(FabricConfig fabric_config);
+/**
+ * Call before CreateDevices to enable fabric, which uses the specified number of routing planes.
+ * Currently, setting num_routing_planes dictates how many routing planes the fabric should be active on
+ * for that init sequence. The number of routing planes fabric will be initialized on will be the max
+ * of all the values specified by different clients. If a client wants to initialize fabric on all the
+ * available routing planes, num_routing_planes can be left unspecifed.
+ * NOTE: This does not 'reserve' routing planes for any clients, but is rather a global setting.
+ *
+ * Return value: void
+ *
+ * | Argument           | Description                         | Data type         | Valid range | Required |
+ * |--------------------|-------------------------------------|-------------------|-------------|----------|
+ * | fabric_config      | Fabric config to set                | FabricConfig      |             | Yes      |
+ * | num_routing_planes | Number of routing planes for fabric | optional<uint8_t> |             | No       |
+ */
+void SetFabricConfig(FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
 
 std::map<chip_id_t, IDevice*> CreateDevices(
     // TODO: delete this in favour of DevicePool

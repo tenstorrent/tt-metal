@@ -303,7 +303,8 @@ public:
     }
 
     // Configures ethernet cores for fabric routers depending on whether fabric is enabled
-    void configure_ethernet_cores_for_fabric_routers(tt_metal::FabricConfig fabric_config);
+    void configure_ethernet_cores_for_fabric_routers(
+        tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
 
     // Returns whether we are running on Galaxy.
     bool is_galaxy_cluster() const;
@@ -395,8 +396,8 @@ private:
     // If any device has to board type of GALAXY, we are on a TG cluster.
     ClusterType cluster_type_ = ClusterType::INVALID;
 
-    // Reserves all free ethernet cores for fabric routers
-    void reserve_ethernet_cores_for_fabric_routers();
+    // Reserves specified number of ethernet cores for fabric routers
+    void reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_planes);
 
     // Releases all reserved ethernet cores for fabric routers
     void release_ethernet_cores_for_fabric_routers();
