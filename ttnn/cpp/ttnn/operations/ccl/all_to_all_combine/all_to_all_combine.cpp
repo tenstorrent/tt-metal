@@ -17,27 +17,26 @@ namespace ttnn::operations::ccl {
 ttnn::Tensor ExecuteAllToAllCombine::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
+    const ttnn::Tensor& expert_metadata_tensor,
+    const GlobalSemaphore& global_semaphore,
     const uint32_t num_links,
     const tt::tt_fabric::Topology topology,
-    const GlobalSemaphore& global_semaphore
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
-    auto mesh_device = input_tensor.mesh_device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto sub_device_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-        mesh_device, sub_device_cores, 0, tt::tt_metal::BufferType::L1));
+    const std::optional<uint32_t>& axis) {
+    // const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
+    // auto mesh_device = input_tensor.mesh_device();
+    // auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
 
     return ttnn::prim::all_to_all_combine(
         input_tensor,
-        expert_indices_tensor,
         expert_mapping_tensor,
+        expert_metadata_tensor,
         num_links,
         topology,
         memory_config.value_or(input_tensor.memory_config()),
-        sd_id,
-        global_semaphore);
+        global_semaphore,
+        axis);
 }
 
 }  // namespace ttnn::operations::ccl
