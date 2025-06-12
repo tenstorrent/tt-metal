@@ -106,6 +106,7 @@ int main(int argc, char *argv[]) {
 
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+    *trisc_run = RUN_SYNC_MSG_DONE;
 
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
