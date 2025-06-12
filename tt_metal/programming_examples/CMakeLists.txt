@@ -46,9 +46,6 @@ install(
         hello_world_datamovement_kernel
         hello_world_datatypes_kernel
         loopback
-        matmul_multi_core
-        matmul_multicore_reuse
-        matmul_single_core
         pad_multi_core
         shard_data_rm
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
@@ -72,9 +69,6 @@ install(
         hello_world_datamovement_kernel
         hello_world_datatypes_kernel
         loopback
-        matmul_multi_core
-        matmul_multicore_reuse
-        matmul_single_core
         pad_multi_core
         shard_data_rm
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
