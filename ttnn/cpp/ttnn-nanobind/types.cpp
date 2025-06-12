@@ -10,6 +10,7 @@
 #include <sstream>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/make_iterator.h>
 #include <nanobind/operators.h>
 #include <nanobind/stl/string.h>
 
@@ -72,24 +73,18 @@ void py_module(nb::module_& mod) {
         });
 
     auto PyShape = static_cast<nb::class_<ttnn::Shape>>(mod.attr("Shape"));
-    PyShape
-        .def(nb::init<const ttnn::SmallVector<uint32_t>&>(), nb::arg("shape"))
+    PyShape.def(nb::init<const ttnn::SmallVector<uint32_t>&>(), nb::arg("shape"))
         .def("__len__", [](const Shape& self) { return self.rank(); })
         .def("__getitem__", [](const Shape& self, std::int64_t index) { return self[index]; })
-        //.def(
-        //    "__iter__",
-        //    [](const Shape& self) {
-        //        return nb::iter(nb::cast(ttnn::SmallVector<uint32_t>(self.cbegin(), self.cend())));
-        //    })
-        //.def( // TODO: validate usage
-        //      // TODO: is this UB??
-        //    "__iter__",
-        //    [](const Shape& self) {
-        //        //return nb::iter(nb::cast(ttnn::SmallVector<uint32_t>(self.cbegin(), self.cend())));
-        //        //return nb::make_iterator()
-        //    }, nb::keep_alive<0,1>())
-        .def(nb::self == nb::self,
-             nb::sig("def __eq__(self, arg: object, /) -> bool")) // see Typing in nb docs for explanation
+        .def(
+            "__iter__",  // TODO: make sure there doesn't need to be an additional cast to SmallVector
+            [](const Shape& self) {
+                return nb::make_iterator(nb::type<ttnn::Shape>(), "iterator", self.cbegin(), self.cend());
+            },
+            nb::keep_alive<0, 1>())
+        .def(
+            nb::self == nb::self,
+            nb::sig("def __eq__(self, arg: object, /) -> bool"))  // see Typing in nb docs for explanation
         .def(
             "__repr__",
             [](const Shape& self) {
@@ -98,20 +93,22 @@ void py_module(nb::module_& mod) {
                 return ss.str();
             })
         .def_prop_ro("rank", [](const Shape& self) -> std::size_t { return self.rank(); })
-        .def("to_rank", [](const Shape& self, std::size_t new_rank) {
-            SmallVector<uint32_t> new_shape(new_rank, 1);
+        .def(
+            "to_rank",
+            [](const Shape& self, std::size_t new_rank) {
+                SmallVector<uint32_t> new_shape(new_rank, 1);
 
-            int cur_idx = static_cast<int>(self.rank()) - 1;
-            int new_idx = static_cast<int>(new_rank) - 1;
-            for (; cur_idx >= 0 && new_idx >= 0; cur_idx--, new_idx--) {
-                new_shape[new_idx] = self[cur_idx];
-            }
-            for (; cur_idx >= 0; cur_idx--) {
-                TT_FATAL(self[cur_idx] == 1, "Can't convert shape rank");
-            }
+                int cur_idx = static_cast<int>(self.rank()) - 1;
+                int new_idx = static_cast<int>(new_rank) - 1;
+                for (; cur_idx >= 0 && new_idx >= 0; cur_idx--, new_idx--) {
+                    new_shape[new_idx] = self[cur_idx];
+                }
+                for (; cur_idx >= 0; cur_idx--) {
+                    TT_FATAL(self[cur_idx] == 1, "Can't convert shape rank");
+                }
 
-            return ttnn::Shape(std::move(new_shape));
-        })
+                return ttnn::Shape(std::move(new_shape));
+            })
         .def(nb::init_implicit<ttnn::SmallVector<uint32_t>>());
 }
 

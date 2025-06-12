@@ -80,7 +80,9 @@ void implement_buffer_protocol(nb::module_& m_tensor, std::string_view name) {
         .def("__len__", [](const CppType& self) { return self.size(); })
         .def(
             "__iter__",
-            [](const CppType& self) { return nb::make_iterator(self.begin(), self.end()); },
+            [](const CppType& self) {
+                return nb::make_iterator(nb::type<py_buffer_t>(), "iterator", self.begin(), self.end());
+            },
             nb::keep_alive<0, 1>())
         //.def_buffer([](CppType& self) -> nb::buffer_info {
         //    using FormatType = typename DataTypeToFormatType<DataType>::type;
@@ -162,7 +164,10 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
             "__iter__",
             [](const HostBuffer& self) {
                 return nb::make_iterator(
-                    nb::type<unsigned char>(), "iterator", self.view_bytes().begin(), self.view_bytes().end());
+                    nb::type<tt::tt_metal::HostBuffer>(),
+                    "iterator",
+                    self.view_bytes().begin(),
+                    self.view_bytes().end());
             },
             nb::keep_alive<0, 1>());
     /*

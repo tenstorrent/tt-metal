@@ -20,8 +20,6 @@ class MeshShape : public ShapeBase {
 public:
     using ShapeBase::operator[];
 
-    using coord_type = uint32_t;
-
     // Shorthands for constructing 1D, 2D and 3D shapes.
     explicit MeshShape(uint32_t x);
     MeshShape(uint32_t x, uint32_t y);
@@ -63,9 +61,6 @@ bool is_line_topology(const MeshShape& shape);
 
 class MeshCoordinate {
 public:
-
-    using coord_type = uint32_t;
-
     // Shorthands for constructing 1D, 2D and 3D coordinates.
     explicit MeshCoordinate(uint32_t x);
     MeshCoordinate(uint32_t x, uint32_t y);

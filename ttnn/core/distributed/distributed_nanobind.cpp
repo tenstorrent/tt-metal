@@ -60,12 +60,12 @@ void py_module(nb::module_& mod) {
 
     static_cast<nb::class_<MeshShape>>(mod.attr("MeshShape"))
         .def(
-            nb::init<MeshShape::coord_type, MeshShape::coord_type>(),
+            nb::init<uint32_t, uint32_t>(),
             "Constructor with the specified number of rows and columns.",
             nb::arg("num_rows"),
             nb::arg("num_cols"))
         .def(
-            nb::init<MeshShape::coord_type, MeshShape::coord_type, MeshShape::coord_type>(),
+            nb::init<uint32_t, uint32_t, uint32_t>(),
             "Constructor with the specified 3D shape.",
             nb::arg("x"),
             nb::arg("y"),
@@ -82,19 +82,18 @@ void py_module(nb::module_& mod) {
         .def(
             "__iter__",
             [](const MeshShape& ms) {
-                return nb::make_iterator(
-                    nb::type<decltype(ms.view().begin())>(), "iterator", ms.view().begin(), ms.view().end());
+                return nb::make_iterator(nb::type<MeshShape>(), "iterator", ms.view().begin(), ms.view().end());
             },
             nb::keep_alive<0, 1>());
 
     static_cast<nb::class_<MeshCoordinate>>(mod.attr("MeshCoordinate"))
         .def(
-            nb::init<MeshCoordinate::coord_type, MeshCoordinate::coord_type>(),
+            nb::init<uint32_t, uint32_t>(),
             "Constructor with specified row and column offsets.",
             nb::arg("row"),
             nb::arg("col"))
         .def(
-            nb::init<MeshCoordinate::coord_type, MeshCoordinate::coord_type, MeshCoordinate::coord_type>(),
+            nb::init<uint32_t, uint32_t, uint32_t>(),
             "Constructor with the specified 3D coordinate.",
             nb::arg("x"),
             nb::arg("y"),
@@ -115,7 +114,7 @@ void py_module(nb::module_& mod) {
             "__iter__",
             [](const MeshCoordinate& mc) {
                 return nb::make_iterator(
-                    nb::type<decltype(mc.coords().begin())>(), "iterator", mc.coords().begin(), mc.coords().end());
+                    nb::type<MeshCoordinate>(), "iterator", mc.coords().begin(), mc.coords().end());
             },
             nb::keep_alive<0, 1>());
 
@@ -136,7 +135,7 @@ void py_module(nb::module_& mod) {
         .def(
             "__iter__",
             [](const MeshCoordinateRange& mcr) {
-                return nb::make_iterator(nb::type<decltype(mcr.begin())>(), "iterator", mcr.begin(), mcr.end());
+                return nb::make_iterator(nb::type<MeshCoordinateRange>(), "iterator", mcr.begin(), mcr.end());
             },
             nb::keep_alive<0, 1>());
 
