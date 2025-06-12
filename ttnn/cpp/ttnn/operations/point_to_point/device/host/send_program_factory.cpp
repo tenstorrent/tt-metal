@@ -91,10 +91,10 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     tt::tt_metal::CBHandle cb_sender_handle = CreateCircularBuffer(program, all_cores, cb_sender_config);
 
     // allocate space for packet headers for payload sempahore
-    constexpr auto packet_header_cb_id = tt::CBIndex::c_6;
+    constexpr auto packet_header_cb_id = tt::CBIndex::c_1;
     constexpr auto buffering_factor = 2;  // this is in other fabric kernels
     constexpr auto num_packet_headers_storable = 2;
-    constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    constexpr auto packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
     tt::tt_metal::CircularBufferConfig cb_header_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
