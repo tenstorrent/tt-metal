@@ -46,11 +46,8 @@ void kernel_main() {
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
-    bool wait_output_semaphore = get_arg_val<uint32_t>(arg_idx++);
-    bool reset_global_semaphore = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
     tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
@@ -146,20 +143,11 @@ void kernel_main() {
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
     fabric_connection.close();
+
     // increment locally
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
-
-    // 3. wait for mcast output ready semaphore
-    if (wait_output_semaphore) {
-        while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
-    }
-
-    // 4. global semaphore reset
-    if (reset_global_semaphore) {
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) = 0;
-    }
 
     noc_async_write_barrier();
 }
