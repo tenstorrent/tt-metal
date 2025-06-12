@@ -8,6 +8,7 @@
 #include <cstdint>
 #include "device_fixture.hpp"
 #include <tuple>
+
 namespace tt::tt_metal::unit_tests::dm {
 
 // Unique id for each test run
