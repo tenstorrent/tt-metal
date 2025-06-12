@@ -139,7 +139,7 @@ jobs:
           message-title: "🚨 Workflow Failures Detected"
           message-data: |
             {
-              "failed_workflows": ${{ needs.analyze-data.outputs.failed_workflows }},
+              "failed_workflows": ${{ toJSON(needs.analyze-data.outputs.failed_workflows) }},
               "repository": "${{ github.repository }}",
               "branch": "${{ github.ref_name }}",
               "workflow_run": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

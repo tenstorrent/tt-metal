@@ -27,11 +27,15 @@ async function sendSlackMessage() {
 
     // Handle failed workflows section
     if (messageData.failed_workflows) {
+      const failedWorkflowsText = Array.isArray(messageData.failed_workflows)
+        ? messageData.failed_workflows.join('\n')
+        : messageData.failed_workflows;
+
       message.blocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
-          text: "*Failed Workflows:*\n" + messageData.failed_workflows
+          text: "*Failed Workflows:*\n" + failedWorkflowsText
         }
       });
     }
