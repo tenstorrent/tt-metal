@@ -11,17 +11,14 @@
 #include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
-#include "all_to_all_dispatch.hpp"
+#include "all_to_all_combine.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 
 namespace ttnn::operations::ccl {
 
 void py_bind_all_to_all_combine(py::module& module) {
-    auto doc =
-        R"doc(all_to_all_combine(input_tensor: ttnn.Tensor, expert_indices_tensor: ttnn.Tensor, expert_mapping_tensor: ttnn.Tensor, num_links: int = 1, topology: ttnn.Topology = ttnn.Topology.Linear, memory_config: Optional[ttnn.MemoryConfig] = std::nullopt, subdevice_id: Optional[ttnn.SubDeviceId] = std::nullopt, global_semaphore: Optional[ttnn.GlobalSemaphore] = std::nullopt, queue_id: int = 0) -> Tuple[ttnn.Tensor, ttnn.Tensor]
-        TODO
-        ";
+    auto doc = R"doc()doc";
 
     using OperationType = decltype(ttnn::all_to_all_combine);
     ttnn::bind_registered_operation(
@@ -31,24 +28,25 @@ void py_bind_all_to_all_combine(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& expert_indices_tensor,
                const ttnn::Tensor& expert_mapping_tensor,
+               const ttnn::Tensor& expert_metadata_tensor,
+               const GlobalSemaphore& global_semaphore,
                const uint32_t num_links,
                const tt::tt_fabric::Topology topology,
-               const GlobalSemaphore& global_semaphore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+               const std::optional<uint32_t>& axis,
+               // const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
                QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor,
-                    expert_indices_tensor,
                     expert_mapping_tensor,
+                    expert_metadata_tensor,
+                    global_semaphore,
                     num_links,
                     topology,
                     memory_config,
-                    subdevice_id,
-                    global_semaphore);
+                    axis);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("expert_indices_tensor").noconvert(),
@@ -58,7 +56,8 @@ void py_bind_all_to_all_combine(py::module& module) {
             py::arg("num_links") = 1,
             py::arg("topology") = tt::tt_fabric::Topology::Linear,
             py::arg("memory_config") = std::nullopt,
-            py::arg("subdevice_id") = std::nullopt,
+            py::arg("axis") = std::nullopt,
+            // py::arg("subdevice_id") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,
         });
 }

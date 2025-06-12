@@ -9,13 +9,13 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from tests.ttnn.nightly.tg.ccl.test_all_to_all_dispatch import (
+from tests.nightly.tg.ccl.test_all_to_all_dispatch import (
     PACKET_WORKER_CRS,
     gen_tokens,
     gen_expert_mapping,
     get_metadata_tensor,
     get_expert_indices,
-    get_output_tensor as get_input_tensor
+    get_output_tensor as get_input_tensor,
 )
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
@@ -24,26 +24,25 @@ from tracy import signpost
 
 def get_output_tensor(input_tokens, expert_indices, expert_mapping):
     # output tensor is [devices, batch, k, hidden_size]
-    # we'll multiply the tokens by the index of their assigned expert to mock expert application. 
-    
-    assert batch%devices==0
-    
+    # we'll multiply the tokens by the index of their assigned expert to mock expert application.
+
     batch = input_tokens.shape[0]
     devices = expert_mapping.shape[3]
     hidden_size = input_tokens.shape[3]
     output_tensor = torch.randn(devices, batch, 1, hidden_size)
     selected_experts_k = expert_indices.shape[3]
-    
-    batch_per_device = batch//devices
-    
-    output_tensor = input_tokens.repeat([1,1,selected_experts_k,1])
-    
+
+    assert batch % devices == 0
+    batch_per_device = batch // devices
+
+    output_tensor = input_tokens.repeat([1, 1, selected_experts_k, 1])
+
     for b in range(batch):
         for k in range(selected_experts_k):
             expert_id = expert_indices[b, 0, 0, k].item()
-            output_tensor[:,b,k,:] *= expert_id
+            output_tensor[:, b, k, :] *= expert_id
 
-    return output_tensor.reshape([devices,batch_per_device,1,hidden_size])
+    return output_tensor.reshape([devices, batch_per_device, 1, hidden_size])
 
 
 def gen_tensors(batch, experts, selected_experts_k, hidden_size, devices, scheme="random"):
@@ -59,10 +58,10 @@ def gen_tensors(batch, experts, selected_experts_k, hidden_size, devices, scheme
 
     input_expert_contributions = get_input_tensor(input_tokens, expert_indices, expert_mapping)
     metadata_tensor = get_metadata_tensor(expert_indices, expert_mapping)
-    output_tensor=get_output_tensor(input_tokens,expert_indices,expert_mapping)
+    output_tensor = get_output_tensor(input_tokens, expert_indices, expert_mapping)
 
     # create expert indices
-    return input_expert_contributions, expert_mapping, metadata_tensor,output_tensor
+    return input_expert_contributions, expert_mapping, metadata_tensor, output_tensor
 
 
 def compare_results(
@@ -71,25 +70,23 @@ def compare_results(
     metadata_tensor,
     expected_pcc=0.99999,
 ):
-
     batch = input_token_tensor.shape[1]
     devices = metadata_tensor.shape[0]
     selected_experts_k = metadata_tensor.shape[3]
-    
+
     for d in range(devices):
         for b in range(batch_per_device):
-            b_total = d * batch_per_device+b
+            b_total = d * batch_per_device + b
             for k in range(selected_experts_k):
                 expert_id = metadata_tensor[0, b, 0, k]
-                    
-                    comp_pcc(
-                        tt_output_contrib_tensor[d, b, k, :],
-                        input_token_tensor[0, b_total, 0, :]*expert_id,
-                        expected_pcc,
-                    )
+                comp_pcc(
+                    tt_output_contrib_tensor[d, b, k, :],
+                    input_token_tensor[0, b_total, 0, :] * expert_id,
+                    expected_pcc,
+                )
 
 
-def run_all_to_all_dispatch_test(
+def run_all_to_all_combine_test(
     mesh_device,
     mesh_shape,
     batch,
@@ -98,14 +95,12 @@ def run_all_to_all_dispatch_test(
     hidden_size,
     num_iters,
     warmup_iters,
-    trace_mode,
-    num_links=3,
+    num_links=1,  # currently not passed through
     scheme="random",
     use_regular_grid=False,
     input_grid=None,
     output_grid=None,
     dtype=ttnn.bfloat16,
-    profiler=BenchmarkProfiler(),
     topology=ttnn.Topology.Linear,
     input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -159,7 +154,7 @@ def run_all_to_all_dispatch_test(
             memory_config=input_memory_config,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
         )
-        
+
         tt_metadata = ttnn.from_torch(
             metadata_tensor,
             device=mesh_device,
@@ -284,9 +279,9 @@ def run_all_to_all_dispatch_test(
         logger.info(f"tt_output_tensor shape: {tt_torch_tensor.shape}")
         logger.info(f"golden_output_tensor shape: {output_tensor_goldens_list[tensor_index].shape}")
 
-        compare_results(tt_torch_tensor,)
-
-        
+        compare_results(
+            tt_torch_tensor,
+        )
 
     logger.info(f"Device has {mesh_device.num_program_cache_entries()} program cache entries")
     assert (

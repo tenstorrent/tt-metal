@@ -21,23 +21,30 @@ namespace ttnn::operations::ccl {
 
 struct AllToAllCombineDeviceOperation {
     struct operation_attributes_t {
-        const tt::tt_metal::SubDeviceId subdevice_id;
+        // const tt::tt_metal::SubDeviceId subdevice_id;
         const MemoryConfig output_mem_config;
+        const std::optional<uint32_t> axis;
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
-        const GlobalSemaphor> cross_device_semaphore;
+        const tt::tt_metal::GlobalSemaphore cross_device_semaphore;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("output_mem_config", "num_links", "topology", "cross_device_semaphore");
+        auto attribute_values() const {
+            return std::forward_as_tuple(output_mem_config, num_links, topology, cross_device_semaphore);
+        };
     };
     struct tensor_args_t {
         const ttnn::Tensor input_tensor;
-        const ttnn::Tensor expert_indices_tensor;
-        const ttnn::Tensor expert_mapping_tensor;
+        const ttnn::Tensor mapping_tensor;
+        const ttnn::Tensor metadata_tensor;
     };
 
     using spec_return_value_t = ttnn::TensorSpec;
 
     using tensor_return_value_t = ttnn::Tensor;
 
-    struct AllToAllCombineSparse {
+    struct AllToAllCombineFromSparse {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
             tt::tt_metal::KernelHandle ternary_reader_kernel_id;
@@ -55,6 +62,7 @@ struct AllToAllCombineDeviceOperation {
         static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
             const operation_attributes_t& operation_attributes,
             const ttnn::MeshCoordinate& mesh_coordinate,
+            const std::vector<ttnn::MeshCoordinate>& all_mesh_coordinates,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
@@ -65,7 +73,7 @@ struct AllToAllCombineDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<AllToAllCombineSparse>;
+    using program_factory_t = std::variant<AllToAllCombineFromSparse>;
 
     // Mandatory methods
 
@@ -86,18 +94,19 @@ struct AllToAllCombineDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& expert_indices_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
+        const ttnn::Tensor& expert_metadata_tensor,
         const uint32_t num_links,
         const tt::tt_fabric::Topology topology,
         const ttnn::MemoryConfig& memory_config,
-        tt::tt_metal::SubDeviceId subdevice_id,
-        const GlobalSemaphore& global_semaphore);
+        // tt::tt_metal::SubDeviceId subdevice_id,
+        const GlobalSemaphore& global_semaphore,
+        const std::optional<uint32_t>& axis);
 };
 }  // namespace ttnn::operations::ccl
 
 namespace ttnn::prim {
 // Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
-constexpr auto all_to_all_dispatch = ttnn::
-    register_operation<"ttnn::prim::all_to_all_combine", ttnn::operations::ccl::AllToAllCombineDeviceOperation>();
+constexpr auto all_to_all_combine =
+    ttnn::register_operation<"ttnn::prim::all_to_all_combine", ttnn::operations::ccl::AllToAllCombineDeviceOperation>();
 }  // namespace ttnn::prim
