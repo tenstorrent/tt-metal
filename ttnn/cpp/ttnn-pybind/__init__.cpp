@@ -187,6 +187,9 @@ void py_module(py::module& module) {
 
     auto m_generic = module.def_submodule("generic", "ttnn generic operation interface");
     generic::bind_generic_operation(m_generic);
+
+    auto m_rand = module.def_submodule("rand", "ttnn rand operation");
+    rand::bind_rand_operation(m_rand);
 }
 }  // namespace ttnn::operations
 
