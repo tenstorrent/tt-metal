@@ -145,6 +145,9 @@ BufferCorePageMappingIterator BufferCorePageMapping::end() const {
 
 void BufferCorePageMappingIterator::next() {
     device_offset++;
+    if (range_index >= mapping->host_ranges.size()) {
+        return;
+    }
     const auto& host_range = mapping->host_ranges[range_index];
     if (device_offset == host_range.device_page_offset + host_range.num_pages) {
         range_index++;
@@ -152,6 +155,9 @@ void BufferCorePageMappingIterator::next() {
 }
 
 std::optional<uint32_t> BufferCorePageMappingIterator::operator*() const {
+    if (range_index >= mapping->host_ranges.size()) {
+        return std::nullopt;
+    }
     const auto& host_range = mapping->host_ranges[range_index];
     if (device_offset < host_range.device_page_offset) {
         return std::nullopt;

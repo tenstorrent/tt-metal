@@ -441,6 +441,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
         auto cur_host_page = *dispatch_params.core_page_mapping_it;
         dispatch_params.core_page_mapping_it.next();
         if (!cur_host_page) {
+            dst_offset += dispatch_params.page_size_to_write;
             continue;
         }
         const uint32_t src_offset = *cur_host_page * buffer.page_size();
