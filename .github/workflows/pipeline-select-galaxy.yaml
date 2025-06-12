@@ -3,16 +3,8 @@ name: "(TG) Choose your pipeline"
 on:
   workflow_dispatch:
     inputs:
-      model-selection:
-        description: "Model selection ignored for now. "
-        required: true
-        type: choice
-        options:
-          - all
-          - llama3_70b
-        default: "all"
       trigger_type:
-        description: "⚠️ If not 'manual', all checkbox selections will be ignored. ⚠️"
+        description: "⚠️ Checkbox options below are used only when 'manual' is selected; otherwise, predefined settings apply. ⚠️"
         required: true
         type: choice
         options:
