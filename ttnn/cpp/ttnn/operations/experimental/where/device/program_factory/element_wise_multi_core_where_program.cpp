@@ -60,17 +60,15 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
     auto condition_cb = tt::CBIndex::c_0;
     auto true_values_cb = tt::CBIndex::c_1;
     auto false_values_cb = tt::CBIndex::c_2;
-    auto output_cb_index = tt::CBIndex::c_7;
+    auto tmp_cb = tt::CBIndex::c_3;
+    auto output_cb_index = tt::CBIndex::c_4;
 
     CBHandle condition_cb_handle = createCircularBuffer(condition_cb, single_tile_size);
     CBHandle true_values_cb_handle = createCircularBuffer(true_values_cb, single_tile_size);
     CBHandle false_values_cb_handle = createCircularBuffer(false_values_cb, single_tile_size);
 
     /* Temporary buffers to hold intermediate results */
-    createCircularBuffer(tt::CBIndex::c_3, single_tile_size);
-    createCircularBuffer(tt::CBIndex::c_4, single_tile_size);
-    createCircularBuffer(tt::CBIndex::c_5, single_tile_size);
-    createCircularBuffer(tt::CBIndex::c_6, single_tile_size);
+    createCircularBuffer(tmp_cb, single_tile_size);
 
     constexpr uint32_t num_output_tiles = 2;
     CBHandle cb_output = createCircularBuffer(output_cb_index, single_tile_size, num_output_tiles);
@@ -105,7 +103,7 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
     /* Use the add_tiles operation in the compute kernel */
     KernelHandle compute_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/where/device/kernel/compute/elemwise_where_kernel_opt.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/where/device/kernel/compute/elemwise_where_kernel.cpp",
         all_device_cores,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
