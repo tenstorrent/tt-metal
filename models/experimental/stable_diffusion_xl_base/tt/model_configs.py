@@ -416,6 +416,51 @@ class ModelOptimisations:
             fused_activation=None,
         )
 
+        self.matmul_configs["2D_GEGLU_LINEAR_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=4,
+            per_core_M=16,
+            per_core_N=20,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs["1D_GEGLU_LINEAR_1280"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            per_core_M=32,
+            per_core_N=5,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+        self.matmul_configs["2D_TM_LINEAR_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=2,
+            per_core_M=16,
+            per_core_N=3,
+            out_subblock_h=8,
+            out_subblock_w=1,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs["2D_TM_LINEAR_1280"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=5,
+            per_core_M=4,
+            per_core_N=5,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
         self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -434,6 +479,20 @@ class ModelOptimisations:
             return None
 
         if not ("decoder" in matmul_path):
+            # # # GEGLU # # #
+            if "net.0.proj" in matmul_path:
+                if "down_blocks.1" in matmul_path or "up_blocks.1" in matmul_path:
+                    return self.matmul_configs["2D_GEGLU_LINEAR_640"]
+                else:
+                    return self.matmul_configs["1D_GEGLU_LINEAR_1280"]
+
+            # # # TM LINEAR # # #
+            if "proj_in" in matmul_path or "proj_out" in matmul_path:
+                if "down_blocks.1" in matmul_path or "up_blocks.1" in matmul_path:
+                    return self.matmul_configs["2D_TM_LINEAR_640"]
+                else:
+                    return self.matmul_configs["2D_TM_LINEAR_1280"]
+
             # # # Down block 1 # # #
             pattern_downn_block_1_dense_out = re.compile(
                 r"down_blocks\.1\.attentions\.[01]\.transformer_blocks\.[01]\.attn[12]\.dense_out"

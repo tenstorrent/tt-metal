@@ -321,6 +321,7 @@ class TtResnetBlock2D(nn.Module):
         C = self.conv2_params["output_channels"]
 
         if self.tt_conv3_weights is not None:
+            input_tensor_pre_conv = input_tensor
             [input_tensor, [H, W], [self.tt_conv3_weights, self.tt_conv3_bias]] = ttnn.conv2d(
                 input_tensor=input_tensor,
                 weight_tensor=self.tt_conv3_weights,
@@ -342,6 +343,7 @@ class TtResnetBlock2D(nn.Module):
                 return_output_dim=True,
                 return_weights_and_bias=True,
             )
+            ttnn.deallocate(input_tensor_pre_conv)
             C = self.conv3_params["output_channels"]
             if input_tensor.is_sharded():
                 input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)

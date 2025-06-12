@@ -176,7 +176,6 @@ class TtUNet2DConditionModel(nn.Module):
         time_ids = added_cond_kwargs.get("time_ids")
         temb_add = self.add_time_proj.forward(time_ids)
         temb_add = ttnn.to_layout(temb_add, ttnn.ROW_MAJOR_LAYOUT)
-        text_embeds = ttnn.to_layout(text_embeds, ttnn.ROW_MAJOR_LAYOUT)
         temb_add = ttnn.reshape(temb_add, (text_embeds.shape[0], -1))
         temb_add = ttnn.concat([text_embeds, temb_add], -1)
         temb_add = ttnn.to_layout(temb_add, ttnn.TILE_LAYOUT)
