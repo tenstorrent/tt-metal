@@ -20,11 +20,11 @@
 
 ## Executive Summary
 
-This guide introduces developers to Tenstorrent's AI processor architecture and the Metalium SDK. Unlike traditional GPUs that rely on massive thread parallelism, Tenstorrent chips use a grid of specialized compute nodes called Tensix cores. Each Tensix contains five small RISC-V CPUs for control and instruction dispatch, dedicated hardware units for matrix operations (FPU) and vector operations (SFPU), data packing/unpacking units, and 1.5MB of local SRAM.
+This guide introduces developers to Tenstorrent's AI processor architecture and the Metalium programming model. Unlike traditional GPUs that rely on massive thread parallelism, Tenstorrent chips use a grid of specialized compute nodes called Tensix cores. Each Tensix contains five small RISC-V CPUs for control and instruction dispatch, dedicated hardware units for matrix operations (FPU) and vector operations (SFPU), data packing/unpacking units, and 1.5MB of local SRAM.
 
 The typical data flow uses Network-on-Chip (NoC) interfaces to bring data into a Tensix, where it gets unpacked, processed by the compute units, packed, and sent out via the NoC to DRAM or other Tensix cores. This design prioritizes efficient data movement and local SRAM usage, reducing frequent DRAM access.
 
-Programming with Metalium typically requires three kernel types per Tensix: a **reader kernel** for data input, a **compute kernel** for calculations, and a **writer kernel** for data output. These kernels coordinate through circular buffers in SRAM. The architecture natively operates on 32×32 tiles, optimized for deep learning operations. The Metalium SDK provides APIs and abstractions (including compute and data movement) to simplify development, manage hardware resources, and ensure kernel compatibility across hardware generations.
+Programming with Metalium typically requires three kernel types per Tensix: a **reader kernel** for data input, a **compute kernel** for calculations, and a **writer kernel** for data output. These kernels coordinate through circular buffers in SRAM. The architecture natively operates on 32×32 tiles, optimized for deep learning operations. Metalium provides APIs and abstractions (including compute and data movement) to simplify development, manage hardware resources, and ensure kernel compatibility across hardware generations.
 
 This document covers these concepts in detail to help you develop efficient applications on Tenstorrent hardware.
 
@@ -66,7 +66,7 @@ Despite the chip's grid-like topology, the architecture maintains programming fl
 
 [spda_tt_report]: https://github.com/tenstorrent/tt-metal/blob/7c26a4706be6ba8b5faf2c3ccb0e127a784883f8/tech_reports/FlashAttention/FlashAttention.md
 
-This architecture, with its five RISC-V cores per Tensix, might initially suggest that developers need to write five separate programs for each operation. In practice, developers typically write three types of kernels per Tensix: a **reader kernel** for data input (usually managing NoC0), a **compute kernel** for the actual computation using the matrix/vector units, and a **writer kernel** for data output (usually managing NoC1). The reader and writer kernels are often reusable across different operations since they handle standard data movement patterns. The three RISC-V cores within the compute section work cooperatively, with their coordination handled automatically by the compiler and Metalium SDK rather than requiring explicit multi-threaded programming.
+This architecture, with its five RISC-V cores per Tensix, might initially suggest that developers need to write five separate programs for each operation. In practice, developers typically write three types of kernels per Tensix: a **reader kernel** for data input (usually managing NoC0), a **compute kernel** for the actual computation using the matrix/vector units, and a **writer kernel** for data output (usually managing NoC1). The reader and writer kernels are often reusable across different operations since they handle standard data movement patterns. The three RISC-V cores within the compute section work cooperatively, with their coordination handled automatically by the compiler and Metalium programming model rather than requiring explicit multi-threaded programming.
 
 The following diagram illustrates how these kernel types are distributed across the Tensix architecture:
 
