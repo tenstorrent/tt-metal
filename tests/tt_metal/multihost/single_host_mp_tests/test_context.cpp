@@ -258,7 +258,7 @@ TEST(DistributedContextExtraTest, IsendIrecvWait) {
     if (*ctx->rank() == 0) {
         auto req = ctx->isend(
             tt::stl::as_writable_bytes(tt::stl::Span<int>{buf_send.data(), buf_send.size()}), Rank{1}, Tag{7});
-        [[maybe_unused]] auto status = req->wait();
+        auto status = req->wait();
         // EXPECT_EQ(status.count, buf_send.size());
     } else if (*ctx->rank() == 1) {
         auto req = ctx->irecv(
