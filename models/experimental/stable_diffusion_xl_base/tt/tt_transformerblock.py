@@ -75,9 +75,11 @@ class TtBasicTransformerBlock(nn.Module):
         )
 
     def forward(self, input_tensor, attention_mask=None, encoder_hidden_states=None):
-        attn_hidden_states = ttnn.layer_norm(input_tensor, weight=self.tt_norm1_weights, bias=self.tt_norm1_bias)
+        attn_hidden_states = ttnn.layer_norm(
+            input_tensor, weight=self.tt_norm1_weights, bias=self.tt_norm1_bias, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         attn_hidden_states = self.attn1(attn_hidden_states, attention_mask, None)
-        hidden_states = ttnn.add(input_tensor, attn_hidden_states)
+        hidden_states = ttnn.add(input_tensor, attn_hidden_states, use_legacy=False)
         ttnn.deallocate(input_tensor)
 
         attn_hidden_states = ttnn.layer_norm(hidden_states, weight=self.tt_norm2_weights, bias=self.tt_norm2_bias)
