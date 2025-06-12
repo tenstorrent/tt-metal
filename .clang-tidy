@@ -169,7 +169,6 @@ Checks: >
   -performance-no-int-to-ptr,
   -performance-noexcept-move-constructor,
   -performance-noexcept-swap,
-  -performance-type-promotion-in-math-fn,
   -performance-unnecessary-copy-initialization,
   -performance-unnecessary-value-param,
   -portability-simd-intrinsics,
