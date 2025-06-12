@@ -73,6 +73,7 @@ int main(int argc, char *argv[]) {
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
     risc_init();
+    signal_subordinate_idle_erisc_completion();
 
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
