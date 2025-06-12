@@ -104,7 +104,7 @@ public:
     [[nodiscard]] ContextPtr create_sub_context(tt::stl::Span<int> ranks) const override;
     void abort(int error_code) const override;
     void revoke_and_shrink() override;
-    [[nodiscard]] virtual bool is_revoked() override;
+    [[nodiscard]] bool is_revoked() override;
 
     /* ----------------- mpi constructors ---------------- */
     explicit MPIContext(MPI_Comm comm);

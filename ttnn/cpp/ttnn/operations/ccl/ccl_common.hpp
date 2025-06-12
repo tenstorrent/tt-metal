@@ -387,8 +387,8 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
             wrapped);
     }
 
-    [[deprecated("deprecated code path for reduce scatter. Use nerw get_worker_slice API instead")]]
-    virtual void increment(uint32_t num_pages) override {
+    [[deprecated("deprecated code path for reduce scatter. Use nerw get_worker_slice API instead")]] void increment(
+        uint32_t num_pages) override {
         TT_THROW("deprecated code path for ");
     }
 
@@ -541,7 +541,7 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
         this->output_start_addr_offset = slice_idx /*ring_index*/ * output_addr_offset;
     }
 
-    virtual void increment(uint32_t num_pages) override {
+    void increment(uint32_t num_pages) override {
         if (num_pages /*pages_per_worker*/ > 0) {
             if (row_major) {
                 uint32_t num_rows_shifted = row_idx + num_pages /*pages_per_worker*/;
