@@ -147,30 +147,55 @@ class WorkflowDataFetcher {
       }
     });
 
+    core.info(`[Filter] Looking for workflows: ${Array.from(configWorkflows).join(', ')}`);
+    core.info(`[Filter] Looking for prefixes: ${Array.from(configPrefixes).join(', ')}`);
+
     return runs.filter(run => {
       // Skip runs without names
-      if (!run.name) return false;
+      if (!run.name) {
+        core.debug(`[Filter] Skipping run ${run.id}: No name`);
+        return false;
+      }
 
       // Skip skipped runs
-      if (run.conclusion === 'skipped' || run.status === 'skipped') return false;
+      if (run.conclusion === 'skipped' || run.status === 'skipped') {
+        core.debug(`[Filter] Skipping run ${run.id}: Skipped (conclusion=${run.conclusion}, status=${run.status})`);
+        return false;
+      }
 
       // Skip non-scheduled/push runs
-      if (run.event !== 'schedule' && run.event !== 'push') return false;
+      if (run.event !== 'schedule' && run.event !== 'push') {
+        core.debug(`[Filter] Skipping run ${run.id}: Wrong event type (${run.event})`);
+        return false;
+      }
 
       // Skip non-main branch runs
-      if (run.head_branch !== MAIN_BRANCH) return false;
+      if (run.head_branch !== MAIN_BRANCH) {
+        core.debug(`[Filter] Skipping run ${run.id}: Wrong branch (${run.head_branch})`);
+        return false;
+      }
 
       // Skip incomplete runs
-      if (run.status !== 'completed') return false;
+      if (run.status !== 'completed') {
+        core.debug(`[Filter] Skipping run ${run.id}: Not completed (${run.status})`);
+        return false;
+      }
 
       // Check for exact name match
-      if (configWorkflows.has(run.name)) return true;
+      if (configWorkflows.has(run.name)) {
+        core.debug(`[Filter] Including run ${run.id}: Exact name match (${run.name})`);
+        return true;
+      }
 
       // Check for prefix match
       for (const prefix of configPrefixes) {
-        if (run.name.startsWith(prefix)) return true;
+        if (run.name.startsWith(prefix)) {
+          core.debug(`[Filter] Including run ${run.id}: Prefix match (${run.name} starts with ${prefix})`);
+          return true;
+        }
       }
 
+      core.debug(`[Filter] Skipping run ${run.id}: No name/prefix match (${run.name})`);
       return false;
     });
   }
@@ -271,6 +296,7 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
     let dateRange = { earliest: null, latest: null };
 
     core.info(`[Fetch] Starting data collection for last ${days} days (cutoff: ${cutoffDate.toISOString()})`);
+    core.info(`[Fetch] Current time: ${new Date().toISOString()}`);
 
     // Validate inputs
     if (!oldestCachedDate || isNaN(oldestCachedDate.getTime())) {
@@ -293,7 +319,6 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
             repo: this.context.repo.repo,
             per_page: this.runsPerPage,
             page,
-            created: `>=${mostRecentCachedDate.toISOString()}`,
             branch: MAIN_BRANCH
           });
 
@@ -301,6 +326,11 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
             core.info('[Fetch] No more runs found in optimized fetch');
             break;
           }
+
+          // Debug log each run's details
+          runs.workflow_runs.forEach(run => {
+            core.debug(`[Fetch] Run ${run.id}: name=${run.name}, status=${run.status}, conclusion=${run.conclusion}, event=${run.event}, branch=${run.head_branch}, created=${run.created_at}`);
+          });
 
           allRuns.push(...runs.workflow_runs);
           core.info(`[Fetch] Page ${page}: Added ${runs.workflow_runs.length} runs (total: ${allRuns.length})`);
@@ -342,6 +372,11 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
             core.info('[Fetch] No more runs found in full fetch');
             break;
           }
+
+          // Debug log each run's details
+          runs.workflow_runs.forEach(run => {
+            core.debug(`[Fetch] Run ${run.id}: name=${run.name}, status=${run.status}, conclusion=${run.conclusion}, event=${run.event}, branch=${run.head_branch}, created=${run.created_at}`);
+          });
 
           for (const run of runs.workflow_runs) {
             const runDate = new Date(run.created_at);
