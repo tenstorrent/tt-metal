@@ -30,9 +30,9 @@ tt_stl/**/CMakeLists.txt @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @smina
 tt_metal/**/CMakeLists.txt @tenstorrent/metalium-developers-infra
 tt_metal/ @tenstorrent/metalium-developers-infra # nothing should be caught by this, if so, someone added a path somewhere
 tt_metal/api/ @tenstorrent/metalium-api-owners
-tt_metal/common/ @abhullar-tt @tt-aho @tt-asaigal @omilyutin-tt
+tt_metal/common/ @abhullar-tt @tt-aho @tt-asaigal @omilyutin-tt @cfjchu
 tt_metal/core_descriptors/ @abhullar-tt @aliuTT @ubcheema
-tt_metal/detail/ @abhullar-tt @tt-aho @tt-asaigal @omilyutin-tt # this should go away
+tt_metal/detail/ @abhullar-tt @tt-aho @tt-asaigal @omilyutin-tt @cfjchu # this should go away
 tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @omilyutin-tt
 tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @omilyutin-tt @tenstorrent/metalium-developers-infra
 tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT
@@ -48,11 +48,11 @@ tt_metal/hw/firmware/ @abhullar-tt @jbaumanTT @pgkeller @nathan-TT
 tt_metal/hw/toolchain/ @jbaumanTT @pgkeller @nathan-TT
 tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT @pgkeller @nathan-TT
 tt_metal/impl/allocator/ @abhullar-tt @tt-aho
-tt_metal/impl/buffers/ @abhullar-tt @jbaumanTT @omilyutin-tt @sminakov-tt @TT-BrianLiu
-tt_metal/impl/context/ @tt-dma @jbaumanTT @aliuTT
+tt_metal/impl/buffers/ @abhullar-tt @jbaumanTT @cfjchu @omilyutin-tt @sminakov-tt @TT-BrianLiu
+tt_metal/impl/context/ @tt-dma @jbaumanTT @aliuTT @cfjchu @omilyutin-tt
 tt_metal/impl/data_format/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/impl/debug/ @tt-dma @pgkeller
-tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @tt-dma
+tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @tt-dma @cfjchu @omilyutin-tt
 tt_metal/impl/dispatch/ @pgkeller @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho
 tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
 tt_metal/impl/event @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho
@@ -90,7 +90,7 @@ tt_metal/third_party/tt_llk @rtawfik01 @ttmtrajkovic @rdjogoTT @nvelickovicTT #d
 tests/tt_metal/distributed/ @cfjchu @tt-asaigal @omilyutin-tt
 tests/tt_metal/distributed/**/CMakeLists.txt @cfjchu @tt-asaigal @omilyutin-tt @tenstorrent/metalium-developers-infra
 tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT
-tests/tt_metal/tt_metal/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @nhuang-tt @tt-aho
+tests/tt_metal/tt_metal/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @nhuang-tt @tt-aho @cfjchu @omilyutin-tt
 tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema @aagarwalTT
 tests/tt_metal/tt_metal/sfpi/ @nathan-TT @pgkeller
 tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT @pgkeller
@@ -116,8 +116,8 @@ ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @ayerofieiev-tt @razorback3 @dongjin-na
 
 ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/cpp/ttnn/operations/moreh*/**/CMakeLists.txt @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/metalium-developers-infra
-ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
-ttnn/cpp/ttnn/operations/ccl/**/CMakeLists.txt @SeanNijjar @cfjchu @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu @omilyutin-tt @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
+ttnn/cpp/ttnn/operations/ccl/**/CMakeLists.txt @SeanNijjar @cfjchu @omilyutin-tt @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/pool/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/conv/ @tenstorrent/metalium-developers-convolutions
@@ -164,8 +164,8 @@ ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_q
 ttnn/tracy/ @mo-tenstorrent @sagarwalTT
 ttnn/api/tools/profiler/ @mo-tenstorrent
 tests/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
-tests/ttnn/unit_tests/gtests/ccl/ @SeanNijjar @jvegaTT @cfjchu @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
-tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
+tests/ttnn/unit_tests/gtests/ccl/ @SeanNijjar @jvegaTT @cfjchu @omilyutin-tt @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
+tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @cfjchu @omilyutin-tt @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
 tests/ttnn/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
