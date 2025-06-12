@@ -8,12 +8,12 @@ on:
           required: false
           type: string
           default: 'BH'
-      enable-watcher:
-          description: 'Enable watcher in BH Post commit'
-          default: false
-          type: boolean
       enable-ttnn-unit-tests:
           description: 'Enable ttnn unit tests'
+          default: false
+          type: boolean
+      enable-watcher:
+          description: 'Enable watcher in BH Post commit'
           default: false
           type: boolean
   workflow_dispatch:
@@ -34,12 +34,12 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
-      enable-watcher:
-        description: 'Enable watcher in BH Post commit'
-        default: false
-        type: boolean
       enable-ttnn-unit-tests:
         description: 'Enable ttnn unit tests'
+        default: false
+        type: boolean
+      enable-watcher:
+        description: 'Enable watcher in BH Post commit'
         default: false
         type: boolean
   schedule:

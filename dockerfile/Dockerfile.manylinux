@@ -88,18 +88,14 @@ RUN git clone --branch ${OMPI_TAG} --depth 1 https://github.com/open-mpi/ompi.gi
     rm -rf ompi-src
 
 COPY tt_metal/sfpi-version.sh /tmp/sfpi-version.sh
-
-# Clone SFPI repo recursively from the specified branch
 WORKDIR /tmp
-RUN source /tmp/sfpi-version.sh && \
-    git clone --recurse-submodules -b ${sfpi_version} https://github.com/tenstorrent/sfpi.git && \
-    cd sfpi && \
-    ./scripts/build.sh && \
-    tar cf - include | tar xf - -C build/sfpi && \
-    mkdir -p /opt/tenstorrent/sfpi && \
-    cp -a build/sfpi/* /opt/tenstorrent/sfpi/ && \
-    cd .. && \
-    rm -rf sfpi
+RUN set -x && sfpi_arch_os=$(uname -m)_$(uname -s) && source /tmp/sfpi-version.sh && \
+    sfpi_rpm_md5=$(eval echo "\$sfpi_${sfpi_arch_os}_rpm_md5") && \
+    test "${sfpi_rpm_md5}" && \
+    wget ${sfpi_url}/${sfpi_version}/sfpi-${sfpi_arch_os}.rpm && \
+    test "${sfpi_rpm_md5}" == "$(md5sum -b sfpi-${sfpi_arch_os}.rpm | cut -d' ' -f1)" && \
+    dnf -y install ./sfpi-${sfpi_arch_os}.rpm && \
+    rm -f sfpi-${sfpi_arch_os}.rpm sfpi-version.sh
 
 # ENV needed
 ENV PATH=${OMPI_PREFIX}/bin:$PATH
