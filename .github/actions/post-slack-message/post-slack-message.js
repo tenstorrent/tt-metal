@@ -27,9 +27,15 @@ async function sendSlackMessage() {
 
     // Handle failed workflows section
     if (messageData.failed_workflows) {
-      const failedWorkflowsText = Array.isArray(messageData.failed_workflows)
-        ? messageData.failed_workflows.join('\n')
-        : messageData.failed_workflows;
+      let failedWorkflowsText;
+      try {
+        // Try to parse if it's a JSON string
+        const parsed = JSON.parse(messageData.failed_workflows);
+        failedWorkflowsText = Array.isArray(parsed) ? parsed.join('\n') : parsed;
+      } catch (e) {
+        // If not JSON, use as is
+        failedWorkflowsText = messageData.failed_workflows;
+      }
 
       message.blocks.push({
         type: "section",
