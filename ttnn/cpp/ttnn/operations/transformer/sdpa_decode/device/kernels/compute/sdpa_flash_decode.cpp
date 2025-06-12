@@ -19,6 +19,7 @@
 
 #include "cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "compute_common.hpp"
+#include "compute_kernel_api/pack_untilize.h"
 
 namespace NAMESPACE {
 
@@ -275,7 +276,11 @@ void MAIN {
             pack_reconfig_data_format(cb_out_accumulate_im);
             mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, DHt);
             pack_reconfig_data_format(cb_out_final);
-            copy_block(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
+
+            pack_untilize_init_short<out_chunk_tiles>(cb_out_accumulate_im, cb_out_final);
+            pack_untilize_block<out_chunk_tiles>(cb_out_accumulate_im, 1, cb_out_final);
+            cb_pop_front(cb_out_accumulate_im, out_chunk_tiles);
+            // copy_block(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
 
             // free up cb_prev_max after K chunks
             cb_pop_front(cb_prev_max, Sq_chunk_t);
