@@ -486,7 +486,7 @@ class Generator:
     def read_decode_output(self, tt_logits, unpadded_batch, is_tokens=True):
         logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1)
         if self.perm_table_tensor is not None:
-            logits = logits[self.perm_table_tensor, :]
+            logits = logits[self.perm_table_tensor]
         return logits
 
     def chat_completion(
