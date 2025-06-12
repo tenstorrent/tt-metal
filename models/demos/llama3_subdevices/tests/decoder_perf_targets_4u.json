@@ -35,7 +35,7 @@
         },
         "AllGatherAsync_0": {
             "op_name": "AllGatherAsync_Binary_Mult",
-            "kernel_duration": 9585.454861111111,
+            "kernel_duration": 13054.826388888889,
             "op_to_op": 959.5555,
             "first_to_last_start": 96.77777777777777,
             "non-overlapped-dispatch-time": 4351.1,
@@ -136,7 +136,7 @@
             "op_name": "ReduceScatter_FF3",
             "kernel_duration": 9817.020833333334,
             "op_to_op": 812.1111111111111,
-            "first_to_last_start": 287.0,
+            "first_to_last_start": 733.333333333334,
             "non-overlapped-dispatch-time": 7359.9,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
