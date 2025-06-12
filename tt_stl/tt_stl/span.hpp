@@ -25,7 +25,7 @@ public:
 
     // expose constructor from initializer_list for const-qualified element_type
     explicit(Extent != dynamic_extent) constexpr SpanBase(std::initializer_list<T> ilist) noexcept :
-        boost::span<const T, Extent>(ilist.begin(), ilist.size()) {}
+        boost::span<const T, Extent>(ilist) {}
 };
 
 }  // namespace detail
