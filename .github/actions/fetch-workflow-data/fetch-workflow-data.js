@@ -26,7 +26,7 @@ class WorkflowDataFetcher {
   /**
    * Date utility functions
    */
-  getCutoffDate(days) {
+  getEarliestDataDate(days) {
     // Validate days parameter
     if (typeof days !== 'number' || isNaN(days)) {
       throw new Error('Days parameter must be a number');
@@ -44,7 +44,7 @@ class WorkflowDataFetcher {
     const hours = Math.floor(days * 24);
     const minutes = Math.floor((days * 24 * 60) % 60);
     core.info(`[Fetch] Time range: ${hours} hours and ${minutes} minutes (${days} days)`);
-    core.info(`[Fetch] Cutoff time: ${d.toISOString()}`);
+    core.info(`[Fetch] Earliest data date: ${d.toISOString()}`);
 
     return d;
   }
@@ -288,25 +288,25 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
     };
   }
 
-  async fetchAllWorkflowRuns(days, latestCacheDate, oldestCachedDate) {
-    const allRuns = [];
-    const cutoffDate = this.getCutoffDate(days);
+  async fetchAllWorkflowRuns(days, latestCacheDate, earliestCachedDate) {
+    const earliestDataDate = this.getEarliestDataDate(days);
     const startTime = Date.now();
-    let apiCallCount = 0;
+    let allRuns = [];
     let dateRange = { earliest: null, latest: null };
+    let apiCallCount = 0;
 
-    core.info(`[Fetch] Starting data collection for last ${days} days (cutoff: ${cutoffDate.toISOString()})`);
+    core.info(`[Fetch] Starting data collection for last ${days} days (earliest data date: ${earliestDataDate.toISOString()})`);
     core.info(`[Fetch] Current time: ${new Date().toISOString()}`);
 
     // Validate inputs
-    if (!oldestCachedDate || isNaN(oldestCachedDate.getTime())) {
-      core.warning('[Fetch] Invalid oldestCachedDate, will perform full fetch');
-      oldestCachedDate = new Date(0);
+    if (!earliestCachedDate || isNaN(earliestCachedDate.getTime())) {
+      core.warning('[Fetch] Invalid earliestCachedDate, will perform full fetch');
+      earliestCachedDate = new Date(0);
     }
 
-    // If our cutoff date is newer than oldest cached date, we only need to fetch new data
-    const needHistoricalData = cutoffDate < oldestCachedDate;
-    core.info(`[Fetch] Cache status: ${needHistoricalData ? 'Need historical data' : 'Using cached data'} (oldest cache: ${oldestCachedDate.toISOString()})`);
+    // If our earliest data date is newer than earliest cached date, we only need to fetch new data
+    const needHistoricalData = earliestDataDate < earliestCachedDate;
+    core.info(`[Fetch] Cache status: ${needHistoricalData ? 'Need historical data' : 'Using cached data'} (earliest cache: ${earliestCachedDate.toISOString()})`);
 
     // If we don't need historical data and we have a valid latestCacheDate, we can optimize our fetch
     if (!needHistoricalData && latestCacheDate && !isNaN(latestCacheDate.getTime())) {
@@ -394,9 +394,9 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
             }
 
             // If we've found a run older than our cutoff date, we have complete data
-            if (runDate < cutoffDate) {
+            if (runDate < earliestDataDate) {
               hasCompleteData = true;
-              core.info(`[Fetch] Found run older than cutoff date: ${runDate.toISOString()} < ${cutoffDate.toISOString()}`);
+              core.info(`[Fetch] Found run older than cutoff date: ${runDate.toISOString()} < ${earliestDataDate.toISOString()}`);
             }
 
             // Always add to allRuns for caching, but we'll filter later for the requested period
@@ -426,7 +426,7 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
 
       // If we don't have complete data coverage, log a warning
       if (!hasCompleteData && dateRange.earliest && dateRange.latest) {
-        core.warning(`[Fetch] Incomplete data coverage: Earliest run (${dateRange.earliest.toISOString()}) is newer than cutoff date (${cutoffDate.toISOString()})`);
+        core.warning(`[Fetch] Incomplete data coverage: Earliest run (${dateRange.earliest.toISOString()}) is newer than earliest requested date (${earliestDataDate.toISOString()})`);
       }
 
       // Log the date range of fetched runs
@@ -474,13 +474,13 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
     const filteredRuns = this.filterRuns(allRuns, workflowConfigs);
     core.info(`[Fetch] Filtered to ${filteredRuns.length} runs based on workflow configs, triggers, and branch`);
 
-    // Get cutoff date for requested period
-    const cutoffDate = this.getCutoffDate(days);
+    // Get earliest data date for requested period
+    const earliestDataDate = this.getEarliestDataDate(days);
 
     // Filter for requested time period
     const requestedPeriodRuns = filteredRuns.filter(run => {
       const runDate = new Date(run.created_at);
-      return runDate >= cutoffDate;
+      return runDate >= earliestDataDate;
     });
     core.info(`[Fetch] Filtered to ${requestedPeriodRuns.length} runs within requested ${days} day period`);
 
@@ -618,7 +618,6 @@ async function run() {
     let latestCacheDate = new Date(0);
     let earliestCachedDate = new Date();
 
-
     if (!clearCache) {
       const cacheData = cacheManager.loadPreviousCache(cachePath);
       previousRuns = cacheData.previousRuns;
@@ -642,10 +641,10 @@ async function run() {
     core.info(`[Fetch] Filtered to ${filteredRuns.length} runs based on workflow configs, triggers, and branch`);
 
     // Filter for requested time period
-    const cutoffDate = fetcher.getCutoffDate(days);
+    const earliestDataDate = fetcher.getEarliestDataDate(days);
     const requestedPeriodRuns = filteredRuns.filter(run => {
       const runDate = new Date(run.created_at);
-      return !isNaN(runDate.getTime()) && runDate >= cutoffDate;
+      return !isNaN(runDate.getTime()) && runDate >= earliestDataDate;
     });
     core.info(`[Fetch] Filtered to ${requestedPeriodRuns.length} runs within requested ${days} day period`);
 
