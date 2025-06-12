@@ -2,7 +2,7 @@ import warnings
 import torch
 import torch.nn as nn
 
-from VADv2.reference.utils import multi_scale_deformable_attn_pytorch
+from models.experimental.vadv2.reference.utils import multi_scale_deformable_attn_pytorch
 
 
 class TemporalSelfAttention(nn.Module):
@@ -24,7 +24,6 @@ class TemporalSelfAttention(nn.Module):
             raise ValueError(f"embed_dims must be divisible by num_heads, " f"but got {embed_dims} and {num_heads}")
         dim_per_head = embed_dims // num_heads
         self.norm_cfg = norm_cfg
-        self.dropout = nn.Dropout(dropout)
         self.batch_first = batch_first
         self.fp16_enabled = False
 
@@ -211,6 +210,6 @@ class TemporalSelfAttention(nn.Module):
         if not self.batch_first:
             output = output.permute(1, 0, 2)
 
-        output = self.dropout(output) + identity
+        output = output + identity
 
         return output
