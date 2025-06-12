@@ -143,7 +143,7 @@ jobs:
     name: "🐳️ Build images"
     needs: check-docker-images
     if: needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true' || needs.check-docker-images.outputs.manylinux-exists != 'true'
-    timeout-minutes: 60
+    timeout-minutes: 90
     runs-on: tt-beta-ubuntu-2204-large
     steps:
       - name: ⬇️ Checkout
