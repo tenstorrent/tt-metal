@@ -27,28 +27,29 @@ public:
         DeviceAddr min_allocation_size,
         DeviceAddr alignment,
         SearchPolicy search_policy);
-    ~FreeList();
-    void init();
+    ~FreeList() override;
+    void init() override;
 
-    std::vector<std::pair<DeviceAddr, DeviceAddr>> available_addresses(DeviceAddr size_bytes) const;
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> available_addresses(DeviceAddr size_bytes) const override;
 
-    std::optional<DeviceAddr> allocate(DeviceAddr size_bytes, bool bottom_up = true, DeviceAddr address_limit = 0);
+    std::optional<DeviceAddr> allocate(
+        DeviceAddr size_bytes, bool bottom_up = true, DeviceAddr address_limit = 0) override;
 
-    std::optional<DeviceAddr> allocate_at_address(DeviceAddr absolute_start_address, DeviceAddr size_bytes);
+    std::optional<DeviceAddr> allocate_at_address(DeviceAddr absolute_start_address, DeviceAddr size_bytes) override;
 
-    void deallocate(DeviceAddr absolute_address);
+    void deallocate(DeviceAddr absolute_address) override;
 
-    void clear();
+    void clear() override;
 
-    Statistics get_statistics() const;
+    Statistics get_statistics() const override;
 
-    void dump_blocks(std::ostream& out) const;
+    void dump_blocks(std::ostream& out) const override;
 
-    MemoryBlockTable get_memory_block_table() const;
+    MemoryBlockTable get_memory_block_table() const override;
 
-    void shrink_size(DeviceAddr shrink_size, bool bottom_up = true);
+    void shrink_size(DeviceAddr shrink_size, bool bottom_up = true) override;
 
-    void reset_size();
+    void reset_size() override;
 
 private:
     struct Block {

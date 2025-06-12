@@ -99,9 +99,9 @@ public:
         uint32_t unicast_cores_launch_message_wptr,
         SubDeviceId sub_device_id);
 
-    void process();
+    void process() override;
 
-    EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_PROGRAM; }
+    EnqueueCommandType type() override { return EnqueueCommandType::ENQUEUE_PROGRAM; }
 
     constexpr bool has_side_effects() { return true; }
 };
@@ -115,9 +115,9 @@ private:
 public:
     EnqueueTerminateCommand(uint32_t command_queue_id, IDevice* device, SystemMemoryManager& manager);
 
-    void process();
+    void process() override;
 
-    EnqueueCommandType type() { return EnqueueCommandType::TERMINATE; }
+    EnqueueCommandType type() override { return EnqueueCommandType::TERMINATE; }
 
     constexpr bool has_side_effects() { return false; }
 };
