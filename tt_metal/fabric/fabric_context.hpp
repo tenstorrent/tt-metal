@@ -54,6 +54,8 @@ private:
     tt::tt_fabric::Topology get_topology() const;
     size_t get_packet_header_size_bytes() const;
     size_t get_max_payload_size_bytes() const;
+    std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> get_edm_config_options(
+        tt::tt_fabric::FabricEriscDatamoverType edm_type);
 
     bool initialized_ = false;
     tt::tt_metal::FabricConfig fabric_config_{};

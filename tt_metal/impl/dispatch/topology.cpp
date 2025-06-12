@@ -1258,6 +1258,8 @@ tt::tt_fabric::FabricEriscDatamoverType get_fabric_edm_type(
     auto larger_chip_id = std::max(chip0, chip1);
 
     // Refactor this once mesh_id has row/col control
+    // wrap_around_mesh is used to fold the edm connections on the corner chips of a 2D mesh to form an outer ring of
+    // devices on the mesh.
     if (wrap_around_mesh) {
         // Wrap around dateline
         if (smaller_chip_id == 0 && larger_chip_id == mesh_num_columns) {
@@ -1268,38 +1270,45 @@ tt::tt_fabric::FabricEriscDatamoverType get_fabric_edm_type(
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
         }
     } else {
+        bool is_dateline_edm_along_column =
+            smaller_chip_id % mesh_num_columns == 0 && larger_chip_id == (smaller_chip_id + mesh_num_columns - 1);
+        bool is_dateline_edm_along_row = smaller_chip_id < mesh_num_columns &&
+                                         larger_chip_id >= (mesh_num_columns * (mesh_num_rows - 1)) &&
+                                         smaller_chip_id == larger_chip_id % mesh_num_columns;
+        bool is_dateline_upstream_edm_along_column =
+            (chip0 % mesh_num_columns == 0 && chip1 == chip0 + 1) ||
+            (chip0 % mesh_num_columns == mesh_num_columns - 1 && chip1 == chip0 - 1);
+        bool is_dateline_upstream_edm_along_row =
+            (chip0 < mesh_num_columns && chip1 == chip0 + mesh_num_columns) ||
+            (chip0 >= (mesh_num_columns * (mesh_num_rows - 1)) && chip1 == chip0 - mesh_num_columns);
+        bool is_dateline_upstream_adjacent_edm_along_column =
+            (chip1 % mesh_num_columns == 0 && chip0 == chip1 + 1) ||
+            (chip1 % mesh_num_columns == mesh_num_columns - 1 && chip0 == chip1 - 1);
+        bool is_dateline_upstream_adjacent_edm_along_row =
+            (chip1 < mesh_num_columns && chip0 == chip1 + mesh_num_columns) ||
+            (chip1 >= (mesh_num_columns * (mesh_num_rows - 1)) && chip0 == chip1 - mesh_num_columns);
         // Column dateline
-        if (smaller_chip_id % mesh_num_columns == 0 && larger_chip_id == (smaller_chip_id + mesh_num_columns - 1)) {
+        if (is_dateline_edm_along_column) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline;
         }
         // Row dateline
-        else if (
-            smaller_chip_id < mesh_num_columns && larger_chip_id >= (mesh_num_columns * (mesh_num_rows - 1)) &&
-            smaller_chip_id == larger_chip_id % mesh_num_columns) {
+        else if (is_dateline_edm_along_row) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline;
         }
         // Column dateline upstream
-        else if (
-            (chip0 % mesh_num_columns == 0 && chip1 == chip0 + 1) ||
-            (chip0 % mesh_num_columns == mesh_num_columns - 1 && chip1 == chip0 - 1)) {
+        else if (is_dateline_upstream_edm_along_column) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
         }
         // Row dateline upstream
-        else if (
-            (chip0 < mesh_num_columns && chip1 == chip0 + mesh_num_columns) ||
-            (chip0 >= (mesh_num_columns * (mesh_num_rows - 1)) && chip1 == chip0 - mesh_num_columns)) {
+        else if (is_dateline_upstream_edm_along_row) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
         }
         // Column dateline upstream adjacent
-        else if (
-            (chip1 % mesh_num_columns == 0 && chip0 == chip1 + 1) ||
-            (chip1 % mesh_num_columns == mesh_num_columns - 1 && chip0 == chip1 - 1)) {
+        else if (is_dateline_upstream_adjacent_edm_along_column) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
         }
         // Row dateline upstream adjacent
-        else if (
-            (chip1 < mesh_num_columns && chip0 == chip1 + mesh_num_columns) ||
-            (chip1 >= (mesh_num_columns * (mesh_num_rows - 1)) && chip0 == chip1 - mesh_num_columns)) {
+        else if (is_dateline_upstream_adjacent_edm_along_row) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
         }
     }
