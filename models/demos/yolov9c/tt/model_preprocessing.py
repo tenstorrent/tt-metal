@@ -4,7 +4,6 @@
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
 
 import ttnn
@@ -39,22 +38,25 @@ def create_yolov9c_input_tensors(
     device, batch_size=1, input_channels=3, input_height=640, input_width=640, model=False
 ):
     torch_input_tensor = torch.randn(batch_size, input_channels, input_height, input_width)
-    ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-    memory_config = None
+    ttnn_input_tensor = None
     if model:
-        ttnn_input_tensor = F.pad(ttnn_input_tensor, (0, 29))
-        memory_config = ttnn.create_sharded_memory_config(
-            [6400, 32],
-            core_grid=device.core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
+        n, c, h, w = torch_input_tensor.shape
+        if c == 3:
+            c = 16
+        input_mem_config = ttnn.create_sharded_memory_config(
+            [n, c, h, w],
+            ttnn.CoreGrid(x=8, y=8),
+            ttnn.ShardStrategy.HEIGHT,
         )
-    memory_config = memory_config if memory_config else ttnn.L1_MEMORY_CONFIG
-    ttnn_input_tensor = ttnn.from_torch(
-        ttnn_input_tensor, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config
-    )
-    return torch_input_tensor, ttnn_input_tensor
+        ttnn_input_host = ttnn.from_torch(
+            torch_input_tensor,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=input_mem_config,
+        )
+        # ttnn_input_tensor = ttnn.to_device(ttnn_input_host, device, memory_config=input_mem_config)
+    return torch_input_tensor, ttnn_input_host
 
 
 def make_anchors(device, feats, strides, grid_cell_offset=0.5):

@@ -30,7 +30,7 @@ from ultralytics import YOLO
     "model_task",
     [
         "segment",  # To run the demo for instance segmentation
-        # "detect",  # Uncomment to run the demo for Object Detection
+        "detect",  # Uncomment to run the demo for Object Detection
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
