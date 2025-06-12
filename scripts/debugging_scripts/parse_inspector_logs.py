@@ -113,7 +113,9 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, Program
         if "program_created" in entry:
             info = entry["program_created"]
             program_id = int(info.get("id"))
-            programs[program_id] = ProgramData(id=program_id, compiled=False, watcher_kernel_ids=[], binary_status_per_device={})
+            programs[program_id] = ProgramData(
+                id=program_id, compiled=False, watcher_kernel_ids=[], binary_status_per_device={}
+            )
             if verbose:
                 print_log(int(info.get("timestamp_ns")), f"Program {program_id} created")
         elif "program_destroyed" in entry:
