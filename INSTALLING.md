@@ -35,32 +35,7 @@ chmod a+x install_dependencies.sh
 sudo ./install_dependencies.sh
 ```
 
-For users on other Linux distributions, please look up the equivalent packages in your distribution's package manager. Package names may vary between distributions, and some distributions (like Gentoo and Arch) may not use suffixes like `-dev` or `-devel` for development packages.
-
-**Runtime dependencies** (if you only aim to use prebuilt libraries):
-* Python3 == 3.10
-* pip
-* venv
-* libhwloc
-* libnuma
-
-**Build dependencies**:
-* git
-* Python3
-* pkg-config
-* cargo
-* cmake
-* ninja
-* boost (with development headers)
-* hwloc (with development headers)
-* xz-utils
-* pandoc
-* capstone (with development headers)
-* C++20 capable compiler (GCC 12 or Clang 17)
-
-> [!NOTE]
->
-> You'll also need OpenMPI and its development package if you wish to build tt-distributed.
+For users on other Linux distributions, please consult the `install_dependencies.sh` script to see what packages need to be installed, then install the equivalent packages using your distribution's package manager. Package names may vary between distributions, and some distributions (like Gentoo and Arch) may not use suffixes like `-dev` or `-devel` for development packages.
 
 > [!IMPORTANT]
 >
