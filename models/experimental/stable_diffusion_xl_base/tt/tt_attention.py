@@ -78,8 +78,10 @@ class TtAttention(nn.Module):
             self.tt_v_weights, _ = prepare_linear_params(device, v_weights, None, weights_dtype)
 
         self.tt_out_weights, self.tt_out_bias = prepare_linear_params(device, out_weights, out_bias, weights_dtype)
-        self.dense_out_program_config = model_config.get_matmul_config(module_path + ".dense_out")
-        self.default_compute_kernel_config = model_config.get_mm_compute_config(module_path)
+        self.dense_out_program_config = model_config.get_matmul_config(
+            f"{module_path}.to_out" if "attn1" in module_path else module_path + ".dense_out"
+        )
+        self.default_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_out")
         assert self.dense_out_program_config is not None, "dense_out_program_config should not be None"
 
     def forward(self, hidden_states, attention_mask, encoder_hidden_states=None):
@@ -88,17 +90,63 @@ class TtAttention(nn.Module):
         B = list(hidden_states.shape)[0]
 
         if self.is_self_attention:
-            qkv_fused = ttnn.linear(
+            if hidden_states.shape[-1] == 640:
+                memory_config = ttnn.create_sharded_memory_config(
+                    shape=(1, 1, 4096 // 8, 1920 // 6),
+                    core_grid=ttnn.CoreGrid(y=8, x=6),
+                    strategy=ttnn.ShardStrategy.BLOCK,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(8, 8),
+                    in0_block_w=4,
+                    per_core_M=16,
+                    per_core_N=8,
+                    out_subblock_h=1,
+                    out_subblock_w=8,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                )
+            else:
+                memory_config = ttnn.create_sharded_memory_config(
+                    shape=(1, 1, 1024 // 8, 3840 // 8),
+                    core_grid=ttnn.CoreGrid(y=8, x=8),
+                    strategy=ttnn.ShardStrategy.BLOCK,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(8, 8),
+                    in0_block_w=4,
+                    per_core_M=4,
+                    per_core_N=15,
+                    out_subblock_h=1,
+                    out_subblock_w=5,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                )
+
+            qkv_fused = ttnn.matmul(
                 hidden_states,
                 self.tt_qkv_weights,
-                bias=None,
+                memory_config=memory_config,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.HiFi2,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=True,
+                ),
+                program_config=program_config,
             )
+            qkv_fused = ttnn.sharded_to_interleaved(qkv_fused, ttnn.L1_MEMORY_CONFIG)
 
             (
                 q_heads,
                 k_heads,
                 v_heads,
-            ) = ttnn.experimental.nlp_create_qkv_heads(qkv_fused, num_heads=self.heads, transpose_k_heads=False)
+            ) = ttnn.experimental.nlp_create_qkv_heads(
+                qkv_fused, num_heads=self.heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
         else:
             q_heads = ttnn.linear(
                 hidden_states,
@@ -146,15 +194,75 @@ class TtAttention(nn.Module):
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
         )
-
-        hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states)
+        hidden_states = ttnn.experimental.nlp_concat_heads(
+            hidden_states
+        )  # ,memory_config=ttnn.create_sharded_memory_config(
+        #     shape=(1, 1, 1024 // 8, 1280 // 8),
+        #     core_grid=ttnn.CoreGrid(y=8, x=8),
+        #     strategy=ttnn.ShardStrategy.BLOCK,
+        #     use_height_and_width_as_shard_shape=True,
+        # ))
+        if self.is_self_attention:
+            if hidden_states.shape[-1] == 640:
+                hidden_states = ttnn.interleaved_to_sharded(
+                    hidden_states,
+                    sharded_memory_config=ttnn.create_sharded_memory_config(
+                        shape=(1, 1, 4096 // 8, 640 // 5),
+                        core_grid=ttnn.CoreGrid(y=8, x=5),
+                        strategy=ttnn.ShardStrategy.BLOCK,
+                        use_height_and_width_as_shard_shape=True,
+                    ),
+                )
+            else:
+                hidden_states = ttnn.interleaved_to_sharded(
+                    hidden_states,
+                    sharded_memory_config=ttnn.create_sharded_memory_config(
+                        shape=(1, 1, 1024 // 8, 1280 // 8),
+                        core_grid=ttnn.CoreGrid(y=8, x=8),
+                        strategy=ttnn.ShardStrategy.BLOCK,
+                        use_height_and_width_as_shard_shape=True,
+                    ),
+                )
 
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_out_weights,
             bias=self.tt_out_bias,
             program_config=self.dense_out_program_config,
+            # program_config=ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            #     compute_with_storage_grid_size=(8,8),
+            #     in0_block_w=4,
+            #     per_core_M=16,
+            #     per_core_N=3,
+            #     out_subblock_h=2,
+            #     out_subblock_w=3,
+            #     transpose_mcast=False,
+            #     fused_activation=None,  # gelu goes here
+            # ),
+            # program_config=ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            #     compute_with_storage_grid_size=(8, 8),
+            #     in0_block_w=5,
+            #     per_core_M=4,
+            #     per_core_N=5,
+            #     out_subblock_h=1,
+            #     out_subblock_w=5,
+            #     transpose_mcast=False,
+            #     fused_activation=None,  # gelu goes here
+            # ),
             compute_kernel_config=self.default_compute_kernel_config,
+            # memory_config=ttnn.create_sharded_memory_config(
+            #     shape=(1, 1, 4096 // 8, 640 // 5),
+            #     core_grid=ttnn.CoreGrid(y=8, x=5),
+            #     strategy=ttnn.ShardStrategy.BLOCK,
+            #     use_height_and_width_as_shard_shape=True,
+            # )
+            # memory_config=ttnn.create_sharded_memory_config(
+            #     shape=(1, 1, 1024 // 8, 1280 // 8),
+            #     core_grid=ttnn.CoreGrid(y=8, x=8),
+            #     strategy=ttnn.ShardStrategy.BLOCK,
+            #     use_height_and_width_as_shard_shape=True,
+            # )
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-
+        # hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         return hidden_states
