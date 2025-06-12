@@ -14,24 +14,29 @@ def flatten_list(sublists):
 def generate_random_face(
     stimuli_format=DataFormat.Float16_b, const_value=1, const_face=False
 ):
+    size = 256
+    if stimuli_format != DataFormat.Bfp8_b:
+        if stimuli_format.is_integer():
+            max = 127 if stimuli_format == DataFormat.Int8 else 255
+            srcA_face = torch.randint(
+                low=0, high=max, size=(size,), dtype=format_dict[stimuli_format]
+            )
+        else:
+            if const_face:
+                srcA_face = (
+                    torch.ones(size, dtype=format_dict[stimuli_format]) * const_value
+                )
+            else:  # random for both faces
+                srcA_face = torch.rand(size, dtype=format_dict[stimuli_format]) + 0.1
 
-    if stimuli_format in [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32]:
-        if const_face:
-            srcA_face = torch.ones(256, dtype=format_dict[stimuli_format]) * const_value
-        else:  # random for both faces
-            srcA_face = torch.rand(256, dtype=format_dict[stimuli_format]) + 0.1
+    else:
 
-    elif stimuli_format == DataFormat.Bfp8_b:
-        size = 256
         integer_part = torch.randint(0, 3, (size,))
         fraction = torch.randint(0, 16, (size,)).to(dtype=torch.bfloat16) / 16.0
         if const_face:
-            srcA_face = torch.ones(256, dtype=torch.bfloat16) * const_value
+            srcA_face = torch.ones(size, dtype=torch.bfloat16) * const_value
         else:
             srcA_face = integer_part.to(dtype=torch.bfloat16) + fraction
-
-    elif stimuli_format == DataFormat.Int32:
-        srcA_face = torch.arange(256)
 
     return srcA_face
 

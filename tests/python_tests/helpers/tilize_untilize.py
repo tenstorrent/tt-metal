@@ -25,6 +25,7 @@ def tilize(original_tensor, stimuli_format=DataFormat.Float16_b):
         dtype=(
             format_dict[stimuli_format]
             if stimuli_format in [DataFormat.Float16_b, DataFormat.Float16]
+            or stimuli_format.is_integer()
             else torch.float32
         )
     )
@@ -48,6 +49,7 @@ def untilize(tilized_tensor, stimuli_format=DataFormat.Float16_b):
         dtype=(
             format_dict[stimuli_format]
             if stimuli_format in [DataFormat.Float16_b, DataFormat.Float16]
+            or stimuli_format.is_integer()
             else torch.float32
         )
     )

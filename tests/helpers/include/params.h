@@ -60,6 +60,18 @@ UNPACK_A_SRC_CASE(Bfp8_b)
 #if defined(UNPACK_A_SRC_TF32)
 UNPACK_A_SRC_CASE(Tf32)
 #endif
+#if defined(UNPACK_A_SRC_UINT32)
+UNPACK_A_SRC_CASE(UInt32)
+#endif
+#if defined(UNPACK_A_SRC_UINT16)
+UNPACK_A_SRC_CASE(UInt16)
+#endif
+#if defined(UNPACK_A_SRC_INT8)
+UNPACK_A_SRC_CASE(Int8)
+#endif
+#if defined(UNPACK_A_SRC_UINT8)
+UNPACK_A_SRC_CASE(UInt8)
+#endif
 
 #undef UNPACK_A_SRC_CASE
 
@@ -83,6 +95,18 @@ UNPACK_B_SRC_CASE(Bfp8_b)
 #if defined(UNPACK_B_SRC_TF32)
 UNPACK_B_SRC_CASE(Tf32)
 #endif
+#if defined(UNPACK_B_SRC_UINT32)
+UNPACK_B_SRC_CASE(UInt32)
+#endif
+#if defined(UNPACK_B_SRC_UINT16)
+UNPACK_B_SRC_CASE(UInt16)
+#endif
+#if defined(UNPACK_B_SRC_INT8)
+UNPACK_B_SRC_CASE(Int8)
+#endif
+#if defined(UNPACK_B_SRC_UINT8)
+UNPACK_B_SRC_CASE(UInt8)
+#endif
 
 #undef UNPACK_B_SRC_CASE
 
@@ -105,6 +129,18 @@ UNPACK_A_DST_CASE(Bfp8_b)
 #if defined(UNPACK_A_DST_TF32)
 UNPACK_A_DST_CASE(Tf32)
 #endif
+#if defined(UNPACK_A_DST_UINT32)
+UNPACK_A_DST_CASE(UInt32)
+#endif
+#if defined(UNPACK_A_DST_UINT16)
+UNPACK_A_DST_CASE(UInt16)
+#endif
+#if defined(UNPACK_A_DST_INT8)
+UNPACK_A_DST_CASE(Int8)
+#endif
+#if defined(UNPACK_A_DST_UINT8)
+UNPACK_A_DST_CASE(UInt8)
+#endif
 
 #undef UNPACK_A_DST_CASE
 
@@ -126,6 +162,18 @@ UNPACK_B_DST_CASE(Bfp8_b)
 #endif
 #if defined(UNPACK_B_DST_TF32)
 UNPACK_B_DST_CASE(Tf32)
+#endif
+#if defined(UNPACK_B_DST_UINT32)
+UNPACK_B_DST_CASE(UInt32)
+#endif
+#if defined(UNPACK_B_DST_UINT16)
+UNPACK_B_DST_CASE(UInt16)
+#endif
+#if defined(UNPACK_B_DST_INT8)
+UNPACK_B_DST_CASE(Int8)
+#endif
+#if defined(UNPACK_B_DST_UINT8)
+UNPACK_B_DST_CASE(UInt8)
 #endif
 
 #undef UNPACK_B_DST_CASE
@@ -150,6 +198,18 @@ PACK_SRC_CASE(Bfp8_b)
 #if defined(PACK_SRC_TF32)
 PACK_SRC_CASE(Tf32)
 #endif
+#if defined(PACK_SRC_UINT32)
+PACK_SRC_CASE(UInt32)
+#endif
+#if defined(PACK_SRC_UINT16)
+PACK_SRC_CASE(UInt16)
+#endif
+#if defined(PACK_SRC_INT8)
+PACK_SRC_CASE(Int8)
+#endif
+#if defined(PACK_SRC_UINT8)
+PACK_SRC_CASE(UInt8)
+#endif
 
 #undef PACK_SRC_CASE
 
@@ -172,6 +232,18 @@ PACK_DST_CASE(Bfp8_b)
 #endif
 #if defined(PACK_DST_TF32)
 PACK_DST_CASE(Tf32)
+#endif
+#if defined(PACK_DST_UINT32)
+PACK_DST_CASE(UInt32)
+#endif
+#if defined(PACK_DST_UINT16)
+PACK_DST_CASE(UInt16)
+#endif
+#if defined(PACK_DST_INT8)
+PACK_DST_CASE(Int8)
+#endif
+#if defined(PACK_DST_UINT8)
+PACK_DST_CASE(UInt8)
 #endif
 
 #undef PACK_DST_CASE
@@ -196,10 +268,26 @@ MATH_CASE(Bfp8_b)
 #if defined(MATH_TF32)
 MATH_CASE(Tf32)
 #endif
+#if defined(MATH_UINT32)
+MATH_CASE(UInt32)
+#endif
+#if defined(MATH_UINT16)
+MATH_CASE(UInt16)
+#endif
+#if defined(MATH_BFP8)
+MATH_CASE(Bfp8)
+#endif
+#if defined(MATH_INT8)
+MATH_CASE(Int8)
+#endif
+#if defined(MATH_UINT8)
+MATH_CASE(UInt8)
+#endif
 
 #undef MATH_CASE
 
-#if !defined(MATH_BFP8_B) && !defined(MATH_INT32) && !defined(MATH_FLOAT32) && !defined(MATH_FLOAT16) && !defined(MATH_FLOAT16_B) && !defined(MATH_TF32)
+#if !defined(MATH_BFP8_B) && !defined(MATH_INT32) && !defined(MATH_FLOAT32) && !defined(MATH_FLOAT16) && !defined(MATH_FLOAT16_B) && !defined(MATH_TF32) && \
+    !defined(MATH_UINT32) && !defined(MATH_UINT16) && !defined(MATH_INT8) && !defined(MATH_UINT8)
 constexpr bool is_fp32_dest_acc_en =
     dest_acc_en_input || is_format_combination_outlier(static_cast<DataFormat>(UNPACK_A_IN), static_cast<DataFormat>(PACK_OUT), dest_acc_en_input);
 constexpr FormatConfig pipeline_formats = get_data_formats(static_cast<DataFormat>(UNPACK_A_IN), static_cast<DataFormat>(PACK_OUT), dest_acc_en_input);

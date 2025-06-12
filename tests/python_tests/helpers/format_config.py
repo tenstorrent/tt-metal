@@ -32,6 +32,10 @@ class DataFormat(Enum):
     Float32 = DataFormatInfo("Float32", 4)
     Int32 = DataFormatInfo("Int32", 4)
     Tf32 = DataFormatInfo("Tf32", 3)
+    UInt32 = DataFormatInfo("UInt32", 4)
+    UInt16 = DataFormatInfo("UInt16", 2)
+    Int8 = DataFormatInfo("Int8", 1)
+    UInt8 = DataFormatInfo("UInt8", 1)
 
     @property
     def size(self) -> int:
@@ -41,6 +45,20 @@ class DataFormat(Enum):
     def __str__(self) -> str:
         """Returns the string representation of the data format."""
         return self.value.name
+
+    def is_integer(self) -> bool:
+        """Checks if the data format is an integer type."""
+        return self in {
+            DataFormat.Int32,
+            DataFormat.UInt32,
+            DataFormat.UInt16,
+            DataFormat.Int8,
+            DataFormat.UInt8,
+        }
+
+    def is_32_bit(self) -> bool:
+        """Checks if the data format is a 32-bit type."""
+        return self in {DataFormat.Float32, DataFormat.Int32, DataFormat.UInt32}
 
 
 @dataclass

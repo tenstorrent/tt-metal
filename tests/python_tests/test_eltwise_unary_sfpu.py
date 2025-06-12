@@ -128,13 +128,14 @@ def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):
     golden = generate_golden(mathop, src_A, formats.output_format)
     write_stimuli_to_l1(src_A, src_B, formats.input_format, formats.input_format)
 
+    unpack_to_dest = formats.input_format.is_32_bit()
     test_config = {
         "formats": formats,
         "testname": testname,
         "dest_acc": dest_acc,
         "mathop": mathop,
         "approx_mode": approx_mode,
-        "unpack_to_dest": True,  # This test does a datacopy and unpacks input into dest register
+        "unpack_to_dest": unpack_to_dest,  # This test does a datacopy and unpacks input into dest register
     }
 
     make_cmd = generate_make_command(test_config)

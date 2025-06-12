@@ -96,11 +96,11 @@ def test_matmul(testname, formats, dest_acc, math_fidelity):
     src_A, src_B = generate_stimuli(formats.input_format, formats.input_format)
 
     golden_tensor = generate_golden(src_A, src_B, formats.output_format, math_fidelity)
-    golden_tensor = tilize(golden_tensor, torch_format).to(torch_format)
+    golden_tensor = tilize(golden_tensor, formats.output_format).to(torch_format)
 
     write_stimuli_to_l1(
-        tilize(src_A, torch_format),
-        tilize(src_B, torch_format),
+        tilize(src_A, formats.input_format),
+        tilize(src_B, formats.input_format),
         formats.input_format,
         formats.input_format,
     )

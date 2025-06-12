@@ -12,6 +12,10 @@ format_dict = {
     DataFormat.Float16: torch.float16,
     DataFormat.Float16_b: torch.bfloat16,
     DataFormat.Int32: torch.int32,
+    DataFormat.UInt32: torch.int64,
+    DataFormat.UInt16: torch.int32,
+    DataFormat.Int8: torch.int8,
+    DataFormat.UInt8: torch.uint8,
 }
 
 unpack_A_src_dict = {
@@ -21,6 +25,10 @@ unpack_A_src_dict = {
     DataFormat.Bfp8_b: "UNPACK_A_SRC_BFP8_B",
     DataFormat.Int32: "UNPACK_A_SRC_INT32",
     DataFormat.Tf32: "UNPACK_A_SRC_TF32",
+    DataFormat.UInt32: "UNPACK_A_SRC_UINT32",
+    DataFormat.UInt16: "UNPACK_A_SRC_UINT16",
+    DataFormat.Int8: "UNPACK_A_SRC_INT8",
+    DataFormat.UInt8: "UNPACK_A_SRC_UINT8",
 }
 
 unpack_A_dst_dict = {
@@ -30,6 +38,10 @@ unpack_A_dst_dict = {
     DataFormat.Bfp8_b: "UNPACK_A_DST_BFP8_B",
     DataFormat.Int32: "UNPACK_A_DST_INT32",
     DataFormat.Tf32: "UNPACK_A_DST_TF32",
+    DataFormat.UInt32: "UNPACK_A_DST_UINT32",
+    DataFormat.UInt16: "UNPACK_A_DST_UINT16",
+    DataFormat.Int8: "UNPACK_A_DST_INT8",
+    DataFormat.UInt8: "UNPACK_A_DST_UINT8",
 }
 
 unpack_B_src_dict = {
@@ -39,6 +51,10 @@ unpack_B_src_dict = {
     DataFormat.Bfp8_b: "UNPACK_B_SRC_BFP8_B",
     DataFormat.Int32: "UNPACK_B_SRC_INT32",
     DataFormat.Tf32: "UNPACK_B_SRC_TF32",
+    DataFormat.UInt32: "UNPACK_B_SRC_UINT32",
+    DataFormat.UInt16: "UNPACK_B_SRC_UINT16",
+    DataFormat.Int8: "UNPACK_B_SRC_INT8",
+    DataFormat.UInt8: "UNPACK_B_SRC_UINT8",
 }
 
 unpack_B_dst_dict = {
@@ -48,6 +64,10 @@ unpack_B_dst_dict = {
     DataFormat.Bfp8_b: "UNPACK_B_DST_BFP8_B",
     DataFormat.Int32: "UNPACK_B_DST_INT32",
     DataFormat.Tf32: "UNPACK_B_DST_TF32",
+    DataFormat.UInt32: "UNPACK_B_DST_UINT32",
+    DataFormat.UInt16: "UNPACK_B_DST_UINT16",
+    DataFormat.Int8: "UNPACK_B_DST_INT8",
+    DataFormat.UInt8: "UNPACK_B_DST_UINT8",
 }
 
 math_dict = {
@@ -57,6 +77,10 @@ math_dict = {
     DataFormat.Bfp8_b: "MATH_BFP8_B",
     DataFormat.Int32: "MATH_INT32",
     DataFormat.Tf32: "MATH_TF32",
+    DataFormat.UInt32: "MATH_UINT32",
+    DataFormat.UInt16: "MATH_UINT16",
+    DataFormat.Int8: "MATH_INT8",
+    DataFormat.UInt8: "MATH_UINT8",
 }
 
 pack_src_dict = {
@@ -66,6 +90,10 @@ pack_src_dict = {
     DataFormat.Bfp8_b: "PACK_SRC_BFP8_B",
     DataFormat.Int32: "PACK_SRC_INT32",
     DataFormat.Tf32: "PACK_SRC_TF32",
+    DataFormat.UInt32: "PACK_SRC_UINT32",
+    DataFormat.UInt16: "PACK_SRC_UINT16",
+    DataFormat.Int8: "PACK_SRC_INT8",
+    DataFormat.UInt8: "PACK_SRC_UINT8",
 }
 
 pack_dst_dict = {
@@ -75,6 +103,10 @@ pack_dst_dict = {
     DataFormat.Bfp8_b: "PACK_DST_BFP8_B",
     DataFormat.Int32: "PACK_DST_INT32",
     DataFormat.Tf32: "PACK_DST_TF32",
+    DataFormat.UInt32: "PACK_DST_UINT32",
+    DataFormat.UInt16: "PACK_DST_UINT16",
+    DataFormat.Int8: "PACK_DST_INT8",
+    DataFormat.UInt8: "PACK_DST_UINT8",
 }
 
 
