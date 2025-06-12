@@ -40,8 +40,6 @@ test_suite_bh_single_pcie_llama_demo_tests() {
     fi
 
     echo "[upstream-tests] Running BH upstream Llama demo model tests"
-    # TODO: remove me , just testing this out
-    pip3 install -r models/tt_transformers/requirements.txt
     pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1
 }
 
@@ -83,8 +81,6 @@ test_suite_wh_6u_llama_demo_tests() {
         exit 1
     fi
 
-    # TODO: to remove...
-    pip install -r models/tt_transformers/requirements.txt
     pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick"
     pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py
     pytest models/demos/llama3_subdevices/demo/text_demo.py -k "repeat"
@@ -110,8 +106,6 @@ test_suite_wh_6u_llama_long_stress_tests() {
         exit 1
     fi
 
-    # TODO: to remove...
-    pip install -r models/tt_transformers/requirements.txt
     # This will take almost 3 hours. Ensure that the tensors are cached in the LLAMA_DIR.
     pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "stress-test and not mini-stress-test"
 }
