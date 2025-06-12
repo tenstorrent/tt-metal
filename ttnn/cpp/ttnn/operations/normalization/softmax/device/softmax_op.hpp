@@ -49,7 +49,8 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     std::optional<float> scale,
     bool causal_mask,
     DeviceComputeKernelConfig compute_kernel_config,
-    bool numeric_stable);
+    bool numeric_stable,
+    bool inplace);
 
 // hw_dims_only_causal_mask - represents if the causal mask is of shape [1, 1, h, w]
 // valid only if causal_mask == true, and is interleaved

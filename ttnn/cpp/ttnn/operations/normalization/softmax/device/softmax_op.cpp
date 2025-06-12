@@ -171,7 +171,8 @@ tt::tt_metal::operation::ProgramWithCallbacks Softmax::create_program(
                     this->scale,
                     causal_mask,
                     this->compute_kernel_config,
-                    this->numeric_stable);
+                    this->numeric_stable,
+                    this->inplace);
             }
         },
         this->program_config);

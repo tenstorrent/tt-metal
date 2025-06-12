@@ -107,17 +107,15 @@ void kernel_main() {
             }
         }
 #if CAUSAL_MASK
-        ht++;
-        if (ht == Wt) {
+        ++ht;
+        ++mask_ht;
+        if (ht == Ht) {
             ht = 0;
-            if (ht != Ht) {
-                // If we exhaust the diagnol mask, restart the mask
-                mask_index = mask_id_offset;
-            } else {
-                // Saves the current mask location for future restart
-                // TODO: Change this logic, to have the outer most forloop to be for NC then for Ht then for Wt
-                mask_id_offset = mask_index;
-            }
+            mask_ht = 0;
+            mask_id_offset += num_tiles_causal_mask;
+        } else if (mask_ht == Wt) {
+            mask_ht = 0;
+            mask_id = mask_id_offset;
         }
 #elif FUSED_SCALE_MASK
         ht++;
