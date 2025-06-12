@@ -30,7 +30,7 @@ FORCE_INLINE void send_chunk_from_address_with_trid(
     } else {
         noc_async_write_one_packet_with_trid<false, false>(
             local_l1_address,
-            ((uint64_t)remote_l1_write_addr_h << 32) | remote_l1_write_addr_l,
+            get_noc_addr_helper(remote_l1_write_addr_h, remote_l1_write_addr_l),
             page_size * num_pages,
             trid,
             cmd_buf,

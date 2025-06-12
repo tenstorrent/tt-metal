@@ -97,7 +97,7 @@ protected:
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
 
-        if (!(arch_ == tt::ARCH::WORMHOLE_B0 && num_devices_ >= 8 &&
+        if (!(num_devices_ >= 8 &&
               (tt::tt_metal::GetNumPCIeDevices() == 4 || tt::tt_metal::GetNumPCIeDevices() == GALAXY_6U_NUM_DEVICES))) {
             TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
         }
