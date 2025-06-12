@@ -118,16 +118,21 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle, tt::tt_metal::CBHandl
             log_debug(
                 LogOp, "Act CB: {}, npages: {}, pagesize: {}", cb_indices.act_cb, num_cb0_tiles, tilized_act_tile_size);
 
-            // num_cb0_tilized_tiles is single buffered
-            cb_indices.act_cb_row_major_bfloat16 = cb_indices.get_next_cb_index();
-            tt::tt_metal::create_cb(
-                cb_indices.act_cb_row_major_bfloat16, program, core, act_tile_size, num_cb0_tilized_tiles, act_df);
-            log_debug(
-                LogOp,
-                "Act CB Row Major BFLOAT16: {}, npages: {}, pagesize: {}",
-                cb_indices.act_cb_row_major_bfloat16,
-                num_cb0_tilized_tiles,
-                act_tile_size);
+            if (act_df != tilized_act_df) {
+                // num_cb0_tilized_tiles is single buffered
+                cb_indices.act_cb_row_major_bfloat16 = cb_indices.get_next_cb_index();
+                tt::tt_metal::create_cb(
+                    cb_indices.act_cb_row_major_bfloat16, program, core, act_tile_size, num_cb0_tilized_tiles, act_df);
+                log_debug(
+                    LogOp,
+                    "Act CB Row Major BFLOAT16: {}, npages: {}, pagesize: {}",
+                    cb_indices.act_cb_row_major_bfloat16,
+                    num_cb0_tilized_tiles,
+                    act_tile_size);
+            } else {
+                // In case formats match reuse act_cb for row major act cb
+                cb_indices.act_cb_row_major_bfloat16 = cb_indices.act_cb;
+            }
         } else {
             // For 1D convs, locally create act matrix in act_cb, which is always ROW_MAJOR BFLOAT16
             // Then, tilize input in compute
@@ -415,17 +420,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     auto conv_reader_indices_storage = conv_reader_indices.value().device_storage();
 
-    tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.dtype());
-    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::DataFormat bias_df =
+    const tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    const tt::DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    const tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const tt::DataFormat bias_df =
         has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().dtype()) : tt::DataFormat::Float16_b;
-    tt::DataFormat tilized_act_df = out_df;
-
-    log_debug(LogOp, "act_df: {}", act_df);
-    log_debug(LogOp, "weight_df: {}", weight_df);
-    log_debug(LogOp, "out_df: {}", out_df);
-    log_debug(LogOp, "bias_df: {}", bias_df);
+    const tt::DataFormat tilized_act_df = out_df;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
