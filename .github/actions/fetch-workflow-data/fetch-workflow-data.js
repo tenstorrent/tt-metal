@@ -342,12 +342,6 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
             break;
           }
 
-          // Check for rate limits
-          const rateLimit = await this.getRateLimitInfo();
-          if (rateLimit.remaining < 100) {
-            core.warning(`[Fetch] Low rate limit remaining: ${rateLimit.remaining}, stopping optimized fetch`);
-            break;
-          }
         }
       } catch (error) {
         core.warning(`[Fetch] Error during optimized fetch: ${error.message}. Falling back to full fetch.`);
@@ -420,12 +414,6 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
             break;
           }
 
-          // Check for rate limits
-          const rateLimit = await this.getRateLimitInfo();
-          if (rateLimit.remaining < 100) {
-            core.warning(`[Fetch] Low rate limit remaining: ${rateLimit.remaining}, stopping full fetch`);
-            break;
-          }
         } catch (error) {
           if (error.status === 403 && error.message.includes('rate limit')) {
             core.warning('[Fetch] Rate limit exceeded, stopping full fetch');
