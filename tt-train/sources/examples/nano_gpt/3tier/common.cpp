@@ -113,8 +113,11 @@ uint32_t round_up_to_tile(uint32_t value, uint32_t tile_size) {
 
 void initialize_device(bool ddp, bool tp) {
     if (ddp || tp) {
-        // currently supports only N300 device
-        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
+        // FIXME: currently hardcoded for n300
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
+    } else {
+        // use single device defaults
+        ttml::autograd::ctx().open_device();
     }
 }
 
