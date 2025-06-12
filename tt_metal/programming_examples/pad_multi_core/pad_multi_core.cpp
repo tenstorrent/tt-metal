@@ -73,7 +73,7 @@ int main() {
         .device = device,
         .size = pad_buffer_size,
         .page_size = packed_data_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+        .buffer_type = tt_metal::BufferType::L1};
     std::shared_ptr<tt::tt_metal::Buffer> pad_buffer = CreateBuffer(pad_dram_config);
     uint32_t pad_addr = pad_buffer->address();
 
