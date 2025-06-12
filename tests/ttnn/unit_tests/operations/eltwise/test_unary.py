@@ -783,6 +783,7 @@ def test_unary_trunc_ttnn_opt(input_shapes, device):
     assert_with_ulp(output_tensor, golden_tensor)
     assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor)
 
+
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -793,7 +794,13 @@ def test_unary_trunc_ttnn_opt(input_shapes, device):
 )
 @pytest.mark.parametrize(
     "dtype, low, high",
-    [(ttnn.float32, 1, 100), (ttnn.bfloat16, -100, 1), (ttnn.float32, -100, 1)],
+    [
+        (ttnn.float32, 1, 100),
+        (ttnn.bfloat16, -100, 1),
+        (ttnn.float32, -100, 1),
+        (ttnn.bfloat8_b, -100, 1),
+        (ttnn.bfloat8_b, -100, 1),
+    ],
 )
 def test_unary_acosh_edge_case_ttnn(input_shapes, device, dtype, low, high):
     in_data1, input_tensor1 = data_gen_with_range_dtype(input_shapes, low, high, device, ttnn_dtype=dtype)
@@ -802,25 +809,27 @@ def test_unary_acosh_edge_case_ttnn(input_shapes, device, dtype, low, high):
     golden_function = ttnn.get_golden_function(ttnn.acosh)
     golden_tensor = golden_function(in_data1, device=device)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([100])),
+        (torch.Size([64, 128])),
+        (torch.Size([3, 128, 32])),
         (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
     ),
 )
 def test_unary_acosh_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, 1, 100, device)
+    in_data1 = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(1, 100)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     output_tensor = ttnn.acosh(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.acosh)
     golden_tensor = golden_function(in_data1, device=device)
     output = ttnn.to_torch(output_tensor)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass and assert_with_ulp(golden_tensor, output)
+    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)

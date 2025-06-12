@@ -1687,8 +1687,7 @@ void py_module(py::module& module) {
         ttnn::acosh,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|acosh|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16)doc",
-        R"doc(System memory is not supported.)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     bind_unary_operation(
         module,

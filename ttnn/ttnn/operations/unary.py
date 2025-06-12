@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import os
 
 
 def register_ttnn_cpp_unary_function(unary_function):
@@ -201,7 +202,11 @@ def _golden_function_acosh(input_tensor_a, *args, device, **kwargs):
     import torch
 
     result = torch.acosh(input_tensor_a)
-    return result.masked_fill_(input_tensor_a < 1, float("inf")) if input_tensor_a.dtype == torch.bfloat16 else result
+    return (
+        result.masked_fill_(input_tensor_a < 1, float("inf"))
+        if input_tensor_a.dtype == torch.bfloat16 and os.getenv("ARCH_NAME") == "wormhole_b0"
+        else result
+    )
 
 
 ttnn.attach_golden_function(ttnn.acosh, golden_function=_golden_function_acosh)
