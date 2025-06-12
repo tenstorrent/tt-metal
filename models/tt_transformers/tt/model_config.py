@@ -5,7 +5,6 @@
 import json
 import math
 import os
-import re
 from enum import Enum, auto
 from pathlib import Path
 from typing import Tuple
@@ -1356,6 +1355,14 @@ class ModelArgs:
         )
         return xs_1BSH
 
+    def _get_text_prefix(self):
+        if "gemma-3" in self.model_name.lower():
+            return "language_model."
+        elif self.is_vision():
+            return "text_model."
+        else:
+            return ""
+
     def _set_params_from_dict(self, config, is_hf=False):
         # Try to get text_config, if it doesn't exist everything is text config
         text_config = config.get("text_config", config)
@@ -1461,6 +1468,8 @@ class ModelArgs:
         self.vision_patch_size = 14
         self.vision_in_channels = 3
 
+        self.state_dict_text_prefix = self._get_text_prefix()
+
     @property
     def use_scaled_rope(self):
         return self.rope_scaling_factor is not None
@@ -1559,7 +1568,7 @@ class ModelArgs:
         return self.vision_chunk_size > 0
 
     def get_state_dict_prefix(self, module_name, layer_num):
-        text_prefix = "text_model." if self.is_vision() else ""
+        text_prefix = self.state_dict_text_prefix
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
         module_map = {
             "MLP": "feed_forward",
@@ -2007,6 +2016,9 @@ class ModelArgs:
                     self.cached_hf_model = model
                 else:
                     model = self.cached_hf_model
+                # HACK: Assume that we want the language model layers only
+                if hasattr(model, "language_model"):
+                    model = model.language_model
                 model.model.layers = model.model.layers[: self.n_layers]
             if wrap:
                 wrapper = HfModelWrapper(model, self.head_dim)
