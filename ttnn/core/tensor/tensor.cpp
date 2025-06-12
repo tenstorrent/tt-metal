@@ -768,7 +768,10 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
                             std::vector<HostBuffer> buffers;
                             host_storage.distributed_buffer().apply(
                                 [&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
-                            TT_FATAL(buffers.size() == 1, "Can't get a single buffer from multi device host storage");
+                            TT_FATAL(
+                                buffers.size() == 1,
+                                "Can't get a single buffer from multi device host storage of size: {}",
+                                buffers.size());
                             return buffers.front().view_bytes().data();
                         },
                         [](auto&&) -> const void* { TT_THROW("Unreachable"); },
