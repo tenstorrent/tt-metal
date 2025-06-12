@@ -344,7 +344,12 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     // Calculate work per core based on input dimensions
     uint32_t work_per_core = (total_work + num_cores_total - 1) / num_cores_total;
 
-    log_debug("total_work: {}, num_cores_total: {}, work_per_core: {}", total_work, num_cores_total, work_per_core);
+    log_debug(
+        tt::LogOp,
+        "total_work: {}, num_cores_total: {}, work_per_core: {}",
+        total_work,
+        num_cores_total,
+        work_per_core);
 
     // Create core ranges
     CoreRange all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});

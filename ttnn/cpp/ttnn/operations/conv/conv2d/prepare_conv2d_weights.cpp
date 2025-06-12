@@ -104,9 +104,6 @@ Tensor to_weight_special_padding_tile_layout(
                 (uint32_t)std::ceil((double)weight_matrix_cols / (double)in1_block_w_datums) * in1_block_w_datums;
         }
         // height padding
-        std::cout << "in1_block_h_datums: " << in1_block_h_datums << std::endl;
-        std::cout << "w_shape[1]: " << w_shape[1] << std::endl;
-        std::cout << "w_shape[3]: " << w_shape[3] << std::endl;
         assert(in1_block_h_datums >= w_shape[1] * w_shape[3]);
         uint32_t block_height_padding = in1_block_h_datums - (w_shape[1] * w_shape[3]);
         auto weight_matrix_rows = ((w_shape[1] * w_shape[3]) + block_height_padding) * w_shape[2];
@@ -502,10 +499,7 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
 }
 
 static Tensor to_folded_weight_layout(
-    const Tensor& conv_weight_tensor,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding) {
+    const Tensor& conv_weight_tensor, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> kernel_size) {
     auto w_shape = conv_weight_tensor.padded_shape();
     uint32_t out_channels = w_shape[0];
     uint32_t in_channels = w_shape[1];
@@ -525,7 +519,6 @@ static Tensor to_folded_weight_layout(
         {out_channels, in_channels * stride[0] * stride[1], padded_kernel_h / stride[0], padded_kernel_w / stride[1]});
     auto storage = std::get<tt::tt_metal::HostStorage>(conv_weight_tensor.storage()).buffer;
 
-    // padding the input buffer
     auto fold_weights = [&](auto input_buffer) {
         using T = std::decay_t<decltype(input_buffer[0])>;
 
@@ -872,7 +865,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             params.padding_n4,
             params.weights_bias_dtype,
             true);
-        // weight_tensor_.print();
     }
 
     if (!is_conv1d and params.groups > 1) {
@@ -1095,14 +1087,10 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         }
     }
     if (params.enable_kernel_stride_folding) {
-        std::array<uint32_t, 4> padding_n4 = {
-            0, original_weights_window_h % params.stride[0], 0, original_weights_window_w % params.stride[1]};
         weight_tensor_ = to_folded_weight_layout(
-            weight_tensor_, params.stride, {original_weights_window_h, original_weights_window_w}, padding_n4);
-        // weight_tensor_.print();
+            weight_tensor_, params.stride, {original_weights_window_h, original_weights_window_w});
     }
     const auto& weights_shape = weight_tensor_.logical_shape();
-    std::cout << "weights_shape: " << weights_shape << std::endl;
     uint32_t out_channels = weights_shape[0];
     uint32_t in_channels = weights_shape[1];
     uint32_t window_h = weights_shape[2];

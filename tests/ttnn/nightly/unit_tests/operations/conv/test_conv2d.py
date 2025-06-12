@@ -20,19 +20,6 @@ BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
 WS = ttnn.TensorMemoryLayout.WIDTH_SHARDED
 
 
-def write_to_file(file_name, tensor):
-    tensor = tensor.float()
-    tensor = tensor.cpu().detach().numpy()
-    with open(file_name, "w") as f:
-        for i in range(1):
-            for j in range(tensor.shape[1]):
-                for k in range(tensor.shape[2]):
-                    for l in range(tensor.shape[3]):
-                        # f.write(str(round(tensor[i][j][k][l]), 2) + " ")
-                        f.write("{:.2f}".format(tensor[i][j][k][l]) + " ")
-                    f.write("\n")
-
-
 def torch_fast_pcc(golden, calculated, pcc=0.99):
     golden = torch.Tensor(golden).flatten()
     calculated = torch.Tensor(calculated).flatten()
@@ -67,15 +54,6 @@ def randomize_torch_tensor(torch_tensor_map, tensor_shape):
         torch_tensor = torch_tensor_map[tensor_shape]
     else:
         torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
-        m = 0
-        # for i in range(tensor_shape[0]):
-        #     for j in range(tensor_shape[1]):
-        #         for k in range(tensor_shape[2]):
-        #             for l in range(tensor_shape[3]):
-        #                 torch_tensor[i, j, k, l] = m
-        #                 m += 1
-        # torch_tensor[i, j, k, l] =  tensor_shape[1]
-        # torch_tensor[i, j, k, l] = 1
         torch_tensor_map[tensor_shape] = torch_tensor
 
     return torch_tensor
@@ -171,12 +149,9 @@ def run_conv(
     conv_weight_shape = (output_channels, input_channels // groups, filter_height, filter_width)
     conv_bias_shape = (1, 1, 1, output_channels)
     torch_input_tensor_nchw = randomize_torch_tensor(torch_tensor_map, conv_input_shape)
-    # torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
-    # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
     torch_weight_tensor = randomize_torch_tensor(torch_tensor_map, conv_weight_shape)
-    # torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
     torch_bias_tensor = randomize_torch_tensor(torch_tensor_map, conv_bias_shape) * 10 if has_bias else None
 
     torch_padded_input = torch.nn.functional.pad(
@@ -281,9 +256,6 @@ def run_conv(
         return_output_dim=True,
         return_weights_and_bias=True,
     )
-    # weight_t = ttnn.from_device(d_w)
-    # torch.set_printoptions(profile="full")
-    # print(weight_t.to_torch())
     if run_twice:
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,
@@ -325,8 +297,6 @@ def run_conv(
     else:
         pcc = 0.997
 
-    # write_to_file("torch_out.txt", ref)
-    # write_to_file("ttnn_out.txt", out)
     if activation == "tanh":
         # Scale down PCC for tanh.
         # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
