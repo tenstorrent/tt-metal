@@ -765,10 +765,11 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
                             return host_storage.buffer.view_bytes().data();
                         },
                         [](const MultiDeviceHostStorage& host_storage) -> const void* {
-                            TT_ASSERT(
-                                host_storage.distributed_buffer().shape().mesh_size() == 1,
-                                "Cannot copy multi-buffer host storage to a single device");
-                            return host_storage.get_shard_at_origin()->view_bytes().data();
+                            std::vector<HostBuffer> buffers;
+                            host_storage.distributed_buffer().apply(
+                                [&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
+                            TT_FATAL(buffers.size() == 1, "Can't get a single buffer from multi device host storage");
+                            return buffers.front().view_bytes().data();
                         },
                         [](auto&&) -> const void* { TT_THROW("Unreachable"); },
                     },
