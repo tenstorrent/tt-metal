@@ -145,6 +145,7 @@ public:
     class Iterator {
     public:
         Iterator& operator++();
+        Iterator operator++(int);
         const MeshCoordinate& operator*() const;
         bool operator==(const Iterator& other) const;
         bool operator!=(const Iterator& other) const;
