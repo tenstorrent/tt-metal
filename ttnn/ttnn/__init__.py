@@ -131,7 +131,7 @@ from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
-from ttnn._ttnn.fabric import FabricConfig, initialize_fabric_config
+from ttnn._ttnn.fabric import FabricConfig, set_fabric_config
 
 from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,

@@ -159,7 +159,7 @@ protected:
             (config_.num_cqs >= 2 and is_n300_or_t3k_cluster) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
 
         if (config_.fabric_config != FabricConfig::DISABLED) {
-            tt::tt_metal::detail::InitializeFabricConfig(config_.fabric_config);
+            tt::tt_metal::detail::SetFabricConfig(config_.fabric_config);
         }
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(get_mesh_shape(*mesh_device_type)),
@@ -178,7 +178,7 @@ protected:
         mesh_device_->close();
         mesh_device_.reset();
         if (config_.fabric_config != FabricConfig::DISABLED) {
-            tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+            tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
         }
     }
 

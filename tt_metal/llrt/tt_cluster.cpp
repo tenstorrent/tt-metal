@@ -1139,24 +1139,79 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
     return active_ethernet_cores;
 }
 
-void Cluster::configure_ethernet_cores_for_fabric_routers(tt_metal::FabricConfig fabric_config) {
+void Cluster::configure_ethernet_cores_for_fabric_routers(
+    tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes) {
     if (fabric_config != tt_metal::FabricConfig::DISABLED) {
-        this->reserve_ethernet_cores_for_fabric_routers();
+        TT_FATAL(num_routing_planes.has_value(), "num_routing_planes should be set for reserving cores for fabric");
+        TT_FATAL(num_routing_planes.value() > 0, "Expected non-zero num_routing_planes for reserving cores for fabric");
+        this->reserve_ethernet_cores_for_fabric_routers(num_routing_planes.value());
     } else {
+        if (num_routing_planes.has_value()) {
+            log_warning(
+                tt::LogMetal,
+                "Got num_routing_planes while releasing fabric cores, ignoring it and releasing all reserved cores");
+        }
         this->release_ethernet_cores_for_fabric_routers();
     }
 }
 
-void Cluster::reserve_ethernet_cores_for_fabric_routers() {
-    for (const auto& [chip_id, eth_cores] : this->device_eth_routing_info_) {
-        for (const auto& [eth_core, mode] : eth_cores) {
-            if (mode == EthRouterMode::IDLE) {
-                this->device_eth_routing_info_[chip_id][eth_core] = EthRouterMode::FABRIC_ROUTER;
+void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_planes) {
+    if (num_routing_planes == std::numeric_limits<uint8_t>::max()) {
+        // default behavior, reserve whatever cores are available
+        for (const auto& [chip_id, eth_cores] : this->device_eth_routing_info_) {
+            for (const auto& [eth_core, mode] : eth_cores) {
+                if (mode == EthRouterMode::IDLE) {
+                    this->device_eth_routing_info_[chip_id][eth_core] = EthRouterMode::FABRIC_ROUTER;
+                }
             }
         }
+
+        // Update sockets to reflect fabric routing
+        this->ethernet_sockets_.clear();
+        return;
     }
-    // Update sockets to reflect fabric routing
+
+    // to reserve specified number of cores, ensure that the same are avaialble on connected chip id as well
+    for (const auto& chip_id : this->driver_->get_target_device_ids()) {
+        const auto& connected_chips_and_cores = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
+        for (const auto& [connnected_chip_id, cores] : connected_chips_and_cores) {
+            const uint8_t num_cores_to_reserve = std::min(num_routing_planes, static_cast<uint8_t>(cores.size()));
+            uint8_t num_reserved_cores = 0;
+            for (auto i = 0; i < cores.size(); i++) {
+                if (num_reserved_cores == num_cores_to_reserve) {
+                    break;
+                }
+
+                const auto eth_core = cores[i];
+                const auto connected_core =
+                    std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core)));
+                if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
+                    // already reserved for fabric, potenially by the connected chip id
+                    num_reserved_cores++;
+                    continue;
+                }
+
+                if (this->device_eth_routing_info_[chip_id][eth_core] == EthRouterMode::IDLE &&
+                    this->device_eth_routing_info_.at(connnected_chip_id).at(connected_core) == EthRouterMode::IDLE) {
+                    this->device_eth_routing_info_[chip_id][eth_core] = EthRouterMode::FABRIC_ROUTER;
+                    this->device_eth_routing_info_[connnected_chip_id][connected_core] = EthRouterMode::FABRIC_ROUTER;
+                    num_reserved_cores++;
+                }
+            }
+
+            TT_FATAL(
+                num_reserved_cores == num_cores_to_reserve,
+                "Unable to reserve {} routing planes b/w chip {} and {} for fabric, reserved only {}",
+                num_cores_to_reserve,
+                chip_id,
+                connnected_chip_id,
+                num_reserved_cores);
+        }
+    }
+
+    // re-init sockets to reflect fabric routing
     this->ethernet_sockets_.clear();
+    this->initialize_ethernet_sockets();
 }
 
 void Cluster::release_ethernet_cores_for_fabric_routers() {
