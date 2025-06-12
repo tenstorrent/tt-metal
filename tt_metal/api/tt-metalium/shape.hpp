@@ -11,7 +11,7 @@
 #include <tuple>
 
 #include <tt-metalium/shape_base.hpp>
-#include <tt-metalium/small_vector.hpp>
+#include <tt_stl/small_vector.hpp>
 
 namespace tt::tt_metal {
 
