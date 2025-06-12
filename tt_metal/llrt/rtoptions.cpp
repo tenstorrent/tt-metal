@@ -37,6 +37,7 @@ static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 // Used for demonstration purposes and will be removed in the future.
 static const char* TT_METAL_FD_FABRIC_DEMO = "TT_METAL_FD_FABRIC";
+static const char* TT_METAL_VISIBLE_DEVICE_ENV_VAR = "TT_METAL_VISIBLE_DEVICE";
 
 RunTimeOptions::RunTimeOptions() {
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
@@ -58,6 +59,12 @@ RunTimeOptions::RunTimeOptions() {
         this->kernel_dir = std::string(kernel_dir_str) + "/";
     }
     this->system_kernel_dir = "/usr/share/tenstorrent/kernels/";
+
+    const char* visible_device_str = std::getenv(TT_METAL_VISIBLE_DEVICE_ENV_VAR);
+    if (visible_device_str != nullptr) {
+        this->is_visible_device_env_var_set = true;
+        this->visible_device = std::stoi(std::string(visible_device_str));
+    }
 
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
 
@@ -204,7 +211,7 @@ RunTimeOptions::RunTimeOptions() {
         this->enable_gathering = true;
     }
 
-    const char *arc_debug_enabled_str = std::getenv("TT_METAL_ARC_DEBUG_BUFFER_SIZE");
+    const char* arc_debug_enabled_str = std::getenv("TT_METAL_ARC_DEBUG_BUFFER_SIZE");
     if (arc_debug_enabled_str != nullptr) {
         sscanf(arc_debug_enabled_str, "%u", &arc_debug_buffer_size);
     }
