@@ -212,7 +212,7 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
         return buffer_page_mapping;
     }
 
-    if (buffer.is_nd_sharded()) {
+    if (buffer.buffer_distribution_spec().has_value()) {
         return buffer.buffer_distribution_spec()->compute_page_mapping();
     }
 
@@ -573,28 +573,6 @@ DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
     return translate_page_address(offset, bank_id);
 }
 
-DeviceAddr Buffer::bank_local_page_address(uint32_t bank_id, uint32_t page_index) const {
-    uint32_t num_banks = allocator_->get_num_banks(buffer_type_);
-    TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
-    uint32_t offset;
-    if (is_sharded(this->buffer_layout())) {
-        size_t num_pages_per_shard = 0;
-        if (is_nd_sharded()) {
-            const auto& distribution_spec = *buffer_distribution_spec_;
-            num_pages_per_shard = distribution_spec.num_dev_pages_per_core();
-        } else {
-            auto shard_spec = this->shard_spec();
-            num_pages_per_shard = shard_spec.num_pages();
-        }
-        uint32_t pages_offset_within_bank = page_index % num_pages_per_shard;
-        offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
-    } else {
-        uint32_t pages_offset_within_bank = page_index / num_banks;
-        offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
-    }
-    return this->address() + offset;
-}
-
 uint32_t Buffer::alignment() const { return allocator_->get_alignment(this->buffer_type()); }
 
 DeviceAddr Buffer::aligned_page_size() const { return align(page_size(), this->alignment()); }
@@ -606,21 +584,6 @@ DeviceAddr Buffer::aligned_size_per_bank() const {
         is_sharded(this->buffer_layout_) ? this->num_cores().value() : allocator_->get_num_banks(this->buffer_type());
     return tt::tt_metal::detail::SizeBytesPerBank(
         this->aligned_size(), this->aligned_page_size(), num_banks, this->alignment());
-}
-
-DeviceAddr Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) const {
-    TT_FATAL(is_sharded(this->buffer_layout()), "Buffer not sharded");
-    size_t num_pages_per_shard = 0;
-    if (is_nd_sharded()) {
-        const auto& distribution_spec = *buffer_distribution_spec_;
-        num_pages_per_shard = distribution_spec.num_dev_pages_per_core();
-    } else {
-        auto shard_spec = this->shard_spec();
-        num_pages_per_shard = shard_spec.num_pages();
-    }
-    uint32_t pages_offset_within_bank = page_index % num_pages_per_shard;
-    auto offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
-    return translate_page_address(offset, bank_id);
 }
 
 ShardSpecBuffer Buffer::shard_spec() const {
@@ -664,8 +627,6 @@ std::shared_ptr<Buffer> Buffer::root_buffer() {
     }
     return shared_from_this();
 }
-
-bool Buffer::is_nd_sharded() const { return this->buffer_distribution_spec_.has_value(); }
 
 const std::optional<BufferDistributionSpec>& Buffer::buffer_distribution_spec() const {
     return this->buffer_distribution_spec_;

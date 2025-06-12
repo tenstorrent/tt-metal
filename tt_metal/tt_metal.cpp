@@ -497,7 +497,9 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
 DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uint32_t bank_index, uint32_t page_index) {
     DeviceAddr addr = 0;
     if (buffer.is_dram()) {
-        addr = buffer.bank_local_page_address(bank_index, page_index);
+        uint32_t num_banks = buffer.allocator()->get_num_banks(buffer.buffer_type());
+        uint32_t pages_offset_within_bank = page_index / num_banks;
+        addr = buffer.address() + pages_offset_within_bank * buffer.aligned_page_size();
     } else {
         TT_ASSERT(buffer.is_l1());
         addr = buffer.page_address(bank_index, page_index);

@@ -247,27 +247,16 @@ public:
 
     DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
 
-    DeviceAddr bank_local_page_address(uint32_t bank_id, uint32_t page_index) const;
     uint32_t alignment() const;
     DeviceAddr aligned_page_size() const;
     DeviceAddr aligned_size() const;
     DeviceAddr aligned_size_per_bank() const;
 
     // SHARDED API STARTS HERE
-    // If buffer contains BufferDistributionSpec, it is considered ND sharded
-    bool is_nd_sharded() const;
     const std::optional<BufferDistributionSpec>& buffer_distribution_spec() const;
-
-    // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
-
-    DeviceAddr sharded_page_address(uint32_t bank_id, uint32_t page_index) const;
-
     ShardSpecBuffer shard_spec() const;
     void set_shard_spec(const ShardSpecBuffer& shard_spec);
-
-    // TODO: Consolidate with interleaved and delete this (maybe get from BufferDistributionSpec)
     std::optional<uint32_t> num_cores() const;
-
     const std::shared_ptr<const CompressedBufferPageMapping>& get_buffer_page_mapping();
 
     std::shared_ptr<Buffer> root_buffer();
