@@ -9,7 +9,6 @@
 #include <unistd.h>
 
 #include "tt-metalium/memory_pin.hpp"
-#include "tt-metalium/logger.hpp"
 #include "tt-metalium/mesh_buffer.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
