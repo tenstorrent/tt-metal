@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       trigger_type:
-        description: "⚠️ Checkbox options below are used only when 'manual' is selected; otherwise, predefined settings apply. ⚠️"
+        description: "⚠️ CHECKBOX options below are used only when 'manual' is selected; otherwise, predefined settings apply. ⚠️"
         required: true
         type: choice
         options:
