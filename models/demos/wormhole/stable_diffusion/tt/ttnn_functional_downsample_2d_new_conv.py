@@ -116,7 +116,6 @@ class downsample_2d:
         #     hidden_states = ttnn.to_memory_config(hidden_states, self.conv.conv.input_sharded_memory_config)
         # hidden_states = self.conv(hidden_states)
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=self.shard_layout,
@@ -173,6 +172,7 @@ class downsample_2d:
             weight_tensor=self.conv_weights,
             bias_tensor=self.conv_bias,
             compute_config=compute_config,
+            dtype=ttnn.bfloat8_b,
         )
 
         return hidden_states
