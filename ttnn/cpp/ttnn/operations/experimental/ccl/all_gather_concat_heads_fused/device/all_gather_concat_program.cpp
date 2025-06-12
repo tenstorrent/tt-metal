@@ -103,10 +103,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     //          - batch 1 (from batch_start_1 to batch end_1)
     //          - batch 2 (from batch_start_2 to batch end_2) if applicable
     LineTopology line_topology(ring_size, ring_index);
-    const size_t num_targets_right =
-        line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
-    const size_t num_targets_left =
-        line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
+    const size_t num_targets_right = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::FORWARD);
+    const size_t num_targets_left = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::BACKWARD);
 
     uint32_t batch_size = 1;
     uint32_t batch_start_1 = 8;
