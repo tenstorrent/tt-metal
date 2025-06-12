@@ -233,7 +233,7 @@ def _create_ds2_model_parameters(conv_args):
     conv_args.c1["enable_split_reader"] = True
     conv_args.c1["enable_act_double_buffer"] = True
     conv_args.c1["deallocate_activation"] = True
-    conv_args.c1["reshard_if_not_optimal"] = False
+    conv_args.c1["reshard_if_not_optimal"] = True
     conv_args.c1["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 
     conv_args.c2["act_block_h"] = None
