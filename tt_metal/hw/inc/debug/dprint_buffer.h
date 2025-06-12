@@ -21,6 +21,12 @@ inline volatile tt_l1_ptr DebugPrintMemLayout* get_debug_print_buffer() {
     return GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[DPRINT_RISCV_INDEX_ER]);
 #elif (defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 1)
     return GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[DPRINT_RISCV_INDEX_ER1]);
+#elif (defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0)
+    return GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[DPRINT_RISCV_INDEX_ER]);
+#elif (defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 1)
+    return GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[DPRINT_RISCV_INDEX_ER1]);
+#elif defined(COMPILE_FOR_ERISC)
+    return GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[DPRINT_RISCV_INDEX_ER]);
 #elif defined(UCK_CHLKC_UNPACK)
     return GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[DPRINT_RISCV_INDEX_TR0]);
 #elif defined(UCK_CHLKC_MATH)

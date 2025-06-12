@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-logger/tt-logger.hpp>
 #include "llrt_common/mailbox.hpp"
 #define COMPILE_FOR_ERISC
 
@@ -96,16 +97,42 @@ HalCoreInfoType create_active_eth_mem_map() {
     fw_mailbox_addr[utils::underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_RELEASE_CORE)] =
         MEM_SYSENG_ETH_MSG_RELEASE_CORE;
 
-    std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses - 1);
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
     std::vector<HalJitBuildConfig> processor_types(1);
-    for (std::size_t processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
-        // BH active ethernet runs idle erisc FW on the second ethernet
+
+    for (int processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
+        DeviceAddr fw_base{}, local_init{}, fw_launch{};
+        uint32_t fw_launch_value{};
+
+        switch (static_cast<EthProcessorTypes>(processor_class_idx)) {
+            case EthProcessorTypes::DM0: {
+                fw_base = 0x36b8;  // MEM_AERISC_FIRMWARE_BASE;
+                local_init = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH;
+                // This is not used for launching DM0. The ETH FW API will be used instead.
+                // Rather, it is used to signal that the active erisc firmware exited properly.
+                fw_launch = MEM_ERISC_LAUNCH_FLAG;
+                fw_launch_value = fw_base;
+                break;
+            }
+            case EthProcessorTypes::DM1: {
+                fw_base = MEM_SUBORDINATE_AERISC_FIRMWARE_BASE;
+                local_init = MEM_SUBORDINATE_AERISC_INIT_LOCAL_L1_BASE_SCRATCH;
+                fw_launch = SUBORDINATE_AERISC_RESET_PC;
+                fw_launch_value = fw_base;
+                break;
+            }
+            default: {
+                TT_THROW("Unexpected processor type {} for Blackhole Active Ethernet", processor_class_idx);
+            }
+        }
+
+        constexpr ll_api::memory::Loading memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP;
         processor_types[0] = HalJitBuildConfig{
-            .fw_base_addr = MEM_AERISC_FIRMWARE_BASE,
-            .local_init_addr = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
-            .fw_launch_addr = SUBORDINATE_IERISC_RESET_PC,
-            .fw_launch_addr_value = MEM_AERISC_FIRMWARE_BASE,
-            .memory_load = ll_api::memory::Loading::CONTIGUOUS,
+            .fw_base_addr = fw_base,
+            .local_init_addr = local_init,
+            .fw_launch_addr = fw_launch,
+            .fw_launch_addr_value = fw_launch_value,
+            .memory_load = memory_load,
         };
         processor_classes[processor_class_idx] = processor_types;
     }
