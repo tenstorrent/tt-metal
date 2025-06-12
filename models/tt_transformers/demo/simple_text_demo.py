@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.utils.llm_demo_utils import create_benchmark_data, parse_readme_perf_targets, verify_perf
+from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
@@ -916,13 +916,7 @@ def test_demo_text(
             "prefill_t/s": target_prefill_tok_s,
             "decode_t/s": target_decode_tok_s,
             "decode_t/s/u": target_decode_tok_s_u,
-            "prefill_time_to_token": measurements["prefill_time_to_token"],
         }
-
-        targets_from_readme = parse_readme_perf_targets(
-            model_name, batch_size, tt_device_name, dp=data_parallel if data_parallel > 1 else None
-        )
-        targets.update(targets_from_readme)
 
     else:
         logger.info(f"Model {model_name} does not have performance targets set")
