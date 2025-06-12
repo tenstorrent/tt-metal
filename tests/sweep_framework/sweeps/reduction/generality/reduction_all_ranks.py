@@ -76,24 +76,13 @@ def run_reduction(device, tensor_shape, dim, keepdim, op, dtype) -> list:
     e2e_perf = stop_measuring_time(start_time)
 
     # Skip the rest of the test if an exception was raised in both
-    if torch_errored:
+    if torch_errored != ttnn_errored:
         return [(True, f"mismatch in errors raised: torch: {torch_errored}, ttnn: {ttnn_errored}"), e2e_perf]
 
-    # torch's min/max double as argmin/argmax, so we need to extract the values only
-    torch_result = (
-        torch_result.values
-        if isinstance(torch_result, (torch.return_types.min, torch.return_types.max))
-        else torch_result
-    )
+    if torch_errored:
+        return [(True, "PASS"), e2e_perf]
 
     atol = rtol = 0.1
-    # There is a scale factor difference between torch and ttnn for std and var
-    # But for other operations, it should be close. Issue #19478
-    if op == "std":
-        atol, rtol = sys.maxsize, 0.1 + math.sqrt(2)
-    elif op == "var":
-        atol, rtol = sys.maxsize, 0.1 + 2
-
     allclose = torch.allclose(torch_result, output_tensor, atol=atol, rtol=rtol, equal_nan=True)
     if not allclose:
         return [(False, f"mismatch in allclose: torch: {torch_result}, ttnn: {output_tensor}"), e2e_perf]

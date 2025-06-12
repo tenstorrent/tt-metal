@@ -127,12 +127,7 @@ ttnn::Tensor bound_matmul(
 
     const bool has_program_config = parameters.program_config.has_value();
     const bool has_user_grid = parameters.user_core_coord.has_value();
-    bool post_process_bias = false;
-    if (bias.has_value()) {
-        if (!has_program_config && !has_user_grid) {
-            post_process_bias = true;
-        }
-    }
+    bool post_process_bias = bias.has_value() && !has_program_config && !has_user_grid;
 
     auto output_tensor = matmul(
         input_tensor_a_adjusted,
