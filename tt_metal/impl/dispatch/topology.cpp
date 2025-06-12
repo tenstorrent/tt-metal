@@ -1236,40 +1236,6 @@ void configure_dispatch_cores(IDevice* device) {
     }
 }
 
-bool check_dateline(
-    const tt_fabric::ControlPlane& control_plane,
-    tt_fabric::Topology topology,
-    tt_fabric::MeshId mesh_id,
-    chip_id_t chip0,
-    chip_id_t chip1,
-    bool wrap_around_mesh) {
-    if (topology != tt_fabric::Topology::Ring) {
-        return false;
-    }
-    if (chip1 < chip0) {
-        std::swap(chip0, chip1);
-    }
-
-    auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id);
-    TT_FATAL(physical_mesh_shape.dims() == 2, "Dateline routing only supported for 2D mesh");
-
-    // Refactor this once mesh_id has row/col control
-    if (wrap_around_mesh) {
-        // Wrap around dateline
-        return chip0 == 0 && chip1 == physical_mesh_shape[1];
-    } else {
-        return
-            // Column dateline
-            // chip0 is the first col, chip1 is the last col on the same row
-            (chip0 % physical_mesh_shape[1] == 0 && (chip0 + physical_mesh_shape[1] - 1) == chip1) ||
-            // Row dateline
-            // chip0 is the first row, chip1 is the last row on the same column
-            (chip0 < physical_mesh_shape[1] && chip1 >= (physical_mesh_shape[1] * (physical_mesh_shape[0] - 1)) &&
-             chip1 % physical_mesh_shape[1] == chip0);
-    }
-    return false;
-}
-
 tt::tt_fabric::FabricEriscDatamoverType get_fabric_edm_type(
     const tt::tt_fabric::ControlPlane& control_plane,
     tt_fabric::Topology topology,
