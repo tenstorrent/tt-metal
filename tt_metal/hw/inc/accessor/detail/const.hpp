@@ -4,4 +4,7 @@
 
 #pragma once
 
-constexpr size_t MAX_RANK = 10;  // Maximum rank supported by the accessor
+namespace nd_sharding::detail {
+constexpr size_t MAX_RANK = 10;                      // Maximum rank supported by the accessor
+constexpr size_t UNKNOWN = static_cast<size_t>(-1);  // Used to indicate unknown values
+}  // namespace nd_sharding::detail

@@ -13,69 +13,34 @@
 #endif
 
 namespace nd_sharding {
-template <size_t CTA_BASE, size_t CRTA_BASE = detail::UNKNOWN>
-using distribution_spec_t = typename detail::BuildDistributionSpec<CTA_BASE, CRTA_BASE>::dspec;
-
-/**
- * @brief Calculates the number of compile-time arguments used when building a DistributionSpec. Note that
- * compile_time_args_skip is required to be constexpr since cta argument index must be constexpr
- *
- * @tparam DSpec                DistributionSpec type.
- * @return constexpr size_t     Number of compile-time arguments used by the DistributionSpec.
- */
-template <typename DSpec>
-constexpr size_t compile_time_args_skip() {
-    return DSpec::ArgsLoc::NumArgsCT;
-}
-
-/**
- * @brief Callculated number of common runtime arguments used when building a DistributionSpec.
- *
- * @tparam DSpec                DistributionSpec type.
- * @return constexpr size_t     Number of common runtime arguments used by the DistributionSpec.
- */
-template <typename DSpec>
-constexpr size_t runtime_args_skip() {
-    // Note: can be evaluated at compile time only if rank and num_banks are static
-    return DSpec::ArgsLoc::num_args_crta();
-}
-
 /**
  * @brief Accessor that encapsulates the logic for accessing sharded tensors pages.
  *
  * @tparam DSpec        DistributionSpec type.
  * @tparam PageSize     Page size in bytes. If set to detail::UNKNOWN, it must be passed to constructor.
  */
-template <typename DSpec, size_t PageSize = detail::UNKNOWN>
+template <typename DSpec>
 struct ShardedAccessor {
 private:
     // DSpec can be static or dynamic, so we use a conditional instance
     using StaticDspec = detail::ConditionalStaticInstance<DSpec, DSpec::is_static>;
     detail::ConditionalField<!DSpec::is_static, DSpec> dspec_instance;
 
-    mutable detail::ConditionalField<!DSpec::has_static_rank, uint32_t[MAX_RANK]> _page_coord;
+    mutable detail::ConditionalField<!DSpec::has_static_rank, uint32_t[detail::MAX_RANK]> _page_coord;
     const size_t bank_base_address;
 
     // Page size is either compile-time constant or runtime value
-    static constexpr auto page_size_ct = PageSize;
-    const detail::ConditionalField<PageSize == detail::UNKNOWN, uint32_t> page_size_rt;
+    const uint32_t page_size;
 
 public:
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
-    constexpr explicit ShardedAccessor(DSpec_&& dspec, const size_t bank_base_address_in, uint32_t page_size_in = 0) :
-        dspec_instance(std::forward<DSpec_>(dspec)),
-        bank_base_address(bank_base_address_in),
-        page_size_rt(page_size_in) {}
+    constexpr explicit ShardedAccessor(
+        DSpec_&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in = 0) :
+        dspec_instance(std::forward<DSpec_>(dspec)), bank_base_address(bank_base_address_in), page_size(page_size_in) {}
 
     template <typename DSpec_ = DSpec, std::enable_if_t<DSpec_::is_static, int> = 0>
     ShardedAccessor(const size_t bank_base_address_in = 0, uint32_t page_size_in = 0) :
-        bank_base_address(bank_base_address_in), page_size_rt(page_size_in) {}
-
-    template <typename DSpec_ = DSpec, std::enable_if_t<!DSpec_::is_static, int> = 0>
-    constexpr explicit ShardedAccessor(const size_t bank_base_address_in, uint32_t page_size_in = 0) :
-        dspec_instance(detail::build_dspec_from_args<DSpec>()),
-        bank_base_address(bank_base_address_in),
-        page_size_rt(page_size_in) {}
+        bank_base_address(bank_base_address_in), page_size(page_size_in) {}
 
     // Helper to get the appropriate DSpec instance
     constexpr auto& get_dspec() const {
@@ -83,14 +48,6 @@ public:
             return StaticDspec::instance;
         } else {
             return dspec_instance.value;
-        }
-    }
-
-    constexpr auto get_page_size() const {
-        if constexpr (page_size_ct != detail::UNKNOWN) {
-            return page_size_ct;
-        } else {
-            return page_size_rt.value;
         }
     }
 
@@ -102,17 +59,17 @@ public:
         return NOC_XY_ADDR(
             DYNAMIC_NOC_X(noc, (packed_xy_coords[bank_id] >> 16) & 0xFFFF),
             DYNAMIC_NOC_Y(noc, packed_xy_coords[bank_id] & 0xFFFF),
-            bank_base_address + bank_offset * get_page_size());
+            bank_base_address + bank_offset * page_size);
     }
 
     FORCE_INLINE
     void noc_async_read_page(const uint32_t page_id, const uint32_t dest_addr, uint8_t noc = noc_index) const {
-        noc_async_read(get_noc_addr(page_id, noc), dest_addr, get_page_size(), noc);
+        noc_async_read(get_noc_addr(page_id, noc), dest_addr, page_size, noc);
     }
 
     FORCE_INLINE
     void noc_async_write_page(const uint32_t page_id, const uint32_t src_addr, uint8_t noc = noc_index) const {
-        noc_async_write(src_addr, get_noc_addr(page_id, noc), get_page_size(), noc);
+        noc_async_write(src_addr, get_noc_addr(page_id, noc), page_size, noc);
     }
 
     // Helpers
@@ -170,4 +127,22 @@ public:
         return {bank_id, bank_page_offset};
     }
 };
+
+template <size_t CTA_BASE, size_t CRTA_BASE>
+FORCE_INLINE auto make_args_proxy() {
+    return detail::ArgsOffsets<CTA_BASE, CRTA_BASE>();
+}
+
+template <size_t CTA_BASE>
+FORCE_INLINE auto make_args_proxy(const size_t crta_base) {
+    return detail::ArgsOffsets<CTA_BASE>(crta_base);
+}
+
+template <typename ArgsOffsetsT>
+FORCE_INLINE auto make_sharded_accessor_from_args_proxy(
+    const ArgsOffsetsT& args, const size_t bank_base_address_in, const uint32_t page_size_in) {
+    auto dspec = detail::build_dspec_from_args_proxy(args);
+    return ShardedAccessor<decltype(dspec)>(std::move(dspec), bank_base_address_in, page_size_in);
+}
+
 }  // namespace nd_sharding

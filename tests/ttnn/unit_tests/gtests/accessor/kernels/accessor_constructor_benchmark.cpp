@@ -13,8 +13,8 @@ void kernel_main() {
     for (size_t i = 0; i < loop_count; ++i) {
         {
             DeviceZoneScopedN(ACCESSOR_CONFIG_NAME);
-            using dspec = nd_sharding::distribution_spec_t<base_idx_cta, base_idx_crta>;
-            volatile auto sharded_accessor = nd_sharding::ShardedAccessor<dspec>(0, 1024);
+            auto args_proxy = nd_sharding::make_args_proxy<base_idx_cta, base_idx_crta>();
+            volatile auto sharded_accessor = nd_sharding::make_sharded_accessor_from_args_proxy(args_proxy, 0, 1024);
             (void)sharded_accessor;
         }
     }

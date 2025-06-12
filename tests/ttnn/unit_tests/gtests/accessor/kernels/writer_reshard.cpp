@@ -11,19 +11,19 @@ void kernel_main() {
     // The compile-time args are set up like this to highlight how you can use compile_time_args_skip
     // Recommended usage is to place the sequential compile-time args for distribution spec at the end
     constexpr uint32_t base_idx_cta = 0;
-    constexpr uint32_t base_idx_crta = 1;
+    uint32_t base_idx_crta = 1;
 
-    using output_dspec = nd_sharding::distribution_spec_t<base_idx_cta, base_idx_crta>;
-    constexpr uint32_t new_base_idx_cta = base_idx_cta + nd_sharding::compile_time_args_skip<output_dspec>();
-    uint32_t new_base_idx_crta = base_idx_crta + nd_sharding::runtime_args_skip<output_dspec>();
+    auto args_proxy = nd_sharding::make_args_proxy<base_idx_cta>(base_idx_crta);
+    constexpr uint32_t new_base_idx_cta = base_idx_cta + args_proxy.compile_time_args_skip();
+    uint32_t new_base_idx_crta = base_idx_crta + args_proxy.runtime_args_skip();
 
     constexpr uint32_t cb_id = get_compile_time_arg_val(new_base_idx_cta);
     // TODO: Expose generic interface to get page size for cb operand
     // - get_tile_size(cb_id) only works for tile layout
-    // In writer page size is a compile-time argument
     constexpr uint32_t page_size = get_compile_time_arg_val(new_base_idx_cta + 1);
 
-    auto sharded_accessor = nd_sharding::ShardedAccessor<output_dspec, page_size>(bank_base_address);
+    auto sharded_accessor =
+        nd_sharding::make_sharded_accessor_from_args_proxy(args_proxy, bank_base_address, page_size);
     // Both rank and num banks can be made constexpr if they are static
     uint32_t rank = sharded_accessor.get_dspec().get_rank();
     uint32_t num_banks = sharded_accessor.get_dspec().get_num_banks();
