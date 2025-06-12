@@ -24,7 +24,6 @@
 #include "cpp/ttnn/operations/matmul/device/matmul_op.hpp"
 #include "cpp/ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_device_operation.hpp"
 
 namespace ttnn::operations::experimental::ccl {
