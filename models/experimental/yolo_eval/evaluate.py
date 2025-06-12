@@ -457,8 +457,7 @@ def test_yolov8s_world(device, model_type, res, reset_seeds):
 
 @pytest.mark.parametrize(
     "model_type",
-    [("tt_model")],
-    # [("tt_model"), ("torch_model")],
+    [("tt_model"), ("torch_model")],
 )
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
