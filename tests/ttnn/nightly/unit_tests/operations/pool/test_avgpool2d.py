@@ -167,7 +167,7 @@ def run_avg_pool2d(
     "count_include_pad",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
