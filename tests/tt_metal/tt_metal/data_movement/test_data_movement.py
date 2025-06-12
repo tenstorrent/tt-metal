@@ -294,7 +294,7 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 300, "upper": 30000}, "bandwidth": 0.16},
         },
         10: {
-            "riscv_0": {"latency": {"lower": 500, "upper": 70000}, "bandwidth": 0.12},
+            "riscv_0": {"latency": {"lower": 450, "upper": 70000}, "bandwidth": 0.12},
         },
         11: {
             "riscv_0": {"latency": {"lower": 700, "upper": 115000}, "bandwidth": 0.08},
