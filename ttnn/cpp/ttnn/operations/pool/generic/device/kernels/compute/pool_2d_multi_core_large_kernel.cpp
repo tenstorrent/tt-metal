@@ -7,7 +7,7 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tilize.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -137,7 +137,15 @@ void MAIN {
                     split_reader,
                     max_rows_for_reduction,
                     neginf_srca_maxpool,
-                    zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, h, interm_cb_id);
+                    zero_srca_avgpool>(
+                    in_cb_id_0,
+                    in_cb_id_1,
+                    (REDUCE_OP == PoolType::MAX || (REDUCE_OP == PoolType::AVG && h == interm_reduction_chunks - 1))
+                        ? in_scalar_cb_id_0
+                        : in_one_cb_id,
+                    i,
+                    h,
+                    interm_cb_id);
             }
         }
         if constexpr (!one_scalar_per_core) {
