@@ -27,6 +27,7 @@ int main() {
     // initialize source data
     constexpr uint32_t src_M = 8;
     constexpr uint32_t src_N = 4;
+    constexpr uint32_t dram_page_size = 32;
     constexpr uint32_t packed_data_size = sizeof(uint32_t);
     constexpr uint32_t unpacked_data_size = sizeof(bfloat16);
     constexpr uint32_t packing_ratio = packed_data_size / unpacked_data_size;
@@ -63,7 +64,7 @@ int main() {
     tt_metal::InterleavedBufferConfig input_dram_config{
         .device = device,
         .size = src_buffer_size,
-        .page_size = packed_data_size,
+        .page_size = dram_page_size,
         .buffer_type = tt_metal::BufferType::DRAM};
     std::shared_ptr<tt::tt_metal::Buffer> src_buffer = CreateBuffer(input_dram_config);
     uint32_t src_addr = src_buffer->address();
@@ -72,8 +73,8 @@ int main() {
     tt_metal::InterleavedBufferConfig pad_dram_config{
         .device = device,
         .size = pad_buffer_size,
-        .page_size = packed_data_size,
-        .buffer_type = tt_metal::BufferType::L1};
+        .page_size = dram_page_size,
+        .buffer_type = tt_metal::BufferType::DRAM};
     std::shared_ptr<tt::tt_metal::Buffer> pad_buffer = CreateBuffer(pad_dram_config);
     uint32_t pad_addr = pad_buffer->address();
 
@@ -81,7 +82,7 @@ int main() {
     tt_metal::InterleavedBufferConfig output_dram_config{
         .device = device,
         .size = dst_buffer_size,
-        .page_size = packed_data_size,
+        .page_size = dram_page_size,
         .buffer_type = tt_metal::BufferType::DRAM};
     std::shared_ptr<tt::tt_metal::Buffer> dst_buffer = CreateBuffer(output_dram_config);
     uint32_t dst_addr = dst_buffer->address();
