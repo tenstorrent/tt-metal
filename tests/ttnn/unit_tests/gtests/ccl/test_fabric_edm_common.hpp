@@ -14,6 +14,7 @@
 #include <tt-metalium/fabric.hpp>
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/common/executor.hpp"
 #include <tt-metalium/fabric_edm_packet_header.hpp>
 
 #include "ttnn/common/queue_id.hpp"
@@ -345,32 +346,40 @@ std::tuple<std::shared_ptr<Buffer>, std::vector<uint32_t>> build_input_buffer(
     return {local_input_buffer, inputs};
 }
 
+template <typename ProgramContainer>
 static void build_and_enqueue(
-    const std::vector<IDevice*>& devices, std::vector<Program>& programs, bool enqueue_only = false) {
+    const std::vector<IDevice*>& devices, ProgramContainer& programs, bool enqueue_only = false) {
+    static_assert(
+        std::is_same_v<ProgramContainer, std::vector<Program*>> ||
+            std::is_same_v<ProgramContainer, std::vector<Program>>,
+        "programs must be a vector of Program* or Program");
     TT_FATAL(
         devices.size() == programs.size(),
         "Number of devices must match number of programs when calling build_and_enqueue in test");
-    if (!enqueue_only) {
-        for (size_t i = 0; i < devices.size(); i++) {
-            tt::tt_metal::detail::CompileProgram(devices[i], programs[i]);
-        }
-    }
+
+    // Parallel compile and enqueue as a single atomic operation per device
+    std::vector<std::shared_future<void>> futures;
+    futures.reserve(devices.size());
+
     for (size_t i = 0; i < devices.size(); i++) {
-        tt_metal::EnqueueProgram(devices[i]->command_queue(), programs[i], false);
+        futures.emplace_back(tt::tt_metal::detail::async([&devices, &programs, i, enqueue_only]() {
+            if constexpr (std::is_same_v<ProgramContainer, std::vector<Program*>>) {
+                if (!enqueue_only) {
+                    tt::tt_metal::detail::CompileProgram(devices[i], *programs[i]);
+                }
+                tt_metal::EnqueueProgram(devices[i]->command_queue(), *programs[i], false);
+            } else {
+                if (!enqueue_only) {
+                    tt::tt_metal::detail::CompileProgram(devices[i], programs[i]);
+                }
+                tt_metal::EnqueueProgram(devices[i]->command_queue(), programs[i], false);
+            }
+        }));
     }
-}
-static void build_and_enqueue(
-    const std::vector<IDevice*>& devices, std::vector<Program*>& program_ptrs, bool enqueue_only = false) {
-    TT_FATAL(
-        devices.size() == program_ptrs.size(),
-        "Number of devices must match number of programs when calling build_and_enqueue in test");
-    if (!enqueue_only) {
-        for (size_t i = 0; i < devices.size(); i++) {
-            tt::tt_metal::detail::CompileProgram(devices[i], *program_ptrs[i]);
-        }
-    }
-    for (size_t i = 0; i < devices.size(); i++) {
-        tt_metal::EnqueueProgram(devices[i]->command_queue(), *program_ptrs[i], false);
+
+    // Wait for all compile and enqueue operations to complete
+    for (const auto& future : futures) {
+        future.get();
     }
 }
 
