@@ -10,6 +10,7 @@ from models.demos.llama3_subdevices.tt.llama_common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
     PagedAttentionConfig,
+    PagedAttention,
 )
 from models.demos.llama3_subdevices.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
@@ -117,24 +118,17 @@ def test_llama_decoder_inference(
     paged_attention_config = None
 
     if paged_attention:
+        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+
+        paged_attn = PagedAttention(page_params, model_args)
+
+        page_table_tt = paged_attn.create_page_table(mesh_device, mesh_mapper)
+
         paged_attention_config = PagedAttentionConfig(
             block_size=page_params["page_block_size"],
             max_num_blocks=page_params["page_max_num_blocks"],
         )
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
-        )
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
+
     prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode="prefill")
     mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
     tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, mode="prefill")
