@@ -117,7 +117,7 @@ FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint
 
 // clang-format off
 /**
- * Get an encoding for a noc address which contains tensix core grid and L1 address.
+ * Get an encoding for a noc address which contains Tensix core grid and L1 address.
  *
  * Return value: uint64_t
  *
