@@ -308,47 +308,7 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
     const needHistoricalData = earliestDataDate < earliestCachedDate;
     core.info(`[Fetch] Cache status: ${needHistoricalData ? 'Need historical data' : 'Using cached data'} (earliest cache: ${earliestCachedDate.toISOString()})`);
 
-    // If we don't need historical data and we have a valid latestCacheDate, we can optimize our fetch
-    if (!needHistoricalData && latestCacheDate && !isNaN(latestCacheDate.getTime())) {
-      core.info(`[Fetch] Optimized fetch: collecting runs after ${latestCacheDate.toISOString()}`);
-      try {
-        for (let page = 1; page <= this.maxPages; page++) {
-          apiCallCount++;
-          const { data: runs } = await this.github.rest.actions.listWorkflowRunsForRepo({
-            owner: this.context.repo.owner,
-            repo: this.context.repo.repo,
-            per_page: this.runsPerPage,
-            page,
-            created: `>=${latestCacheDate.toISOString()}`,
-            branch: MAIN_BRANCH
-          });
-
-          if (!runs.workflow_runs.length) {
-            core.info('[Fetch] No more runs found in optimized fetch');
-            break;
-          }
-
-          // Debug log the first run's date
-          if (page === 1 && runs.workflow_runs.length > 0) {
-            const firstRun = runs.workflow_runs[0];
-            core.info(`[Fetch] First run in page 1: created_at=${firstRun.created_at}, conclusion=${firstRun.conclusion}, status=${firstRun.status}`);
-          }
-
-          allRuns.push(...runs.workflow_runs);
-          core.info(`[Fetch] Page ${page}: Added ${runs.workflow_runs.length} runs (total: ${allRuns.length})`);
-
-          if (runs.workflow_runs.length < this.runsPerPage) {
-            core.info('[Fetch] Reached end of data in optimized fetch');
-            break;
-          }
-
-        }
-      } catch (error) {
-        core.warning(`[Fetch] Error during optimized fetch: ${error.message}. Falling back to full fetch.`);
-      }
-    }
-
-    // Full fetch - only needed if we don't have enough historical data
+    // if needHistoricalData, we need to fetch all runs
     if (needHistoricalData) {
       core.info('[Fetch] Starting full fetch to collect historical data');
       let hasCompleteData = false;
@@ -393,10 +353,10 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
               dateRange.latest = runDate;
             }
 
-            // If we've found a run older than our cutoff date, we have complete data
+            // If we've found a run older than our earliest data date, we have complete data
             if (runDate < earliestDataDate) {
               hasCompleteData = true;
-              core.info(`[Fetch] Found run older than cutoff date: ${runDate.toISOString()} < ${earliestDataDate.toISOString()}`);
+              core.info(`[Fetch] Found run older than earliest data date: ${runDate.toISOString()} < ${earliestDataDate.toISOString()}`);
             }
 
             // Always add to allRuns for caching, but we'll filter later for the requested period
@@ -428,10 +388,44 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
       if (!hasCompleteData && dateRange.earliest && dateRange.latest) {
         core.warning(`[Fetch] Incomplete data coverage: Earliest run (${dateRange.earliest.toISOString()}) is newer than earliest requested date (${earliestDataDate.toISOString()})`);
       }
+    } else {
+      // else fetch only up to latest cache date
+      core.info(`[Fetch] Optimized fetch: collecting runs after ${latestCacheDate.toISOString()}`);
+      try {
+        for (let page = 1; page <= this.maxPages; page++) {
+          apiCallCount++;
+          const { data: runs } = await this.github.rest.actions.listWorkflowRunsForRepo({
+            owner: this.context.repo.owner,
+            repo: this.context.repo.repo,
+            per_page: this.runsPerPage,
+            page,
+            created: `>=${latestCacheDate.toISOString()}`,
+            branch: MAIN_BRANCH
+          });
 
-      // Log the date range of fetched runs
-      if (dateRange.earliest && dateRange.latest) {
-        core.info(`[Fetch] Fetched runs date range: ${dateRange.earliest.toISOString()} to ${dateRange.latest.toISOString()}`);
+          if (!runs.workflow_runs.length) {
+            core.info('[Fetch] No more runs found in optimized fetch');
+            break;
+          }
+
+          // Debug log the first run's date
+          if (page === 1 && runs.workflow_runs.length > 0) {
+            const firstRun = runs.workflow_runs[0];
+            core.info(`[Fetch] First run in page 1: created_at=${firstRun.created_at}, conclusion=${firstRun.conclusion}, status=${firstRun.status}`);
+          }
+
+          allRuns.push(...runs.workflow_runs);
+          core.info(`[Fetch] Page ${page}: Added ${runs.workflow_runs.length} runs (total: ${allRuns.length})`);
+
+          if (runs.workflow_runs.length < this.runsPerPage) {
+            core.info('[Fetch] Reached end of data in optimized fetch');
+            break;
+          }
+        }
+      } catch (error) {
+        core.warning(`[Fetch] Error during optimized fetch: ${error.message}. Falling back to full fetch.`);
+        // If optimized fetch fails, we'll need to do a full fetch
+        return this.fetchAllWorkflowRuns(days, null, new Date(0));
       }
     }
 
