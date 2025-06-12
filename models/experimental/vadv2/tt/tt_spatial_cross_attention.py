@@ -1,10 +1,11 @@
 import warnings
 import torch
 import torch.nn as nn
+import ttnn
 from models.experimental.vadv2.reference.utils import multi_scale_deformable_attn_pytorch
 
 
-class SpatialCrossAttention(nn.Module):
+class TtSpatialCrossAttention(nn.Module):
     def __init__(
         self,
         embed_dims=256,
@@ -16,16 +17,16 @@ class SpatialCrossAttention(nn.Module):
         deformable_attention=dict(type="MSDeformableAttention3D", embed_dims=256, num_levels=4),
         **kwargs,
     ):
-        super(SpatialCrossAttention, self).__init__()
+        super(TtSpatialCrossAttention, self).__init__()
 
         self.init_cfg = init_cfg
         self.dropout = nn.Dropout(dropout)
         self.pc_range = pc_range
         self.fp16_enabled = False
-        self.deformable_attention = MSDeformableAttention3D()
+        self.deformable_attention = TtMSDeformableAttention3D(num_levels=1)
         self.embed_dims = embed_dims
         self.num_cams = num_cams
-        self.output_proj = nn.Linear(embed_dims, embed_dims)
+        # self.output_proj = nn.Linear(embed_dims, embed_dims)
         self.batch_first = batch_first
 
     def forward(
@@ -54,20 +55,21 @@ class SpatialCrossAttention(nn.Module):
         if residual is None:
             print("4")
             inp_residual = query
-            slots = torch.zeros_like(query)
+            slots = ttnn.zeros_like(query)
         if query_pos is not None:
             print("5")
             query = query + query_pos
 
-        bs, num_query, _ = query.size()
-        print(bs, num_query)
+        bs, num_query, _ = query.shape
 
-        D = reference_points_cam.size(3)
+        D = reference_points_cam.shape[3]
         indexes = []
         for i, mask_per_img in enumerate(bev_mask):
-            index_query_per_img = mask_per_img[0].sum(-1).nonzero().squeeze(-1)
+            index_query_per_img = ttnn.sum(mask_per_img[0], -1)
             print(index_query_per_img.shape)
-            indexes.append(index_query_per_img)
+            print(index_query_per_img)
+            index_query_per_img = ttnn.nonzero(index_query_per_img, queue_id=0)
+            index_query_per_img = ttnn.squeeze(index_query_per_img, -1)
         max_len = max([len(each) for each in indexes])
 
         # each camera only interacts with its corresponding BEV queries. This step can  greatly save GPU memory.
@@ -109,12 +111,12 @@ class SpatialCrossAttention(nn.Module):
         return self.dropout(slots) + inp_residual
 
 
-class MSDeformableAttention3D(nn.Module):
+class TtMSDeformableAttention3D(nn.Module):
     def __init__(
         self,
         embed_dims=256,
         num_heads=8,
-        num_levels=1,
+        num_levels=4,
         num_points=8,
         im2col_step=64,
         dropout=0.1,
@@ -151,9 +153,9 @@ class MSDeformableAttention3D(nn.Module):
         self.num_levels = num_levels
         self.num_heads = num_heads
         self.num_points = num_points
-        self.sampling_offsets = nn.Linear(embed_dims, num_heads * num_levels * num_points * 2)
-        self.attention_weights = nn.Linear(embed_dims, num_heads * num_levels * num_points)
-        self.value_proj = nn.Linear(embed_dims, embed_dims)
+        # self.sampling_offsets = nn.Linear(embed_dims, num_heads * num_levels * num_points * 2)
+        # self.attention_weights = nn.Linear(embed_dims, num_heads * num_levels * num_points)
+        # self.value_proj = nn.Linear(embed_dims, embed_dims)
 
     def forward(
         self,
