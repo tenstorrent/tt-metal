@@ -193,7 +193,7 @@ test_bounds = {
         16: {
             "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
         },
-        30: {  # One from One Directed Ideal
+        30: {  # One from All Directed Ideal
             "riscv_1": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 30},
         },
         50: {  # One to One Directed Ideal
@@ -283,7 +283,7 @@ test_bounds = {
         16: {
             "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
         },
-        30: {  # One from One Directed Ideal
+        30: {  # One from All Directed Ideal
             "riscv_1": {"latency": {"lower": 16500, "upper": 17500}, "bandwidth": 60},
         },
         50: {  # One to One Directed Ideal
