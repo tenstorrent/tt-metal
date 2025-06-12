@@ -76,8 +76,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     ttnn::MeshDevice* mesh_device = input_tensor.mesh_device();
     const bool enable_async_output_tensor = false;
 
-    TensorSpec output_intermediate_tensor_spec = temp_tensor.tensor_spec();
-    auto output_interm_padded_shape = output_intermediate_tensor_spec.padded_shape();
+    const TensorSpec& output_intermediate_tensor_spec = temp_tensor.tensor_spec();
     auto ring_core_ranges = output_tensor.shard_spec().value().grid.ranges();
 
     bool is_first_chip = ring_index == 0;

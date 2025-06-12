@@ -520,7 +520,7 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool
     }();
 
     if (padded_output) {
-        auto shape = tt_tensor.padded_shape();
+        const auto& shape = tt_tensor.padded_shape();
         torch_shape = std::vector<std::uint32_t>(shape.cbegin(), shape.cend());
     }
     tensor = tensor.attr("reshape")(torch_shape);

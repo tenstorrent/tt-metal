@@ -379,7 +379,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         receiver_reader_kernel_config);
 
     // Determine output shape and fracturing
-    const auto input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     const auto in_row_tiles = input_shape[2] / tt::constants::TILE_HEIGHT;
     const auto in_col_tiles = input_shape[3] / tt::constants::TILE_WIDTH;
     auto output_shape = output_buffer.padded_shape();

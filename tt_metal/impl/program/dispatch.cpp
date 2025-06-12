@@ -299,7 +299,7 @@ uint32_t finalize_kernel_bins(
         for (int class_id = 0; class_id < DISPATCH_CLASS_MAX; class_id++) {
             auto& optional_id = kg->kernel_ids[class_id];
             if (optional_id) {
-                const auto kernel = kernels.at(optional_id.value());
+                const auto& kernel = kernels.at(optional_id.value());
                 const auto& kernel_impl = KernelImpl::from(*kernel);
                 const std::vector<const ll_api::memory*>& binaries = kernel_impl.binaries(
                     BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);

@@ -70,7 +70,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     using tt::tt_metal::CircularBufferConfig;
 
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
-    const auto shape = a.padded_shape();
+    const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
     const uint32_t NC = a.physical_volume() / HW;
