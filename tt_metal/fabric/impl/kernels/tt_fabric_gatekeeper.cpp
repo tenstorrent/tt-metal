@@ -65,7 +65,7 @@ inline void get_routing_tables() {
             if (temp_mask & 0x1) {
                 uint64_t router_config_addr = ((uint64_t)eth_chan_to_noc_xy[noc_index][channel] << 32) |
                                               eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
-                noc_async_read_one_packet(
+                noc_async_read<sizeof(tt::tt_fabric::fabric_router_l1_config_t)>(
                     router_config_addr,
                     (uint32_t)&routing_table[routing_plane],
                     sizeof(tt::tt_fabric::fabric_router_l1_config_t));
@@ -157,7 +157,7 @@ inline socket_handle_t* socket_receiver_available(packet_header_t* packet) {
 inline void set_socket_active(socket_handle_t* handle) {
     handle->socket_state = SocketState::ACTIVE;
     // send socket connection state to send socket opener.
-    noc_async_write_one_packet(
+    noc_async_write<sizeof(socket_handle_t)>(
         (uint32_t)(handle), handle->status_notification_addr, sizeof(socket_handle_t), noc_index);
 }
 
@@ -328,7 +328,7 @@ inline bool send_gk_message(uint64_t dest_addr, packet_header_t* packet) {
     uint32_t wrptr = socket_info->wrptr.ptr;
     noc_addr = dest_addr + offsetof(ctrl_chan_msg_buf, rdptr);
 
-    noc_async_read_one_packet(noc_addr, (uint32_t)(&socket_info->rdptr.ptr), 4);
+    noc_async_read<4>(noc_addr, (uint32_t)(&socket_info->rdptr.ptr), 4);
     noc_async_read_barrier();
     if (fvcc_buf_ptrs_full(wrptr, socket_info->rdptr.ptr)) {
         return false;
@@ -336,7 +336,7 @@ inline bool send_gk_message(uint64_t dest_addr, packet_header_t* packet) {
 
     uint32_t dest_wr_index = wrptr & FVCC_SIZE_MASK;
     noc_addr = dest_addr + offsetof(ctrl_chan_msg_buf, msg_buf) + dest_wr_index * sizeof(packet_header_t);
-    noc_async_write_one_packet((uint32_t)(packet), noc_addr, sizeof(packet_header_t), noc_index);
+    noc_async_write<sizeof(packet_header_t)>((uint32_t)(packet), noc_addr, sizeof(packet_header_t), noc_index);
     return true;
 }
 
@@ -344,7 +344,7 @@ inline bool retry_gk_message(uint64_t dest_addr, packet_header_t* packet) {
     uint32_t wrptr = socket_info->wrptr.ptr;
     uint64_t noc_addr = dest_addr + offsetof(ctrl_chan_msg_buf, rdptr);
 
-    noc_async_read_one_packet(noc_addr, (uint32_t)(&socket_info->rdptr.ptr), 4);
+    noc_async_read<4>(noc_addr, (uint32_t)(&socket_info->rdptr.ptr), 4);
     noc_async_read_barrier();
     if (fvcc_buf_ptrs_full(wrptr, socket_info->rdptr.ptr)) {
         return false;
@@ -352,7 +352,7 @@ inline bool retry_gk_message(uint64_t dest_addr, packet_header_t* packet) {
 
     uint32_t dest_wr_index = wrptr & FVCC_SIZE_MASK;
     noc_addr = dest_addr + offsetof(ctrl_chan_msg_buf, msg_buf) + dest_wr_index * sizeof(packet_header_t);
-    noc_async_write_one_packet((uint32_t)(packet), noc_addr, sizeof(packet_header_t), noc_index);
+    noc_async_write<sizeof(packet_header_t)>((uint32_t)(packet), noc_addr, sizeof(packet_header_t), noc_index);
     gk_message_pending = 0;
     return true;
 }

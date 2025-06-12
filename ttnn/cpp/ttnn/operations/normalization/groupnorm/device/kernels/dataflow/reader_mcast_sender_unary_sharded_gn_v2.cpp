@@ -188,7 +188,7 @@ void kernel_main() {
                 uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial);
                 uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external);
                 uint64_t noc_addr_ex_par = get_noc_addr(noc_coord_x[0], noc_coord_y[0], l1_read_addr_ex_par);
-                noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
+                noc_async_read<1>(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
                 l1_write_addr_external += 16;
                 noc_async_read_barrier();
 
@@ -201,7 +201,7 @@ void kernel_main() {
                 for (uint32_t i = 0; i < num_mcast_cores - 1; ++i) {
                     uint64_t noc_addr_ex_par =
                         get_noc_addr(noc_coord_x[i + 1], noc_coord_y[i + 1], l1_read_addr_ex_par);
-                    noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, num_bytes_read);
+                    noc_async_read<1>(noc_addr_ex_par, l1_write_addr_external, num_bytes_read);
                     l1_write_addr_external += 16;
                     noc_async_read_barrier();
                 }

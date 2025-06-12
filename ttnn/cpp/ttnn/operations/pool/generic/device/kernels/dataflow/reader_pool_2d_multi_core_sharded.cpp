@@ -179,7 +179,7 @@ void kernel_main() {
                         const uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
                         const uint32_t read_offset =
                             in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
-                        noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
+                        noc_async_read<1>(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
                         out_l1_write_addr += read_bytes;
                     }
                 }
@@ -195,7 +195,8 @@ void kernel_main() {
             for (uint32_t h = 0; h < window_h; ++h, h_multiples += in_w_padded) {
                 const uint32_t stick_offset = top_left_local_index + h_multiples;
                 const uint32_t read_offset = in_l1_read_base_addr + (stick_offset * in_nbytes_c);
-                noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
+                noc_async_read<in_nbytes_c * window_w>(
+                    get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
                 out_l1_write_addr += in_nbytes_c * window_w;
             }
             noc_async_read_barrier();
