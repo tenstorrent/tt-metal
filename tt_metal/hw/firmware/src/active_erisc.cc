@@ -65,51 +65,66 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 
+void set_deassert_addresses() {
+#ifdef ARCH_BLACKHOLE
+    WRITE_REG(SUBORDINATE_AERISC_RESET_PC, MEM_SUBORDINATE_AERISC_FIRMWARE_BASE);
+#endif
+}
+
+inline void run_subordinate_eriscs(dispatch_core_processor_masks enables) {
+    // List of subordinate eriscs to run
+    if (enables & DISPATCH_CLASS_MASK_ETH_DM1) {
+        mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
+    }
+}
+
+inline void wait_subordinate_eriscs() {
+    WAYPOINT("SEW");
+    while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
+        invalidate_l1_cache();
+    }
+    WAYPOINT("SED");
+}
+
 int main() {
     configure_csr();
     WAYPOINT("I");
     do_crt1((uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
-    // put this into scratch space similar to idle erisc
     noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
 
-    mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+    enable_fw_flag[0] = 1;
 
     risc_init();
 
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
+    set_deassert_addresses();
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
 
+    deassert_all_reset();
+    wait_subordinate_eriscs();
     mailboxes->go_message.signal = RUN_MSG_DONE;
+    mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
-    while (1) {
+    // Use this to exit for now
+    while (enable_fw_flag[0]) {
         // Wait...
         WAYPOINT("GW");
 
-        uint8_t go_message_signal = RUN_MSG_DONE;
-        while ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
-            invalidate_l1_cache();
-            // While the go signal for kernel execution is not sent, check if the worker was signalled
-            // to reset its launch message read pointer.
-            if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
-                // Set the rd_ptr on workers to specified value
-                mailboxes->launch_msg_rd_ptr = 0;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
-                mailboxes->go_message.signal = RUN_MSG_DONE;
-                // Notify dispatcher that this has been done
-                internal_::notify_dispatch_core_done(dispatch_addr);
-            }
-        }
-        WAYPOINT("GD");
+        uint8_t go_message_signal = mailboxes->go_message.signal;
 
-        {
+        uint32_t kernel_config_base =
+            firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+
+        if (go_message_signal == RUN_MSG_GO) {
             // Only include this iteration in the device profile if the launch message is valid. This is because all
             // workers get a go signal regardless of whether they're running a kernel or not. We don't want to profile
             // "invalid" iterations.
@@ -123,32 +138,31 @@ int main() {
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
-            flush_erisc_icache();
+            // #18384: This register was left dirty by eth training.
+            // It is not used in dataflow api, so it can be set to 0
+            // one time here instead of setting it everytime in dataflow_api.
+            NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
 
-            firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+            flush_erisc_icache();
 
             enum dispatch_core_processor_masks enables =
                 (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
 
-            // Run the ERISC kernel, no kernel config buffer on active eth
+            run_subordinate_eriscs(enables);
+
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 WAYPOINT("R");
-#ifdef ARCH_BLACKHOLE
-                // #18384: This register was left dirty by eth training.
-                // It is not used in dataflow api, so it can be set to 0
-                // one time here instead of setting it everytime in dataflow_api.
-                NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
-#endif
-                // TODO: This currently runs on second risc on active eth cores but with newer drop of syseng FW
-                //  this will run on risc0
+
                 int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
                 uint32_t kernel_lma =
+                    kernel_config_base +
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
                 auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                 record_stack_usage(stack_free);
                 WAYPOINT("D");
             }
 
+            wait_subordinate_eriscs();
             mailboxes->go_message.signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed
@@ -159,7 +173,17 @@ int main() {
                 internal_::notify_dispatch_core_done(dispatch_addr);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
+
+            WAYPOINT("GD");
+        } else if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+            // Reset the launch message buffer read ptr
+            mailboxes->launch_msg_rd_ptr = 0;
+            uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
+            mailboxes->go_message.signal = RUN_MSG_DONE;
+            internal_::notify_dispatch_core_done(dispatch_addr);
         }
+
+        invalidate_l1_cache();
     }
 
     return 0;
