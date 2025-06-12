@@ -864,6 +864,11 @@ void copy_completion_queue_data_into_user_space(
 
     uint32_t pad_size_bytes = padded_page_size - page_size;
 
+    BufferCorePageMappingIterator core_page_mapping_it;
+    if (core_page_mapping) {
+        core_page_mapping_it = core_page_mapping->begin();
+    }
+
     while (remaining_bytes_to_read != 0) {
         uint32_t completion_queue_write_ptr_and_toggle =
             sysmem_manager.completion_queue_wait_front(cq_id, exit_condition);
@@ -958,9 +963,6 @@ void copy_completion_queue_data_into_user_space(
                 }
             }
         } else {
-            auto core_page_mapping_it = core_page_mapping->begin();
-            // TT_FATAL(dev_page_id == 0, "dev_page_id is not 0");
-
             uint32_t src_offset_bytes = offset_in_completion_q_data;
             offset_in_completion_q_data = 0;
             uint32_t dst_offset_bytes = contig_dst_offset;
