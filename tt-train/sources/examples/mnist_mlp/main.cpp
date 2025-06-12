@@ -5,6 +5,7 @@
 #include <yaml-cpp/node/node.h>
 
 #include <CLI/CLI.hpp>
+#include <chrono>
 #include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <functional>
@@ -173,6 +174,7 @@ int main(int argc, char **argv) {
         dataset.test_images, dataset.test_labels);
 
     auto *device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
         [num_features, num_targets, device](std::vector<DatasetSample> &&samples) {
             const uint32_t batch_size = samples.size();
@@ -253,6 +255,8 @@ int main(int argc, char **argv) {
     };
 
     for (size_t epoch = 0; epoch < config.num_epochs; ++epoch) {
+        auto start_time = std::chrono::steady_clock::now();
+        uint32_t num_steps_in_epoch = 0;
         for (const auto &[data, target] : train_dataloader) {
             optimizer.zero_grad();
             auto output = run_model(model, data);
@@ -271,7 +275,12 @@ int main(int argc, char **argv) {
             optimizer.step();
             ttml::autograd::ctx().reset_graph();
             training_step++;
+            num_steps_in_epoch++;
         }
+
+        auto end_time = std::chrono::steady_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+        fmt::println("per step ms: {} ms", duration.count() / num_steps_in_epoch);
 
         const float test_accuracy = evaluate(test_dataloader, model, num_targets);
         fmt::print(
