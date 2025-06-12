@@ -19,10 +19,9 @@ HostBuffer get_host_buffer(const Tensor& tensor) {
             [](const HostStorage& storage) { return storage.buffer; },
             [](const MultiDeviceHostStorage& storage) {
                 TT_FATAL(
-                    storage.num_buffers() == 1,
-                    "Can't get a single buffer from multi device host storage, got {}",
-                    storage.num_buffers());
-                return storage.get_buffer(0);
+                    storage.distributed_buffer().shape().mesh_size() == 1,
+                    "Can't get a single buffer from multi device host storage");
+                return *storage.get_shard_at_origin();
             },
             [](const auto&) -> HostBuffer { TT_THROW("Tensor must have HostStorage or MultiDeviceHostStorage"); },
         },
