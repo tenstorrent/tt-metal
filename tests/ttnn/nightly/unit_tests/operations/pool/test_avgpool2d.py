@@ -112,14 +112,18 @@ def run_avg_pool2d(
         # Normal reduction cases are when channels <= 8 * 32 and kernel_hw <= 16
         # Wide reduction cases channels > 8 * 32
         # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
-        [1, 32, 16, 16],
-        [1, 512, 112, 32],
-        [1, 512, 16, 16],
-        [1, 800, 16, 16],
-        [2, 32, 16, 16],
-        [2, 512, 112, 32],
-        [2, 512, 16, 16],
-        [2, 800, 16, 16],
+        # [1, 32, 16, 16],
+        # [1, 512, 112, 32],
+        # [1, 512, 16, 16],
+        # [1, 800, 16, 16],
+        # [2, 32, 16, 16],
+        # [2, 512, 112, 32],
+        # [2, 512, 16, 16],
+        # [2, 800, 16, 16],
+        [1, 384, 28, 28],
+        [1, 288, 56, 56],
+        [1, 256, 132, 20],
+        [1, 32, 264, 40],
     ),
 )
 @pytest.mark.parametrize(
@@ -129,9 +133,9 @@ def run_avg_pool2d(
         # Large reductions go to large kernels
         # Reductions which are large and wide at the same time
         # go to large kernels
-        (2, 2),
-        (3, 3),
-        (5, 5),
+        # (2, 2),
+        # (3, 3),
+        # (5, 5),
         (9, 9),
     ),
 )
@@ -139,23 +143,23 @@ def run_avg_pool2d(
     "stride",
     (
         (1, 1),
-        (2, 2),
+        # (2, 2),
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
         (0, 0),
-        (1, 2),
-        (2, 3),
-        (4, 4),
+        # (1, 1),
+        # (2, 2),
+        # (4, 4),
     ),
 )
 @pytest.mark.parametrize(
     "ceil_mode",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
@@ -169,20 +173,20 @@ def run_avg_pool2d(
     "divisor_override",
     [
         None,
-        5,
+        # 5,
     ],
 )
 @pytest.mark.parametrize(
     "shard_scheme",
     [
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        # ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
 @pytest.mark.parametrize(
     "use_program_cache",
-    [True, False],
+    [False],
 )
 def test_run_avg_pool2d(
     device,

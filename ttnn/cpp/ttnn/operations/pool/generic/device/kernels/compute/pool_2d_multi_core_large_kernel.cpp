@@ -34,7 +34,7 @@ inline void reduce_h_fused_interm(
     constexpr uint32_t num_faces_in_output_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
-    const uint32_t curr_in_cb_id = (split_reader && (in_stick_index & 0x1)) ? in_cb_id_1 : in_cb_id_0;
+    const uint32_t curr_in_cb_id = in_cb_id_0;
     cb_wait_front(curr_in_cb_id, 1);
 
     tile_regs_acquire();
@@ -153,13 +153,9 @@ void MAIN {
 
     // wait for initialization to complete
     cb_wait_front(sync_cb_id1, 2);
-    if constexpr (split_reader) {
-        cb_wait_front(sync_cb_id2, 2);
-    }
 
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++i) {
-        const uint32_t curr_scalar_cb_id =
-            (split_reader && (i & 0x1) && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+        const uint32_t curr_scalar_cb_id = in_scalar_cb_id_0;
         if constexpr (!one_scalar_per_core) {
             cb_wait_front(curr_scalar_cb_id, 1);
         }

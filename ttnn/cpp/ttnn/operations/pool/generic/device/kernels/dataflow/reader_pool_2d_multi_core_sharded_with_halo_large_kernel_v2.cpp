@@ -89,8 +89,7 @@ void kernel_main() {
     constexpr uint32_t sync_cb_id1 = get_compile_time_arg_val(29);
     constexpr uint32_t sync_cb_id2 = get_compile_time_arg_val(30);
 
-    constexpr uint32_t in_scalar_cb_id =
-        split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+    constexpr uint32_t in_scalar_cb_id = in_scalar_cb_id_0;
 
     uint32_t scalar_index = 0;
     uint32_t scalar_start = 0;
@@ -106,58 +105,29 @@ void kernel_main() {
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
     // fill the clear cb
-    if constexpr (split_reader) {
-        constexpr uint32_t half_tile = TILE_HEIGHT * TILE_WIDTH / 2;
-        if constexpr (reader_id == 0) {
-            fill_with_val(get_write_ptr(clear_value_cb_id), half_tile, bf16_init_value);
-        } else {
-            fill_with_val(get_write_ptr(clear_value_cb_id) + 2 * half_tile, half_tile, bf16_init_value);  // 2 for bf16
-        }
-    } else {
-        if constexpr (reader_id == 0) {
-            fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-        }
-    }
+    fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
 
     // ensure the clear CB is full before proceeding
-    if constexpr (reader_id == 0) {
-        cb_push_back(sync_cb_id1, 1);
-        if constexpr (split_reader) {
-            cb_wait_front(sync_cb_id2, 1);
-        }
-    } else {
-        cb_push_back(sync_cb_id2, 1);
-        cb_wait_front(sync_cb_id1, 1);
-    }
+    cb_push_back(sync_cb_id1, 1);
 
     if constexpr (need_to_initialize_in_cb && !is_avg_pool) {  // for avg pool fill_with_val runs in loop, no need to
                                                                // initialize
         clear_out_tiles<in_cb_id, clear_value_cb_id>();
     }
 
-    if constexpr (reader_id == 0) {
-        constexpr uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
-        // initialize buffers
-        clear_out_tiles<interm_reduction_cb_id, clear_value_cb_id>();
-        if constexpr (one_scalar_per_core) {
-            fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16);
-        }
-        if constexpr (is_avg_pool) {
-            // for avgpool, we use a one's CB to avoid double division by kernel size for large kernel case.
-            fill_with_val(get_write_ptr(in_one_cb_id), TILE_WIDTH, bf16_one_u16);
-        }
+    constexpr uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
+    // initialize buffers
+    clear_out_tiles<interm_reduction_cb_id, clear_value_cb_id>();
+    if constexpr (one_scalar_per_core) {
+        fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16);
+    }
+    if constexpr (is_avg_pool) {
+        // for avgpool, we use a one's CB to avoid double division by kernel size for large kernel case.
+        fill_with_val(get_write_ptr(in_one_cb_id), TILE_WIDTH, bf16_one_u16);
     }
 
     // ensure initialization is done before proceeding
-    if constexpr (reader_id == 0) {
-        cb_push_back(sync_cb_id1, 1);
-        if constexpr (split_reader) {
-            cb_wait_front(sync_cb_id2, 2);
-        }
-    } else {
-        cb_push_back(sync_cb_id2, 1);
-        cb_wait_front(sync_cb_id1, 2);
-    }
+    cb_push_back(sync_cb_id1, 1);
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
@@ -198,9 +168,7 @@ void kernel_main() {
             // and counter is even it will fullfill the first half of the condition counter == scalar_start || counter
             // == scalar_start + 2. When reader is even and scalar_start is odd or vice versa we will fullfill the
             // second half of the condition counter == scalar_start + 1 || counter == scalar_start + 3.
-            if (counter < scalar_end &&
-                (counter == scalar_start || counter == scalar_start + 1 ||
-                 (split_reader && (counter == scalar_start + 2 || counter == scalar_start + 3)))) {
+            if (counter < scalar_end && (counter == scalar_start || counter == scalar_start + 1)) {
                 fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_value, false);
             }
             cb_push_back(in_scalar_cb_id, 1);
@@ -245,8 +213,5 @@ void kernel_main() {
             }
         }
         counter++;
-        if constexpr (split_reader) {
-            counter++;  // interleave the indices
-        }
     }
 }  // kernel_main()
