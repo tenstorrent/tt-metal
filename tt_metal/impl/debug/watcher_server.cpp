@@ -463,12 +463,12 @@ void watcher_attach(chip_id_t device_id) {
 }
 
 void watcher_detach(chip_id_t device_id) {
-    if (!tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
-        // TODO: reinstate this after watcher server singleton is removed.
-        return;
-    }
     {
         const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
+        if (!watcher::enabled) {
+            // TODO: reinstate this after watcher server singleton is removed.
+            return;
+        }
 
         TT_ASSERT(watcher::devices.find(device_id) != watcher::devices.end());
         if (watcher::enabled && watcher::logfile != nullptr) {
