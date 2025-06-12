@@ -9,8 +9,7 @@
 #include <variant>
 #include "helpers.hpp"
 #include "const.hpp"
-#include "shape_wrapper.hpp"
-#include "bank_coords_wrapper.hpp"
+#include "array_wrapper.hpp"
 #include "args_location.hpp"
 
 namespace nd_sharding {
@@ -35,7 +34,7 @@ struct DistributionSpec {
 
     // std::array if rank/num_banks are static, Span otherwise
     using ShapeBase = typename TensorShapeWrapper::ShapeBase;
-    using PackedCoordsBase = typename BankCoordsWrapper::PackedCoordsBase;
+    using PackedCoordsBase = typename BankCoordsWrapper::ShapeBase;
 
     static constexpr bool has_static_rank = ArgsLoc::RankStatic;
     static constexpr bool has_static_num_banks = ArgsLoc::NumBanksStatic;
@@ -47,8 +46,8 @@ struct DistributionSpec {
     static constexpr bool shapes_static = has_static_rank && tensor_shape_static && shard_shape_static;
     static constexpr bool is_static = shapes_static && bank_coords_static;
 
-    static constexpr auto rank_ct = has_static_rank ? TensorShapeWrapper::rank : detail::UNKNOWN;
-    static constexpr uint32_t num_banks_ct = has_static_num_banks ? BankCoordsWrapper::num_banks : detail::UNKNOWN;
+    static constexpr auto rank_ct = has_static_rank ? TensorShapeWrapper::size : detail::UNKNOWN;
+    static constexpr uint32_t num_banks_ct = has_static_num_banks ? BankCoordsWrapper::size : detail::UNKNOWN;
 
     // This constructor is only used for completely static DistributionSpec
     template <typename T = void, typename = std::enable_if_t<is_static, T>>
@@ -71,7 +70,7 @@ struct DistributionSpec {
         bank_coords_rt(std::forward<BankCoordsArr>(bank_coords_arr)) {
         if constexpr (!has_static_rank) {
             // Rank is not known at compile time, use runtime rank
-            rank_rt = tensor_shape_rt.shape.size();
+            rank_rt = tensor_shape_rt.elements.size();
             // !has_static_rank means ShapeBase is span<uint32_t>
             shard_grid_rt = ShapeBase(shard_grid_rt_buf.value, rank_rt);
             shard_grid_strides_rt = ShapeBase(shard_grid_strides_rt_buf.value, rank_rt);
@@ -81,15 +80,15 @@ struct DistributionSpec {
         }
         if constexpr (!has_static_num_banks) {
             // Number of banks is not known at compile time, use runtime number of banks
-            num_banks_rt = bank_coords_rt.packed_xy_coords.size();
+            num_banks_rt = bank_coords_rt.elements.size();
         }
         if constexpr (!tensor_shape_static) {
             // If tensor shape is not static, we need to compute strides and volume at runtime
-            compute_strides_volume_rt(tensor_shape_rt.shape, tensor_strides_rt, tensor_volume_rt);
+            compute_strides_volume_rt(tensor_shape_rt.elements, tensor_strides_rt, tensor_volume_rt);
         }
         if constexpr (!shard_shape_static) {
             // If shard shape is not static, we need to compute strides and volume at runtime
-            compute_strides_volume_rt(shard_shape_rt.shape, shard_strides_rt, shard_volume_rt);
+            compute_strides_volume_rt(shard_shape_rt.elements, shard_strides_rt, shard_volume_rt);
         }
         if constexpr (!shapes_static) {
             compute_shard_grid_and_strides_rt(get_tensor_shape(), get_shard_shape());
@@ -116,7 +115,7 @@ struct DistributionSpec {
     }
 
     constexpr const ShapeBase& get_tensor_shape() const {
-        getter_helper(tensor_shape_static, TensorShapeWrapper::shape, tensor_shape_rt.shape)
+        getter_helper(tensor_shape_static, TensorShapeWrapper::elements, tensor_shape_rt.elements)
     }
 
     constexpr const ShapeBase& get_tensor_strides() const {
@@ -128,7 +127,7 @@ struct DistributionSpec {
     }
 
     constexpr const ShapeBase& get_shard_shape() const {
-        getter_helper(shard_shape_static, ShardShapeWrapper::shape, shard_shape_rt.shape)
+        getter_helper(shard_shape_static, ShardShapeWrapper::elements, shard_shape_rt.elements)
     }
 
     constexpr const ShapeBase& get_shard_strides() const {
@@ -138,7 +137,7 @@ struct DistributionSpec {
     constexpr size_t get_shard_volume() const { getter_helper(shard_shape_static, shard_volume_ct, shard_volume_rt) }
 
     constexpr const PackedCoordsBase& get_packed_xy_coords() const {
-        getter_helper(bank_coords_static, BankCoordsWrapper::packed_xy_coords, bank_coords_rt.packed_xy_coords)
+        getter_helper(bank_coords_static, BankCoordsWrapper::elements, bank_coords_rt.elements)
     }
 
 #undef getter_helper
@@ -221,21 +220,21 @@ private:
     mutable detail::ConditionalField<!has_static_rank, uint32_t[MAX_RANK]> shard_grid_strides_rt_buf;
 
     static constexpr ShapeBase shard_grid_ct =
-        precompute_shard_grid_ct(TensorShapeWrapper::shape, ShardShapeWrapper::shape);
+        precompute_shard_grid_ct(TensorShapeWrapper::elements, ShardShapeWrapper::elements);
     static constexpr ShapeBase shard_grid_strides_ct =
-        precompute_shard_grid_strides_ct(TensorShapeWrapper::shape, ShardShapeWrapper::shape);
+        precompute_shard_grid_strides_ct(TensorShapeWrapper::elements, ShardShapeWrapper::elements);
 
     mutable detail::ConditionalField<!has_static_rank, uint32_t[MAX_RANK]> tensor_strides_rt_buf;
     mutable detail::ConditionalField<!has_static_rank, uint32_t[MAX_RANK]> shard_strides_rt_buf;
     ShapeBase tensor_strides_rt = {};
     ShapeBase shard_strides_rt = {};
-    static constexpr ShapeBase tensor_strides_ct = precompute_strides_ct(TensorShapeWrapper::shape);
-    static constexpr ShapeBase shard_strides_ct = precompute_strides_ct(ShardShapeWrapper::shape);
+    static constexpr ShapeBase tensor_strides_ct = precompute_strides_ct(TensorShapeWrapper::elements);
+    static constexpr ShapeBase shard_strides_ct = precompute_strides_ct(ShardShapeWrapper::elements);
 
     size_t tensor_volume_rt = 0;
     size_t shard_volume_rt = 0;
-    static constexpr size_t tensor_volume_ct = precompute_volume_ct(TensorShapeWrapper::shape);
-    static constexpr size_t shard_volume_ct = precompute_volume_ct(ShardShapeWrapper::shape);
+    static constexpr size_t tensor_volume_ct = precompute_volume_ct(TensorShapeWrapper::elements);
+    static constexpr size_t shard_volume_ct = precompute_volume_ct(ShardShapeWrapper::elements);
 };
 
 /**
@@ -250,17 +249,17 @@ auto build_dspec_from_args_proxy(const ArgsOffsets& args_offsets) {
     using Loc = typename ArgsOffsets::ArgsLoc;
 
     // Dispatch to the appropriate ShapeWrapper and BankCoordsWrapper types based on the "staticness"
-    using TensorShapeType = typename ShapeWrapperTypeSelector<
+    using TensorShapeType = typename ArrayWrapperTypeSelector<
         Loc::RankStatic,
         Loc::TensorShapeStatic,
         ArgsOffsets::TensorShapeCTAOffset,
         ArgsOffsets::RankCT>::type;
-    using ShardShapeType = typename ShapeWrapperTypeSelector<
+    using ShardShapeType = typename ArrayWrapperTypeSelector<
         Loc::RankStatic,
         Loc::ShardShapeStatic,
         ArgsOffsets::ShardShapeCTAOffset,
         ArgsOffsets::RankCT>::type;
-    using BankCoordsType = typename BankCoordsWrapperTypeSelector<
+    using BankCoordsType = typename ArrayWrapperTypeSelector<
         Loc::NumBanksStatic,
         Loc::BankCoordsStatic,
         ArgsOffsets::BankCoordsCTAOffset,

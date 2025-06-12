@@ -54,16 +54,10 @@ constexpr uint32_t get_common_arg_addr(int arg_idx);
 #undef FORCE_INLINE
 
 template <size_t... Dims>
-using ShapeWrapper = nd_sharding::detail::ShapeWrapperStaticDimsStaticRank<Dims...>;
+using ArrayWrapper = nd_sharding::detail::ArrayStaticWrapper<Dims...>;
 
 template <size_t Rank>
-using ShapeWrapperDynamic = nd_sharding::detail::ShapeWrapperDynamicDimsStaticRank<Rank>;
-
-template <size_t... PackedCoords>
-using BankCoordWrapper = nd_sharding::detail::BankCoordWrapperStaticNBanksStaticCoords<PackedCoords...>;
-
-template <size_t NumBanks>
-using BankCoordWrapperDynamic = nd_sharding::detail::BankCoordWrapperDynamicStaticNBanksDynamicCoords<NumBanks>;
+using ArrayWrapperDynamic = nd_sharding::detail::ArrayStaticSizeDynamicElementsWrapper<Rank>;
 
 template <
     uint32_t Rank_ = 0,
@@ -86,8 +80,8 @@ struct ArgsConfigPlaceholder {
 // If inputs are passed as constexpr arrays, we can use this style to directly create the structs
 // Example:
 //    constexpr std::array<uint32_t, 3> tensor_shape_array_1 = {1, 2, 3};
-//    USING_STRUCT_FROM_ARRAY_WRAPPER(ShapeWrapper, tensor_shape_1, tensor_shape_array);
-//    static_assert(std::is_same_v<tensor_shape_1, ShapeWrapper<1, 2, 3>>);
+//    USING_STRUCT_FROM_ARRAY_WRAPPER(ArrayWrapper, tensor_shape_1, tensor_shape_array);
+//    static_assert(std::is_same_v<tensor_shape_1, ArrayWrapper<1, 2, 3>>);
 template <template <size_t...> class Wrapper, typename F, size_t... Is>
 constexpr auto make_struct_from_array_wrapper(F, std::index_sequence<Is...>) -> Wrapper<F{}()[Is]...>;
 
@@ -145,9 +139,9 @@ constexpr size_t num_banks_1 = 4;
 constexpr std::array<uint32_t, rank_1> tensor_shape_array_1 = {2, 3};
 constexpr std::array<uint32_t, rank_1> shard_shape_array_1 = {1, 2};
 constexpr std::array<uint32_t, num_banks_1> bank_coord_array_1{};
-USING_STRUCT_FROM_ARRAY_WRAPPER(ShapeWrapper, tensor_shape_1, tensor_shape_array_1);
-USING_STRUCT_FROM_ARRAY_WRAPPER(ShapeWrapper, shard_shape_1, shard_shape_array_1);
-USING_STRUCT_FROM_ARRAY_WRAPPER(BankCoordWrapper, bank_coords_1, bank_coord_array_1);
+USING_STRUCT_FROM_ARRAY_WRAPPER(ArrayWrapper, tensor_shape_1, tensor_shape_array_1);
+USING_STRUCT_FROM_ARRAY_WRAPPER(ArrayWrapper, shard_shape_1, shard_shape_array_1);
+USING_STRUCT_FROM_ARRAY_WRAPPER(ArrayWrapper, bank_coords_1, bank_coord_array_1);
 
 using test_params_1 = ShardedAccessorParams<
     ShardedAccessorInputs<
@@ -173,9 +167,9 @@ constexpr size_t num_banks_2 = 6;
 constexpr std::array<uint32_t, rank_2> tensor_shape_array_2 = {2, 1, 3, 4};
 constexpr std::array<uint32_t, rank_2> shard_shape_array_2 = {2, 2, 1, 2};
 constexpr std::array<uint32_t, num_banks_2> bank_coord_array_2{};
-USING_STRUCT_FROM_ARRAY_WRAPPER(ShapeWrapper, tensor_shape_2, tensor_shape_array_2);
-USING_STRUCT_FROM_ARRAY_WRAPPER(ShapeWrapper, shard_shape_2, shard_shape_array_2);
-USING_STRUCT_FROM_ARRAY_WRAPPER(BankCoordWrapper, bank_coords_2, bank_coord_array_2);
+USING_STRUCT_FROM_ARRAY_WRAPPER(ArrayWrapper, tensor_shape_2, tensor_shape_array_2);
+USING_STRUCT_FROM_ARRAY_WRAPPER(ArrayWrapper, shard_shape_2, shard_shape_array_2);
+USING_STRUCT_FROM_ARRAY_WRAPPER(ArrayWrapper, bank_coords_2, bank_coord_array_2);
 
 using test_params_2 = ShardedAccessorParams<
     ShardedAccessorInputs<
@@ -219,9 +213,9 @@ constexpr size_t num_banks_3 = 5;
 constexpr std::array<uint32_t, rank_3> tensor_shape_array_3 = {2, 1, 3, 4};
 constexpr std::array<uint32_t, rank_3> shard_shape_array_3 = {2, 2, 1, 2};
 constexpr std::array<uint32_t, num_banks_3> bank_coord_array_3{};
-USING_STRUCT_FROM_ARRAY_WRAPPER(ShapeWrapper, tensor_shape_3, tensor_shape_array_3);
-USING_STRUCT_FROM_ARRAY_WRAPPER(ShapeWrapper, shard_shape_3, shard_shape_array_3);
-USING_STRUCT_FROM_ARRAY_WRAPPER(BankCoordWrapper, bank_coords_3, bank_coord_array_3);
+USING_STRUCT_FROM_ARRAY_WRAPPER(ArrayWrapper, tensor_shape_3, tensor_shape_array_3);
+USING_STRUCT_FROM_ARRAY_WRAPPER(ArrayWrapper, shard_shape_3, shard_shape_array_3);
+USING_STRUCT_FROM_ARRAY_WRAPPER(ArrayWrapper, bank_coords_3, bank_coord_array_3);
 
 using test_params_3 = ShardedAccessorParams<
     ShardedAccessorInputs<
@@ -301,7 +295,7 @@ namespace crta_params {
 constexpr size_t rank = 2;
 constexpr size_t num_banks = 4;
 constexpr std::array<uint32_t, num_banks> bank_coord_array{};
-USING_STRUCT_FROM_ARRAY_WRAPPER(BankCoordWrapper, bank_coords, crta_params::bank_coord_array);
+USING_STRUCT_FROM_ARRAY_WRAPPER(ArrayWrapper, bank_coords, crta_params::bank_coord_array);
 using expected = ShardedAccessorExpected<
     ExpectedDSpec<rank>{
         .tensor_strides = {3, 1},
@@ -342,9 +336,9 @@ void assert_sharded_accessor(const ShardAccessorT& sharded_accessor) {
 }  // namespace crta_params
 
 TEST(ShardedAccessorTestsCRTA, RuntimeTensorRuntimeShardShapeCompileTimeBanks) {
-    using TensorShapeT = ShapeWrapperDynamic<crta_params::rank>;
-    using ShardShapeT = ShapeWrapperDynamic<crta_params::rank>;
-    USING_STRUCT_FROM_ARRAY_WRAPPER(BankCoordWrapper, bank_coords, crta_params::bank_coord_array);
+    using TensorShapeT = ArrayWrapperDynamic<crta_params::rank>;
+    using ShardShapeT = ArrayWrapperDynamic<crta_params::rank>;
+    USING_STRUCT_FROM_ARRAY_WRAPPER(ArrayWrapper, bank_coords, crta_params::bank_coord_array);
     using dspec_t = nd_sharding::detail::DistributionSpec<
         TensorShapeT,
         ShardShapeT,
@@ -361,9 +355,9 @@ TEST(ShardedAccessorTestsCRTA, RuntimeTensorRuntimeShardShapeCompileTimeBanks) {
 }
 
 TEST(ShardedAccessorTestsCRTA, RuntimeTensorCompiletimeShardShapeCompileTimeBanks) {
-    using TensorShapeT = ShapeWrapperDynamic<crta_params::rank>;
-    using ShardShapeT = ShapeWrapper<1, 2>;
-    USING_STRUCT_FROM_ARRAY_WRAPPER(BankCoordWrapper, bank_coords, crta_params::bank_coord_array);
+    using TensorShapeT = ArrayWrapperDynamic<crta_params::rank>;
+    using ShardShapeT = ArrayWrapper<1, 2>;
+    USING_STRUCT_FROM_ARRAY_WRAPPER(ArrayWrapper, bank_coords, crta_params::bank_coord_array);
     using dspec_t = nd_sharding::detail::DistributionSpec<
         TensorShapeT,
         ShardShapeT,
@@ -379,9 +373,9 @@ TEST(ShardedAccessorTestsCRTA, RuntimeTensorCompiletimeShardShapeCompileTimeBank
 }
 
 TEST(ShardedAccessorTestsCRTA, CompiletimeTensorRuntimeShardShapeCompileTimeBanks) {
-    using TensorShapeT = ShapeWrapper<2, 3>;
-    using ShardShapeT = ShapeWrapperDynamic<crta_params::rank>;
-    USING_STRUCT_FROM_ARRAY_WRAPPER(BankCoordWrapper, bank_coords, crta_params::bank_coord_array);
+    using TensorShapeT = ArrayWrapper<2, 3>;
+    using ShardShapeT = ArrayWrapperDynamic<crta_params::rank>;
+    USING_STRUCT_FROM_ARRAY_WRAPPER(ArrayWrapper, bank_coords, crta_params::bank_coord_array);
 
     using dspec_t = nd_sharding::detail::DistributionSpec<
         TensorShapeT,
@@ -397,9 +391,9 @@ TEST(ShardedAccessorTestsCRTA, CompiletimeTensorRuntimeShardShapeCompileTimeBank
 }
 
 TEST(ShardedAccessorTestsCRTA, RuntimeTensorRuntimeShardShapeRuntimeBanks) {
-    using TensorShapeT = ShapeWrapperDynamic<crta_params::rank>;
-    using ShardShapeT = ShapeWrapperDynamic<crta_params::rank>;
-    using bank_coords = BankCoordWrapperDynamic<crta_params::num_banks>;
+    using TensorShapeT = ArrayWrapperDynamic<crta_params::rank>;
+    using ShardShapeT = ArrayWrapperDynamic<crta_params::rank>;
+    using bank_coords = ArrayWrapperDynamic<crta_params::num_banks>;
 
     using dspec_t = nd_sharding::detail::DistributionSpec<
         TensorShapeT,
@@ -418,9 +412,9 @@ TEST(ShardedAccessorTestsCRTA, RuntimeTensorRuntimeShardShapeRuntimeBanks) {
 }
 
 TEST(ShardedAccessorTestsCRTA, RuntimeTensorCompiletimeShardShapeRuntimeBanks) {
-    using TensorShapeT = ShapeWrapperDynamic<crta_params::rank>;
-    using ShardShapeT = ShapeWrapper<1, 2>;
-    using bank_coords = BankCoordWrapperDynamic<crta_params::num_banks>;
+    using TensorShapeT = ArrayWrapperDynamic<crta_params::rank>;
+    using ShardShapeT = ArrayWrapper<1, 2>;
+    using bank_coords = ArrayWrapperDynamic<crta_params::num_banks>;
 
     using dspec_t = nd_sharding::detail::DistributionSpec<
         TensorShapeT,
@@ -438,9 +432,9 @@ TEST(ShardedAccessorTestsCRTA, RuntimeTensorCompiletimeShardShapeRuntimeBanks) {
 }
 
 TEST(ShardedAccessorTestsCRTA, CompiletimeTensorRuntimeShardShapeRuntimeBanks) {
-    using TensorShapeT = ShapeWrapper<2, 3>;
-    using ShardShapeT = ShapeWrapperDynamic<crta_params::rank>;
-    using bank_coords = BankCoordWrapperDynamic<crta_params::num_banks>;
+    using TensorShapeT = ArrayWrapper<2, 3>;
+    using ShardShapeT = ArrayWrapperDynamic<crta_params::rank>;
+    using bank_coords = ArrayWrapperDynamic<crta_params::num_banks>;
 
     using dspec_t = nd_sharding::detail::DistributionSpec<
         TensorShapeT,
@@ -458,9 +452,9 @@ TEST(ShardedAccessorTestsCRTA, CompiletimeTensorRuntimeShardShapeRuntimeBanks) {
 }
 
 TEST(ShardedAccessorTestsCRTA, CompiletimeTensorCompileTimeShardShapeRuntimeBanks) {
-    using TensorShapeT = ShapeWrapper<2, 3>;
-    using ShardShapeT = ShapeWrapper<1, 2>;
-    using bank_coords = BankCoordWrapperDynamic<crta_params::num_banks>;
+    using TensorShapeT = ArrayWrapper<2, 3>;
+    using ShardShapeT = ArrayWrapper<1, 2>;
+    using bank_coords = ArrayWrapperDynamic<crta_params::num_banks>;
 
     using dspec_t = nd_sharding::detail::DistributionSpec<
         TensorShapeT,
