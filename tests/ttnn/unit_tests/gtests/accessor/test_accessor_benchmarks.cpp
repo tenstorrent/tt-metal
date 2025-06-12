@@ -167,7 +167,7 @@ INSTANTIATE_TEST_SUITE_P(
         // - Try out other accessors as well, especially legacy ShardedAddrGen
         InputBufferParams{
             .test_name = "rank_2",
-            .physical_tensor_shape = tt::tt_metal::Shape{160, 160},
+            .physical_tensor_shape = tt::tt_metal::Shape{320, 320},
             .page_shape = tt::tt_metal::Shape2D{32, 32},
             .bytes_per_element = 2,
             .data_format = tt::DataFormat::Float16,
@@ -182,7 +182,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InputBufferParams{
             .test_name = "rank_3",
-            .physical_tensor_shape = tt::tt_metal::Shape{5, 160, 160},
+            .physical_tensor_shape = tt::tt_metal::Shape{5, 160, 320},
             .page_shape = tt::tt_metal::Shape2D{32, 32},
             .bytes_per_element = 2,
             .data_format = tt::DataFormat::Float16,

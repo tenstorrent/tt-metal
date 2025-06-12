@@ -290,7 +290,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
     // - Output distribution spec is something different from input distribution spec
     std::vector<InputOutputBufferParams> base_params{
         InputOutputBufferParams{
-            .physical_tensor_shape = tt::tt_metal::Shape{2, 64, 96},
+            .physical_tensor_shape = tt::tt_metal::Shape{4, 64, 96},
             .page_shape = tt::tt_metal::Shape2D{32, 32},
             .bytes_per_element = 2,
             .data_format = tt::DataFormat::Float16,
@@ -313,7 +313,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
         // HEIGHT sharding with padding along shard width + random CoreRangeSet; tile layout
         // page size = 32 x 32 x 1.0625 = 1088 bytes (eg. bfloat8_b)
         InputOutputBufferParams{
-            .physical_tensor_shape = tt::tt_metal::Shape{2, 128, 64},
+            .physical_tensor_shape = tt::tt_metal::Shape{18, 128, 64},
             .page_shape = tt::tt_metal::Shape2D{32, 32},
             .bytes_per_element = 1.0625,  // Headers for block float amortized over elements
             .data_format = tt::DataFormat::Bfp8,
@@ -337,7 +337,7 @@ std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
         // WIDTH sharding with padding along shard height; row major layout with aligned page size
         // page size = 1 x 16 x 1 = 16 bytes (eg. uint8, int8, etc...)
         InputOutputBufferParams{
-            .physical_tensor_shape = tt::tt_metal::Shape{2, 3, 32},
+            .physical_tensor_shape = tt::tt_metal::Shape{2, 3, 256},
             .page_shape = tt::tt_metal::Shape2D{1, 16},
             .bytes_per_element = 1,
             .data_format = tt::DataFormat::UInt8,
