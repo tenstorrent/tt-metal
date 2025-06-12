@@ -16,8 +16,8 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
     const auto& input_tensor_a = input_tensors.at(0);
 
-    uint32_t tensor_width = input_tensor_a.get_padded_shape()[-1];
-    uint32_t tensor_height = input_tensor_a.volume() / tensor_width;
+    uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
+    uint32_t tensor_height = input_tensor_a.physical_volume() / tensor_width;
 
     bool input_is_sharded = input_tensor_a.is_sharded();
     bool output_is_sharded = this->output_mem_config.is_sharded();

@@ -139,7 +139,7 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
+    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
@@ -741,9 +741,9 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
     tt::tt_metal::IDevice* device = a.device();
@@ -751,7 +751,7 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    const auto& tile_shape = a.get_tensor_spec().tile().get_tile_shape();
+    const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
@@ -812,7 +812,7 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
 
     // Compute kernel
     std::string compute_kernel;
-    if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
+    if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
@@ -878,10 +878,10 @@ operation::ProgramWithCallbacks untilize_multi_core(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    uint32_t tensor_width = a.get_padded_shape()[-1];
-    uint32_t tensor_height = a.volume() / tensor_width;
+    uint32_t tensor_width = a.padded_shape()[-1];
+    uint32_t tensor_height = a.physical_volume() / tensor_width;
 
-    const auto& tile_shape = a.get_tensor_spec().tile().get_tile_shape();
+    const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
     uint32_t tile_volume = tile_height * tile_width;
@@ -1094,8 +1094,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     // Compute kernel file
     std::string compute_kernel;
-    if (num_tiles_per_input_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize ||
-        a.get_dtype() == DataType::UINT16) {
+    if (num_tiles_per_input_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = std::string(
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
@@ -1335,14 +1334,14 @@ operation::ProgramWithCallbacks untilize_single_core(
     bool input_is_sharded = a.memory_config().is_sharded();
     bool output_is_sharded = output.memory_config().is_sharded();
 
-    uint32_t num_tiles = a.volume() / tile_volume;
-    uint32_t num_blocks_across_height = a.volume() / a.get_padded_shape()[-1] / tile_height;
+    uint32_t num_tiles = a.physical_volume() / tile_volume;
+    uint32_t num_blocks_across_height = a.physical_volume() / a.padded_shape()[-1] / tile_height;
     uint32_t num_columns_of_blocks = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
         output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
         num_columns_of_blocks = a.padded_shape()[-1] / output.shard_spec().value().shape[1];
     }
-    uint32_t num_tiles_per_column_row = a.get_padded_shape()[-1] / num_columns_of_blocks / tile_width;
+    uint32_t num_tiles_per_column_row = a.padded_shape()[-1] / num_columns_of_blocks / tile_width;
 
     // Determine how much L1 space we can use for input and output CBs,
     // ensuring that we don't intrude into other L1 storage space
@@ -1367,8 +1366,8 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     uint32_t num_blocks_per_column_row = num_tiles_per_column_row / num_tiles_per_block;
     uint32_t output_single_block_width_size = num_tiles_per_block * TILE_WIDTH * output.element_size();
-    uint32_t num_total_sticks = a.volume() / a.get_padded_shape()[-1] * num_columns_of_blocks;
-    uint32_t output_stick_size = a.volume() * output.element_size() / num_total_sticks;
+    uint32_t num_total_sticks = a.physical_volume() / a.padded_shape()[-1] * num_columns_of_blocks;
+    uint32_t output_stick_size = a.physical_volume() * output.element_size() / num_total_sticks;
 
     // Input CB
     uint32_t input_cb_num_tiles = num_tiles_per_block;
@@ -1442,7 +1441,7 @@ operation::ProgramWithCallbacks untilize_single_core(
     // Compute file path
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
+    if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
