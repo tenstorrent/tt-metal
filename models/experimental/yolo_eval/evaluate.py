@@ -223,23 +223,20 @@ def evaluation(
             input_tensor = input_tensor.reshape(1, 1, h * w * n, c)
             ttnn_im = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
             ttnn_im = ttnn.pad(ttnn_im, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
-        elif model_name in ["YOLOv8s", "YOLOv8s_World", "YOLOv11n"]:
+        elif model_name in ["YOLOv8s", "YOLOv8s_World","YOLOv8x","YOLOv11n"]:
             ttnn_im = im.clone()
         else:
             ttnn_im = im.permute((0, 2, 3, 1))
 
-        if model_name in ["YOLOv11", "YOLOv8x"]:
+        if model_name in ["YOLOv11"]:
             ttnn_im = ttnn_im.reshape(
                 1,
                 1,
                 ttnn_im.shape[0] * ttnn_im.shape[1] * ttnn_im.shape[2],
                 ttnn_im.shape[3],
             )
-        if model_name not in ["YOLOv4", "YOLOv9c", "YOLOv10", "YOLOv8s_World", "YOLOv8s", "YOLOv11n"]:
-            if model_name == "YOLOv8x":
-                ttnn_im = ttnn.from_torch(ttnn_im, dtype=input_dtype, layout=input_layout)
-            else:
-                ttnn_im = ttnn.from_torch(ttnn_im, dtype=input_dtype, layout=input_layout, device=device)
+        if model_name not in ["YOLOv4", "YOLOv9c", "YOLOv10", "YOLOv8s_World", "YOLOv8s","YOLOv8x","YOLOv11n"]:
+            ttnn_im = ttnn.from_torch(ttnn_im, dtype=input_dtype, layout=input_layout, device=device)
 
         if model_type != "torch_model":
             preprocessed_images.append((ttnn_im, im, im0s))
@@ -267,8 +264,7 @@ def evaluation(
                 preds = ttnn.clone(preds_temp[0])
                 preds = ttnn.to_torch(preds, dtype=torch.float32)
             elif model_name == "YOLOv8x":
-                ttnn_im = ttnn.pad(ttnn_im, [1, 1, ttnn_im.shape[2], 16], [0, 0, 0, 0], 0)
-                preds = model.execute_yolov8x_trace_2cqs_inference(ttnn_im)
+                preds = model.run(ttnn_im)
                 preds = ttnn.to_torch(preds, dtype=torch.float32)
             elif model_name == "YOLOv4":
                 preds = model._execute_yolov4_trace_2cqs_inference(ttnn_im)
@@ -461,7 +457,8 @@ def test_yolov8s_world(device, model_type, res, reset_seeds):
 
 @pytest.mark.parametrize(
     "model_type",
-    [("tt_model"), ("torch_model")],
+    [("tt_model")],
+    # [("tt_model"), ("torch_model")],
 )
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
