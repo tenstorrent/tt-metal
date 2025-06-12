@@ -25,7 +25,7 @@ private:
     uint8_t next_trid = 0;
 };
 
-template <size_t NUM_CHANNELS, size_t MAX_TRANSACTION_IDS, size_t OFFSET>
+template <uint8_t NUM_CHANNELS, size_t MAX_TRANSACTION_IDS, size_t OFFSET>
 struct WriteTransactionIdTracker {
     static constexpr size_t NUM_CHANNELS_PARAM = NUM_CHANNELS;
     static constexpr size_t MAX_TRANSACTION_IDS_PARAM = MAX_TRANSACTION_IDS;
