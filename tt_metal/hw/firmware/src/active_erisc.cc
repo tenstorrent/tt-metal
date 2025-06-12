@@ -86,7 +86,18 @@ inline void wait_subordinate_eriscs() {
     WAYPOINT("SED");
 }
 
-int main() {
+extern "C" [[gnu::section(".start")]]
+int _start() {
+#if 0
+    // Enable GPREL optimizations.
+    asm(R"ASM(
+	.option push
+	.option norelax
+	lui gp,%hi(__global_pointer$)
+	addi gp,gp,%lo(__global_pointer$)
+	.option pop
+	)ASM");
+#endif
     configure_csr();
     WAYPOINT("I");
     do_crt1((uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH);
@@ -157,8 +168,7 @@ int main() {
                 uint32_t kernel_lma =
                     kernel_config_base +
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
-                auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
-                record_stack_usage(stack_free);
+                reinterpret_cast<void (*)()>(kernel_lma)();
                 WAYPOINT("D");
             }
 

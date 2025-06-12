@@ -319,7 +319,7 @@ void JitBuildState::finish_init() {
     // Append hw build objects compiled offline
     std::string build_dir =
         tt_metal::MetalContext::instance().rtoptions().get_root_dir() + "runtime/hw/lib/" + get_alias(env_.arch_) + "/";
-    if (this->is_fw_ and this->target_name_ != "erisc") {
+    if (this->is_fw_ and this->target_name_ != "erisc" and this->target_name_ != "active_erisc") {
         this->link_objs_ += build_dir + "tmu-crt0.o ";
     }
 
