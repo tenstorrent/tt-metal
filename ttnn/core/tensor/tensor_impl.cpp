@@ -581,19 +581,17 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
 
     // For performance, perform all allocations via DistributedHostBuffer::transform, run from multiple threads.
     auto distributed_host_buffer = DistributedHostBuffer::create(device->shape());
-    {
-        ZoneScopedN("AllocateBuffer");
-        for (const auto& coord : storage.coords) {
-            distributed_host_buffer.emplace_shard(coord, []() { return HostBuffer(); });
-        }
-
-        distributed_host_buffer = distributed_host_buffer.transform(
-            [&](const HostBuffer&) {
-                std::vector<T> data_vec(tensor.get_tensor_spec().compute_packed_buffer_size_bytes() / sizeof(T));
-                return HostBuffer(std::move(data_vec));
-            },
-            DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+    for (const auto& coord : storage.coords) {
+        distributed_host_buffer.emplace_shard(coord, []() { return HostBuffer(); });
     }
+
+    distributed_host_buffer = distributed_host_buffer.transform(
+        [&](const HostBuffer&) {
+            ZoneScopedN("AllocateBuffer");
+            std::vector<T> data_vec(tensor.get_tensor_spec().compute_packed_buffer_size_bytes() / sizeof(T));
+            return HostBuffer(std::move(data_vec));
+        },
+        DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
     mesh_cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
