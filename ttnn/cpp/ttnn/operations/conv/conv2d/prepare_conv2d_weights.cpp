@@ -104,6 +104,9 @@ Tensor to_weight_special_padding_tile_layout(
                 (uint32_t)std::ceil((double)weight_matrix_cols / (double)in1_block_w_datums) * in1_block_w_datums;
         }
         // height padding
+        std::cout << "in1_block_h_datums: " << in1_block_h_datums << std::endl;
+        std::cout << "w_shape[1]: " << w_shape[1] << std::endl;
+        std::cout << "w_shape[3]: " << w_shape[3] << std::endl;
         assert(in1_block_h_datums >= w_shape[1] * w_shape[3]);
         uint32_t block_height_padding = in1_block_h_datums - (w_shape[1] * w_shape[3]);
         auto weight_matrix_rows = ((w_shape[1] * w_shape[3]) + block_height_padding) * w_shape[2];
@@ -512,26 +515,72 @@ static Tensor to_folded_weight_layout(
     // Get input data type
     auto dtype = conv_weight_tensor.dtype();
 
-    ttnn::Shape output_shape = ttnn::Shape({w_shape[0], w_shape[1] * kernel_h * kernel_w, 1, 1});
+    auto pad_h = kernel_size[0] % stride[0];
+    auto pad_w = kernel_size[1] % stride[1];
+
+    auto padded_kernel_h = kernel_h + pad_h;
+    auto padded_kernel_w = kernel_w + pad_w;
+
+    ttnn::Shape output_shape = ttnn::Shape(
+        {out_channels, in_channels * stride[0] * stride[1], padded_kernel_h / stride[0], padded_kernel_w / stride[1]});
     auto storage = std::get<tt::tt_metal::HostStorage>(conv_weight_tensor.storage()).buffer;
 
+    conv_weight_tensor.print();
+    // padding the input buffer
     auto fold_weights = [&](auto input_buffer) {
         using T = std::decay_t<decltype(input_buffer[0])>;
-        std::vector<T> output_buffer(output_shape.volume());
-
-        uint32_t patch_size = kernel_h * kernel_w * in_channels;
+        auto padded_input_buffer = std::vector<T>(output_shape.volume(), T(0));
         for (auto oc = 0; oc < out_channels; oc++) {
-            uint32_t dst_offset = oc * patch_size;
-            uint32_t dst_idx = 0;
             for (auto kh = 0; kh < kernel_h; kh++) {
                 for (auto kw = 0; kw < kernel_w; kw++) {
                     for (auto ic = 0; ic < in_channels; ic++) {
                         uint32_t src_idx = ((((oc * in_channels + ic) * kernel_h) + kh) * kernel_w) + kw;
-                        output_buffer[dst_offset + dst_idx++] = input_buffer[src_idx];
+                        uint32_t dst_idx = ((((oc * in_channels + ic) * padded_kernel_h) + kh) * padded_kernel_w) + kw;
+                        std::cout << "src_idx: " << src_idx << " dst_idx: " << dst_idx << std::endl;
+                        padded_input_buffer[dst_idx] = input_buffer[src_idx];
                     }
                 }
             }
         }
+
+        std::vector<T> output_buffer(output_shape.volume());
+        int new_h = padded_kernel_h / stride[0];
+        int new_w = padded_kernel_w / stride[1];
+        int output_idx = 0;
+        for (auto oc = 0; oc < out_channels; oc++) {
+            for (auto ic = 0; ic < in_channels; ic++) {
+                for (auto y = 0; y < new_h; y++) {
+                    for (auto x = 0; x < new_w; x++) {
+                        for (auto sh = 0; sh < stride[0]; sh++) {
+                            for (auto sw = 0; sw < stride[1]; sw++) {
+                                int in_y = y * stride[0] + sh;
+                                int in_x = x * stride[1] + sw;
+                                int input_idx = oc * in_channels * padded_kernel_h * padded_kernel_w +
+                                                ic * padded_kernel_h * padded_kernel_w + in_y * padded_kernel_w + in_x;
+                                int folded_ic_idx = ic * stride[0] * stride[1] + sh * stride[1] + sw;
+                                int dst_idx = oc * in_channels * stride[0] * stride[1] + folded_ic_idx * new_h * new_w +
+                                              y * new_w + x;
+                                std::cout << "input_idx: " << input_idx << " output_idx: " << dst_idx << std::endl;
+                                output_buffer[dst_idx] = padded_input_buffer[input_idx];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // uint32_t patch_size = kernel_h * kernel_w * in_channels;
+        // for (auto oc = 0; oc < out_channels; oc++) {
+        //     uint32_t dst_offset = oc * patch_size;
+        //     uint32_t dst_idx = 0;
+        //     for (auto kh = 0; kh < kernel_h; kh++) {
+        //         for (auto kw = 0; kw < kernel_w; kw++) {
+        //             for (auto ic = 0; ic < in_channels; ic++) {
+        //                 uint32_t src_idx = ((((oc * in_channels + ic) * kernel_h) + kh) * kernel_w) + kw;
+        //                 output_buffer[dst_offset + dst_idx++] = padded_input_buffer[src_idx];
+        //             }
+        //         }
+        //     }
+        // }
 
         return Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), output_shape, dtype, Layout::ROW_MAJOR);
     };
@@ -1065,10 +1114,14 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         }
     }
     if (params.enable_kernel_stride_folding) {
+        std::array<uint32_t, 4> padding_n4 = {
+            0, original_weights_window_h % params.stride[0], 0, original_weights_window_w % params.stride[1]};
         weight_tensor_ = to_folded_weight_layout(
-            weight_tensor_, params.stride, {original_weights_window_h, original_weights_window_w}, params.padding_n4);
+            weight_tensor_, params.stride, {original_weights_window_h, original_weights_window_w}, padding_n4);
+        weight_tensor_.print();
     }
     const auto& weights_shape = weight_tensor_.logical_shape();
+    std::cout << "weights_shape: " << weights_shape << std::endl;
     uint32_t out_channels = weights_shape[0];
     uint32_t in_channels = weights_shape[1];
     uint32_t window_h = weights_shape[2];
