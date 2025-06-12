@@ -163,7 +163,6 @@ Checks: >
   -performance-avoid-endl,
   -performance-faster-string-find,
   -performance-inefficient-string-concatenation,
-  -performance-inefficient-vector-operation,
   -performance-move-const-arg,
   -performance-move-constructor-init,
   -performance-no-int-to-ptr,

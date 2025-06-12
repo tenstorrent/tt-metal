@@ -423,6 +423,7 @@ const InterMeshConnectivity& MeshGraph::get_inter_mesh_connectivity() const { re
 
 std::vector<MeshId> MeshGraph::get_mesh_ids() const {
     std::vector<MeshId> mesh_ids;
+    mesh_ids.reserve(this->mesh_to_chip_ids_.size());
     for (const auto& [mesh_id, _] : this->mesh_to_chip_ids_) {
         mesh_ids.push_back(mesh_id);
     }

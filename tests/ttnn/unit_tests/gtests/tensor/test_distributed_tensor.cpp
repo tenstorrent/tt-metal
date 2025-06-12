@@ -369,6 +369,7 @@ TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
     ASSERT_EQ(mesh_device_->shape(), MeshShape(kNumRows, kNumCols));
 
     std::vector<float> test_data;
+    test_data.reserve(4 * kNumRows * kNumCols * 7);
     for (int i = 0; i < 4 * kNumRows * kNumCols * 7; ++i) {
         test_data.push_back(static_cast<float>(i));
     }

@@ -153,6 +153,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
 MeshDevice::ScopedDevices::~ScopedDevices() {
     if (!opened_devices_.empty()) {
         std::vector<IDevice*> devices_to_close;
+        devices_to_close.reserve(opened_devices_.size());
         for (auto& [id, device] : opened_devices_) {
             devices_to_close.push_back(device);
         }

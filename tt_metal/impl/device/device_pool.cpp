@@ -600,6 +600,7 @@ DevicePool::DevicePool() {
     log_debug(tt::LogMetal, "DevicePool constructor");
     bool use_numa_node_based_thread_binding = parse_env("TT_METAL_NUMA_BASED_AFFINITY", false);
     std::vector<chip_id_t> all_device_ids;
+    all_device_ids.reserve(tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices());
     for (int i = 0; i < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); i++) {
         all_device_ids.emplace_back((chip_id_t)i);
     }

@@ -37,6 +37,7 @@ using namespace ccl;
 
 CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores) {
     std::vector<CoreRange> core_ranges;
+    core_ranges.reserve(cores.size());
     for (const auto& core : cores) {
         core_ranges.push_back(CoreRange(core));
     }
