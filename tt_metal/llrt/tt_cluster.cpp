@@ -916,14 +916,14 @@ void Cluster::set_tunnels_from_mmio_device() {
         }
 
         bool tunneled_device_hit;
-        for (auto it = device_ids.begin(); it != device_ids.end();) {
+        while (!device_ids.empty()) {
             tunneled_device_hit = false;
             for (auto &dev_vec : tunnels_from_mmio) {
                 for (const auto &[eth_chan, connected_chip_chan] : all_eth_connections.at(dev_vec.back())) {
                     const auto &other_chip_id = std::get<0>(connected_chip_chan);
                     auto id_iter = device_ids.find(other_chip_id);
                     if (id_iter != device_ids.end()) {
-                        it = device_ids.erase(id_iter);
+                        device_ids.erase(id_iter);
                         dev_vec.push_back(other_chip_id);
                         tunneled_device_hit = true;
                         break;
@@ -931,7 +931,7 @@ void Cluster::set_tunnels_from_mmio_device() {
                 }
             }
             TT_FATAL(
-                tunneled_device_hit || (it == device_ids.end()),
+                tunneled_device_hit || device_ids.empty(),
                 "Detected ethernet connections did not match expected device connectivity, try re-running "
                 "tt-topology.");
         }
