@@ -17,6 +17,7 @@ env:
   WH_6U_PROFILER_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-profiler-tests-wh-6u
   BLACKHOLE_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh
   BLACKHOLE_PROFILER_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-profiler-tests-bh
+  BLACKHOLE_LLMBOX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-llmbox
 
 jobs:
   build-artifact:
@@ -41,13 +42,10 @@ jobs:
     outputs:
       image-tag-suffix: ${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}
       wh-6u-image-tag: ${{ steps.set-image-tags.outputs.wh-6u-image-tag }}
-      wh-6u-base-image-name: ${{ steps.set-image-tags.outputs.wh-6u-base-image-name }}
       wh-6u-profiler-image-tag: ${{ steps.set-image-tags.outputs.wh-6u-profiler-image-tag }}
-      wh-6u-profiler-base-image-name: ${{ steps.set-image-tags.outputs.wh-6u-profiler-base-image-name }}
       bh-image-tag: ${{ steps.set-image-tags.outputs.bh-image-tag }}
-      bh-base-image-name: ${{ steps.set-image-tags.outputs.bh-base-image-name }}
       bh-profiler-image-tag: ${{ steps.set-image-tags.outputs.bh-profiler-image-tag }}
-      bh-profiler-base-image-name: ${{ steps.set-image-tags.outputs.bh-profiler-base-image-name }}
+      bh-llmbox-image-tag: ${{ steps.set-image-tags.outputs.bh-llmbox-image-tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,13 +58,10 @@ jobs:
         id: set-image-tags
         run: |
           echo "wh-6u-image-tag=${{ env.WH_6U_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "wh-6u-base-image-name=${{ env.WH_6U_IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
           echo "wh-6u-profiler-image-tag=${{ env.WH_6U_PROFILER_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "wh-6u-profiler-base-image-name=${{ env.WH_6U_PROFILER_IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
           echo "bh-image-tag=${{ env.BLACKHOLE_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "bh-base-image-name=${{ env.BLACKHOLE_IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
           echo "bh-profiler-image-tag=${{ env.BLACKHOLE_PROFILER_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "bh-profiler-base-image-name=${{ env.BLACKHOLE_PROFILER_IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
+          echo "bh-llmbox-image-tag=${{ env.BLACKHOLE_LLMBOX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
   build-images:
     needs:
       - build-artifact
@@ -102,6 +97,12 @@ jobs:
             hw-topology: blackhole
             build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
+            dockerfile: dockerfile/upstream_test_images/Dockerfile
+            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
+            hw-topology: blackhole_llmbox
+            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     runs-on: tt-beta-ubuntu-2204-large
     steps:
       - uses: actions/checkout@v4
@@ -175,6 +176,20 @@ jobs:
       - name: Run profiler image
         timeout-minutes: 10
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+  test-bh-llmbox-image:
+    needs:
+      - get-image-tags
+      - build-images
+    runs-on:
+      - BH-LLMBox
+      - in-service
+      - cloud-virtual-machine
+    steps:
+      - name: Run image
+        timeout-minutes: 30
+        env:
+          LLAMA_DIR: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
+        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
   test-bh-image:
     needs:
       - get-image-tags
