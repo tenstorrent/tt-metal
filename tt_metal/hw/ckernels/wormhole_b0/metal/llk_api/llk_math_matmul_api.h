@@ -50,7 +50,8 @@ inline void llk_math_matmul(
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1,
     const std::uint32_t kt_dim = 1) {
-
+    
+    // add this to create a commit to prevent the branch from being removed
     DPRINT << "llk_math_matmul, " << NUM_FIDELITY_PHASES << ", " << static_cast<uint32_t>(transpose) << ", " << ct_dim << ", " << rt_dim << ", " << kt_dim << ENDL();
     _llk_math_matmul_<NUM_FIDELITY_PHASES, DstTileFaceLayout::RowMajor>(dst_index, transpose, ct_dim, rt_dim, kt_dim);
 }
