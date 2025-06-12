@@ -292,6 +292,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     // uint32_t ring_size = operation_attributes.ring_devices;
     // uint32_t num_devices = ring_size;
 
+    bool use_noc1_only = false;
+
     const auto& input_tensor = tensor_args.input_tensor;
     // tt::tt_metal::IDevice* device = input_tensor.device();
     uint32_t num_links = operation_attributes.num_links;
@@ -668,7 +670,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         all_cores_grid,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
+            .noc = use_noc1_only ? NOC::NOC_1 : NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
 
@@ -703,7 +705,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         all_cores_grid,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
+            .noc = use_noc1_only ? NOC::NOC_1 : NOC::RISCV_0_default,
             .compile_args = writer_compile_time_args,
             .defines = writer_defines});
 

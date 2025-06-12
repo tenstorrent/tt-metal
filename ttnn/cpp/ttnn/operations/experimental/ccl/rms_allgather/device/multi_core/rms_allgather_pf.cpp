@@ -88,6 +88,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     ttnn::MeshDevice* mesh_device = a.mesh_device();
     tt::tt_metal::Program program{};
+    bool use_noc1_only = false;
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     uint32_t output_page_size = 0;
@@ -703,12 +704,16 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     writer_compile_time_args.push_back(signaling_cb);
     writer_compile_time_args.push_back(num_blocks);
 
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(mesh_device->arch());
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(mesh_device->arch());
+    tt::tt_metal::NOC reader_noc = NOC::NOC_1;
+    tt::tt_metal::NOC writer_noc = NOC::NOC_1;
+    if (!use_noc1_only) {
+        reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(mesh_device->arch());
+        writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(mesh_device->arch());
 
-    if (!skip_write_back) {
-        reader_noc = NOC::NOC_0;
-        writer_noc = NOC::NOC_1;
+        if (!skip_write_back) {
+            reader_noc = NOC::NOC_0;
+            writer_noc = NOC::NOC_1;
+        }
     }
 
     // compute kernel compile time args
