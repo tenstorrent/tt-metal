@@ -104,9 +104,7 @@ void kernel_main() {
             poll_ptr = base_poll_ptr + ptr_offset;
 
             // poll on the last word in the payload -> this ensures that the entire payload is written
-            while (*poll_ptr != expected_val) {
-                invalidate_l1_cache();
-            }
+            while (*poll_ptr != expected_val);
 
             // check for data correctness
             match = check_packet_data(

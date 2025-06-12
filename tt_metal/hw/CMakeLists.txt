@@ -463,7 +463,6 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 inc/blackhole/cfg_defines.h
                 inc/blackhole/core_config.h
                 inc/blackhole/dev_mem_map.h
-                inc/blackhole/eth_chan_noc_mapping.h
                 inc/blackhole/eth_l1_address_map.h
                 inc/blackhole/noc/noc.h
                 inc/blackhole/noc/noc_overlay_parameters.h
@@ -511,7 +510,6 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 inc/wormhole/c_tensix_core.h
                 inc/wormhole/core_config.h
                 inc/wormhole/dev_mem_map.h
-                inc/wormhole/eth_chan_noc_mapping.h
                 inc/wormhole/eth_l1_address_map.h
                 inc/wormhole/noc/noc.h
                 inc/wormhole/noc/noc_overlay_parameters.h

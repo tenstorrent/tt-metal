@@ -106,7 +106,7 @@ void kernel_main() {
     fvcc_inbound_state.init(
         FVCC_IN_BUF_START,
         (uint32_t)&fvcc_outbound_state.remote_rdptr,
-        get_noc_addr_helper(gk_message_addr_h, gk_message_addr_l) + offsetof(gatekeeper_info_t, gk_msg_buf));
+        (((uint64_t)gk_message_addr_h << 32) | gk_message_addr_l) + offsetof(gatekeeper_info_t, gk_msg_buf));
 #endif
 
     if (!wait_all_src_dest_ready(&router_state, timeout_cycles)) {

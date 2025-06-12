@@ -87,9 +87,7 @@ void kernel_main() {
         uint32_t dest_payload_slot_id = 0;
         for (uint32_t packet_id = 0; packet_id < num_packets; packet_id++) {
             // wait until we have atleast 1 credit
-            while (credit_handshake_ptr[0] == 0) {
-                invalidate_l1_cache();
-            }
+            while (credit_handshake_ptr[0] == 0);
 
             seed = prng_next(seed);
             fill_packet_data(payload_start_ptr, packet_payload_size_bytes / 16, seed);
@@ -111,9 +109,7 @@ void kernel_main() {
         }
         noc_async_write_barrier();
         // wait for all credits to be returned before disconnecting
-        while (credit_handshake_ptr[0] != num_credits) {
-            invalidate_l1_cache();
-        }
+        while (credit_handshake_ptr[0] != num_credits);
         tt::tt_fabric::fabric_client_disconnect(mux_connection_handle);
     }
 

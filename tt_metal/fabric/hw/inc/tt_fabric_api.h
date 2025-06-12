@@ -167,7 +167,6 @@ inline void fabric_send_pull_request(
 FORCE_INLINE void fabric_wait_for_pull_request_words_flushed(
     volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface, uint32_t words) {
     while (client_interface->local_pull_request.pull_request.words_read < words) {
-        invalidate_l1_cache();
 #pragma GCC unroll 4
         for (int i = 0; i < 4; i++) {
             asm("nop");
@@ -556,7 +555,7 @@ inline void fabric_client_connect(
         router_addr,
         (STREAM_REG_ADDR(
             STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX)));
-    noc_inline_dw_write(router_addr + sizeof(uint32_t), xy_local_addr >> NOC_ADDR_COORD_SHIFT);
+    noc_inline_dw_write(router_addr + sizeof(uint32_t), xy_local_addr >> 32);
     client_interface->router_addr_h = router_addr_h;
     client_interface->buffer_size = FABRIC_ROUTER_OUTBOUND_BUF_SLOTS;
     client_interface->wr_ptr = local_req_entry->remote_router_wr_ptr.ptr;
@@ -573,9 +572,7 @@ inline void fabric_client_connect(
 
 inline void fabric_client_disconnect(volatile tt_l1_ptr fabric_push_client_interface_t* client_interface) {
     // wait for slots to drain
-    while (*(uint32_t*)(client_interface->router_space) != FABRIC_ROUTER_OUTBOUND_BUF_SLOTS) {
-        invalidate_l1_cache();
-    }
+    while (*(uint32_t*)(client_interface->router_space) != FABRIC_ROUTER_OUTBOUND_BUF_SLOTS);
 
     uint64_t client_q_addr = get_noc_addr_helper(client_interface->router_addr_h, FABRIC_ROUTER_CLIENT_QUEUE_START);
 
@@ -605,7 +602,6 @@ inline void fabric_async_write_push_data(
     uint64_t push_addr = get_noc_addr_helper(client_interface->router_addr_h, client_interface->router_push_addr);
     uint32_t router_buf_space = *(volatile uint32_t*)client_interface->router_space;
     while (router_buf_space == 0) {
-        invalidate_l1_cache();
         router_buf_space = *(volatile uint32_t*)client_interface->router_space;
     }
 
@@ -619,7 +615,7 @@ inline void fabric_async_write_push_data(
         size -= PACKET_HEADER_SIZE_BYTES;
     }
     noc_async_write_one_packet(src_addr, buffer_wr_addr, size, noc_index);
-    noc_inline_dw_write<true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+    noc_inline_dw_write(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
     client_interface->wr_ptr++;
     *(volatile uint32_t*)client_interface->update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
     if (client_interface->wr_ptr >= client_interface->buffer_size) {

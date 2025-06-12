@@ -61,8 +61,7 @@ FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
         this->is_receiver_channel_serviced_.fill(true);
     } else if (arch == tt::ARCH::BLACKHOLE) {
         this->is_sender_channel_serviced_.fill(risc_id == 0);
-        // TODO: set this to be risc_id == 1 when we want to split sender/receiver on the two eriscs
-        this->is_receiver_channel_serviced_.fill(risc_id == 0);
+        this->is_receiver_channel_serviced_.fill(risc_id == 1);
         this->enable_context_switch_ = false;
         this->enable_interrupts_ = false;
     } else {

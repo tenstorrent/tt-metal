@@ -32,6 +32,7 @@ target_sources(
             hw/inc/tt_fabric_interface.h
             hw/inc/tt_fabric_mux.hpp
             hw/inc/tt_fabric_mux_interface.hpp
+            hw/inc/eth_chan_noc_mapping.h
             hw/inc/fabric_routing_mode.h
             hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp
             hw/inc/edm_fabric/edm_fabric_utils.hpp
