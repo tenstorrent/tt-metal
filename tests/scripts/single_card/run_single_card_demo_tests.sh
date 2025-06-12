@@ -102,6 +102,13 @@ run_resnet_func() {
 
 }
 
+run_resnet_perf(){
+
+   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/ttnn_resnet/demo/demo.py
+
+}
+
+
 run_sdxl_func() {
   pytest --disable-warnings models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2
 }

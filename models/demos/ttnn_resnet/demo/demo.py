@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,12 +6,16 @@
 import pytest
 import torch
 from loguru import logger
+from tqdm import tqdm
 from transformers import AutoImageProcessor
 
 import ttnn
 from models.demos.ttnn_resnet.tests.demo_utils import get_batch, get_data, get_data_loader
+from models.demos.ttnn_resnet.tests.resnet50_performant_imagenet import ResNet50Trace2CQ
 from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
-from models.utility_functions import profiler
+from models.utility_functions import profiler, run_for_wormhole_b0
+
+NUM_VALIDATION_IMAGES_IMAGENET = 49920
 
 resnet_model_config = {
     "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
@@ -238,6 +242,200 @@ def run_resnet_inference(
     return measurements, predictions
 
 
+@run_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 1605632, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "batch_size_per_device, iterations, act_dtype, weight_dtype",
+    ((16, 100, ttnn.bfloat8_b, ttnn.bfloat8_b),),
+)
+def run_trace_2cqs_demo_sample(
+    batch_size_per_device,
+    input_loc,
+    imagenet_label_dict,
+    device,
+    use_program_cache,
+    model_location_generator,
+    model_config=resnet_model_config,
+):
+    batch_size = batch_size_per_device * device.get_num_devices()
+    images = get_data(input_loc)
+
+    profiler.clear()
+    with torch.no_grad():
+        resnet50_trace_2cq = ResNet50Trace2CQ()
+
+        profiler.start(f"compile")
+        resnet50_trace_2cq.initialize_resnet50_trace_2cqs_inference(
+            device,
+            batch_size_per_device,
+            model_config["ACTIVATIONS_DTYPE"],
+            model_config["WEIGHTS_DTYPE"],
+            model_location_generator=model_location_generator,
+        )
+        profiler.end(f"compile")
+        model_version = "microsoft/resnet-50"
+        image_processor = AutoImageProcessor.from_pretrained(model_version)
+        profiler.start(f"processing_inputs")
+        inputs = None
+        num_images = len(images)
+        for i in range(batch_size):
+            input_image = images[i % num_images].image
+            if input_image.mode == "L":
+                input_image = input_image.convert(mode="RGB")
+            input = image_processor(input_image, return_tensors="pt")
+            input = input["pixel_values"]
+            if inputs is None:
+                inputs = input
+            else:
+                inputs = torch.cat((inputs, input), dim=0)
+        profiler.end(f"processing_inputs")
+
+        tt_inputs_host = ttnn.from_torch(
+            inputs,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=resnet50_trace_2cq.test_infra.inputs_mesh_mapper,
+        )
+        logger.info("Starting inference")
+        total_inference_time = 0
+        profiler.start(f"run")
+        tt_out = resnet50_trace_2cq.execute_resnet50_trace_2cqs_inference(tt_inputs_host)
+        profiler.start(f"post_processing")
+        predictions = []
+        tt_out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)).to(torch.float)
+        profiler.end(f"run")
+        total_inference_time += profiler.get(f"run")
+        prediction = tt_out[:, 0, 0, :].argmax(dim=-1)
+        for i in range(batch_size):
+            predictions.append(imagenet_label_dict[prediction[i].item()])
+
+        profiler.end(f"post_processing")
+
+        correct = 0  # counter for correct predictions
+
+        for pr, image in zip(predictions, images):
+            expected_label = imagenet_label_dict[image.label]
+            logger.info(f"Expected Label: {expected_label}, Predicted Label: {pr}")
+
+            if pr == expected_label:
+                correct += 1
+
+        resnet50_trace_2cq.release_resnet50_trace_2cqs_inference()
+        first_iter_time = profiler.get(f"compile")
+        accuracy = correct / batch_size * 100
+        logger.info(f"Correct Predictions: {correct}/{batch_size}")
+        logger.info(f"Accuracy: {accuracy:.2f}%")
+        inference_time_avg = total_inference_time
+
+        compile_time = first_iter_time - 2 * inference_time_avg
+        logger.info(
+            f"ttnn_{model_version}_batch_size{batch_size} tests inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
+        )
+        logger.info(f"ttnn_{model_version}_batch_size{batch_size} compile time: {compile_time}")
+        del tt_out
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 1605632, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "batch_size_per_device, iterations, act_dtype, weight_dtype",
+    ((16, 100, ttnn.bfloat8_b, ttnn.bfloat8_b),),
+)
+def run_resnet50_imagenet_trace_2cqs(
+    mesh_device,
+    use_program_cache,
+    batch_size_per_device,
+    iterations,
+    imagenet_label_dict,
+    act_dtype,
+    weight_dtype,
+    model_location_generator,
+    entire_imagenet_dataset=False,
+    expected_accuracy=0.7555288461538462,
+):
+    batch_size = batch_size_per_device * mesh_device.get_num_devices()
+    iterations = iterations // mesh_device.get_num_devices()
+
+    if entire_imagenet_dataset:
+        iterations = NUM_VALIDATION_IMAGES_IMAGENET // batch_size
+
+    profiler.clear()
+    with torch.no_grad():
+        resnet50_trace_2cq = ResNet50Trace2CQ()
+
+        profiler.start(f"compile")
+        resnet50_trace_2cq.initialize_resnet50_trace_2cqs_inference(
+            mesh_device,
+            batch_size_per_device,
+            act_dtype,
+            weight_dtype,
+        )
+        profiler.end(f"compile")
+        model_version = "microsoft/resnet-50"
+        image_processor = AutoImageProcessor.from_pretrained(model_version)
+        logger.info("ImageNet-1k validation Dataset")
+        input_loc = str(model_location_generator("ImageNet_data"))
+        data_loader = get_data_loader(input_loc, batch_size, iterations, entire_imagenet_dataset)
+
+        input_tensors_all = []
+        input_labels_all = []
+        for iter in tqdm(range(iterations), desc="Preparing images"):
+            inputs, labels = get_batch(data_loader, image_processor)
+            input_tensors_all.append(inputs)
+            input_labels_all.append(labels)
+        logger.info("Processed ImageNet-1k validation Dataset")
+
+        logger.info("Starting inference")
+        correct = 0
+        total_inference_time = 0
+        for iter in range(iterations):
+            predictions = []
+            inputs = input_tensors_all[iter]
+            labels = input_labels_all[iter]
+            profiler.start(f"run")
+            ### TODO optimize input streamer for better e2e performance
+            tt_inputs_host = ttnn.from_torch(
+                inputs,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=resnet50_trace_2cq.test_infra.inputs_mesh_mapper,
+            )
+            output = resnet50_trace_2cq.execute_resnet50_trace_2cqs_inference(tt_inputs_host)
+            output = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+            prediction = output[:, 0, 0, :].argmax(dim=-1)
+            profiler.end(f"run")
+            total_inference_time += profiler.get(f"run")
+            for i in range(batch_size):
+                predictions.append(imagenet_label_dict[prediction[i].item()])
+                logger.info(
+                    f"Iter: {iter} Sample: {i} - Expected Label: {imagenet_label_dict[labels[i]]} -- Predicted Label: {predictions[-1]}"
+                )
+                if imagenet_label_dict[labels[i]] == predictions[-1]:
+                    correct += 1
+        resnet50_trace_2cq.release_resnet50_trace_2cqs_inference()
+        accuracy = correct / (batch_size * iterations)
+        logger.info(f"=============")
+        logger.info(f"Accuracy for {batch_size}x{iterations} inputs: {accuracy}")
+        if entire_imagenet_dataset:
+            assert (
+                accuracy == expected_accuracy
+            ), f"Accuracy {accuracy} does not match expected accuracy {expected_accuracy}"
+
+        first_iter_time = profiler.get(f"compile")
+        # ensuring inference time fluctuations is not noise
+        inference_time_avg = total_inference_time / (iterations)
+
+        compile_time = first_iter_time - 2 * inference_time_avg
+    logger.info(
+        f"ttnn_{model_version}_batch_size{batch_size} tests inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
+    )
+    logger.info(f"ttnn_{model_version}_batch_size{batch_size} compile time: {compile_time}")
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, iterations",
@@ -254,3 +452,53 @@ def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_locati
 )
 def test_demo_sample(device, use_program_cache, batch_size, input_loc, imagenet_label_dict, model_location_generator):
     run_resnet_inference(batch_size, input_loc, imagenet_label_dict, device, model_location_generator)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "num_command_queues": 2, "trace_region_size": 1605632}], indirect=True
+)
+@pytest.mark.parametrize(
+    "batch_size, input_loc",
+    ((16, "models/demos/ttnn_resnet/demo/images/"),),
+)
+def test_demo_sample_trace_2cqs(
+    device, use_program_cache, batch_size, input_loc, imagenet_label_dict, model_location_generator
+):
+    run_trace_2cqs_demo_sample(
+        batch_size, input_loc, imagenet_label_dict, device, use_program_cache, model_location_generator
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 1605632, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "batch_size_per_device, iterations, act_dtype, weight_dtype",
+    ((16, 100, ttnn.bfloat8_b, ttnn.bfloat8_b),),
+)
+@pytest.mark.parametrize("entire_imagenet_dataset", [False])
+@pytest.mark.parametrize("expected_accuracy", [0.7555288461538462])
+def test_run_resnet50_imagenet_trace_2cqs(
+    device,
+    use_program_cache,
+    batch_size_per_device,
+    iterations,
+    imagenet_label_dict,
+    act_dtype,
+    weight_dtype,
+    model_location_generator,
+    entire_imagenet_dataset,
+    expected_accuracy,
+):
+    run_resnet50_imagenet_trace_2cqs(
+        device,
+        use_program_cache,
+        batch_size_per_device,
+        iterations,
+        imagenet_label_dict,
+        act_dtype,
+        weight_dtype,
+        model_location_generator,
+        entire_imagenet_dataset,
+        expected_accuracy,
+    )
