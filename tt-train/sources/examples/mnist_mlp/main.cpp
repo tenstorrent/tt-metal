@@ -68,7 +68,10 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
 void initialize_device(bool enable_tp) {
     if (enable_tp) {
         // we support only N300 for now
-        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
+    } else {
+        // use single device defaults
+        ttml::autograd::ctx().open_device();
     }
 }
 

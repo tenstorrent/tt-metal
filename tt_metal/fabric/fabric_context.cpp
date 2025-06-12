@@ -138,7 +138,9 @@ void FabricContext::set_num_fabric_initialized_routers(chip_id_t chip_id, size_t
 uint32_t FabricContext::get_num_fabric_initialized_routers(chip_id_t chip_id) const {
     auto it = this->num_initialized_routers_.find(chip_id);
     TT_FATAL(
-        it != this->num_initialized_routers_.end(), "Error, querying num initialized routers for an unknown device");
+        it != this->num_initialized_routers_.end(),
+        "Error, querying num initialized routers for an unknown device with id {}",
+        chip_id);
     return it->second;
 }
 
