@@ -274,6 +274,11 @@ void DevicePool::initialize(
             "consider using CreateDevices API.");
     }
 
+    // Need to reserve eth cores for fabric before we initialize individual devices to maintain consistent state
+    // while initializing default sub device state.
+    // This call will be a no-op if fabric is disabled.
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
     _inst->skip_remote_devices = skip;
     _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
     _inst->add_devices_to_pool(device_ids);
