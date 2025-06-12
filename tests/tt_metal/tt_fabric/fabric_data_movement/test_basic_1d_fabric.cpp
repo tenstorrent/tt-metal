@@ -455,7 +455,6 @@ void RunTestUnicastRaw(
         .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
         .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
         .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
-        .persistent_fabric = true,
         .edm_direction = edm_direction};
 
     auto worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);

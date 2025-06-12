@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt-metalium/small_vector.hpp"
+#include <tt_stl/small_vector.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
 

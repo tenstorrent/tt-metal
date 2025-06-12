@@ -5,7 +5,7 @@
 #include "tensor/host_buffer/functions.hpp"
 #include "tt-metalium/shape.hpp"
 #include "tt-metalium/mesh_coord.hpp"
-#include "tt-metalium/small_vector.hpp"
+#include <tt_stl/small_vector.hpp>
 #include "tt-metalium/tilize_utils.hpp"
 #include "tt_stl/overloaded.hpp"
 #include "ttnn/distributed/api.hpp"
