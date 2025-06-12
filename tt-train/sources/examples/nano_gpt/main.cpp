@@ -451,7 +451,7 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
     if (!device_node) {
         return config;
     }
-    
+
     config.enable_ddp = device_node["enable_ddp"].as<bool>(false);
     config.enable_tp = device_node["enable_tp"].as<bool>(false);
 
