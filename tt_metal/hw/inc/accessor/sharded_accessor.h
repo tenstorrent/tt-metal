@@ -53,23 +53,25 @@ public:
 
     // NOC APIs
     FORCE_INLINE
-    std::uint64_t get_noc_addr(const uint32_t page_id, uint8_t noc = noc_index) const {
+    std::uint64_t get_noc_addr(const uint32_t page_id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
         const auto [bank_id, bank_offset] = this->get_bank_and_offset(page_id);
         const auto& packed_xy_coords = get_dspec().get_packed_xy_coords();
         return NOC_XY_ADDR(
             DYNAMIC_NOC_X(noc, (packed_xy_coords[bank_id] >> 16) & 0xFFFF),
             DYNAMIC_NOC_Y(noc, packed_xy_coords[bank_id] & 0xFFFF),
-            bank_base_address + bank_offset * page_size);
+            bank_base_address + bank_offset * page_size + offset);
     }
 
     FORCE_INLINE
-    void noc_async_read_page(const uint32_t page_id, const uint32_t dest_addr, uint8_t noc = noc_index) const {
-        noc_async_read(get_noc_addr(page_id, noc), dest_addr, page_size, noc);
+    void noc_async_read_page(
+        const uint32_t page_id, const uint32_t dest_addr, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        noc_async_read(get_noc_addr(page_id, offset, noc), dest_addr, page_size, noc);
     }
 
     FORCE_INLINE
-    void noc_async_write_page(const uint32_t page_id, const uint32_t src_addr, uint8_t noc = noc_index) const {
-        noc_async_write(src_addr, get_noc_addr(page_id, noc), page_size, noc);
+    void noc_async_write_page(
+        const uint32_t page_id, const uint32_t src_addr, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        noc_async_write(src_addr, get_noc_addr(page_id, offset, noc), page_size, noc);
     }
 
     // Helpers
