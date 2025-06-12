@@ -43,7 +43,8 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     std::optional<float> scale,
     bool causal_mask,
     DeviceComputeKernelConfig compute_kernel_config,
-    bool numeric_stable) {
+    bool numeric_stable,
+    bool inplace) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto shape = input_tensor.padded_shape();
     uint32_t W = shape[-1], H = (input_tensor.physical_volume() / (shape[0] * shape[-1])), NC = shape[0];
@@ -132,8 +133,8 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
     uint32_t cb_length = in0_t;
     bool use_large_kernel = false;
-    // Noisy CB estimator, if the cbs used take up 80% of L1 switch to large kernel implementation
-    if ((input_tensor.device()->l1_size_per_core() / 4) * 5 <
+    // Noisy CB estimator, if the cbs used take up 90% of L1 switch to large kernel implementation
+    if ((input_tensor.device()->l1_size_per_core() * 0.9) <
         (in0_t * in0_tile_size) + (im4_t * im_tile_size) + (im0_t * im_tile_size) + (im3_t * im_tile_size)) {
         use_large_kernel = true;
         cb_length = 120;
@@ -141,6 +142,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         im4_t = 120;
         im0_t = 120;
         im3_t = 120;
+        TT_FATAL(!inplace, "Tensor is too large to run softmax inplace, please use standard softmax");
     }
     // TODO: Not sure why this fatal is here but not needed for use_large_kernel
     if (!use_large_kernel) {
