@@ -5,6 +5,7 @@
 import json
 import math
 import os
+import re
 from enum import Enum, auto
 from pathlib import Path
 from typing import Tuple
@@ -483,6 +484,13 @@ class ModelArgs:
             self.TOKENIZER_PATH = LLAMA_DIR
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
+            else:
+                # tt-inference-server currently incorrectly sets cache path so we first need to strip the device name
+                # TODO: Remove this once tt-inference-server is fixed
+                regex = r"/(CPU|TG|T3K|N150x4|N300|N150|P150x4|P300|P150|P100)$"
+                self.CACHE_PATH = re.sub(regex, "", self.CACHE_PATH)
+                self.CACHE_PATH = os.path.join(self.CACHE_PATH, self.device_name)
+
             self.model_name = os.path.basename(LLAMA_DIR.strip("/"))  # May be overridden by config
         elif HF_MODEL:
             self.CKPT_DIR = HF_MODEL
