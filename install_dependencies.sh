@@ -18,12 +18,17 @@ usage()
 }
 
 FLAVOR=`grep '^ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
+ID_LIKE=`grep '^ID_LIKE=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
 VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
 MAJOR=${VERSION%.*}
 ARCH=`uname -m`
 
-if [ $FLAVOR != "ubuntu" ]; then
-    echo "Error: Only Ubuntu is supported"
+is_ubuntu_like() {
+    [[ "$FLAVOR" == "ubuntu" || "$ID_LIKE" == *ubuntu* ]]
+}
+
+if ! is_ubuntu_like; then
+    echo "Error: Only Ubuntu and Ubuntu-based distributions are currently supported"
     exit 1
 fi
 
@@ -134,8 +139,8 @@ ub_baremetal_packages() {
 
 update_package_list()
 {
-    if [ $FLAVOR == "ubuntu" ]; then
-	case "$mode" in
+    if is_ubuntu_like; then
+        case "$mode" in
             runtime)
                 ub_runtime_packages
                 PKG_LIST=("${UB_RUNTIME_LIST[@]}")
@@ -158,7 +163,7 @@ update_package_list()
 
 validate_packages()
 {
-    if [ $FLAVOR == "ubuntu" ]; then
+    if is_ubuntu_like; then
         dpkg -l "${PKG_LIST[@]}"
     fi
 }
@@ -205,23 +210,48 @@ install_llvm() {
 }
 
 install_gcc() {
-    case "$VERSION" in
-        "22.04")
-            GCC_VER=12
+    local GCC_VER=""
+    case "$FLAVOR" in
+        linuxmint)
+            case "$VERSION" in
+                21.*)
+                    GCC_VER=12
+                    ;;
+                22.*)
+                    GCC_VER=14
+                    ;;
+                *)
+                    GCC_VER=""
+                    ;;
+            esac
             ;;
-        "24.04")
-            GCC_VER=14
+        ubuntu|kubuntu|xubuntu|lubuntu)
+            case "$VERSION" in
+                "22.04")
+                    GCC_VER=12
+                    ;;
+                "24.04")
+                    GCC_VER=14
+                    ;;
+                *)
+                    GCC_VER=""
+                    ;;
+            esac
             ;;
         *)
-            echo "Unknown or unsupported Ubuntu version: $VERSION"
-            echo "Falling back to installing default g++..."
-            apt-get install -y --no-install-recommends g++
-            echo "Using g++ version: $(g++ --version | head -n1)"
-            return
+            GCC_VER=""
             ;;
     esac
 
-    echo "Detected Ubuntu $VERSION, installing g++-$GCC_VER..."
+    if [ -z "$GCC_VER" ]; then
+        echo "Unknown or unsupported $FLAVOR version: $VERSION"
+        echo "Falling back to installing default g++..."
+        apt-get install -y --no-install-recommends g++
+        echo "Using g++ version: $(g++ --version | head -n1)"
+        return
+    fi
+
+    echo "Detected $FLAVOR $VERSION, installing g++-$GCC_VER..."
 
     apt-get install -y --no-install-recommends g++-$GCC_VER gcc-$GCC_VER
 
@@ -311,9 +341,9 @@ configure_hugepages() {
 }
 
 install() {
-    if [ $FLAVOR == "ubuntu" ]; then
+    if is_ubuntu_like; then
         echo "Installing packages..."
-	case "$mode" in
+        case "$mode" in
             runtime)
                 prep_ubuntu_runtime
                 install_sfpi
@@ -342,7 +372,7 @@ install() {
 }
 
 cleanup() {
-    if [ $FLAVOR == "ubuntu" ]; then
+    if is_ubuntu_like; then
         rm -rf /var/lib/apt/lists/*
     fi
 }
