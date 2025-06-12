@@ -43,6 +43,7 @@ namespace tt_metal {
 class CircularBufferConfig;
 class IDevice;
 class JitBuildOptions;
+class HWCommandQueue;
 
 namespace experimental {
 class GlobalCircularBuffer;
@@ -192,8 +193,8 @@ public:
     // debug/test
     uint32_t get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
-    void set_last_used_command_queue_for_testing(CommandQueue* queue);
-    CommandQueue* get_last_used_command_queue() const;
+    void set_last_used_command_queue_for_testing(HWCommandQueue* queue);
+    HWCommandQueue* get_last_used_command_queue() const;
     void populate_dispatch_data(IDevice* device);
 
     void finalize_offsets(IDevice* device);
@@ -209,7 +210,7 @@ public:
     std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
 
 private:
-    CommandQueue* last_used_command_queue_for_testing = nullptr;
+    HWCommandQueue* last_used_command_queue_for_testing = nullptr;
 
     // Buffers temporarily owned by the program
     std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};

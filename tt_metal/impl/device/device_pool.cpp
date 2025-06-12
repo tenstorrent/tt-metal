@@ -39,6 +39,7 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include <umd/device/tt_core_coordinates.h>
+#include "dispatch/hardware_command_queue.hpp"
 
 using namespace tt::tt_metal;
 
@@ -642,7 +643,7 @@ void DevicePool::teardown_fd(const std::unordered_set<chip_id_t>& devices_to_clo
         }
 
         for (int cq_id = 0; cq_id < dev->num_hw_cqs(); cq_id++) {
-            auto& cq = dev->command_queue(cq_id);
+            auto& cq = HWCommandQueue::from(dev->command_queue(cq_id));
             if (cq.sysmem_manager().get_bypass_mode()) {
                 cq.record_end();
             }
