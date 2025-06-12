@@ -30,7 +30,7 @@ inline void reduce_h_fused_interm(
     const uint32_t in_stick_index,
     const uint32_t interm_index,
     const uint32_t interm_cb_id) {
-    constexpr uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : 4;
+    constexpr uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : max_rows_for_reduction < 32 ? 2 : 4;
     constexpr uint32_t num_faces_in_output_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
@@ -67,7 +67,7 @@ template <
     bool neginf_srca_maxpool,
     bool zero_srca_avgpool>
 inline void reduce_h_fused(const uint32_t interm_cb_id, const uint32_t in_scalar_cb_id, const uint32_t out_cb_id) {
-    constexpr uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : 4;
+    constexpr uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : max_rows_for_reduction < 32 ? 2 : 4;
     constexpr uint32_t num_faces_in_output_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
@@ -124,7 +124,7 @@ void MAIN {
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
-    constexpr uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : 4;
+    constexpr uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : max_rows_for_reduction < 32 ? 2 : 4;
     constexpr uint32_t num_faces_in_output_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
