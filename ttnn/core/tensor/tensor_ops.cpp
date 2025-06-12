@@ -82,22 +82,12 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
 Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevice* worker) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout, worker);
-    TT_ASSERT(
+    TT_FATAL(
         input_tensor.storage_type() != StorageType::DEVICE, "Bring tensor to host before converting to target layout");
     Tensor output = tensor_impl::to_layout_wrapper(input_tensor, target_layout);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
-}
-
-Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device) {
-    ZoneScoped;
-    TT_FATAL(
-        is_cpu_tensor(input_tensor) || is_multi_device_host_tensor(input_tensor),
-        "to(layout) must be called on host tensors with MULTI_DEVICE_HOST_STORAGE when multiple "
-        "workers "
-        "are specified");
-    return tensor_to_layout(input_tensor, target_layout, mesh_device);
 }
 
 void tensor_print(const Tensor& input_tensor) {
