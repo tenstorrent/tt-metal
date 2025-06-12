@@ -919,8 +919,6 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     bool skip_physical = cluster_->arch() == ARCH::BLACKHOLE and hal_->is_coordinate_virtualization_enabled();
     if (not skip_physical) {
         for (tt::umd::CoreCoord core : pcie_cores) {
-            tt::umd::CoreCoord translated_coord =
-                soc_d.translate_coord_to(tt_xy_pair(core.x, core.y), CoordSystem::PHYSICAL, CoordSystem::VIRTUAL);
             core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::PCIE};
         }
         for (tt::umd::CoreCoord core : dram_cores) {
