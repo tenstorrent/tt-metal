@@ -23,7 +23,6 @@ TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_smoke)
 target_sources(
     unit_tests_ttnn_smoke
     PRIVATE
-        test_graph_add.cpp
         test_matmul_benchmark.cpp
         test_multiprod_queue.cpp
         test_multi_cq_multi_dev.cpp
@@ -51,6 +50,7 @@ target_sources(
         test_broadcast_to.cpp
         test_conv2d.cpp # TODO: Fix misaligned memory load (UBSan) then shift-left
         test_generic_op.cpp
+        test_graph_add.cpp
         test_graph_basic.cpp
         test_graph_capture_arguments_morehdot.cpp
         test_graph_capture_arguments_transpose.cpp
