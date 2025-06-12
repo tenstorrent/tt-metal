@@ -26,7 +26,7 @@ void validate_pool2d(
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
     TT_FATAL(input.buffer() != nullptr, "Operands to reshape need to be allocated in buffers on device!");
     TT_FATAL(input.dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
-    TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now");
+    TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now. Tracked by issue #23338");
 
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
     TT_FATAL(out_mem_config.is_sharded(), "Output memory config needs to be sharded");
@@ -134,6 +134,7 @@ tt::stl::hash::hash_t Pool2D::compute_program_hash(
         op_attr.pool_type_,
         op_attr.memory_config_,
         op_attr.divisor_override_,
+        op_attr.count_include_pad_,
         input_mem_config,
         dtype);
 }
@@ -181,6 +182,7 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
     Pool2DType pool_type,
     DataType output_dtype,
     MemoryConfig memory_config,
+    bool count_include_pad,
     std::optional<int32_t> divisor_override) {
     return {
         operation_attributes_t{
@@ -188,6 +190,7 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
             .pool_type_ = pool_type,
             .output_dtype_ = output_dtype,
             .memory_config_ = std::move(memory_config),
+            .count_include_pad_ = count_include_pad,
             .divisor_override_ = divisor_override},
         tensor_args_t{input_tensor}};
 }

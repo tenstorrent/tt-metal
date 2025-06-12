@@ -1,5 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -52,6 +51,13 @@ def tensor_map():
     ],
 )
 @pytest.mark.parametrize(
+    "count_include_pad",
+    [
+        False,
+        True,
+    ],
+)
+@pytest.mark.parametrize(
     "divisor_override",
     [
         None,
@@ -80,6 +86,7 @@ def test_avg_pool2d_post_commit(
     padding,
     ceil_mode,
     divisor_override,
+    count_include_pad,
     shard_scheme,
 ):
     run_avg_pool2d(
@@ -92,5 +99,6 @@ def test_avg_pool2d_post_commit(
         padding=padding,
         ceil_mode=ceil_mode,
         divisor_override=divisor_override,
+        count_include_pad=count_include_pad,
         shard_scheme=shard_scheme,
     )

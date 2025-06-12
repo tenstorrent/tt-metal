@@ -7,7 +7,7 @@
 #include <boost/container/vector.hpp>
 #include <boost/move/utility_core.hpp>
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/small_vector.hpp>
+#include <tt_stl/small_vector.hpp>
 #include <functional>
 #include <numeric>
 #include <ostream>
@@ -81,7 +81,7 @@ tt::stl::SmallVector<uint32_t> compute_strides(const tt::tt_metal::Shape& shape)
         return tt::stl::SmallVector<uint32_t>(shape.rank(), 0);
     }
 
-    ttnn::SmallVector<uint32_t> strides;
+    tt::stl::SmallVector<uint32_t> strides;
     for (std::int32_t index = 0; index < shape.rank(); index++) {
         num_elements /= shape[index];
         strides.push_back(num_elements);
