@@ -41,8 +41,8 @@ class OpenPDNMnistConv2D:
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
         )
+        self.conf_output_dtype = activation_dtype
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=activation_dtype,
             weights_dtype=weights_dtype,
             activation=activation,
             shard_layout=shard_layout,
@@ -87,6 +87,7 @@ class OpenPDNMnistConv2D:
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conf_output_dtype,
         )
         return tt_tensor
 

@@ -173,7 +173,6 @@ class resnet50Bottleneck:
                 input_height=input_height,
                 input_width=input_width,
                 conv_config=ttnn.Conv2dConfig(
-                    dtype=self.model_config["ACTIVATIONS_DTYPE"],
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                     shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
                     if height_sharding
@@ -187,6 +186,7 @@ class resnet50Bottleneck:
                 ),
                 return_output_dim=False,
                 return_weights_and_bias=True,
+                dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
             ttnn.deallocate(x)
             ds_out = ttnn.reallocate(ds_out)
@@ -222,7 +222,6 @@ class resnet50Bottleneck:
             input_height=input_height,
             input_width=input_width,
             conv_config=ttnn.Conv2dConfig(
-                dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
@@ -235,6 +234,7 @@ class resnet50Bottleneck:
             ),
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
         act_block_h_override = 0
@@ -286,7 +286,6 @@ class resnet50Bottleneck:
             input_height=input_height,
             input_width=input_width,
             conv_config=ttnn.Conv2dConfig(
-                dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
                 deallocate_activation=True,
@@ -302,6 +301,7 @@ class resnet50Bottleneck:
             ),
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
         # conv3 is 1x1 conv
@@ -320,7 +320,6 @@ class resnet50Bottleneck:
             input_height=input_height,
             input_width=input_width,
             conv_config=ttnn.Conv2dConfig(
-                dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
                 if height_sharding
@@ -332,6 +331,7 @@ class resnet50Bottleneck:
             ),
             return_output_dim=False,
             return_weights_and_bias=True,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
         if not self.run_downsample_before_conv2:
@@ -532,7 +532,6 @@ class resnet50:
             input_height=451,
             input_width=451,
             conv_config=ttnn.Conv2dConfig(
-                dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
                 deallocate_activation=True,
@@ -543,6 +542,7 @@ class resnet50:
             ),
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
         # Relu is fused with conv1
 
@@ -834,7 +834,6 @@ class resnet50:
             input_height=451,
             input_width=451,
             conv_config=ttnn.Conv2dConfig(
-                dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
                 deallocate_activation=True,
@@ -845,6 +844,7 @@ class resnet50:
             ),
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
         # Relu is fused with conv1
 

@@ -56,7 +56,6 @@ class TtMobileNetV2Conv2D:
 
     def _initialize_conv_config(self):
         conv_config = ttnn.Conv2dConfig(
-            dtype=self.activation_dtype,
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=self.shard_layout,
@@ -113,6 +112,7 @@ class TtMobileNetV2Conv2D:
             groups=self.groups,
             return_weights_and_bias=True,
             return_output_dim=True,
+            dtype=self.activation_dtype,
         )
         return x, h, w
 

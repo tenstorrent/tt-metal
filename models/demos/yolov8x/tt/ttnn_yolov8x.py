@@ -92,7 +92,6 @@ class TtConv:
 
     def _initialize_conv_config(self):
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat16,
             weights_dtype=ttnn.bfloat16,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -163,6 +162,7 @@ class TtConv:
             memory_config=None,
             return_weights_and_bias=True,
             return_output_dim=True,
+            dtype=ttnn.bfloat16,
         )
 
         if self.is_detect_cv2:

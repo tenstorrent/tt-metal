@@ -351,7 +351,6 @@ class UNet2DConditionModel:
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if in_channels < 320 else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=shard_layout,
@@ -402,6 +401,7 @@ class UNet2DConditionModel:
             bias_tensor=self.conv_in_bias,
             **conv_kwargs,
             compute_config=compute_config,
+            dtype=ttnn.bfloat8_b,
         )
         sample = ttnn.reallocate(sample)  # TODO: Test remove
 
@@ -637,7 +637,6 @@ class UNet2DConditionModel:
         sample = ttnn.sharded_to_interleaved(sample, ttnn.L1_MEMORY_CONFIG, sample.dtype)
 
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -689,6 +688,7 @@ class UNet2DConditionModel:
             weight_tensor=self.conv_out_weights,
             bias_tensor=self.conv_out_bias,
             compute_config=compute_config,
+            dtype=ttnn.bfloat8_b,
         )
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.clone(sample, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
