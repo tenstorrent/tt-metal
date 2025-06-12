@@ -7,7 +7,7 @@ import math
 import os
 from enum import Enum, auto
 from pathlib import Path
-from typing import Tuple
+from typing import Literal, Tuple
 
 import torch
 from loguru import logger
@@ -416,6 +416,7 @@ class ModelArgs:
         self,
         mesh_device,
         instruct=False,
+        model_style: Literal["Meta", "HuggingFace"] | None = None,
         dummy_weights=False,
         max_batch_size=1,
         max_seq_len=1024 * 128,
@@ -471,20 +472,29 @@ class ModelArgs:
             "FAKE_DEVICE"
         ), "FAKE_DEVICE has been renamed to MESH_DEVICE for consistency with vLLM, please update your environment variables and run again."
 
-        # Remove trailing slashes so basename gets the right model name
+        assert model_style in ["Meta", "HuggingFace", "Dummy", None]
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         HF_MODEL = os.getenv("HF_MODEL")
+        assert (
+            LLAMA_DIR is not None or HF_MODEL is not None
+        ), "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct or LLAMA_DIR to a Meta-style checkpoint directory"
         self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
-        assert not (LLAMA_DIR and HF_MODEL), "Only one of LLAMA_DIR or HF_MODEL should be set"
-        if LLAMA_DIR:
+
+        if model_style is None: # Detect model style automatically
+            assert LLAMA_DIR is None or HF_MODEL is None, "Only one of LLAMA_DIR or HF_MODEL should be set when auto-detecting model style"
+            model_style = "HuggingFace" if HF_MODEL else "Meta"
+
+        if model_style == "Meta":
+            assert LLAMA_DIR is not None, "LLAMA_DIR must be set for Meta-style checkpoints"
             if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH")]):
                 logger.warning("LLAMA_DIR will override LLAMA_CKPT_DIR and LLAMA_TOKENIZER_PATH")
             self.CKPT_DIR = LLAMA_DIR
             self.TOKENIZER_PATH = LLAMA_DIR
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
-            self.model_name = os.path.basename(LLAMA_DIR.strip("/"))  # May be overridden by config
-        elif HF_MODEL:
+            self.model_name = os.path.basename(LLAMA_DIR.strip("/"))  # Remove trailing slashes so basename gets the right model name. May be overridden by config
+        else:
+            assert HF_MODEL is not None, "HF_MODEL must be set for HuggingFace-style checkpoints"
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
             if not self.CACHE_PATH:
@@ -495,12 +505,8 @@ class ModelArgs:
                 -1
             ]  # HF model names use / even on windows. May be overridden by config.
             self.from_hf_url = True
-        else:
-            assert (
-                False
-            ), "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct or LLAMA_DIR to a Meta-style checkpoint directory"
 
-        if not dummy_weights and not HF_MODEL:
+        if not dummy_weights and model_style == "Meta":
             # Assert if all folders and files exist
             assert os.path.exists(
                 self.CKPT_DIR
@@ -531,13 +537,7 @@ class ModelArgs:
             raise ValueError(f"Batch size {self.max_batch_size} not supported")
 
         # Load model params
-        if HF_MODEL:
-            self.checkpoint_type = CheckpointType.HuggingFace
-            self._set_hf_params(self.CKPT_DIR)
-        elif not dummy_weights:
-            self.checkpoint_type = self.detect_checkpoint_type()
-            self._set_model_params(self.CKPT_DIR)
-        else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
+        if dummy_weights: # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
             self.checkpoint_type = CheckpointType.Meta
             if "3.2-1B" in self.CKPT_DIR:
                 local_params = "LLAMA3_2_1B_PARAMS"
@@ -549,13 +549,19 @@ class ModelArgs:
                 local_params = "LLAMA3_2_11B_PARAMS"
             elif "3.1-70B" in self.CKPT_DIR:
                 local_params = "LLAMA3_1_70B_PARAMS"
-            elif "3.2-90B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_90B_PARAMS"
+            elif "3.3-70B" in self.CKPT_DIR:
+                local_params = "LLAMA3_3_70B_PARAMS"
             else:
                 raise ValueError(
                     f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
                 )
-            self._set_model_params(self.LOCAL_LLAMA_PARAMS[local_params])
+            self._set_params(self.LOCAL_LLAMA_PARAMS[local_params])
+        elif model_style == "HuggingFace":
+            self.checkpoint_type = CheckpointType.HuggingFace
+            self._set_hf_params(self.CKPT_DIR)
+        else:
+            self.checkpoint_type = CheckpointType.Meta
+            self._set_params(self.CKPT_DIR)
 
         # Set the max number of tokens for each prefill chunk based on the model and device
         max_prefill_chunk_size_div1024 = os.getenv("MAX_PREFILL_CHUNK_SIZE")
@@ -1493,14 +1499,6 @@ class ModelArgs:
         """
         return (self.vision_chunk_size // self.vision_patch_size) ** 2 + 1
 
-    def _set_model_params(self, checkpoint_dir):
-        if self.checkpoint_type == CheckpointType.Meta:
-            self._set_params(checkpoint_dir)
-        elif self.checkpoint_type == CheckpointType.HuggingFace:
-            self._set_hf_params(checkpoint_dir)
-        else:
-            raise ValueError(f"Unsupported checkpoint type: {self.checkpoint_type}")
-
     def _set_params(self, checkpoint_dir):
         params_file = os.path.join(checkpoint_dir, "params.json")
         assert os.path.exists(params_file), f"params.json file not found at {params_file}"
@@ -1926,32 +1924,6 @@ class ModelArgs:
             block_h=self.tile_padded_batch_rows // self.tile_size,
             block_w=block_w,
             inplace=False,
-        )
-
-    def detect_checkpoint_type(self) -> CheckpointType:
-        """Detect if checkpoint directory contains Meta or HuggingFace format weights.
-
-        Returns:
-            CheckpointType: Meta or HuggingFace enum value
-
-        Raises:
-            ValueError: If neither Meta nor HuggingFace checkpoint format is detected
-        """
-        config_path = os.path.join(self.CKPT_DIR, "config.json")
-        params_path = os.path.join(self.CKPT_DIR, "params.json")
-
-        if os.path.exists(config_path):
-            with open(config_path) as f:
-                config = json.load(f)
-                if "transformers_version" in config:
-                    return CheckpointType.HuggingFace
-
-        if os.path.exists(params_path):
-            return CheckpointType.Meta
-
-        raise ValueError(
-            f"Could not detect Meta or HuggingFace checkpoint format in {self.CKPT_DIR}. "
-            "Directory should contain either config.json (HuggingFace) or params.json (Meta)."
         )
 
     def create_tokenizer(self):
