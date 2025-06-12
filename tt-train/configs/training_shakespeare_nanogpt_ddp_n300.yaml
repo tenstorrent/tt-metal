@@ -8,8 +8,6 @@ training_config:
     max_steps: 5000
     learning_rate: 0.0003
     weight_decay: 0.01
-    enable_ddp: true
-    mesh_shape: [1,2]
     use_moreh_adamw: true
     use_kahan_summation: false
     use_clip_grad_norm: false
@@ -30,3 +28,7 @@ eval_config:
     temperature: 0.7
     top_k: 50
     top_p: 1.0
+device_config:
+    enable_ddp: true
+    mesh_shape: [1,2]
+    device_ids: [0,1]

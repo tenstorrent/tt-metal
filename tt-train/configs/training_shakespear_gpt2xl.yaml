@@ -12,8 +12,6 @@ training_config:
   use_kahan_summation: false
   gradient_accumulation_steps: 32
   tokenizer_type: bpe
-  enable_tp: true
-  mesh_shape: [1,2]
 
   transformer_config:
     runner_type: memory_efficient
@@ -25,3 +23,7 @@ training_config:
     max_sequence_length: 1024
     experimental:
       use_composite_layernorm: false
+
+device_config:
+  enable_tp: true
+  mesh_shape: [1,2]

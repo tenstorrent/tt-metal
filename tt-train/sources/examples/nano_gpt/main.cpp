@@ -393,14 +393,6 @@ struct TrainingConfig {
     // mpi config
     bool enable_mpi = false;
     uint32_t num_mh_workers = 0U;
-
-    // multidevice config: default to single device with default mapping of
-    // physical devices onto the mesh shape.
-    tt::tt_metal::distributed::MeshShape mesh_shape{1, 1};
-    std::vector<int> device_ids{};
-
-    bool enable_ddp = false;
-    bool enable_tp = false;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -427,28 +419,6 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
-    config.enable_ddp = training_config["enable_ddp"].as<bool>(false);
-    config.enable_tp = training_config["enable_tp"].as<bool>(false);
-
-    if (config.enable_ddp && config.enable_tp) {
-        throw std::runtime_error("DDP and TP cannot be enabled at the same time. Disable DDP or TP.");
-    }
-
-    auto mesh_shape_node = training_config["mesh_shape"];
-    bool multidevice = config.enable_ddp || config.enable_tp;
-    if (multidevice && !mesh_shape_node) {
-        throw std::runtime_error("Mesh shape is required for multidevice training");
-    }
-    if (mesh_shape_node) {
-        assert(mesh_shape_node.size() == 2);
-        auto mesh_shape = mesh_shape_node.as<std::vector<int>>();
-        config.mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_shape[0], mesh_shape[1]);
-    }
-
-    auto device_ids_node = training_config["device_ids"];
-    if (device_ids_node) {
-        config.device_ids = device_ids_node.as<std::vector<int>>();
-    }
 
     if (config.model_type == "gpt2") {
         config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
@@ -462,6 +432,49 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
         config.enable_mpi = multihost_config["enabled"].as<bool>(false);
         config.num_mh_workers = multihost_config["num_workers"].as<uint32_t>(0U);
     }
+    return config;
+}
+
+struct DeviceConfig {
+    // multidevice config: default to single device with default mapping of
+    // physical devices onto the mesh shape.
+    tt::tt_metal::distributed::MeshShape mesh_shape{1, 1};
+    std::vector<int> device_ids{};
+
+    bool enable_ddp = false;
+    bool enable_tp = false;
+};
+
+DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
+    DeviceConfig config;
+    auto device_node = yaml_config["device_config"];
+    if (!device_node) {
+        return config;
+    }
+    
+    config.enable_ddp = device_node["enable_ddp"].as<bool>(false);
+    config.enable_tp = device_node["enable_tp"].as<bool>(false);
+
+    if (config.enable_ddp && config.enable_tp) {
+        throw std::runtime_error("DDP and TP cannot be enabled at the same time. Disable DDP or TP.");
+    }
+
+    auto mesh_shape_node = device_node["mesh_shape"];
+    bool multidevice = config.enable_ddp || config.enable_tp;
+    if (multidevice && !mesh_shape_node) {
+        throw std::runtime_error("Mesh shape is required for multidevice training");
+    }
+    if (mesh_shape_node) {
+        assert(mesh_shape_node.size() == 2);
+        auto mesh_shape = mesh_shape_node.as<std::vector<int>>();
+        config.mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_shape[0], mesh_shape[1]);
+    }
+
+    auto device_ids_node = device_node["device_ids"];
+    if (device_ids_node) {
+        config.device_ids = device_ids_node.as<std::vector<int>>();
+    }
+
     return config;
 }
 
@@ -493,6 +506,7 @@ int main(int argc, char **argv) {
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
     EvalConfig eval_config = parse_eval_config(yaml_config);
+    DeviceConfig device_config = parse_device_config(yaml_config);
 
     if (config.enable_mpi) {
         auto &ctx = ttml::autograd::ctx();
@@ -505,12 +519,12 @@ int main(int argc, char **argv) {
         enable_wandb = false;
     }
 
-    if (config.enable_ddp || config.enable_tp) {
-        fmt::println("Multidevice config:");
-        fmt::println("  Tensor parallel enabled: {}", config.enable_tp);
-        fmt::println("  Distributed data-parallel enabled: {}", config.enable_ddp);
-        fmt::println("  Mesh shape: {}", config.mesh_shape);
-        fmt::println("  Device IDs: {}", config.device_ids);
+    if (device_config.enable_ddp || device_config.enable_tp) {
+        fmt::println("Device config:");
+        fmt::println("  Tensor parallel enabled: {}", device_config.enable_tp);
+        fmt::println("  Distributed data-parallel enabled: {}", device_config.enable_ddp);
+        fmt::println("  Mesh shape: {}", device_config.mesh_shape);
+        fmt::println("  Device IDs: {}", device_config.device_ids);
     }
 
     if (config.enable_mpi) {
@@ -529,7 +543,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (config.enable_tp) {
+    if (device_config.enable_tp) {
         if (!config.model_path.empty()) {
             throw std::runtime_error("Save and load is not supported with Tensor Parallel model");
         }
@@ -645,7 +659,7 @@ int main(int argc, char **argv) {
     fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
 
-    initialize_device(config.mesh_shape, config.device_ids);
+    initialize_device(device_config.mesh_shape, device_config.device_ids);
 
     auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
@@ -668,7 +682,7 @@ int main(int argc, char **argv) {
         ttml::core::from_vector(mask, ttml::core::create_shape({1, 1, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, num_heads, device, &cached_data, &config](std::vector<DatasetSample> &&samples) {
+        [sequence_length, num_heads, device, &cached_data, &device_config](std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
@@ -688,7 +702,7 @@ int main(int argc, char **argv) {
             fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
 
             auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
-                if (config.enable_ddp) {
+                if (device_config.enable_ddp) {
                     auto data_xtensor = xt::adapt(data, {batch_size, 1U, 1U, sequence_length});
                     auto data_composer = ttml::core::ShardXTensorToMesh<uint32_t>(device->shape(), 0);
                     auto data_tensor =
@@ -732,7 +746,7 @@ int main(int argc, char **argv) {
     std::visit(
         [&](auto &&arg) {
             if constexpr (requires { arg.vocab_size; }) {
-                arg.vocab_size = round_up_to_tile(tokenizer->get_vocab_size(), (config.enable_tp ? num_devices : 1U) * 32U);
+                arg.vocab_size = round_up_to_tile(tokenizer->get_vocab_size(), (device_config.enable_tp ? num_devices : 1U) * 32U);
             } else {
                 throw std::runtime_error(
                     "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
@@ -741,15 +755,15 @@ int main(int argc, char **argv) {
         config.transformer_config);
 
     Model model = std::visit(
-        [&config](auto &&arg) -> Model {
+        [&device_config](auto &&arg) -> Model {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
-                if (config.enable_tp) {
+                if (device_config.enable_tp) {
                     return ttml::models::distributed::llama::create(arg);
                 } else {
                     return ttml::models::llama::create(arg);
                 }
             } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>) {
-                if (config.enable_tp) {
+                if (device_config.enable_tp) {
                     return ttml::models::distributed::gpt2::create(arg);
                 } else {
                     return ttml::models::gpt2::create(arg);
@@ -792,7 +806,7 @@ int main(int argc, char **argv) {
                 std::visit([](auto &&arg) { return arg.max_sequence_length; }, config.transformer_config),
                 num_heads,
                 sequence_length,
-                config.enable_tp,
+                device_config.enable_tp,
                 eval_config.temperature,
                 eval_config.repetition_penalty,
                 eval_config.top_k,
@@ -815,7 +829,7 @@ int main(int argc, char **argv) {
         fmt::println("Remote optimizer configured!");
     }
 
-    fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, config.enable_tp));
+    fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
 
     auto select_optimizer =
         [&model, &adamw_params, &config](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
@@ -897,12 +911,12 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
-                if (!config.enable_tp) {
+                if (!device_config.enable_tp) {
                     ttml::core::distributed::synchronize_parameters(parameters);
                 }
 
                 if (config.use_clip_grad_norm) {
-                    if (config.enable_tp) {
+                    if (device_config.enable_tp) {
                         throw std::logic_error("Clip grad norm is not supported with TP");
                     }
                     ttml::core::clip_grad_norm(parameters, config.clip_grad_norm_max_norm);
