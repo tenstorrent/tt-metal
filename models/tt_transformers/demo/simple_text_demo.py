@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.demos.utils.llm_demo_utils import create_benchmark_data, parse_readme_perf_targets, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
@@ -848,7 +848,7 @@ def test_demo_text(
     logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
     logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
     logger.info("")
-    logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token*1000, 2)}ms")
+    logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token * 1000, 2)}ms")
     logger.info(
         f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
@@ -916,7 +916,14 @@ def test_demo_text(
             "prefill_t/s": target_prefill_tok_s,
             "decode_t/s": target_decode_tok_s,
             "decode_t/s/u": target_decode_tok_s_u,
+            "prefill_time_to_token": measurements["prefill_time_to_token"],
         }
+
+        targets_from_readme = parse_readme_perf_targets(
+            model_name, batch_size, tt_device_name, dp=data_parallel if data_parallel > 1 else None
+        )
+        targets.update(targets_from_readme)
+
     else:
         logger.info(f"Model {model_name} does not have performance targets set")
         targets = {}
@@ -963,3 +970,7 @@ def test_demo_text(
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )
+
+    verify_perf(
+        measurements, targets, high_tol_percentage=1.15, expected_measurements={k: True for k in targets.keys()}
+    )
