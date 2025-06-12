@@ -242,7 +242,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     const SlidingWindowConfig& sliding_window_config,
     uint32_t channels,
     Pool2DType pool_type) {
-    auto batch_size = sliding_window_config.batch_size;
+    uint32_t batch_size = sliding_window_config.batch_size;
     auto output_shape = sliding_window_config.get_output_shape();
     auto compute_grid_size = input_tensor.device()->compute_with_storage_grid_size();
 
