@@ -66,14 +66,16 @@ def randomize_torch_tensor(torch_tensor_map, tensor_shape):
     if tensor_shape in torch_tensor_map.keys():
         torch_tensor = torch_tensor_map[tensor_shape]
     else:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float() * 9.0
+        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
+        m = 0
         # for i in range(tensor_shape[0]):
         #     for j in range(tensor_shape[1]):
         #         for k in range(tensor_shape[2]):
         #             for l in range(tensor_shape[3]):
-        #                 # torch_tensor[i, j, k, l] =  tensor_shape[1]
-        #                 torch_tensor[i, j, k, l] = k * tensor_shape[3] + l + 1
-        #                 # torch_tensor[i, j, k, l] = 1
+        #                 torch_tensor[i, j, k, l] = m
+        #                 m += 1
+        # torch_tensor[i, j, k, l] =  tensor_shape[1]
+        # torch_tensor[i, j, k, l] = 1
         torch_tensor_map[tensor_shape] = torch_tensor
 
     return torch_tensor
@@ -323,8 +325,8 @@ def run_conv(
     else:
         pcc = 0.997
 
-    write_to_file("torch_out.txt", ref)
-    write_to_file("ttnn_out.txt", out)
+    # write_to_file("torch_out.txt", ref)
+    # write_to_file("ttnn_out.txt", out)
     if activation == "tanh":
         # Scale down PCC for tanh.
         # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
@@ -3633,13 +3635,26 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("input_channels", [3, 320])
-@pytest.mark.parametrize("output_channels", [32])
-@pytest.mark.parametrize("input_height,input_width", [(224, 224)])
-@pytest.mark.parametrize("kernel_height,kernel_width", [(7, 7)])
-@pytest.mark.parametrize("stride_height,stride_width", [(2, 2)])
+@pytest.mark.parametrize(
+    "input_channels, output_channels, input_height, input_width, kernel_height, kernel_width, stride_height, stride_width",
+    [
+        (3, 32, 224, 224, 16, 16, 16, 16),
+        (3, 32, 224, 224, 32, 32, 32, 32),
+        (3, 32, 224, 224, 16, 16, 2, 2),
+        (3, 32, 224, 224, 7, 7, 2, 2),
+        (3, 32, 224, 224, 6, 6, 2, 2),
+        (3, 32, 1280, 1280, 6, 6, 2, 2),
+        (3, 32, 512, 672, 16, 16, 16, 16),
+        (3, 32, 512, 672, 32, 32, 32, 32),
+        (320, 32, 224, 224, 16, 16, 16, 16),
+        (320, 32, 224, 224, 32, 32, 32, 32),
+        (320, 32, 512, 672, 16, 16, 16, 16),
+        (320, 32, 512, 672, 32, 32, 32, 32),
+    ]
+)
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("has_bias", [True, False])
+@pytest.mark.parametrize("preprocess_weights_on_device", [True, False])
 def test_conv2d_with_fold(
     device,
     torch_tensor_map,
