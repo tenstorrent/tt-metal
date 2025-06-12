@@ -98,6 +98,8 @@ CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &et
 
 tt_metal::HalProgrammableCoreType get_core_type(chip_id_t chip_id, const CoreCoord& virtual_core) {
     bool is_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, chip_id);
+    std::cerr << " == virtual_core: " << virtual_core.str() << ", is_eth_core: " << (is_eth_core ? "true" : "false");
+    std::cerr << ", logical_core: " << logical_core_from_ethernet_core(chip_id, virtual_core).str() << std::endl;
     bool is_active_eth_core = false;
     bool is_inactive_eth_core = false;
 
@@ -106,6 +108,8 @@ tt_metal::HalProgrammableCoreType get_core_type(chip_id_t chip_id, const CoreCoo
         auto active_eth_cores = tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(chip_id);
         auto inactive_eth_cores =
             tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(chip_id);
+        fmt::print(stderr, " == active_eth_cores: {}\n", fmt::join(active_eth_cores, ", "));
+        fmt::print(stderr, " == inactive_eth_cores: {}\n", fmt::join(inactive_eth_cores, ", "));
         is_active_eth_core =
             active_eth_cores.find(logical_core_from_ethernet_core(chip_id, virtual_core)) != active_eth_cores.end();
         is_inactive_eth_core =
