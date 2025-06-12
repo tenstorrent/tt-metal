@@ -1,9 +1,8 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 
-import torch.nn as nn
 import ttnn
 from models.experimental.functional_vovnet.tt.common import Conv
 
