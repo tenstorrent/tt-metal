@@ -288,7 +288,7 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
     };
   }
 
-  async fetchAllWorkflowRuns(days, mostRecentCachedDate, oldestCachedDate) {
+  async fetchAllWorkflowRuns(days, latestCacheDate, oldestCachedDate) {
     const allRuns = [];
     const cutoffDate = this.getCutoffDate(days);
     const startTime = Date.now();
@@ -308,9 +308,9 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
     const needHistoricalData = cutoffDate < oldestCachedDate;
     core.info(`[Fetch] Cache status: ${needHistoricalData ? 'Need historical data' : 'Using cached data'} (oldest cache: ${oldestCachedDate.toISOString()})`);
 
-    // If we don't need historical data and we have a valid mostRecentCachedDate, we can optimize our fetch
-    if (!needHistoricalData && mostRecentCachedDate && !isNaN(mostRecentCachedDate.getTime())) {
-      core.info(`[Fetch] Optimized fetch: collecting runs after ${mostRecentCachedDate.toISOString()}`);
+    // If we don't need historical data and we have a valid latestCacheDate, we can optimize our fetch
+    if (!needHistoricalData && latestCacheDate && !isNaN(latestCacheDate.getTime())) {
+      core.info(`[Fetch] Optimized fetch: collecting runs after ${latestCacheDate.toISOString()}`);
       try {
         for (let page = 1; page <= this.maxPages; page++) {
           apiCallCount++;
@@ -319,7 +319,7 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
             repo: this.context.repo.repo,
             per_page: this.runsPerPage,
             page,
-            created: `>=${mostRecentCachedDate.toISOString()}`,
+            created: `>=${latestCacheDate.toISOString()}`,
             branch: MAIN_BRANCH
           });
 
@@ -549,14 +549,14 @@ class CacheManager {
 
   loadPreviousCache(cachePath) {
     let previousRuns = [];
-    let mostRecentCachedDate = null;
+    let latestCacheDate = null;
     let earliestCachedDate = null;
 
     // Check if force fetch is enabled
-    const forceFetch = core.getInput('force-fetch') === 'true';
-    if (forceFetch) {
+    const clearCache = core.getInput('clear-cache') === 'true';
+    if (clearCache) {
       core.info('[Cache] Force fetch enabled, skipping cache load');
-      return { previousRuns, mostRecentCachedDate, earliestCachedDate };
+      return { previousRuns, latestCacheDate, earliestCachedDate };
     }
 
     if (fs.existsSync(cachePath)) {
@@ -576,17 +576,17 @@ class CacheManager {
         }
 
         // Calculate date boundaries
-        mostRecentCachedDate = this.fetcher.getMostRecentDateInRuns(previousRuns);
+        latestCacheDate = this.fetcher.getMostRecentDateInRuns(previousRuns);
         earliestCachedDate = this.fetcher.getEarliestDateInRuns(previousRuns);
 
         core.info(`Loaded ${previousRuns.length} runs from cache`);
-        core.info(`Cache date range: ${earliestCachedDate.toISOString()} to ${mostRecentCachedDate.toISOString()}`);
+        core.info(`Cache date range: ${earliestCachedDate.toISOString()} to ${latestCacheDate.toISOString()}`);
       } catch (error) {
         core.warning(`Error loading cache: ${error.message}`);
       }
     }
 
-    return { previousRuns, mostRecentCachedDate, earliestCachedDate };
+    return { previousRuns, latestCacheDate, earliestCachedDate };
   }
 
   saveCache(cachePath, groupedRuns) {
@@ -602,7 +602,7 @@ class CacheManager {
 async function run() {
   try {
     // Get inputs
-    const forceFetch = core.getInput('force-fetch') === 'true';
+    const clearCache = core.getInput('clear-cache') === 'true';
     const daysInput = core.getInput('days') || DEFAULT_DAYS;
     const days = parseFloat(daysInput);
     if (isNaN(days)) {
@@ -627,18 +627,18 @@ async function run() {
 
     // Set default values for cache
     let previousRuns = [];
-    let mostRecentCachedDate = new Date(0);
+    let latestCacheDate = new Date(0);
     let earliestCachedDate = new Date();
 
 
-    if (!forceFetch) {
+    if (!clearCache) {
       const cacheData = cacheManager.loadPreviousCache(cachePath);
       previousRuns = cacheData.previousRuns;
-      mostRecentCachedDate = cacheData.mostRecentCachedDate;
+      latestCacheDate = cacheData.latestCacheDate;
       earliestCachedDate = cacheData.earliestCachedDate;
     }
     // Fetch new runs
-    const { completeRuns, dateRange } = await fetcher.fetchAllWorkflowRuns(days, mostRecentCachedDate, earliestCachedDate);
+    const { completeRuns, dateRange } = await fetcher.fetchAllWorkflowRuns(days, latestCacheDate, earliestCachedDate);
     if (dateRange && dateRange.earliest && dateRange.latest) {
       core.info(`[Fetch] Fetched ${completeRuns.length} new runs with date range: ${dateRange.earliest.toISOString()} to ${dateRange.latest.toISOString()}`);
     } else {

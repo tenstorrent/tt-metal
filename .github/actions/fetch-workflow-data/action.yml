@@ -21,7 +21,7 @@ inputs:
   GITHUB_TOKEN:
     description: 'GitHub token for API access'
     required: true
-  force-fetch:
+  force-cache:
     description: 'If true, skips loading cache and fetches all new data'
     required: false
     default: 'true'

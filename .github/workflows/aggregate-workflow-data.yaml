@@ -72,7 +72,7 @@ jobs:
           cache-path: ${{ github.workspace }}/workflow-data.json
           days: ${{ github.event.inputs.days || 15 }}
           workflow_configs: ${{ steps.set-configs.outputs.workflow_configs }}
-          force-fetch: 'true'
+          clear-cache: 'true'
 
       - name: Save to rolling cache indices
         uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 #@v4
