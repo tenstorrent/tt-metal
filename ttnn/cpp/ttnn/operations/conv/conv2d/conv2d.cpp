@@ -375,6 +375,10 @@ Result conv2d_DRAM(
         if (sliced_output_tensor.layout() != Layout::ROW_MAJOR) {
             sliced_output_tensor = ttnn::untilize(sliced_output_tensor);
         }
+        if (sliced_output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
+            sliced_output_tensor = ttnn::reshape(
+                sliced_output_tensor, ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}));
+        }
         ttnn::experimental::slice_write(
             queue_id,
             sliced_output_tensor,
