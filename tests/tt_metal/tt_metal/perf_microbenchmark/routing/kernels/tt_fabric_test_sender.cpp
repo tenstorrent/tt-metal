@@ -16,25 +16,25 @@ void kernel_main() {
     size_t rt_args_idx = 0;
     auto sender_config = SenderKernelConfig::build_from_args<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(rt_args_idx);
 
-    std::array<uint64_t, NUM_TRAFFIC_CONFIGS> elapsed_cycles = {};
-
     // clear out test results area
 
     sender_config.open_connections();
 
-    bool packets_left = true;
+    bool packets_left_to_send = true;
 
-    while (packets_left) {
-        packets_left = false;
+    while (packets_left_to_send) {
+        packets_left_to_send = false;
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-            auto& traffic_config = sender_config.traffic_configs[i];
-            if (!traffic_config.has_packets_to_send()) {
+            auto* traffic_config = sender_config.traffic_configs[i];
+            if (!traffic_config->has_packets_to_send()) {
                 continue;
             }
 
-            uint64_t start_timestamp = get_timestamp();
-            packets_left |= traffic_config.send_packets<BENCHMARK_MODE>();
-            elapsed_cycles[i] += get_timestamp() - start_timestamp;
+            // TODO: might want to check if the buffer has wrapped or not
+            // if wrapped, then wait for credits from the receiver
+
+            traffic_config->send_packets<BENCHMARK_MODE>();
+            packets_left_to_send |= traffic_config->has_packets_to_send();
         }
     }
 
