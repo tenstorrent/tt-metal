@@ -172,7 +172,7 @@ struct ArgsOffsets {
      * @return constexpr size_t     Number of common runtime arguments used by the DistributionSpec.
      */
     constexpr uint32_t runtime_args_skip() const {
-        return bank_coords_crta_offset() + (ArgsLoc::BankCoordsCRTA ? fetch_num_banks() : 0) - CRTA_OFFSET;
+        return bank_coords_crta_offset() + (ArgsLoc::BankCoordsCRTA ? fetch_num_banks() : 0) - get_crta_offset();
     }
 };
 

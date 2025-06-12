@@ -60,18 +60,17 @@ Creating an Accessor
 constexpr uint32_t base_idx_cta = 0;
 constexpr uint32_t base_idx_crta = 1;
 
-// Get DistributionSpec type.
-using dspec_t = nd_sharding::distribution_spec_t<base_idx_cta, base_idx_crta>;
+// This object keeps track of the location of arguments for the sharded accessor
+auto args_proxy = nd_sharding::make_args_proxy<base_idx_cta, base_idx_crta>();
+// crta base index can be a runtime variable too:
+auto args_proxy = nd_sharding::make_args_proxy<base_idx_cta>(base_idx_crta);
 
-constexpr uint32_t new_base_idx_cta = base_idx_cta + nd_sharding::compile_time_args_skip<dspec_t>();
+constexpr uint32_t new_base_idx_cta = base_idx_cta + args_proxy.compile_time_args_skip();
 // new_base_idx_crta might be constexpr if rank and number of banks are static
-uint32_t new_base_idx_crta = base_idx_crta + nd_sharding::runtime_args_skip<dspec_t>();
-
-// Create a ShardedAccessor with compile time page size
-auto sharded_accessor = nd_sharding::ShardedAccessor<dspec_t, page_size>(bank_base_address);
+uint32_t new_base_idx_crta = base_idx_crta + args_proxy.runtime_args_skip();
 
 // Create a ShardedAccessor with runtime page size
-auto sharded_accessor = nd_sharding::ShardedAccessor<dspec_t>(bank_base_address, page_size);
+auto sharded_accessor = nd_sharding::make_sharded_accessor_from_args_proxy(args_proxy, bank_base_address, page_size);
 ```
 
 **Key Operations**
