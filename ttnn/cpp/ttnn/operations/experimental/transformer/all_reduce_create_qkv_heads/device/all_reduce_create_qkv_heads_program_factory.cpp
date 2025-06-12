@@ -155,10 +155,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     size_t num_targets_backward = 0;
     if (topology == ccl::Topology::Linear) {
         LineTopology line_topology(ring_size, ring_index);
-        num_targets_forward =
-            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
-        num_targets_backward =
-            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
+        num_targets_forward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::FORWARD);
+        num_targets_backward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::BACKWARD);
     } else if (topology == ccl::Topology::Ring) {
         // TODO: Commonize
         num_targets_forward = tt::div_up(ring_size - 1, 2);
