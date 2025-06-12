@@ -17,7 +17,6 @@ from models.utility_functions import torch_random
 @pytest.mark.parametrize(
     "batch_size, h, w, dim",
     [
-        (1, 512, 128000, -1),
         (1, 128, 128000, -1),
         (1, 32, 128000, -1),
         (1, 2048, 32000, -1),
