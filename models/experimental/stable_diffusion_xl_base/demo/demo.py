@@ -280,14 +280,14 @@ def run_demo_inference(
                     negative_pooled_prompt_embed,
                     dtype=ttnn.bfloat16,
                     device=ttnn_device,
-                    layout=ttnn.TILE_LAYOUT,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 ),
                 ttnn.from_torch(
                     add_text_embed,
                     dtype=ttnn.bfloat16,
                     device=ttnn_device,
-                    layout=ttnn.TILE_LAYOUT,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 ),
             ]
@@ -337,7 +337,7 @@ def run_demo_inference(
                 add_text_embeds,
                 dtype=ttnn.bfloat16,
                 device=ttnn_device,
-                layout=ttnn.TILE_LAYOUT,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         ]

@@ -18,17 +18,6 @@ def prepare_ttnn_tensors(
     device, torch_input_tensor, torch_timestep_tensor, torch_temb_tensor, torch_encoder_tensor, torch_time_ids
 ):
     torch.manual_seed(2025)
-    ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    B, C, H, W = list(ttnn_input_tensor.shape)
-
-    ttnn_input_tensor = ttnn.permute(ttnn_input_tensor, (0, 2, 3, 1))
-    ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
 
     ttnn_timestep_tensor = ttnn.from_torch(
         torch_timestep_tensor,
@@ -49,7 +38,7 @@ def prepare_ttnn_tensors(
         torch_temb_tensor,
         dtype=ttnn.bfloat16,
         device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_time_ids = ttnn.from_torch(
@@ -63,6 +52,18 @@ def prepare_ttnn_tensors(
         "text_embeds": ttnn_text_embeds,
         "time_ids": ttnn_time_ids,
     }
+
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    B, C, H, W = list(ttnn_input_tensor.shape)
+
+    ttnn_input_tensor = ttnn.permute(ttnn_input_tensor, (0, 2, 3, 1))
+    ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
 
     return ttnn_input_tensor, [B, C, H, W], ttnn_timestep_tensor, ttnn_encoder_tensor, ttnn_added_cond_kwargs
 
