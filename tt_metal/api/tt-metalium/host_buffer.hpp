@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,8 +18,8 @@
 
 namespace tt::tt_metal {
 
-// HostBuffer is wrapper around data, which can either be owned or borrowed from external sources (Python objects,
-// mmap-ed regions, etc).
+// HostBuffer is a wrapper around contiguous data, which can either be owned or borrowed from external sources (Python
+// objects, mmap-ed regions, etc).
 class HostBuffer {
 public:
     HostBuffer();
@@ -62,21 +62,10 @@ public:
     template <typename T>
     tt::stl::Span<const T> view_as() const&& = delete;
 
-    // Returns true if the data buffer is borrowed.
-    bool is_borrowed() const;
-
-    // Makes a deep copy of the data buffer.
-    HostBuffer deep_copy() const;
-
-    // Returns a pin for the data buffer.
-    // The data won't be freed until the pin is destroyed.
-    MemoryPin pin() const;
-
 private:
     MemoryPin pin_;
     tt::stl::Span<std::byte> view_;
     const std::type_info* type_info_ = nullptr;
-    bool is_borrowed_ = false;
 };
 
 template <typename T>
@@ -85,7 +74,6 @@ HostBuffer::HostBuffer(std::shared_ptr<std::vector<T>> data) {
     view_ = tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(data->data()), size_bytes);
     pin_ = MemoryPin(data);
     type_info_ = &typeid(T);
-    is_borrowed_ = false;
 }
 
 template <typename T>
@@ -101,8 +89,7 @@ HostBuffer::HostBuffer(tt::stl::Span<T> borrowed_data, MemoryPin pin) :
     view_(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(borrowed_data.data()), borrowed_data.size() * sizeof(T))),
     pin_(std::move(pin)),
-    type_info_(&typeid(T)),
-    is_borrowed_(true) {}
+    type_info_(&typeid(T)) {}
 
 template <typename T>
 tt::stl::Span<T> HostBuffer::view_as() & {

@@ -14,7 +14,7 @@
 
 namespace tt::tt_metal {
 
-HostBuffer::HostBuffer() : pin_(), view_(tt::stl::Span<std::byte>()), type_info_(nullptr), is_borrowed_(false) {}
+HostBuffer::HostBuffer() : pin_(), view_(tt::stl::Span<std::byte>()), type_info_(nullptr) {}
 
 HostBuffer::HostBuffer(const HostBuffer& other) = default;
 
@@ -36,26 +36,11 @@ void HostBuffer::swap(HostBuffer& other) noexcept {
     swap(pin_, other.pin_);
     swap(view_, other.view_);
     swap(type_info_, other.type_info_);
-    swap(is_borrowed_, other.is_borrowed_);
 }
 
 tt::stl::Span<std::byte> HostBuffer::view_bytes() & noexcept { return view_; }
 
 tt::stl::Span<const std::byte> HostBuffer::view_bytes() const& noexcept { return view_; }
-
-bool HostBuffer::is_borrowed() const { return is_borrowed_; }
-
-HostBuffer HostBuffer::deep_copy() const {
-    auto copied_data = std::make_shared<std::vector<std::byte>>(view_bytes().begin(), view_bytes().end());
-    HostBuffer copy;
-    copy.view_ = tt::stl::Span<std::byte>(copied_data->data(), copied_data->size());
-    copy.pin_ = MemoryPin(copied_data);
-    copy.type_info_ = type_info_;
-    copy.is_borrowed_ = false;
-    return copy;
-}
-
-MemoryPin HostBuffer::pin() const { return pin_; }
 
 bool operator==(const HostBuffer& a, const HostBuffer& b) noexcept {
     auto a_view = a.view_bytes();
