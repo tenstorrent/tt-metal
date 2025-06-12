@@ -20,6 +20,9 @@ target_sources(
         llama_reduce_scatter/llama_reduce_scatter.cpp
         llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp
         llama_reduce_scatter/device/llama_reduce_scatter_program_factory.cpp
+        llama_reduce_scatter_matmul/rs_matmul.cpp
+        llama_reduce_scatter_matmul/device/rs_matmul_op.cpp
+        llama_reduce_scatter_matmul/device/rs_matmul_program_factory.cpp
         llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads.cpp
         llama_reduce_scatter_create_heads/device/llama_reduce_scatter_create_heads_device_op.cpp
         llama_reduce_scatter_create_heads/device/llama_reduce_scatter_create_heads_program_factory.cpp
