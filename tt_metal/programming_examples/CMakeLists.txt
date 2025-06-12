@@ -48,6 +48,9 @@ install(
         loopback
         shard_data_rm
         pad_multi_core
+        matmul_multi_core
+        matmul_multicore_reuse
+        matmul_single_core
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
     # FIXME(afuller): Something funky is happening when installing files into
     # /usr/share/doc on a default Docker image. Speculation: some dependency for
@@ -71,6 +74,9 @@ install(
         loopback
         shard_data_rm
         pad_multi_core
+        matmul_multi_core
+        matmul_multicore_reuse
+        matmul_single_core
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples
     FILES_MATCHING
