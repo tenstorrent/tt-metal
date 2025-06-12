@@ -168,6 +168,47 @@ void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device) {
     }
 }
 
+void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(IDevice* device, const CoreCoord& worker_core) {
+    ZoneScoped;
+    TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
+    const chip_id_t device_id = device->id();
+    const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);
+    profiler_msg_t* profiler_msg =
+        MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
+    core_l1_data_buffers[worker_core].resize(kernel_profiler::PROFILER_L1_VECTOR_SIZE * PROFILER_RISC_COUNT);
+    if (auto mesh_device = device->get_mesh_device()) {
+        const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
+        dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue())
+            .enqueue_read_shard_from_core(
+                distributed::DeviceMemoryAddress{
+                    device_coord, worker_core, reinterpret_cast<DeviceAddr>(profiler_msg->buffer)},
+                core_l1_data_buffers[worker_core].data(),
+                kernel_profiler::PROFILER_L1_VECTOR_SIZE * PROFILER_RISC_COUNT,
+                true);
+    } else {
+        dynamic_cast<HWCommandQueue&>(device->command_queue())
+            .enqueue_read_from_core(
+                worker_core,
+                core_l1_data_buffers[worker_core].data(),
+                reinterpret_cast<DeviceAddr>(profiler_msg->buffer),
+                kernel_profiler::PROFILER_L1_VECTOR_SIZE * PROFILER_RISC_COUNT,
+                true);
+    }
+}
+
+void DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(IDevice* device, const CoreCoord& worker_core) {
+    ZoneScoped;
+    const chip_id_t device_id = device->id();
+    const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);
+    profiler_msg_t* profiler_msg =
+        MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
+    core_l1_data_buffers[worker_core] = tt::llrt::read_hex_vec_from_core(
+        device_id,
+        worker_core,
+        reinterpret_cast<uint64_t>(profiler_msg->buffer),
+        kernel_profiler::PROFILER_L1_VECTOR_SIZE * PROFILER_RISC_COUNT);
+}
+
 void DeviceProfiler::readControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state) {
     ZoneScoped;
     chip_id_t device_id = device->id();
@@ -1152,6 +1193,17 @@ void DeviceProfiler::dumpResults(
                     worker_core,
                     reinterpret_cast<uint64_t>(profiler_msg->buffer),
                     kernel_profiler::PROFILER_L1_VECTOR_SIZE * PROFILER_RISC_COUNT);
+
+                if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
+                    if (rtoptions.get_profiler_do_dispatch_cores() || state == ProfilerDumpState::FORCE_UMD_READ) {
+                        issueSlowDispatchReadFromL1DataBuffer(device, worker_core);
+                    } else {
+                        issueFastDispatchReadFromL1DataBuffer(device, worker_core);
+                    }
+                } else {
+                    issueSlowDispatchReadFromL1DataBuffer(device, worker_core);
+                }
+
                 readRiscProfilerResults(
                     device,
                     worker_core,
