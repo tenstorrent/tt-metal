@@ -200,7 +200,7 @@ void kernel_main() {
 
         // Write entire out into its corresponding batch
         uint32_t out_tile_id = out_batch_offset;
-        cb_wait_front(cb_out, out_chunk_tiles);
+        cb_wait_front(cb_out, 8);
         noc_async_writes_flushed();
 
         if constexpr (num_kv_heads > 1) {
@@ -280,6 +280,6 @@ void kernel_main() {
             }
         }
         noc_async_write_barrier();
-        cb_pop_front(cb_out, out_chunk_tiles);
+        cb_pop_front(cb_out, 8);
     }
 }
