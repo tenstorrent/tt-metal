@@ -837,6 +837,7 @@ inline void noc_async_write_multicast(
         noc_async_write_multicast_one_packet(src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked);
     } else {
         WAYPOINT("NMWW");
+        NOC_TRACE_QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
         DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
         ncrisc_noc_fast_write_any_len<noc_mode>(
             noc,
