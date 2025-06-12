@@ -11,6 +11,7 @@ class ModelOptimisations:
         self.conv_configs = {}
         self.matmul_configs = {}
         self.compute_configs = {}
+        self.sdpa_configs = {}
         self.prepared_weights = False
         self.conv_w_dtype = conv_w_dtype
         self.conv_ws_dtype = ttnn.bfloat8_b
@@ -460,6 +461,20 @@ class ModelOptimisations:
             transpose_mcast=False,
             fused_activation=None,
         )
+        
+        self.sdpa_configs["SELF_ATTENTION"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=128,
+            k_chunk_size=1024,
+            exp_approx_mode=False,
+        )
+
+        self.sdpa_configs["CROSS_ATTENTION"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=128,
+            k_chunk_size=128,  # should be 96 but asserting in SDPA(), has to be pow2 for now
+            exp_approx_mode=False,
+        )
 
         self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -584,6 +599,13 @@ class ModelOptimisations:
 
             if pattern_resnet_linear.search(matmul_path):
                 return self.matmul_configs["1D_RESNET_LINEAR"]
+        return None
+
+    def get_sdpa_config(self, sdpa_path):
+        if ".self_attention" in sdpa_path:
+            return self.sdpa_configs["SELF_ATTENTION"]
+        elif ".cross_attention" in sdpa_path:
+            return self.sdpa_configs["CROSS_ATTENTION"]
         return None
 
     def get_mm_compute_config(self, module_path):
