@@ -90,6 +90,7 @@ void kernel_main() {
     constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(28);
     constexpr uint32_t sync_cb_id1 = get_compile_time_arg_val(29);
     constexpr uint32_t sync_cb_id2 = get_compile_time_arg_val(30);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(31);
 
     constexpr uint32_t in_scalar_cb_id = in_scalar_cb_id_0;
 
@@ -99,9 +100,9 @@ void kernel_main() {
     uint32_t scalar_value = 0;
 
     constexpr uint32_t window_size_hw = window_h * window_w;
-    constexpr uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;
-    constexpr uint32_t interm_reduction_chunks =
-        remaining_elems ? window_size_hw / max_rows_for_reduction + 1 : window_size_hw / max_rows_for_reduction;
+    constexpr uint32_t remaining_elems = window_size_hw % (max_rows_for_reduction - 1);
+    constexpr uint32_t interm_reduction_chunks = remaining_elems ? window_size_hw / (max_rows_for_reduction - 1) + 1
+                                                                 : window_size_hw / (max_rows_for_reduction - 1);
     // we only need to initialize the in_cb if we will not fill each multibuffering chunk with max_rows worth of data
     constexpr bool need_to_initialize_in_cb = remaining_elems && interm_reduction_chunks <= multi_buffering_factor;
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
@@ -112,13 +113,9 @@ void kernel_main() {
     // ensure the clear CB is full before proceeding
     cb_push_back(sync_cb_id1, 1);
 
-    if constexpr (need_to_initialize_in_cb && !is_avg_pool) {  // for avg pool fill_with_val runs in loop, no need to
-                                                               // initialize
-        clear_out_tiles<in_cb_id, clear_value_cb_id>();
-    }
-
     constexpr uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
     // initialize buffers
+    clear_out_tiles<in_cb_id, clear_value_cb_id>();
     clear_out_tiles<interm_reduction_cb_id, clear_value_cb_id>();
     if constexpr (one_scalar_per_core) {
         fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16);
@@ -143,7 +140,7 @@ void kernel_main() {
     uint32_t counter = reader_id;
     constexpr uint32_t total_elems_to_reduce = window_h * window_w;
     constexpr bool wide_reduction = in_nblocks_c > 1;
-    constexpr uint32_t out_write_inc =
+    constexpr uint32_t in_write_inc =
         wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
 
     if constexpr (!one_scalar_per_core) {
@@ -176,6 +173,7 @@ void kernel_main() {
             cb_push_back(in_scalar_cb_id, 1);
         }
 
+        uint32_t out_l1_write_addr = get_write_ptr(out_cb_id);
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             const uint32_t read_bytes = !wide_reduction ? in_nbytes_c
                                         : c_i != in_nblocks_c - 1
@@ -183,33 +181,27 @@ void kernel_main() {
                                             : (in_c - c_i * TILE_WIDTH * MAX_TILES_PER_REDUCTION) * BYTES_PER_ELEM;
             const uint16_t top_left_local_index = reader_indices_ptr[counter];
             uint32_t processed_rows = 0;
-            cb_reserve_back(in_cb_id, 1);
-            uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
+            const uint32_t in_l1_write_addr_base = get_write_ptr(in_cb_id);
+            if (c_i == in_nblocks_c - 1) {  // re-initialize the entire buffer to overwite old data since this is a
+                                            // partially filled iteration
+                clear_out_tiles<clear_value_cb_id, in_cb_ntiles>(
+                    get_noc_addr(in_l1_write_addr_base), get_noc_addr(get_read_ptr(clear_value_cb_id)));
+            } else {  // initialize only the first row where the running max / total is stored
+                fill_with_val(in_l1_write_addr_base, read_bytes / BYTES_PER_ELEM, bf16_init_value);
+            }
+            uint32_t in_l1_write_addr =
+                in_l1_write_addr_base + in_write_inc;  // skip the first row where the running max / total is stored
             for (uint32_t h = 0; h < window_h; ++h) {
                 for (uint32_t w = 0; w < window_w; w++) {
                     const uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
                     const uint32_t read_offset =
                         in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);
-                    noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
-                    out_l1_write_addr += out_write_inc;
+                    noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes);
+                    in_l1_write_addr += in_write_inc;
                     processed_rows++;
-                    if ((processed_rows % max_rows_for_reduction) == 0) {
+                    if ((processed_rows % (max_rows_for_reduction - 1)) == 0) {
                         noc_async_read_barrier();
                         cb_push_back(in_cb_id, 1);
-                        cb_reserve_back(in_cb_id, 1);
-                        out_l1_write_addr = get_write_ptr(in_cb_id);
-                        // If next is last chunk, fill whole buffer with the init_value. note for max pool we do
-                        // not need to fill the CB for the partial chunk since as long as we have N>1 chunks we
-                        // are guaranteed that the junk data remaining from chunk N-1 will fill the entire CB and
-                        // cannot contain values greater than the max value, and if we have N=1 chunks we already
-                        // initialized the entire CB with the init value, but for avg pool we need to fill the
-                        // entire CB with the init value since the junk data will contribute to the average.
-                        if constexpr (is_avg_pool) {
-                            if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
-                                clear_out_tiles<clear_value_cb_id, in_cb_ntiles>(
-                                    get_noc_addr(out_l1_write_addr), get_noc_addr(get_read_ptr(clear_value_cb_id)));
-                            }
-                        }
                     }
                 }
             }
@@ -217,7 +209,16 @@ void kernel_main() {
                 noc_async_read_barrier();
                 cb_push_back(in_cb_id, 1);
             }
+            // wait for compute to finish this top left index
+            // write the final result to the output buffer
+            cb_reserve_back(in_cb_id, 1);
+            noc_async_read_one_packet(
+                get_noc_addr(out_l1_write_addr), in_l1_write_addr_base, read_bytes);  // write the first row
+            out_l1_write_addr += read_bytes;
+            noc_async_read_barrier();  // write only read bytes out
         }
+        cb_reserve_back(sync_cb_id1, 2);
+        cb_push_back(sync_cb_id1, 2);  // signal that we are done with this top left index
         counter++;
     }
 }  // kernel_main()

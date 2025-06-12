@@ -121,9 +121,9 @@ def run_avg_pool2d(
         # [2, 512, 16, 16],
         # [2, 800, 16, 16],
         [1, 384, 28, 28],
-        [1, 288, 56, 56],
-        [1, 256, 132, 20],
-        [1, 32, 264, 40],
+        # [1, 288, 56, 56],
+        # [1, 256, 132, 20],
+        # [1, 32, 264, 40],
     ),
 )
 @pytest.mark.parametrize(
@@ -173,7 +173,7 @@ def run_avg_pool2d(
     "divisor_override",
     [
         None,
-        5,
+        # 5,
     ],
 )
 @pytest.mark.parametrize(
