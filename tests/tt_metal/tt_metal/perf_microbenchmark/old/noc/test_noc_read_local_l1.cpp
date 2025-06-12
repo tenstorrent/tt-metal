@@ -49,19 +49,6 @@ std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
     return vec;
 }
 
-void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const std::string& name) {
-    std::cout << name << ": " << std::endl;
-    int index = 0;
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            std::cout << data.at(index).to_float() << " ";
-            index++;
-        }
-        std::cout << std::endl;
-    }
-    std::cout << std::endl;
-}
-
 int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
@@ -138,10 +125,9 @@ int main(int argc, char** argv) {
         if (print_tensor) {
             for (int r = 0; r < num_cores_r; ++r) {
                 for (int c = 0; c < num_cores_c; ++c) {
-                    print_vec(
+                    print_vec_of_bfloat16(
                         tensors[r * num_cores_c + c].get_values(),
                         1,
-                        32,
                         std::string("input tensor " + std::to_string(r) + " " + std::to_string(c)));
                 }
             }
@@ -262,16 +248,13 @@ int main(int argc, char** argv) {
                         slice_vec(tensors[r * num_cores_c + c].get_values(), (Nt - cb_tiles) * 1024, Nt * 1024 - 1);
 
                     if (print_tensor) {
-                        print_vec(
+                        print_vec_of_bfloat16(
                             result_bfp16,
-                            32,
-                            32,
+                            1,
                             std::string("result_bfp16 " + std::to_string(r) + " " + std::to_string(c)));
-
-                        print_vec(
+                        print_vec_of_bfloat16(
                             sliced_tensor,
-                            32,
-                            32,
+                            1,
                             std::string("sliced_tensor " + std::to_string(r) + " " + std::to_string(c)));
                     }
 
