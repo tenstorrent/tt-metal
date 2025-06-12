@@ -169,7 +169,8 @@ target_sources(
             include/compute_kernel_api/tile_move_copy.h
             include/compute_kernel_api/tilize.h
             include/compute_kernel_api/transpose_wh.h
-            include/compute_kernel_api/untilize.h            include/compute_kernel_api/eltwise_binary.h
+            include/compute_kernel_api/untilize.h
+            include/compute_kernel_api/eltwise_binary.h
             include/compute_kernel_api/tile_move_copy.h
             soc_descriptors/blackhole_140_arch.yaml
             soc_descriptors/wormhole_b0_80_arch.yaml
