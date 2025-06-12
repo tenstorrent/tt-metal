@@ -16,6 +16,7 @@ class ResNet50Trace2CQ:
         device_batch_size=1,
         act_dtype=ttnn.bfloat16,
         weight_dtype=ttnn.bfloat16,
+        model_location_generator=None,
     ):
         self.test_infra = create_test_infra(
             device,
@@ -26,6 +27,7 @@ class ResNet50Trace2CQ:
             True,
             dealloc_input=True,
             final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
+            model_location_generator=model_location_generator,
         )
         self.device = device
         self.tt_inputs_host, sharded_mem_config_DRAM, self.input_mem_config = self.test_infra.setup_dram_sharded_input(
