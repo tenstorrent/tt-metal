@@ -22,6 +22,9 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
     bool input_is_sharded = input_tensor_a.is_sharded();
     bool output_is_sharded = this->output_mem_config.is_sharded();
 
+    BufferType input_buffer_type = input_tensor_a.memory_config().buffer_type();
+    BufferType output_buffer_type = this->output_mem_config.buffer_type();
+
     TensorMemoryLayout input_memory_layout = input_tensor_a.memory_config().memory_layout();
     TensorMemoryLayout output_memory_layout = this->output_mem_config.memory_layout();
 
@@ -122,6 +125,16 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
                 "Input and output shard specs must be identical if output is uneven sharded");
         }
     }
+
+    // Multicore implementation doesn't support input DRAM sharding
+    if (this->use_multicore && input_is_sharded) {
+        TT_FATAL(input_buffer_type == BufferType::L1, "Multicore implementation doesn't support DRAM sharding");
+    }
+
+    // We don't support output DRAM block sharding
+    if (output_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        TT_FATAL(output_buffer_type == BufferType::L1, "We don't support DRAM block sharding");
+    }
 }
 
 std::vector<ttnn::TensorSpec> Untilize::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -147,6 +160,9 @@ operation::ProgramWithCallbacks Untilize::create_program(
     bool input_is_sharded = input_tensor_a.is_sharded();
     bool output_is_sharded = output_tensor.is_sharded();
 
+    BufferType input_buffer_type = input_tensor_a.memory_config().buffer_type();
+    BufferType output_buffer_type = output_tensor.memory_config().buffer_type();
+
     TensorMemoryLayout input_memory_layout = input_tensor_a.memory_config().memory_layout();
     TensorMemoryLayout output_memory_layout = output_tensor.memory_config().memory_layout();
 
@@ -171,10 +187,12 @@ operation::ProgramWithCallbacks Untilize::create_program(
         return detail::untilize_multi_core_block(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
-    if (input_is_sharded && output_is_sharded && input_memory_layout == output_memory_layout &&
+    if (input_is_sharded && output_is_sharded && input_buffer_type == BufferType::L1 &&
+        output_buffer_type == BufferType::L1 && input_memory_layout == output_memory_layout &&
         input_tensor_a.shard_spec() == output_tensor.shard_spec()) {
-        // Optimized special case implementation for when both input and output are sharded, have identical
-        // memory layouts (i.e. height->height, width->width, block->block), and have identical shard specs
+        // Optimized special case implementation for when both input and output are sharded, both are located in L1,
+        // have identical memory layouts (i.e. height->height, width->width, block->block), and have identical shard
+        // specs
         return detail::untilize_multi_core_input_and_output_shard_type_and_shard_spec_identical(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }

@@ -352,6 +352,64 @@ def test_untilize_single_core_sharded_to_sharded(
     assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("use_pack_untilize", [True])
+@pytest.mark.parametrize("tensor_shape", [[1, 1, 512, 512]])
+@pytest.mark.parametrize("input_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+@pytest.mark.parametrize("output_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+@pytest.mark.parametrize(
+    "input_memory_layout",
+    [
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ],
+)
+@pytest.mark.parametrize(
+    "output_memory_layout",
+    [
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+    ],
+)
+def test_untilize_single_core_buffer_type_variations(
+    device,
+    dtype,
+    use_pack_untilize,
+    tensor_shape,
+    input_buffer_type,
+    output_buffer_type,
+    input_memory_layout,
+    output_memory_layout,
+):
+    height_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        (128, 512),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    # Input memory config
+    if input_memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        input_memory_config = ttnn.MemoryConfig(input_memory_layout, input_buffer_type)
+    else:
+        input_memory_config = ttnn.MemoryConfig(input_memory_layout, input_buffer_type, height_shard_spec)
+
+    # Output memory config
+    if output_memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        output_memory_config = ttnn.MemoryConfig(output_memory_layout, output_buffer_type)
+    else:
+        output_memory_config = ttnn.MemoryConfig(output_memory_layout, output_buffer_type, height_shard_spec)
+
+    # Test
+    input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
+    ttnn_output_tensor = ttnn.untilize(
+        input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False, use_pack_untilize=use_pack_untilize
+    )
+
+    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("use_pack_untilize", [True, False])
 @pytest.mark.parametrize(
@@ -1195,6 +1253,67 @@ def test_untilize_multi_core_sharded_to_sharded_same_shard_type_and_shard_spec_u
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=memory_config)
     ttnn_output_tensor = ttnn.untilize(
         input_ttnn_tensor, memory_config=memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize
+    )
+
+    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("use_pack_untilize", [True])
+@pytest.mark.parametrize("tensor_shape", [[1, 1, 512, 512]])
+@pytest.mark.parametrize("input_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+@pytest.mark.parametrize("output_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+@pytest.mark.parametrize(
+    "input_memory_layout",
+    [
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ],
+)
+@pytest.mark.parametrize(
+    "output_memory_layout",
+    [
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+    ],
+)
+def test_untilize_multi_core_buffer_type_variations(
+    device,
+    dtype,
+    use_pack_untilize,
+    tensor_shape,
+    input_buffer_type,
+    output_buffer_type,
+    input_memory_layout,
+    output_memory_layout,
+):
+    if input_buffer_type == ttnn.BufferType.DRAM and input_memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        pytest.skip("Untilize multicore does not support input DRAM sharded")
+
+    height_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        (128, 512),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    # Input memory config
+    if input_memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        input_memory_config = ttnn.MemoryConfig(input_memory_layout, input_buffer_type)
+    else:
+        input_memory_config = ttnn.MemoryConfig(input_memory_layout, input_buffer_type, height_shard_spec)
+
+    # Output memory config
+    if output_memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        output_memory_config = ttnn.MemoryConfig(output_memory_layout, output_buffer_type)
+    else:
+        output_memory_config = ttnn.MemoryConfig(output_memory_layout, output_buffer_type, height_shard_spec)
+
+    # Test
+    input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
+    ttnn_output_tensor = ttnn.untilize(
+        input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True, use_pack_untilize=use_pack_untilize
     )
 
     assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
