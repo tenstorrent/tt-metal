@@ -528,43 +528,34 @@ static Tensor to_folded_weight_layout(
     // padding the input buffer
     auto fold_weights = [&](auto input_buffer) {
         using T = std::decay_t<decltype(input_buffer[0])>;
-        auto padded_input_buffer = std::vector<T>(output_shape.volume(), T(0));
-        for (auto oc = 0; oc < out_channels; oc++) {
-            for (auto kh = 0; kh < kernel_h; kh++) {
-                for (auto kw = 0; kw < kernel_w; kw++) {
-                    for (auto ic = 0; ic < in_channels; ic++) {
-                        uint32_t src_idx = ((((oc * in_channels + ic) * kernel_h) + kh) * kernel_w) + kw;
-                        uint32_t dst_idx = oc * in_channels * padded_kernel_h * padded_kernel_w +
-                                           ic * padded_kernel_h * padded_kernel_w + kh * padded_kernel_w + kw;
-                        padded_input_buffer[dst_idx] = input_buffer[src_idx];
-                    }
-                }
-            }
-        }
 
-        std::vector<T> output_buffer(output_shape.volume());
+        std::vector<T> output_buffer(output_shape.volume(), T(0));
         int new_h = padded_kernel_h / stride[0];
         int new_w = padded_kernel_w / stride[1];
 
         for (auto oc = 0; oc < out_channels; oc++) {
-            for (auto sh = 0; sh < stride[0]; sh++) {
-                for (auto sw = 0; sw < stride[1]; sw++) {
-                    for (auto ic = 0; ic < in_channels; ic++) {
-                        for (auto y = 0; y < new_h; y++) {
-                            for (auto x = 0; x < new_w; x++) {
-                                int in_y = y * stride[0] + sh;
-                                int in_x = x * stride[1] + sw;
+            for (auto ic = 0; ic < in_channels; ic++) {
+                for (auto kh = 0; kh < kernel_h; kh++) {
+                    for (auto kw = 0; kw < kernel_w; kw++) {
+                        uint32_t src_idx = ((((oc * in_channels + ic) * kernel_h) + kh) * kernel_w) + kw;
 
-                                int input_idx = oc * in_channels * padded_kernel_h * padded_kernel_w +
-                                                ic * padded_kernel_h * padded_kernel_w + in_y * padded_kernel_w + in_x;
+                        int sh = kh % stride[0];
+                        int sw = kw % stride[1];
 
-                                int folded_ic_idx = (sh * stride[1] + sw) * in_channels + ic;
+                        // Calculate new y,x coordinates
+                        int y = kh / stride[0];
+                        int x = kw / stride[1];
 
-                                int dst_idx = oc * in_channels * stride[0] * stride[1] * new_h * new_w +
-                                              folded_ic_idx * new_h * new_w + y * new_w + x;
+                        if (y < new_h && x < new_w) {
+                            // Calculate folded input channel index
+                            int folded_ic_idx = (sh * stride[1] + sw) * in_channels + ic;
 
-                                output_buffer[dst_idx] = padded_input_buffer[input_idx];
-                            }
+                            // Calculate final destination index
+                            int dst_idx = oc * in_channels * stride[0] * stride[1] * new_h * new_w +
+                                          folded_ic_idx * new_h * new_w + y * new_w + x;
+
+                            // Direct copy from input to output
+                            output_buffer[dst_idx] = input_buffer[src_idx];
                         }
                     }
                 }
