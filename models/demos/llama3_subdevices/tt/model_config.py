@@ -15,6 +15,7 @@ from models.tt_transformers.tt.common import (
     freqs_to_rotation_matrix,
     num_to_core_range_set,
     calculate_hidden_dim,
+    get_base_model_name,
     get_out_subblock_w,
     encode_prompt_instruct,
     encode_prompt_hf,
@@ -1927,10 +1928,7 @@ class TtModelArgs:
 
     @property
     def base_model_name(self):
-        # HuggingFace name contains a dash, but Meta name does not (e.g. Llama-3.1-70B vs Llama3.1-70B)
-        # Until we switch to HF weights-first, we need to force the dash out
-        model_name = self.model_name.replace("Llama-", "Llama")
-        return model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
+        return get_base_model_name(self.model_name)
 
     @property
     def vision_chunk_ntok(self):

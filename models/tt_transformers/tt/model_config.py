@@ -19,6 +19,7 @@ from models.tt_transformers.tt.common import (
     encode_prompt_hf,
     encode_prompt_instruct,
     freqs_to_rotation_matrix,
+    get_base_model_name,
     get_out_subblock_w,
     nearest_multiple,
     num_to_core_range_set,
@@ -84,7 +85,7 @@ class ModelOptimizations:
         """Configuration optimized for accuracy
         70B+ models still use bfp4 MLPs and BFP8 attention in this configuration
         """
-        base_model_name = model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
+        base_model_name = get_base_model_name(model_name)
         if base_model_name in ["Llama3.1-70B", "Llama3.2-90B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
             logger.info(
                 f"{model_name} is >70B and large models test insensitive precision, using BFP4 MLPs and BFP8 attention even in accuracy mode"
@@ -96,7 +97,7 @@ class ModelOptimizations:
                 }
             )
         else:
-            if model_name.startswith("Llama3") or model_name.startswith("Mistral-7B"):
+            if base_model_name.startswith("Llama3") or base_model_name.startswith("Mistral-7B"):
                 logger.info(
                     f"Llama 3 and Mistral 7B models test insensitive to attention precision, using BFP8 attention and kv-cache with FP16 MLP accumulation even in accuracy mode"
                 )
@@ -139,7 +140,7 @@ class ModelOptimizations:
         """Configuration optimized for performance
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
-        base_model_name = model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
+        base_model_name = get_base_model_name(model_name)
         if base_model_name == "Qwen2.5-7B":
             logger.info(
                 f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
@@ -1484,7 +1485,7 @@ class ModelArgs:
 
     @property
     def base_model_name(self):
-        return self.model_name.split("B-")[0] + "B" if "B-" in self.model_name else self.model_name
+        return get_base_model_name(self.model_name)
 
     @property
     def vision_chunk_ntok(self):
