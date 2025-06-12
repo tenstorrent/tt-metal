@@ -26,8 +26,12 @@ enum class KernelName {
     ComputeNoBcast,
     ComputeBcast,
     ComputeScalar,
-    ReaderNoBcastSplit,
-    WriterNoBcastSplit,
+    ReaderNoBcastNg,
+    WriterNoBcastNg,
+    ReaderRowBcastNg,
+    ReaderColBcastNg,
+    ReaderRowBColABcastNg,
+    ReaderScalarBcastNg,
 };
 
 struct BinaryNgKernelConfig {
@@ -86,6 +90,6 @@ void add_activation_defines(
 
 uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype, bool is_quant_op);
 
-std::map<std::string, std::string> make_dataflow_defines(DataType dtype);
+std::map<std::string, std::string> make_dataflow_defines(DataType dtype, DataType b_dtype);
 
 }  // namespace ttnn::operations::binary_ng

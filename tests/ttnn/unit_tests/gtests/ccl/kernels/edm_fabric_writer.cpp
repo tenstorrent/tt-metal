@@ -347,7 +347,7 @@ void kernel_main() {
     fabric_connection.open();
 
     cb_reserve_back(source_l1_cb_index, 1);
-    cb_reserve_back(packet_header_cb, packet_header_size_in_headers);
+    cb_reserve_back(packet_header_cb, 1);
     const auto source_l1_buffer_address = get_write_ptr(source_l1_cb_index);
     const auto packet_header_buffer_address = get_write_ptr(packet_header_cb);
 

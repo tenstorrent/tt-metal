@@ -766,10 +766,9 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
                         },
                         [](const MultiDeviceHostStorage& host_storage) -> const void* {
                             TT_ASSERT(
-                                host_storage.num_buffers() == 1,
+                                host_storage.distributed_buffer().shape().mesh_size() == 1,
                                 "Cannot copy multi-buffer host storage to a single device");
-                            auto buffer = host_storage.get_buffer(0);
-                            return buffer.view_bytes().data();
+                            return host_storage.get_shard_at_origin()->view_bytes().data();
                         },
                         [](auto&&) -> const void* { TT_THROW("Unreachable"); },
                     },

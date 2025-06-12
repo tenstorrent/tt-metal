@@ -756,10 +756,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     bool forward_fabric_connection = false, backward_fabric_connection = false;
     if (operation_attributes.topology == ttnn::ccl::Topology::Linear) {
         LineTopology line_topology(ring_size, ring_index);
-        forward_fabric_connection =
-            !(line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD));
-        backward_fabric_connection =
-            !(line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD));
+        forward_fabric_connection = !(line_topology.is_first_device_in_line(ttnn::ccl::LineDirection::BACKWARD));
+        backward_fabric_connection = !(line_topology.is_last_device_in_line(ttnn::ccl::LineDirection::BACKWARD));
     } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
         forward_fabric_connection = true;
         backward_fabric_connection = true;
