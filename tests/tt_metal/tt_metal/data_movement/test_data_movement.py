@@ -585,7 +585,9 @@ def print_stats(dm_stats):
         logger.info("")
 
 
-def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
+def plot_dm_stats(
+    dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement/documentation/perf_plots", arch="blackhole"
+):
     # Extract data for plotting
     riscv_1_series = dm_stats["riscv_1"]["analysis"]["series"]
     riscv_0_series = dm_stats["riscv_0"]["analysis"]["series"]
@@ -602,18 +604,16 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
     # Set noc_width based on architecture
     noc_width = 32 if arch == "wormhole_b0" else 64
 
-    # Create the main figure
-    fig = plt.figure(layout="constrained", figsize=(18, 6 * len(test_ids)))
+    # Ensure output directory exists
+    os.makedirs(f"{output_dir}/{arch}", exist_ok=True)
 
-    # Create subfigures for each Test id
-    subfigs = fig.subfigures(len(test_ids), 1)
-    if len(test_ids) == 1:
-        subfigs = [subfigs]
+    for test_id in test_ids:
+        # Create the figure for this test id
+        fig = plt.figure(layout="constrained", figsize=(18, 6))
 
-    for idx, (subfig, test_id) in enumerate(zip(subfigs, test_ids)):
         # Add a title for the current Test id
         test_name = test_id_to_name.get(test_id, f"Test ID {test_id}")
-        subsubfig = subfig.subfigures(2, 1, height_ratios=[100, 1])
+        subsubfig = fig.subfigures(2, 1, height_ratios=[100, 1])
         subsubfig[0].suptitle(test_name, fontsize=16, weight="bold")
 
         # Create subplots within the subfigure
@@ -728,10 +728,11 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
         )
         txtObj._get_wrap_line_width = lambda: 0.9 * subsubfig[1].bbox.width
 
-    # Save the combined plot
-    plt.savefig(output_file)
-    plt.close()
-    logger.info(f"dm_stats plots saved at {output_file}")
+        # Save the plot for this test id
+        output_file = os.path.join(f"{output_dir}/{arch}", f"{test_id_to_name.get(test_id, f'Test ID {test_id}')}.png")
+        plt.savefig(output_file)
+        plt.close(fig)
+        logger.info(f"dm_stats plot for test id {test_id} saved at {output_file}")
 
 
 def export_dm_stats_to_csv(dm_stats, output_file="dm_stats.csv"):
