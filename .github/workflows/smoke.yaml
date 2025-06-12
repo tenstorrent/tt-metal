@@ -15,7 +15,7 @@ on:
       per-test-timeout:
         required: false
         type: string
-        default: 3.5
+        default: 4.0 # Was 3.5, but CIv2 is experiencing slow disks; until that's resolved, relax this threshold
       product:
         required: true
         type: string # tt-metalium or tt-nn
