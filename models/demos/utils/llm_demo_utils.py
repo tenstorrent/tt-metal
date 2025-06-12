@@ -141,11 +141,8 @@ def verify_perf(
         if not expected_measurements[key]:
             continue
         assert (
-            key in measurements and key in expected_perf_metrics
+            key in measurements and key in expected_perf_metrics and expected_perf_metrics[key] is not None
         ), f"Metric {key} not found in measurements or expected_perf_metrics"
-        if expected_perf_metrics[key] is None:
-            logger.warning(f"Expected perf metric {key} is None, skipping check")
-            continue
 
         if measurements[key] < expected_perf_metrics[key]:  # Note: assumes higher is better for metric
             does_pass = False
