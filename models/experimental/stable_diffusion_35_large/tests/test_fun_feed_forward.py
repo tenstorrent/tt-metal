@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 
 import pytest
 import torch
@@ -18,30 +17,35 @@ TILE_SIZE = 32
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
     (
         "batch_size",
         "embedding_dim",
         "num_heads",
         "sequence_length",
-        "cfg_factor",
-        "sp_factor",
-        "tp_factor",
-        "topology",
         "shard_sequence",
     ),
     [
-        (1, 2432, 38, 4096, 1, 2, 4, ttnn.Topology.Linear, True),
-        (1, 2432, 38, 333, 1, 2, 4, ttnn.Topology.Linear, False),
+        (1, 2432, 38, 4096, True),
+        (1, 2432, 38, 333, False),
     ],
+)
+@pytest.mark.parametrize(
+    (
+        "mesh_device",
+        "cfg",
+        "sp",
+        "tp",
+        "topology",
+    ),
+    [
+        [(2, 4), (1, 0), (2, 0), (4, 1), ttnn.Topology.Linear],
+        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear],
+    ],
+    ids=[
+        "t3k_cfg1_sp2_tp4",
+        "tg_cfg2_sp4_tp4",
+    ],
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.usefixtures("use_program_cache")
@@ -52,15 +56,28 @@ def test_feed_forward(
     embedding_dim: int,
     num_heads: int,
     sequence_length: int,
-    cfg_factor: int,
-    sp_factor: int,
-    tp_factor: int,
+    cfg: int,
+    sp: int,
+    tp: int,
     topology: ttnn.Topology,
     shard_sequence: bool,
 ) -> None:
+    cfg_factor, cfg_axis = cfg
+    sp_factor, sp_axis = sp
+    tp_factor, tp_axis = tp
     parallel_manager = StableDiffusionParallelManager(
-        mesh_device, cfg_factor, sp_factor, tp_factor, sp_factor, tp_factor, topology
+        mesh_device,
+        cfg_factor,
+        sp_factor,
+        tp_factor,
+        sp_factor,
+        tp_factor,
+        topology,
+        cfg_axis=cfg_axis,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
     )
+    submesh = parallel_manager.submesh_devices[0]
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 
@@ -79,7 +96,7 @@ def test_feed_forward(
     parameters = TtFeedForwardParameters.from_torch(
         torch_model.state_dict(),
         dtype=ttnn_dtype,
-        device=mesh_device,
+        device=submesh,
         hidden_dim_padding=hidden_dim_padding,
         parallel_config=parallel_manager.dit_parallel_config,
     )
@@ -99,11 +116,15 @@ def test_feed_forward(
             mode="constant",
             value=0,
         )
+
+    dims = [None, None]
+    if shard_sequence:
+        dims[parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis] = 2
     tt_input_tensor = from_torch_fast_2d(
         input_padded_4d,
-        mesh_device=mesh_device,
+        mesh_device=submesh,
         mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
-        dims=[parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 2 if shard_sequence else None, None],
+        dims=dims,
         dtype=ttnn_dtype,
         layout=ttnn.TILE_LAYOUT,
     )
@@ -117,15 +138,15 @@ def test_feed_forward(
         parallel_manager=parallel_manager,
         cfg_index=0,
     )
+    dims = [None, None]
+    dims[parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis] = 2
+    dims[parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis] = 3
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device,
-            mesh_shape=tuple(mesh_device.shape),
-            dims=[
-                parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis + 2,
-                parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis + 2,
-            ],
+            submesh,
+            mesh_shape=tuple(submesh.shape),
+            dims=dims,
         ),
     )
     tt_output_torch = tt_output_torch[:, :, 0:sequence_length, :embedding_dim]

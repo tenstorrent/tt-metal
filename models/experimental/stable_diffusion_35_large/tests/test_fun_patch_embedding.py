@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import os
 import pytest
 import torch
 import ttnn
@@ -23,30 +22,35 @@ TILE_SIZE = 32
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
     (
         "model_name",
         "batch_size",
         "in_channels",
         "height",
         "width",
-        "cfg_factor",
-        "sp_factor",
-        "tp_factor",
+    ),
+    [
+        ("large", 1, 16, 128, 128),
+        ("large", 2, 16, 128, 128),
+    ],
+)
+@pytest.mark.parametrize(
+    (
+        "mesh_device",
+        "cfg",
+        "sp",
+        "tp",
         "topology",
     ),
     [
-        ("large", 1, 16, 128, 128, 1, 2, 4, ttnn.Topology.Linear),
-        ("large", 2, 16, 128, 128, 1, 2, 4, ttnn.Topology.Linear),
+        [(2, 4), (1, 0), (2, 0), (4, 1), ttnn.Topology.Linear],
+        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear],
     ],
+    ids=[
+        "t3k_cfg1_sp2_tp4",
+        "tg_cfg2_sp4_tp4",
+    ],
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 def test_patch_embedding(
@@ -57,14 +61,27 @@ def test_patch_embedding(
     in_channels: int,
     height: int,
     width: int,
-    cfg_factor: int,
-    sp_factor: int,
-    tp_factor: int,
+    cfg: tuple[int, int],
+    sp: tuple[int, int],
+    tp: tuple[int, int],
     topology: ttnn.Topology,
 ) -> None:
+    cfg_factor, cfg_axis = cfg
+    sp_factor, sp_axis = sp
+    tp_factor, tp_axis = tp
     parallel_manager = StableDiffusionParallelManager(
-        mesh_device, cfg_factor, sp_factor, tp_factor, sp_factor, tp_factor, topology
+        mesh_device,
+        cfg_factor,
+        sp_factor,
+        tp_factor,
+        sp_factor,
+        tp_factor,
+        topology,
+        cfg_axis=cfg_axis,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
     )
+    submesh = parallel_manager.submesh_devices[0]
     torch_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat16
 
@@ -88,7 +105,7 @@ def test_patch_embedding(
 
     parameters = TtPatchEmbedParameters.from_torch(
         torch_model.state_dict(),
-        device=mesh_device,
+        device=submesh,
         hidden_dim_padding=hidden_dim_padding,
         out_channels=embedding_dim,
         parallel_config=parallel_manager.dit_parallel_config,
@@ -103,24 +120,29 @@ def test_patch_embedding(
         torch_output = torch_model(torch_input_tensor)
 
     seq_parallel_shard_dim = 1  # 1 is height
+    dims = [None, None]
+    dims[parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis] = seq_parallel_shard_dim
     tt_input_tensor = from_torch_fast_2d(
         torch_input_tensor.permute([0, 2, 3, 1]),  # BCYX -> BYXC
-        mesh_device=mesh_device,
+        mesh_device=submesh,
         mesh_shape=parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape,
-        dims=[seq_parallel_shard_dim, None],
+        dims=dims,
         dtype=ttnn_dtype,
         layout=ttnn.TILE_LAYOUT,
     )
 
+    concat_dims = [None, None]
+    concat_dims[parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis] = seq_parallel_shard_dim
+    concat_dims[parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis] = 2
     tt_output = sd_patch_embed(tt_input_tensor, parameters, parallel_manager=parallel_manager)
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device,
-            mesh_shape=tuple(mesh_device.shape),
-            dims=[-2, -1],
+            submesh,
+            mesh_shape=tuple(submesh.shape),
+            dims=concat_dims,
         ),
     )
     tt_output_torch = tt_output_torch.squeeze(1)[:batch_size, :, :embedding_dim]
 
-    assert_quality(torch_output, tt_output_torch, pcc=0.999_990, shard_dim=0, num_devices=mesh_device.get_num_devices())
+    assert_quality(torch_output, tt_output_torch, pcc=0.999_990)

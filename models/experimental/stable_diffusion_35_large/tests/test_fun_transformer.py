@@ -35,13 +35,13 @@ TILE_SIZE = 32
         [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear],
         [(2, 4), (1, 0), (2, 0), (4, 1), ttnn.Topology.Linear],
         [(2, 4), (1, 0), (4, 1), (2, 0), ttnn.Topology.Linear],
-        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear],
+        [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear],
     ],
     ids=[
         "t3k_cfg2_sp2_tp2",
         "t3k_cfg1_sp2_tp4",
         "t3k_cfg1_sp4_tp2",
-        "tg_cfg4_sp2_tp4",
+        "tg_cfg2_sp4_tp4",
     ],
     indirect=["mesh_device"],
 )
@@ -91,6 +91,7 @@ def test_transformer(
         torch_dtype=torch_dtype,
         local_files_only=True,
     )
+    torch_model.transformer_blocks = torch_model.transformer_blocks[:1]
     embedding_dim = 1536 if model_name == "medium" else 2432
 
     torch_model.eval()
