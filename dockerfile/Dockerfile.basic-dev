@@ -29,3 +29,9 @@ RUN set -eux; \
     apt-get install -f -y "$TMP_DIR/ompi.deb" && \
     rm -rf "$TMP_DIR" && \
     rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /debians
+COPY .build/default/*.deb /debians/
+
+COPY build_cmake_stuff.sh /build_cmake_stuff.sh
+RUN chmod +x /build_cmake_stuff.sh
