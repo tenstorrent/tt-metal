@@ -1125,7 +1125,6 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
         }
     }
 
-    log_info(tt::LogMetal, "creating kernel for device {}", device->id());
     for (auto node_and_kernel : node_id_to_kernel) {
         if (node_and_kernel->GetDeviceId() == device->id()) {
             node_and_kernel->CreateKernel();
