@@ -105,7 +105,7 @@ Distribution Spec Information
 // Access information about the tensor / shard / banks
 const auto& dspec = sharded_accessor.get_dspec();
 
-auto rank = get_rank();
+auto rank = dspec.get_rank();
 auto num_banks = dspec.get_num_banks();
 
 // Note: all volumes, shapes and strides are in pages!!!
