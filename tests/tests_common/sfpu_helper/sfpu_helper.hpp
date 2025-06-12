@@ -5,7 +5,7 @@
 // Sfpu golden functions
 #include <cmath>
 
-float exponential(float x) { return exp(x); }
+float exponential(float x) { return std::exp(x); }
 
 float reciprocal(float x) { return 1 / x; }
 
@@ -19,7 +19,7 @@ float relu(float x) { return fmaxf(x, 0.0f); }
 
 float ref_sqrt(float x) { return sqrtf(x); }
 
-float sigmoid(float x) { return 1.0f / (1.0f + exp(-x)); }
+float sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 
 float ref_log(float x) { return logf(x); }
 
@@ -27,7 +27,7 @@ float ref_log10(float x) { return ref_log(x) * 0.4342944819032518; }
 
 float ref_log2(float x) { return ref_log(x) * 1.4426950408889634f; }
 
-float ref_tanh(float x) { return tanh(x); }
+float ref_tanh(float x) { return std::tanh(x); }
 
 inline std::vector<std::uint32_t> create_random_vector_of_bfloat16_0_2_plus_1(uint32_t num_bytes, int seed) {
     return create_random_vector_of_bfloat16(num_bytes, 2.0f, seed, 1.0f);  // 0.0f..2.0f
