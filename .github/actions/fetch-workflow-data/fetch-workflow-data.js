@@ -319,6 +319,7 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
             repo: this.context.repo.repo,
             per_page: this.runsPerPage,
             page,
+            created: `>=${mostRecentCachedDate.toISOString()}`,
             branch: MAIN_BRANCH
           });
 
@@ -327,10 +328,11 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
             break;
           }
 
-          // Debug log each run's details
-          runs.workflow_runs.forEach(run => {
-            core.debug(`[Fetch] Run ${run.id}: name=${run.name}, status=${run.status}, conclusion=${run.conclusion}, event=${run.event}, branch=${run.head_branch}, created=${run.created_at}`);
-          });
+          // Debug log the first run's date
+          if (page === 1 && runs.workflow_runs.length > 0) {
+            const firstRun = runs.workflow_runs[0];
+            core.info(`[Fetch] First run in page 1: created_at=${firstRun.created_at}, conclusion=${firstRun.conclusion}, status=${firstRun.status}`);
+          }
 
           allRuns.push(...runs.workflow_runs);
           core.info(`[Fetch] Page ${page}: Added ${runs.workflow_runs.length} runs (total: ${allRuns.length})`);
@@ -373,10 +375,11 @@ class GitHubWorkflowFetcher extends WorkflowDataFetcher {
             break;
           }
 
-          // Debug log each run's details
-          runs.workflow_runs.forEach(run => {
-            core.debug(`[Fetch] Run ${run.id}: name=${run.name}, status=${run.status}, conclusion=${run.conclusion}, event=${run.event}, branch=${run.head_branch}, created=${run.created_at}`);
-          });
+          // Debug log the first run's date
+          if (page === 1 && runs.workflow_runs.length > 0) {
+            const firstRun = runs.workflow_runs[0];
+            core.info(`[Fetch] First run in full fetch page 1: created_at=${firstRun.created_at}, conclusion=${firstRun.conclusion}, status=${firstRun.status}`);
+          }
 
           for (const run of runs.workflow_runs) {
             const runDate = new Date(run.created_at);
