@@ -503,7 +503,7 @@ def run_llama3_demo(
 
                 if not stress_test:
                     # Increment failure count if throughput is too low
-                    if (
+                    if iteration < 200 and (
                         tokens_per_second_per_user < tsu_thresholds["min"]
                         or tokens_per_second_per_user > tsu_thresholds["max"]
                     ):
@@ -540,7 +540,7 @@ def run_llama3_demo(
             ml_model_name="llama70b-tg",
         )
 
-    if not stress_test:
+    if not stress_test and len(all_tokens_per_second_per_user) > 0:
         logger.info(f"Min tsu throughput: {min(all_tokens_per_second_per_user)}")
         logger.info(f"Max tsu throughput: {max(all_tokens_per_second_per_user)}")
         logger.info(f"Avg tsu throughput: {sum(all_tokens_per_second_per_user) / len(all_tokens_per_second_per_user)}")
@@ -605,7 +605,7 @@ def run_llama3_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            2000,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
@@ -620,7 +620,7 @@ def run_llama3_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            2000,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
