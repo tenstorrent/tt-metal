@@ -552,6 +552,13 @@ class CacheManager {
     let mostRecentCachedDate = null;
     let earliestCachedDate = null;
 
+    // Check if force fetch is enabled
+    const forceFetch = core.getInput('force-fetch') === 'true';
+    if (forceFetch) {
+      core.info('[Cache] Force fetch enabled, skipping cache load');
+      return { previousRuns, mostRecentCachedDate, earliestCachedDate };
+    }
+
     if (fs.existsSync(cachePath)) {
       try {
         const rawCache = fs.readFileSync(cachePath, 'utf8');
