@@ -14,7 +14,7 @@
 - [tt-Metalium](#tt-metalium)
   - [Running code on device](#running-code-on-device)
   - [Register control and Data Flow within the Compute Kernels](#register-control-and-data-flow-within-the-compute-kernels)
-  - [Low-Level Kernels (LLKs)](#low-level-kernels-llks)
+  - [Compute APIs](#compute-apis)
   - [Fast dispatch](#fast-dispatch)
   - [SPMD in Metalium](#spmd-in-metalium)
 
@@ -24,7 +24,7 @@ This guide introduces developers to Tenstorrent's AI processor architecture and 
 
 The typical data flow uses Network-on-Chip (NoC) interfaces to bring data into a Tensix, where it gets unpacked, processed by the compute units, packed, and sent out via the NoC to DRAM or other Tensix cores. This design prioritizes efficient data movement and local SRAM usage, reducing frequent DRAM access.
 
-Programming with Metalium typically requires three kernel types per Tensix: a **reader kernel** for data input, a **compute kernel** for calculations, and a **writer kernel** for data output. These kernels coordinate through circular buffers in SRAM. The architecture natively operates on 32×32 tiles, optimized for deep learning operations. The Metalium SDK provides APIs and abstractions (including Low-Level Kernels) to simplify development, manage hardware resources, and ensure kernel compatibility across hardware generations.
+Programming with Metalium typically requires three kernel types per Tensix: a **reader kernel** for data input, a **compute kernel** for calculations, and a **writer kernel** for data output. These kernels coordinate through circular buffers in SRAM. The architecture natively operates on 32×32 tiles, optimized for deep learning operations. The Metalium SDK provides APIs and abstractions (including compute and data movement) to simplify development, manage hardware resources, and ensure kernel compatibility across hardware generations.
 
 This document covers these concepts in detail to help you develop efficient applications on Tenstorrent hardware.
 
@@ -375,17 +375,17 @@ pack_tile(dst_reg, tt::c_16);
 
 In general, FPU operations can work directly on circular buffers, while SFPU operations require data to be moved into into the Dst register before invoking the SFPU. But almost always `pack_tile` is needed to write the result back to the circular buffer, which is then pushed and the writer kernel can proceed to write the result to the output buffer.
 
-#### Low-Level Kernels (LLKs)
+#### Compute APIs
 
-A natural question when encountering a new abstraction layer is, "Why is this needed?" For Metalium kernels, the Low-Level Kernel (LLK) abstraction layer addresses a fundamental problem: **maintaining kernel code compatibility and performance across different hardware generations.**
+A natural question when encountering a new abstraction layer is, "Why is this needed?" For Metalium kernels, the Compute API abstraction layer addresses a fundamental problem: **maintaining kernel code compatibility and performance across different hardware generations.**
 
 Tenstorrent hardware evolves between generations with significant architectural changes. Vector units, instruction sets, and data path characteristics differ - Grayskull's vector unit processes 64 elements with 19-bit floating point precision, while Wormhole and Blackhole generations use 32-element vectors with 32-bit floating point operations.
 
-Without an abstraction like LLKs, developers would need to write kernels directly for specific hardware generations. This creates several problems:
+Without an abstraction like compute API, developers would need to write kernels directly for specific hardware generations. This creates several problems:
 *   **Code Brittleness:** Kernels written for Grayskull (using 64-wide vector operations) won't work on Wormhole or Blackhole.
 *   **Maintenance Overhead:** Each new hardware generation requires rewriting and re-validating kernels, slowing development and adoption.
 
-LLKs solve this by providing a stable programming interface. When a compute kernel calls an LLK function (e.g., `sin_tile`), the Metalium compiler automatically selects the correct implementation optimized for the target hardware's vector width, instruction set, and other capabilities. This preserves the kernel's functionality while ensuring optimal performance across hardware generations.
+Compute APIs solve this by providing a stable programming interface. When invoked from a compute kernel (e.g., `sin_tile`), the Metalium compiler automatically selects the correct implementation optimized for the target hardware's vector width, instruction set, and other capabilities. This preserves the kernel's functionality while ensuring optimal performance across hardware generations.
 
 This abstraction ensures kernel code remains functional and efficient across hardware generations. For example, when a compute kernel invokes `sin_tile`, the compiler automatically selects the appropriate implementation optimized for the target hardware's specific vector width and computational capabilities.
 
@@ -393,8 +393,7 @@ This abstraction ensures kernel code remains functional and efficient across har
 sin_tile(0); // Different implementation for sin is called when compiled for
              // different generations of Tenstorrent processors.
 ```
-
-For Grayskull processors, the implementation performs a phase shift transformation from the [0, 2π] range to [-π, π] and employs a MacLaurin series expansion to compute the sine function.
+When a compute kernel calls `sin_tile`, Metalium automatically selects the correct hardware-specific implementation for the target processor. For Grayskull processors, the implementation performs a phase shift transformation from the [0, 2π] range to [-π, π] and employs a MacLaurin series expansion to compute the sine function. This selection and dispatch are handled by Metalium, ensuring that the appropriate version of the sine operation is invoked for each hardware generation.
 
 ```c++
 // tt_metal/hw/ckernels/grayskull/metal/llk_api/llk_sfpu/ckernel_sfpu_trigonometry.h
@@ -440,7 +439,7 @@ inline void calculate_sine() {
 }
 ```
 
-While Metalium supports custom vectorized computation implementations, developers should note that vector width and hardware-specific details vary between processor generations. For most applications, use the provided LLKs from the kernel library since Tenstorrent maintains these implementations for compatibility with future hardware generations. For custom vectorized computation guidance, see the [Low Level Kernels][tt_llk_doc] section in the Metalium documentation.
+While Metalium supports custom vectorized computation implementations, developers should note that vector width and hardware-specific details vary between processor generations. And working implementation must be provide for the target processor. For most applications, use the provided compute APIs from the kernel library since Tenstorrent maintains these implementations for compatibility with future hardware generations. For custom vectorized computation guidance, see the [Low Level Kernels][tt_llk_doc] section in the Metalium documentation.
 
 [tt_llk_doc]: https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/sfpu/llk.html
 
