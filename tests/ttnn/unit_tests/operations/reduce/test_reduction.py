@@ -216,9 +216,9 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     [8192 - 64, pytest.param(50257, marks=pytest.mark.xfail(condition=is_blackhole(), reason="Issue #23465"))],
 )  # Need to resolve issue #20294 to verify 128256 for OXMIQ <- will need topk_local_sort to handle uint32_t
 @pytest.mark.parametrize("dim", [1])
-@pytest.mark.parametrize("k", [50])
+@pytest.mark.parametrize("k", [50, 3200])
 @pytest.mark.parametrize("largest", [True])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2]
