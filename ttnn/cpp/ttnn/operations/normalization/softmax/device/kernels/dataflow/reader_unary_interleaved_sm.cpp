@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -38,8 +38,8 @@ void kernel_main() {
 
 #if CAUSAL_MASK
     constexpr uint32_t num_tiles_causal_mask = get_compile_time_arg_val(2);
-    uint32_t mask_start_ht = get_arg_val<uint32_t>(11);
-    uint32_t mask_offset = get_arg_val<uint32_t>(12);
+    uint32_t mask_start_ht = get_arg_val<uint32_t>(12);
+    uint32_t mask_offset = get_arg_val<uint32_t>(13);
 
     uint32_t mask_id_offset = mask_offset;
     uint32_t mask_ht = mask_start_ht;
@@ -86,6 +86,15 @@ void kernel_main() {
 // For fused scale-mask softmax we write Wt attention tiles for every partHt*Wt
 // of slice of tensor that was assigned to our core, then we skip to next batch
 #if CAUSAL_MASK
+        DPRINT << "WT: " << Wt << ENDL();
+        DPRINT << "\nHT: " << Ht << ENDL();
+        // DPRINT<< "\nht: "<< ht << ENDL();
+        // DPRINT<< "mask_id: "<< mask_id << ENDL();
+        // DPRINT<< "\nmask_ht: "<< mask_ht << ENDL();
+        // DPRINT<< "\nmask_start_id: "<< mask_start_ht << ENDL();
+        DPRINT << "\nnum_blks: " << num_blks << ENDL();
+        // DPRINT<<"\nmask_id_offset"<< ": "<<mask_id_offset  << ENDL();
+        DPRINT << "======================" << ENDL();
         for (uint32_t j = 0; j < Wt; j += blk) {
             cb_reserve_back(cb_id_attn, blk);
             uint32_t l1_write_addr = get_write_ptr(cb_id_attn);
@@ -93,10 +102,12 @@ void kernel_main() {
                 noc_async_read_tile(mask_id, addr_mask, l1_write_addr);
                 l1_write_addr += mask_tile_bytes;
                 ++mask_id;
+                DPRINT << "mask_id: " << mask_id << ENDL();
             }
             noc_async_read_barrier();
             cb_push_back(cb_id_attn, blk);
         }
+        DPRINT << "======================" << ENDL();
         ++ht;
         ++mask_ht;
         if (ht == Ht) {
