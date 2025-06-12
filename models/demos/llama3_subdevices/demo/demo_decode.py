@@ -35,8 +35,9 @@ TSU_PERF_DROP_LIMIT_PERCENT = 10
 
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
-    "4U": {1: {"min": 617, "max": 640}, 80: {"min": 50, "max": 54}},
-    "6U": {1: {"min": 738, "max": 762}, 80: {"min": 55, "max": 59}},
+    "4U": {1: {"min": 390, "max": 448}, 10: {"min": 230, "max": 253}, 80: {"min": 52, "max": 56}},
+    # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
+    "6U": {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
 }
 
 
@@ -407,7 +408,7 @@ def run_llama3_demo(
 
     all_outputs = []
 
-    logger.info(f"Starting decode loop...")
+    logger.info(f"Starting decode loop in trace mode...")
     profiler.start(f"inference_decode", iteration=iteration)
 
     # Determine TSU threshold based on layer count
@@ -419,27 +420,29 @@ def run_llama3_demo(
     tsu_failures = 0
     all_tokens_per_second_per_user = []
 
+    read_events = []
+    tt_out_toks_cpu = []
+    iteration_time_start = time()
+    prefill = True
+    block_host = True
+    decode_iteration = 0
+    trace_exec_offset = 1
     while users_decoding:
+        # Execute trace
+        if iteration in range(len(encoded_prompts[0])):
+            block_host = True
+            prefill = True
+        else:
+            block_host = False if layers == 80 else True
+            prefill = False
+
         if iteration == 0:  # First iteration also accounts for compile time
             profiler.start(f"compile_decode", iteration=iteration)
-        iteration_time_start = time()
 
-        # Execute trace
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-        tt_out_tok_device0 = ttnn.get_device_tensors(tt_out_tok)[0]
-        tt_out_tok_cpu = tt_out_tok_device0.cpu(blocking=True, cq_id=0)
-        iteration_time = time() - iteration_time_start
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=block_host)
 
-        # Update current pos and mat idxs on host and send to device
-        # TODO This is required for now since we cannot ttnn.plus_one(rot_mat_idxs) while it being uint32.
-        # If this tensor is int32, it won't be supported by ttnn.embedding
-        if not stress_test:
-            current_pos += 1
-        tt_output_torch = ttnn.to_torch(
-            tt_out_tok_cpu,
-        )[0, 0, 0, :batch_size]
-        # Append the generated token to the list of outputs
-        if iteration in range(len(encoded_prompts[0])):
+        if prefill:
+            current_iteration = iteration
             all_outputs.append(encoded_prompts[0][iteration])  # Update list of TT outputs
             tt_out_tok_reset = ttnn.from_torch(
                 encoded_prompts_tensor_whole_sequence[:, iteration].reshape(1, 1, 1, batch_size),
@@ -448,57 +451,76 @@ def run_llama3_demo(
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
             )
             ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
+            profiler.start(f"log_printing_iter_{iteration}", iteration=iteration)
+            if not is_ci_env:
+                # Print out generated outputs for each user at the end of every iteration
+                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
+
+            iteration_time_ends = time()
+            iteration_time = iteration_time_ends - iteration_time_start
+            tokens_per_second_per_user = 1 / iteration_time
+
+            if not is_ci_env or iteration < 200 or iteration % 1000 == 0:
+                logger.info(
+                    f"Iteration : {iteration}, Prefill Iteration : {iteration}, tok/s/user : {tokens_per_second_per_user:.2f}, Throughput : {batch_size/iteration_time:.2f} tok/s, Iteration Time : {1000*iteration_time:.2f} ms"
+                )
+            profiler.end(f"log_printing_iter_{iteration}", iteration=iteration)
+            iteration_time_start = time()
         else:
-            all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
-            if all_outputs[-1] in [128001, 128009] and not stress_test:  # EoT tokens
-                users_decoding = False
+            tt_out_toks_cpu += [tt_out_tok.cpu(blocking=block_host, cq_id=0)]
+            read_events += [ttnn.record_event(mesh_device, 0)]
 
-        # Ignore the first iteration for average speed calculation
-        if iteration > 0:
-            total_decoding_time += iteration_time
-            total_tokens_generated += 1
+            if decode_iteration >= trace_exec_offset:
+                current_iteration = iteration - trace_exec_offset
+                current_decode_iteration = decode_iteration - trace_exec_offset
+                # Write to host
+                ttnn.event_synchronize(read_events[current_decode_iteration])
+                tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks_cpu[current_decode_iteration])[0])[
+                    0, 0, 0, :batch_size
+                ]
+                all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
 
-        tokens_per_second_per_user = 1 / iteration_time
+                profiler.start(f"log_printing_iter_{current_iteration}", iteration=current_iteration)
+                if not is_ci_env:
+                    # Print out generated outputs for each user at the end of every iteration
+                    logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
 
-        profiler.start(f"log_printing_iter_{iteration}", iteration=iteration)
-        # Print out generated outputs for each user at the end of every iteration
-        if not is_ci_env:
-            # if len(user_input) == 1:
-            logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
-            # else:
-            #     for user in range(batch_size):
-            #         text = "".join(tokenizer.decode(all_outputs[user]))
-            #         if len(text) > 100:
-            #             text = "..." + text[-97:]
-            #         text = text.replace("\n", " ")
-            #         logger.info("[User {}] {}".format(user, text))
+                iteration_time_ends = time()
+                iteration_time = iteration_time_ends - iteration_time_start
 
-        if not is_ci_env or iteration < 200 or iteration % 1000 == 0:
-            # Always print perf at every iteration if not in CI
-            logger.info(
-                f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-            )
+                tokens_per_second_per_user = 1 / iteration_time
 
-        all_tokens_per_second_per_user.append(tokens_per_second_per_user)
+                all_tokens_per_second_per_user.append(tokens_per_second_per_user)
 
-        if iteration == 127:
-            tokens_per_second_per_user_token127 = tokens_per_second_per_user
+                if not is_ci_env or current_iteration < 200 or current_iteration % 1000 == 0:
+                    logger.info(
+                        f"Iteration : {current_iteration}, Decode Iteration : {current_decode_iteration}, tok/s/user : {tokens_per_second_per_user:.2f}, Throughput : {batch_size/iteration_time:.2f} tok/s, Iteration Time : {1000*iteration_time:.2f} ms"
+                    )
+                profiler.end(f"log_printing_iter_{current_iteration}", iteration=current_iteration)
 
-        if not stress_test:
-            # Increment failure count if throughput is too low
-            if tokens_per_second_per_user < tsu_thresholds["min"] or tokens_per_second_per_user > tsu_thresholds["max"]:
-                tsu_failures += 1
+                if current_iteration == 127:
+                    tokens_per_second_per_user_token127 = tokens_per_second_per_user
 
-        profiler.end(f"log_printing_iter_{iteration}", iteration=iteration)
+                if not stress_test:
+                    # Increment failure count if throughput is too low
+                    if iteration < 200 and (
+                        tokens_per_second_per_user < tsu_thresholds["min"]
+                        or tokens_per_second_per_user > tsu_thresholds["max"]
+                    ):
+                        tsu_failures += 1
+
+                iteration_time_start = time()
+
+            decode_iteration += 1
+
+        # Upper limit of generated tokens for each user (to avoid infinite generation in case eos is not seen)
+        if current_iteration + 1 >= max_generated_tokens:  # EoT tokens
+            users_decoding = False
 
         if iteration == 0:  # First iteration also accounts for compile time
             profiler.end(f"compile_decode", iteration=iteration)
 
         iteration += 1
-
-        # Upper limit of generated tokens for each user (to avoid infinite generation in case eos is not seen)
-        if iteration >= max_generated_tokens:
-            users_decoding = False
 
     # Release trace
     ttnn.release_trace(mesh_device, trace_id)
@@ -518,7 +540,7 @@ def run_llama3_demo(
             ml_model_name="llama70b-tg",
         )
 
-    if not stress_test:
+    if not stress_test and len(all_tokens_per_second_per_user) > 0:
         logger.info(f"Min tsu throughput: {min(all_tokens_per_second_per_user)}")
         logger.info(f"Max tsu throughput: {max(all_tokens_per_second_per_user)}")
         logger.info(f"Avg tsu throughput: {sum(all_tokens_per_second_per_user) / len(all_tokens_per_second_per_user)}")
@@ -583,7 +605,7 @@ def run_llama3_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            2000,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
@@ -598,7 +620,7 @@ def run_llama3_demo(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            2000,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)

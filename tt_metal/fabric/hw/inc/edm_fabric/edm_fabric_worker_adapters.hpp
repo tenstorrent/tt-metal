@@ -66,7 +66,7 @@ struct WorkerToFabricEdmSenderImpl {
 
     template <ProgrammableCoreType my_core_type>
     static WorkerToFabricEdmSenderImpl build_from_args(std::size_t& arg_idx) {
-        bool is_persistent_fabric = get_arg_val<uint32_t>(arg_idx++);
+        constexpr bool is_persistent_fabric = true;
         const auto direction = get_arg_val<uint32_t>(arg_idx++);
         const WorkerXY edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
         const auto edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -525,7 +525,6 @@ private:
                     BufferIndex{wrap_increment(this->buffer_slot_index.get(), this->num_buffers_per_channel)};
                 this->edm_buffer_addr =
                     this->edm_buffer_base_addr + (this->get_buffer_slot_index() * this->buffer_size_bytes);
-                ;
             } else {
                 this->buffer_slot_index = BufferIndex{wrap_increment(this->buffer_slot_index.get(), this->num_buffers_per_channel)};
                 this->edm_buffer_addr =

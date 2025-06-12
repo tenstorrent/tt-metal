@@ -104,11 +104,12 @@ inline void RunPersistent1dFabricLatencyTest(
         }
     }
 
-    // static constexpr size_t source_l1_buffer_address = 1000000;
+    // Temporary until we move this to be under tt_metal and migrate to device init fabric
+    // OR packet header management is removed from user space, whichever comes first
+    constexpr size_t packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     static constexpr uint32_t packet_header_cb_index = tt::CB::c_in0;
     static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
     static constexpr size_t packet_header_cb_size_in_headers = 4;
-    static constexpr bool enable_persistent_fabric_mode = true;
     std::vector<size_t> dest_buffer_addresses(writer_specs.size(), 0);
 
     for (size_t i = 0; i < writer_specs.size(); i++) {
@@ -154,12 +155,10 @@ inline void RunPersistent1dFabricLatencyTest(
         std::vector<Program> dummy_worker_programs;
         setup_test_with_persistent_fabric(
             devices,
-            dummy_worker_programs,
             subdevice_managers,
             fabric_programs,
             fabric_program_ptrs,
             fabric_handle,
-            enable_persistent_fabric_mode,
             num_links,
             topology,
             tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval,
@@ -260,21 +259,14 @@ inline void RunPersistent1dFabricLatencyTest(
         if (!use_device_init_fabric) {
             local_device_fabric_handle =
                 ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-                    device,
-                    forward_device,
-                    backward_device,
-                    &program,
-                    enable_persistent_fabric_mode,
-                    num_links,
-                    topology);
+                    device, forward_device, backward_device, &program, num_links, topology);
         }
 
         // reserve CB
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(
-                packet_header_cb_size_in_headers * sizeof(tt::tt_fabric::PacketHeader),
-                {{packet_header_cb_index, cb_df}})
-                .set_page_size(packet_header_cb_index, sizeof(tt::tt_fabric::PacketHeader));
+                packet_header_cb_size_in_headers * packet_header_size_bytes, {{packet_header_cb_index, cb_df}})
+                .set_page_size(packet_header_cb_index, packet_header_size_bytes);
         CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_cores, cb_src0_config);
 
         if (!use_device_init_fabric) {

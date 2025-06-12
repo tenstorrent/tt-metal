@@ -36,7 +36,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     Tensor& v_output_tensor = output_tensors[3];
 
     auto mesh_device = input_tensor.mesh_device();
-    const bool enable_persistent_fabric_mode = true;
     // For qkv heads fuse
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
@@ -156,10 +155,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     size_t num_targets_backward = 0;
     if (topology == ccl::Topology::Linear) {
         LineTopology line_topology(ring_size, ring_index);
-        num_targets_forward =
-            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
-        num_targets_backward =
-            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
+        num_targets_forward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::FORWARD);
+        num_targets_backward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::BACKWARD);
     } else if (topology == ccl::Topology::Ring) {
         // TODO: Commonize
         num_targets_forward = tt::div_up(ring_size - 1, 2);
@@ -185,8 +182,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     // Get worker cores, assuming 1 worker per link
     std::optional<CoreRangeSet> reserved_cores = output_tensor_cores;
     uint32_t num_workers_per_link = 1;
-    const auto [sender_worker_core_range, sender_worker_cores] = choose_worker_cores_fuse(
-        num_links, num_workers_per_link, enable_persistent_fabric_mode, mesh_device, sub_device_id, reserved_cores);
+    const auto [sender_worker_core_range, sender_worker_cores] =
+        choose_worker_cores_fuse(num_links, num_workers_per_link, mesh_device, sub_device_id, reserved_cores);
 
     log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
     log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
