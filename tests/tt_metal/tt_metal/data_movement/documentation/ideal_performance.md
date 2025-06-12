@@ -10,3 +10,4 @@ Units are **Bytes/cycle**.
 | One To One                        | 29            | 60        |
 | One From One                      | 28            | 60        |
 | One To All (Multicast + Linked)   | 19            | 34        |
+| One From All                      | 30            | 60        |
