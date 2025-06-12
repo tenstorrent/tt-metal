@@ -38,9 +38,6 @@ def test_yolov9c(use_weights_from_ultralytics, model_task, device, use_program_c
     torch_input, ttnn_input = create_yolov9c_input_tensors(device, model=True)
     state_dict = None
 
-    # todo: add ticket if this is the actual issue
-    device.disable_and_clear_program_cache()
-
     weights = "yolov9c-seg.pt" if model_task == "segment" else "yolov9c.pt"
     enable_segment = model_task == "segment"
 
