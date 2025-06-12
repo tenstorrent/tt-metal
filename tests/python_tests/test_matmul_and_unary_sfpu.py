@@ -151,13 +151,13 @@ def test_matmul_and_unary_sfpu(
     golden_tensor = generate_matmul_golden(
         src_A, src_B, formats.output_format, math_fidelity
     )
-    golden_tensor = tilize(golden_tensor, torch_format)
+    golden_tensor = tilize(golden_tensor, formats.output_format)
     golden_tensor = generate_sfpu_golden(mathop, golden_tensor, formats.output_format)
     golden_tensor = golden_tensor.to(torch_format)
 
     write_stimuli_to_l1(
-        tilize(src_A, torch_format),
-        tilize(src_B, torch_format),
+        tilize(src_A, formats.input_format),
+        tilize(src_B, formats.input_format),
         formats.input_format,
         formats.input_format,
     )

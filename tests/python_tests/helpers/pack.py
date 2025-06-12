@@ -3,72 +3,64 @@
 
 # pack.py
 
+import array
 import struct
 
 
-def flatten_list(sublists):
-    return [item for sublist in sublists for item in sublist]
-
-
-def int_to_bytes_list(n):
-    return [(n >> (8 * i)) & 0xFF for i in range(3, -1, -1)]
-
-
-def fp32_to_bytes(number):
-    number_unpacked = struct.unpack("!I", struct.pack("!f", number))[0]
-    return int_to_bytes_list(number_unpacked)
-
-
 def pack_bfp16(torch_tensor):
-    def bfloat16_to_bytes(number):
-        number_unpacked = struct.unpack("!I", struct.pack("!f", number))[0]
-        res_masked = number_unpacked & 0xFFFF0000
-        return int_to_bytes_list(res_masked)
-
-    packed_bytes = []
-    for i in range(0, len(torch_tensor), 2):
-        half1 = bfloat16_to_bytes(torch_tensor[i])
-        half2 = bfloat16_to_bytes(torch_tensor[i + 1])
-        packed_bytes.extend([half1[0:2][::-1], half2[0:2][::-1]])
-    return flatten_list(packed_bytes)
+    return array.array(
+        "B",
+        b"".join(
+            struct.pack("<f", value)[2:] for value in torch_tensor
+        ),  # Take high 2 bytes (MSBs)
+    ).tolist()
 
 
 def pack_fp16(torch_tensor):
-    def float16_to_bytes(value):
-        packed_bytes = struct.pack("<e", value)
-        return list(packed_bytes)
-
-    packed_bytes = []
-    for i in range(0, len(torch_tensor), 2):
-        half1 = float16_to_bytes(torch_tensor[i])
-        half2 = float16_to_bytes(torch_tensor[i + 1])
-        packed_bytes.extend([half1[0:2], half2[0:2]])
-    return flatten_list(packed_bytes)
+    return array.array(
+        "B", b"".join(struct.pack("<e", value) for value in torch_tensor)
+    ).tolist()
 
 
 def pack_fp32(torch_tensor):
-    def fp32_to_bytes(number):
-        return list(struct.pack("<f", number))
-
-    packed_bytes = [None] * len(torch_tensor)
-    for i in range(len(torch_tensor)):
-        packed_bytes[i] = fp32_to_bytes(torch_tensor[i])
-    return flatten_list(packed_bytes)
+    return array.array(
+        "B", b"".join(struct.pack("<f", value) for value in torch_tensor)
+    ).tolist()
 
 
 def pack_int32(torch_tensor):
-    def int32_to_bytes(number):
-        return list(struct.pack("<I", number))
+    return array.array(
+        "B", b"".join(struct.pack("<i", value) for value in torch_tensor)
+    ).tolist()
 
-    packed_bytes = [None] * len(torch_tensor)
-    for i in range(len(torch_tensor)):
-        packed_bytes[i] = int32_to_bytes(torch_tensor[i])
-    return flatten_list(packed_bytes)
+
+def pack_uint32(torch_tensor):
+    return array.array(
+        "B", b"".join(struct.pack("<I", value) for value in torch_tensor)
+    ).tolist()
+
+
+def pack_uint16(torch_tensor):
+    return array.array(
+        "B", b"".join(struct.pack("<H", value) for value in torch_tensor)
+    ).tolist()
+
+
+def pack_int8(torch_tensor):
+    return array.array(
+        "B", b"".join(struct.pack("<b", value) for value in torch_tensor)
+    ).tolist()
+
+
+def pack_uint8(torch_tensor):
+    return array.array(
+        "B", b"".join(struct.pack("<B", value) for value in torch_tensor)
+    ).tolist()
 
 
 def float_to_bfp8_block(block):
     def bfloat16_to_binary(value):
-        float_value = struct.unpack("!I", struct.pack("!f", value))[0]
+        float_value = struct.unpack("<I", struct.pack("<f", value))[0]
         bfloat16_value = (float_value & 0xFFFF0000) >> 16
         return f"{(bfloat16_value >> 8) & 0xFF:08b}{bfloat16_value & 0xFF:08b}"
 

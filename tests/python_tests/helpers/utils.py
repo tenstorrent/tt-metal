@@ -163,7 +163,11 @@ def passed_test(golden_tensor, res_tensor, output_data_format=DataFormat.Float16
             DataFormat.Float16: Tolerance(atol=0.05, rtol=0.05),
             DataFormat.Float16_b: Tolerance(atol=0.05, rtol=0.05),
             DataFormat.Float32: Tolerance(atol=0.05, rtol=0.05),
-            DataFormat.Int32: Tolerance(atol=0.05, rtol=0.05),
+            DataFormat.Int32: Tolerance(atol=0, rtol=0),
+            DataFormat.UInt32: Tolerance(atol=0, rtol=0),
+            DataFormat.UInt16: Tolerance(atol=0, rtol=0),
+            DataFormat.Int8: Tolerance(atol=0, rtol=0),
+            DataFormat.UInt8: Tolerance(atol=0, rtol=0),
             DataFormat.Bfp8_b: Tolerance(atol=0.1, rtol=0.2),
         }
 

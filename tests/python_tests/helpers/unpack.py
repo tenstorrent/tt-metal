@@ -9,45 +9,43 @@ import torch
 
 
 def unpack_fp16(packed_list, unpack_src, pack_dst):
-    def bytes_to_float16(byte_list):
-        return struct.unpack("<e", bytes(byte_list))[0]
-
-    return [
-        bytes_to_float16(packed_list[i : i + 2]) for i in range(0, len(packed_list), 2)
-    ]
+    return [val[0] for val in struct.iter_unpack("<e", bytes(packed_list))]
 
 
 def unpack_bfp16(packed_list, unpack_src, pack_dst):
-    def bytes_to_bfloat16(byte_list):
-        bytes_data = b"\x00\x00" + bytes(byte_list)  # Ensure we include padding
-        unpacked_value = struct.unpack("<f", bytes_data)[0]
-        return unpacked_value
+    # Step 1: Promote each 2-byte bfloat16 to 4-byte float32
+    # Place bfloat16 in high 2 bytes (little-endian)
+    padded_bytes = bytearray()
+    for i in range(0, len(packed_list), 2):
+        hi, lo = packed_list[i], packed_list[i + 1]
+        padded_bytes.extend([0x00, 0x00, hi, lo])  # float32 = [LSB, ..., MSB]
 
-    return [
-        bytes_to_bfloat16(packed_list[i : i + 2]) for i in range(0, len(packed_list), 2)
-    ]
+    # Use iter_unpack with "<f" to read float32
+    return [val[0] for val in struct.iter_unpack("<f", padded_bytes)]
 
 
 def unpack_fp32(packed_list):
-    def bytes_to_fp32(byte_list):
-        bytes_data = bytes(byte_list)
-        unpacked_value = struct.unpack("<f", bytes_data)[0]
-        return unpacked_value
-
-    return [
-        bytes_to_fp32(packed_list[i : i + 4]) for i in range(0, len(packed_list), 4)
-    ]
+    return [val[0] for val in struct.iter_unpack("<f", bytes(packed_list))]
 
 
 def unpack_int32(packed_list):
-    def bytes_to_int32(byte_list):
-        bytes_data = bytes(byte_list)
-        unpacked_value = struct.unpack(">i", bytes_data)[0]
-        return unpacked_value
+    return [val[0] for val in struct.iter_unpack("<i", bytes(packed_list))]
 
-    return [
-        bytes_to_int32(packed_list[i : i + 4]) for i in range(0, len(packed_list), 4)
-    ]
+
+def unpack_uint32(packed_list):
+    return [val[0] for val in struct.iter_unpack("<I", bytes(packed_list))]
+
+
+def unpack_uint16(packed_list):
+    return [val[0] for val in struct.iter_unpack("<H", bytes(packed_list))]
+
+
+def unpack_int8(packed_list):
+    return [val[0] for val in struct.iter_unpack("<b", bytes(packed_list))]
+
+
+def unpack_uint8(packed_list):
+    return [val[0] for val in struct.iter_unpack("<B", bytes(packed_list))]
 
 
 def bfp8_to_float_block(exponent, bfp8_mantissas, unpacked_bfp8):

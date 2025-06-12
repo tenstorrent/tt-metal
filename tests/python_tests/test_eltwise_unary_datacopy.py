@@ -66,11 +66,11 @@ param_ids = generate_param_ids(all_params)
 def test_unary_datacopy(testname, formats, dest_acc):
 
     src_A, src_B = generate_stimuli(formats.input_format, formats.input_format)
-    srcB = torch.full((1024,), 0)
+
     golden = generate_golden(src_A, formats.output_format)
     write_stimuli_to_l1(src_A, src_B, formats.input_format, formats.input_format)
 
-    unpack_to_dest = formats.input_format == DataFormat.Float32
+    unpack_to_dest = formats.input_format.is_32_bit()
 
     test_config = {
         "formats": formats,
@@ -87,33 +87,10 @@ def test_unary_datacopy(testname, formats, dest_acc):
     res_from_L1 = collect_results(formats, tensor_size=len(src_A))
     assert len(res_from_L1) == len(golden)
 
-    golden_tensor = torch.tensor(
-        golden,
-        dtype=(
-            format_dict[formats.output_format]
-            if formats.output_format
-            in [
-                DataFormat.Float16,
-                DataFormat.Float16_b,
-                DataFormat.Float32,
-                DataFormat.Int32,
-            ]
-            else torch.bfloat16
-        ),
+    torch_format = format_dict.get(
+        formats.output_format, format_dict[DataFormat.Float16_b]
     )
-    res_tensor = torch.tensor(
-        res_from_L1,
-        dtype=(
-            format_dict[formats.output_format]
-            if formats.output_format
-            in [
-                DataFormat.Float16,
-                DataFormat.Float16_b,
-                DataFormat.Float32,
-                DataFormat.Int32,
-            ]
-            else torch.bfloat16
-        ),
-    )
+    golden_tensor = torch.tensor(golden, dtype=(torch_format))
+    res_tensor = torch.tensor(res_from_L1, dtype=(torch_format))
 
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
