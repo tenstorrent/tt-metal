@@ -101,34 +101,34 @@ jobs:
             "model-pr")
               echo "run-quick=true" >> $GITHUB_OUTPUT
               echo "run-unit=false" >> $GITHUB_OUTPUT
-              echo "run-frequent=false" >> $GITHUB_OUTPUT
-              echo "run-demo=false" >> $GITHUB_OUTPUT
-              echo "run-model-perf=false" >> $GITHUB_OUTPUT
-              echo "run-stress=false" >> $GITHUB_OUTPUT
+              echo "run-frequent=true" >> $GITHUB_OUTPUT
+              echo "run-demo=true" >> $GITHUB_OUTPUT
+              echo "run-model-perf=true" >> $GITHUB_OUTPUT
+              echo "run-stress=true" >> $GITHUB_OUTPUT
               ;;
             "op-pr")
-              echo "run-quick=true" >> $GITHUB_OUTPUT
-              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-quick=false" >> $GITHUB_OUTPUT
+              echo "run-unit=true" >> $GITHUB_OUTPUT
               echo "run-frequent=false" >> $GITHUB_OUTPUT
               echo "run-demo=false" >> $GITHUB_OUTPUT
               echo "run-model-perf=false" >> $GITHUB_OUTPUT
               echo "run-stress=false" >> $GITHUB_OUTPUT
               ;;
             "nightly")
-              echo "run-quick=true" >> $GITHUB_OUTPUT
-              echo "run-unit=false" >> $GITHUB_OUTPUT
-              echo "run-frequent=false" >> $GITHUB_OUTPUT
-              echo "run-demo=false" >> $GITHUB_OUTPUT
-              echo "run-model-perf=false" >> $GITHUB_OUTPUT
-              echo "run-stress=false" >> $GITHUB_OUTPUT
+              echo "run-quick=false" >> $GITHUB_OUTPUT
+              echo "run-unit=true" >> $GITHUB_OUTPUT
+              echo "run-frequent=true" >> $GITHUB_OUTPUT
+              echo "run-demo=true" >> $GITHUB_OUTPUT
+              echo "run-model-perf=true" >> $GITHUB_OUTPUT
+              echo "run-stress=true" >> $GITHUB_OUTPUT
               ;;
             "hw-self-test")
-              echo "run-quick=true" >> $GITHUB_OUTPUT
+              echo "run-quick=false" >> $GITHUB_OUTPUT
               echo "run-unit=false" >> $GITHUB_OUTPUT
-              echo "run-frequent=false" >> $GITHUB_OUTPUT
+              echo "run-frequent=true" >> $GITHUB_OUTPUT
               echo "run-demo=false" >> $GITHUB_OUTPUT
-              echo "run-model-perf=false" >> $GITHUB_OUTPUT
-              echo "run-stress=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=true" >> $GITHUB_OUTPUT
+              echo "run-stress=true" >> $GITHUB_OUTPUT
               ;;
             *)
               echo "run-quick=true" >> $GITHUB_OUTPUT
