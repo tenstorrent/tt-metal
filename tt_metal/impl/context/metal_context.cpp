@@ -267,7 +267,7 @@ void MetalContext::set_default_control_plane_mesh_graph() {
     this->set_fabric_config(fabric_config_);
 }
 
-void MetalContext::deinitialize_fabric_config() {
+void MetalContext::teardown_fabric_config() {
     this->cluster_->configure_ethernet_cores_for_fabric_routers(tt_metal::FabricConfig::DISABLED);
     this->get_control_plane().clear_fabric_context();
 }
@@ -291,7 +291,7 @@ void MetalContext::set_fabric_config(
                 "Got num_routing_planes while disabling fabric, ignoring it and disabling all active routing planes");
         }
 
-        this->deinitialize_fabric_config();
+        this->teardown_fabric_config();
         return;
     }
 

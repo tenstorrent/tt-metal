@@ -82,7 +82,7 @@ private:
     void clear_dram_state(chip_id_t device_id);
     void clear_launch_messages_on_eth_cores(chip_id_t device_id);
     void initialize_control_plane();
-    void deinitialize_fabric_config();
+    void teardown_fabric_config();
 
     bool initialized_ = false;
     bool teardown_registered_ = false;
