@@ -61,10 +61,10 @@ void kernel_main() {
     const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t dram_read_offset = get_arg_val<uint32_t>(rt_args_idx++);
 
-    constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t sync_cb = tt::CBIndex::c_3;
-    constexpr uint32_t sync_cb2 = tt::CBIndex::c_4;
-    constexpr uint32_t remote_cb_id = tt::CBIndex::c_31;
+    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(11);
+    constexpr uint32_t sync_cb = get_compile_time_arg_val(12);
+    constexpr uint32_t sync_cb2 = get_compile_time_arg_val(13);
+    constexpr uint32_t remote_cb_id = get_compile_time_arg_val(14);
 
     const uint32_t in1_block_num_tiles = in1_block_height_in_tiles * in1_block_width_in_tiles;
 
