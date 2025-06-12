@@ -6,6 +6,7 @@
 
 #include <tt_stl/overloaded.hpp>
 
+#include "tt-metalium/distributed_host_buffer.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -105,26 +106,31 @@ Tensor transform(const Tensor& tensor, const std::function<Tensor(const Tensor&)
     // TODO: #15840 - Push this down to OPs, so that instead of transforming the multi-device shards as `Tensor`, we
     // operate on buffers directly. OPs code should not differentiate between host and multi-device host storage.
     std::optional<TensorSpec> transformed_spec;
+    std::mutex transformed_buffer_mutex;
     DistributedHostBuffer transformed_buffer =
         std::get<MultiDeviceHostStorage>(tensor.storage())
             .distributed_buffer()
-            .transform([&](const HostBuffer& buffer) {
-                auto transformed_tensor = transform_func(Tensor(buffer, tensor.get_tensor_spec()));
-                auto* host_storage = std::get_if<HostStorage>(&transformed_tensor.get_storage());
-                TT_FATAL(host_storage != nullptr, "transform function must return a host tensor");
-                if (transformed_spec.has_value()) {
-                    TT_FATAL(
-                        *transformed_spec == transformed_tensor.get_tensor_spec(),
-                        "All shards must have the same spec");
-                } else {
-                    transformed_spec = transformed_tensor.get_tensor_spec();
-                }
-                return std::move(host_storage->buffer);
-            });
-    transformed_spec = transformed_spec.value_or(tensor.get_tensor_spec());
+            .transform(
+                [&](const HostBuffer& buffer) {
+                    auto transformed_tensor = transform_func(Tensor(buffer, tensor.get_tensor_spec()));
+                    auto* host_storage = std::get_if<HostStorage>(&transformed_tensor.get_storage());
+                    TT_FATAL(host_storage != nullptr, "transform function must return a host tensor");
+                    {
+                        std::lock_guard<std::mutex> lock(transformed_buffer_mutex);
+                        if (transformed_spec.has_value()) {
+                            TT_FATAL(
+                                *transformed_spec == transformed_tensor.get_tensor_spec(),
+                                "All shards must have the same spec");
+                        } else {
+                            transformed_spec = transformed_tensor.get_tensor_spec();
+                        }
+                    }
+                    return host_storage->buffer;
+                },
+                DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
     return Tensor(
         MultiDeviceHostStorage(std::move(transformed_buffer)),
-        *transformed_spec,
+        transformed_spec.value_or(tensor.get_tensor_spec()),
         tensor.get_distributed_tensor_config());
 }
 
