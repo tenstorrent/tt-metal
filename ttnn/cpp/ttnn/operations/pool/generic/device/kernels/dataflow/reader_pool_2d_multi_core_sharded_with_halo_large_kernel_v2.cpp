@@ -201,17 +201,20 @@ void kernel_main() {
                     processed_rows++;
                     if ((processed_rows % (max_rows_for_reduction - 1)) == 0) {
                         noc_async_read_barrier();
-                        cb_push_back(in_cb_id, 1);
+                        DPRINT << "READER processed rows: " << processed_rows << ENDL();
+                        cb_push_back(in_cb_id, 2);
+                        cb_reserve_back(in_cb_id, 2);
                     }
                 }
             }
             if (remaining_elems) {
                 noc_async_read_barrier();
-                cb_push_back(in_cb_id, 1);
+                DPRINT << "READER processed rows: " << processed_rows << ENDL();
+                cb_push_back(in_cb_id, 2);
+                cb_reserve_back(in_cb_id, 2);
             }
             // wait for compute to finish this top left index
             // write the final result to the output buffer
-            cb_reserve_back(in_cb_id, 1);
             noc_async_read_one_packet(
                 get_noc_addr(out_l1_write_addr), in_l1_write_addr_base, read_bytes);  // write the first row
             out_l1_write_addr += read_bytes;

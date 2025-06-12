@@ -35,7 +35,7 @@ inline void reduce_h_fused(
     constexpr uint32_t num_out_rows = 1;
 
     const uint32_t curr_in_cb_id = in_cb_id_0;
-    cb_wait_front(curr_in_cb_id, 1);
+    cb_wait_front(curr_in_cb_id, 2);
 
     tile_regs_acquire();
     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
@@ -53,7 +53,7 @@ inline void reduce_h_fused(
     pack_untilize_dst<num_output_tiles>(
         in_cb_id_0, 1 /*out_subblock_h*/, 0, num_out_rows, num_faces_in_output_tile); /* pack 1 row (1x16 or 1x32) */
     tile_regs_release();
-    cb_pop_front(curr_in_cb_id, 1);
+    cb_pop_front(curr_in_cb_id, 2);
 }
 
 namespace NAMESPACE {
@@ -129,6 +129,7 @@ void MAIN {
             // twice, and both results are written to interm_cb_id. interm_cb_id will be the input to the
             // next level of reduction.
             for (uint32_t h = 0; h < interm_reduction_chunks; h++) {
+                MATH(DPRINT << "COMPUTE h, b_i, i: " << h << ", " << b_i << ", " << i << ENDL());
                 reduce_h_fused<
                     max_tiles_per_iter,
                     is_partial_tile,

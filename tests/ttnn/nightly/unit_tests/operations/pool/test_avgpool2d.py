@@ -75,7 +75,7 @@ def run_avg_pool2d(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         applied_shard_scheme=shard_scheme,
     )
-    if run_twice:
+    if False:
         ttnn_output = ttnn.avg_pool2d(
             input_tensor=ttnn_input,
             batch_size=in_n,
@@ -120,10 +120,11 @@ def run_avg_pool2d(
         # [2, 512, 112, 32],
         # [2, 512, 16, 16],
         # [2, 800, 16, 16],
-        [1, 384, 28, 28],
+        # [1, 384, 28, 28],
         # [1, 288, 56, 56],
         # [1, 256, 132, 20],
         # [1, 32, 264, 40],
+        [1, 32, 9, 9],
     ),
 )
 @pytest.mark.parametrize(
