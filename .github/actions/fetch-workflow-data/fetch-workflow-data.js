@@ -602,6 +602,7 @@ class CacheManager {
 async function run() {
   try {
     // Get inputs
+    const forceFetch = core.getInput('force-fetch') === 'true';
     const daysInput = core.getInput('days') || DEFAULT_DAYS;
     const days = parseFloat(daysInput);
     if (isNaN(days)) {
@@ -624,9 +625,18 @@ async function run() {
     const fetcher = new GitHubWorkflowFetcher(octokit, github.context);
     const cacheManager = new CacheManager(fetcher);
 
-    // Load previous cache
-    const { previousRuns, mostRecentCachedDate, earliestCachedDate } = cacheManager.loadPreviousCache(cachePath);
+    // Set default values for cache
+    let previousRuns = [];
+    let mostRecentCachedDate = new Date(0);
+    let earliestCachedDate = new Date();
 
+
+    if (!forceFetch) {
+      const cacheData = cacheManager.loadPreviousCache(cachePath);
+      previousRuns = cacheData.previousRuns;
+      mostRecentCachedDate = cacheData.mostRecentCachedDate;
+      earliestCachedDate = cacheData.earliestCachedDate;
+    }
     // Fetch new runs
     const { completeRuns, dateRange } = await fetcher.fetchAllWorkflowRuns(days, mostRecentCachedDate, earliestCachedDate);
     if (dateRange && dateRange.earliest && dateRange.latest) {
