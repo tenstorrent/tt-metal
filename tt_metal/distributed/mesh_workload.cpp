@@ -83,7 +83,7 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
 void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
     ZoneScoped;
     auto& program = programs_.at(device_range);
-    program.compile(mesh_device);
+    program.impl().compile(mesh_device);
     program.allocate_circular_buffers(mesh_device);
     tt::tt_metal::detail::ValidateCircularBufferRegion(program, mesh_device);
 }
@@ -171,7 +171,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
                     TensorMemoryLayout::INTERLEAVED,
                     std::nullopt,
                     false);
-                program.set_kernels_bin_buffer(buffer_view);
+                program.impl().set_kernels_bin_buffer(buffer_view);
             }
         }
         program_binary_status_[mesh_device->id()] = ProgramBinaryStatus::InFlight;
@@ -198,7 +198,7 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     // workload is enqueued.
     auto mesh_device = mesh_cq.device();
     for (auto& [device_range, program] : programs_) {
-        program.generate_dispatch_commands(mesh_device);
+        program.impl().generate_dispatch_commands(mesh_device);
     }
 }
 
@@ -307,7 +307,7 @@ std::unordered_set<SubDeviceId> MeshWorkloadImpl::determine_sub_device_ids(MeshD
     std::unordered_set<SubDeviceId> sub_devices_;
     for (auto& [device_range, program] : programs_) {
         IDevice* device = mesh_device->get_device(device_range.start_coord());
-        auto sub_devs_for_program = program.determine_sub_device_ids(mesh_device);
+        auto sub_devs_for_program = program.impl().determine_sub_device_ids(mesh_device);
         for (auto& sub_dev : sub_devs_for_program) {
             sub_devices_.insert(sub_dev);
         }
@@ -318,7 +318,7 @@ std::unordered_set<SubDeviceId> MeshWorkloadImpl::determine_sub_device_ids(MeshD
 ProgramCommandSequence& MeshWorkloadImpl::get_dispatch_cmds_for_program(Program& program, uint64_t command_hash) {
     ZoneScoped;
     // Get the dispatch commands associated with this program
-    return program.get_cached_program_command_sequences().at(command_hash);
+    return program.impl().get_cached_program_command_sequences().at(command_hash);
 }
 
 // The functions below are for testing purposes only
@@ -355,9 +355,9 @@ uint32_t MeshWorkloadImpl::get_sem_size(
     uint32_t program_idx = 0;
     for (auto& [device_range, program] : programs_) {
         if (program_idx) {
-            TT_ASSERT(sem_size == program.get_sem_size(mesh_device.get(), logical_core, core_type));
+            TT_ASSERT(sem_size == program.impl().get_sem_size(mesh_device.get(), logical_core, core_type));
         } else {
-            sem_size = program.get_sem_size(mesh_device.get(), logical_core, core_type);
+            sem_size = program.impl().get_sem_size(mesh_device.get(), logical_core, core_type);
         }
         program_idx++;
     }
@@ -382,9 +382,9 @@ uint32_t MeshWorkloadImpl::get_cb_size(
     uint32_t program_idx = 0;
     for (auto& [device_range, program] : programs_) {
         if (program_idx) {
-            TT_ASSERT(cb_size == program.get_cb_size(mesh_device.get(), logical_core, core_type));
+            TT_ASSERT(cb_size == program.impl().get_cb_size(mesh_device.get(), logical_core, core_type));
         } else {
-            cb_size = program.get_cb_size(mesh_device.get(), logical_core, core_type);
+            cb_size = program.impl().get_cb_size(mesh_device.get(), logical_core, core_type);
         }
         program_idx++;
     }

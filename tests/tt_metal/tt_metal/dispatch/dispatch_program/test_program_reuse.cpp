@@ -60,6 +60,7 @@
 #include "umd/device/types/arch.h"
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/utils.hpp>
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 struct CBConfig {
@@ -307,7 +308,7 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
         std::vector<uint32_t> semaphore_vals;
         for (const CoreCoord& core_coord : sem_cr_range) {
             uint32_t expected_sem_idx = 0;
-            uint32_t sem_base_addr = program->get_sem_base_addr(devices_[0], core_coord, CoreType::WORKER);
+            uint32_t sem_base_addr = program->impl().get_sem_base_addr(devices_[0], core_coord, CoreType::WORKER);
             detail::ReadFromDeviceL1(device, core_coord, sem_base_addr, semaphore_buffer_size, semaphore_vals);
             for (uint32_t i = 0; i < semaphore_vals.size();
                  i += (MetalContext::instance().hal().get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
@@ -320,7 +321,7 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
             detail::ReadFromDeviceL1(
                 device,
                 core_coord,
-                program->get_cb_base_addr(device, core_coord, CoreType::WORKER),
+                program->impl().get_cb_base_addr(device, core_coord, CoreType::WORKER),
                 cb_config_buffer_size,
                 cb_config_vector);
             uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);

@@ -33,6 +33,7 @@
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/util.hpp>
+#include "impl/program/program_impl.hpp"
 
 using std::vector;
 using namespace tt::tt_metal;
@@ -57,7 +58,7 @@ void validate_cb_address(
                 tt::tt_metal::detail::ReadFromDeviceL1(
                     device,
                     core_coord,
-                    program.get_cb_base_addr(device, core_coord, CoreType::WORKER),
+                    program.impl().get_cb_base_addr(device, core_coord, CoreType::WORKER),
                     cb_config_buffer_size,
                     cb_config_vector);
 
@@ -373,7 +374,7 @@ TEST_F(DeviceFixture, TensixTestUpdateCircularBufferPageSize) {
                     tt::tt_metal::detail::ReadFromDeviceL1(
                         device,
                         core_coord,
-                        program.get_cb_base_addr(device, core_coord, CoreType::WORKER),
+                        program.impl().get_cb_base_addr(device, core_coord, CoreType::WORKER),
                         cb_config_buffer_size,
                         cb_config_vector);
 
@@ -405,7 +406,7 @@ TEST_F(DeviceFixture, TensixTestUpdateCircularBufferPageSize) {
                     tt::tt_metal::detail::ReadFromDeviceL1(
                         device,
                         core_coord,
-                        program.get_cb_base_addr(device, core_coord, CoreType::WORKER),
+                        program.impl().get_cb_base_addr(device, core_coord, CoreType::WORKER),
                         cb_config_buffer_size,
                         cb_config_vector);
 

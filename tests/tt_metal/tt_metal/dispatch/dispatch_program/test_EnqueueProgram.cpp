@@ -53,6 +53,7 @@
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
+#include "impl/program/program_impl.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -202,7 +203,7 @@ bool cb_config_successful(IDevice* device, Program& program, const DummyProgramM
             tt::tt_metal::detail::ReadFromDeviceL1(
                 device,
                 core_coord,
-                program.get_cb_base_addr(device, core_coord, CoreType::WORKER),
+                program.impl().get_cb_base_addr(device, core_coord, CoreType::WORKER),
                 cb_config_buffer_size,
                 cb_config_vector);
 
@@ -325,7 +326,7 @@ bool test_dummy_EnqueueProgram_with_sems(
             uint32_t expected_semaphore_vals_for_core_idx = 0;
             const uint32_t semaphore_buffer_size =
                 program_config.num_sems * MetalContext::instance().hal().get_alignment(HalMemType::L1);
-            uint32_t semaphore_base = program.get_sem_base_addr(device, core_coord, CoreType::WORKER);
+            uint32_t semaphore_base = program.impl().get_sem_base_addr(device, core_coord, CoreType::WORKER);
             tt::tt_metal::detail::ReadFromDeviceL1(
                 device, core_coord, semaphore_base, semaphore_buffer_size, semaphore_vals);
             for (uint32_t i = 0; i < semaphore_vals.size();
@@ -1085,7 +1086,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCBSharedAddressSpace
         tt::tt_metal::detail::ReadFromDeviceL1(
             device,
             core_coord,
-            program.get_cb_base_addr(device, core_coord, CoreType::WORKER),
+            program.impl().get_cb_base_addr(device, core_coord, CoreType::WORKER),
             cb_config_buffer_size,
             cb_config_vector);
         uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);

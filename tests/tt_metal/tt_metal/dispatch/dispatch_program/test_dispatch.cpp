@@ -31,6 +31,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -269,12 +270,12 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
         tt::tt_metal::detail::ReadFromDeviceL1(
             device,
             core_coord,
-            program.get_cb_base_addr(device, core_coord, CoreType::WORKER),
+            program.impl().get_cb_base_addr(device, core_coord, CoreType::WORKER),
             cb_config_buffer_size,
             cb_config_vector);
 
         // ETH core doesn't have CB
-        EXPECT_TRUE(program.get_cb_size(device, core_coord, CoreType::ETH) == 0);
+        EXPECT_TRUE(program.impl().get_cb_size(device, core_coord, CoreType::ETH) == 0);
 
         uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);

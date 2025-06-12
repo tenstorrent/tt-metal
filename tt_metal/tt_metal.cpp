@@ -718,8 +718,8 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
 
         detail::CompileProgram(device, program);
-        if (!program.is_finalized()) {
-            program.finalize_offsets(device);
+        if (!program.impl().is_finalized()) {
+            program.impl().finalize_offsets(device);
         }
 
         detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
@@ -850,7 +850,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                     llrt::write_hex_vec_to_core(device_id, physical_core, circular_buffer_config_vec, addr);
                 }
             }
-            program.init_semaphores(*device, logical_core, index);
+            program.impl().init_semaphores(*device, logical_core, index);
         }
     }
 
@@ -931,7 +931,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
 
 void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch) {
     ZoneScoped;
-    program.compile(device, force_slow_dispatch);
+    program.impl().compile(device, force_slow_dispatch);
 }
 
 }  // namespace detail
@@ -1134,7 +1134,7 @@ const CircularBufferConfig& GetCircularBufferConfig(Program& program, CBHandle c
 void UpdateCircularBufferTotalSize(Program& program, CBHandle cb_handle, uint32_t total_size) {
     std::shared_ptr<CircularBuffer> circular_buffer = detail::GetCircularBuffer(program, cb_handle);
     if (not circular_buffer->globally_allocated()) {
-        program.invalidate_circular_buffer_allocation();
+        program.impl().invalidate_circular_buffer_allocation();
     }
     circular_buffer->config().set_total_size(total_size);
 }

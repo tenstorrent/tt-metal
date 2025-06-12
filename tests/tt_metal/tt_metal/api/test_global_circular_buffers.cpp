@@ -21,6 +21,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -95,7 +96,7 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
         auto remote_cb =
             tt::tt_metal::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
         tt::tt_metal::detail::CompileProgram(device, program);
-        program.finalize_offsets(device);
+        program.impl().finalize_offsets(device);
         tt::tt_metal::experimental::UpdateDynamicCircularBufferAddress(program, remote_cb, global_cb);
         EXPECT_THROW(UpdateDynamicCircularBufferAddress(program, remote_cb, dummy_global_cb), std::exception);
     }
@@ -115,7 +116,7 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
         auto remote_cb =
             tt::tt_metal::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
         tt::tt_metal::detail::CompileProgram(device, program);
-        EXPECT_THROW(program.finalize_offsets(device), std::exception);
+        EXPECT_THROW(program.impl().finalize_offsets(device), std::exception);
     }
 }
 
