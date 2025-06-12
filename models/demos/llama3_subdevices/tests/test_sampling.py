@@ -167,13 +167,19 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
 @pytest.mark.parametrize(
     "sampling_params",
     (
-        # {"temperature": None, "top_k": 1, "top_p": 0.5, "seed": 42},  # argmax
-        # {"temperature": None, "top_k": 32, "top_p": 0.00, "seed": 42}, # argmax
-        # {"temperature": None, "top_k": 32, "top_p": 1.00, "seed": 42}, # multinomial sampling from all tok-k tokens
-        # {"temperature": None, "top_k": 32, "top_p": 0.95, "seed": 42}, # typical top-k top-p sampling
-        # # {"temperature": None, "top_k": 128, "top_p": 0.95, "seed": 42}, # large top-k # does not work with CCL persistent buffers!!!
-        # {"temperature": None, "top_k": 32, "top_p": 0.08, "seed": 42}, # small top-p
-        {"temperature": 0.001, "top_k": 32, "top_p": 0.9, "seed": 42},  # temperature 0.7
+        # {"temperature": 1.0, "top_k": 32, "top_p": 0.00, "seed": 42}, # argmax
+        # {"temperature": 1.0, "top_k": 32, "top_p": 1.00, "seed": 42}, # multinomial sampling from all tok-k tokens
+        {"temperature": 1.0, "top_k": 32, "top_p": 0.95, "seed": 42},  # typical top-p parameter in LLMs
+        # {"temperature": 1.0, "top_k": 32, "top_p": 0.08, "seed": 42}, # small top-p
+        # {"temperature": 1.0, "top_k": 32, "top_p": 0.5, "seed": 42}, # mid top-p
+        # {"temperature": 1.0, "top_k": 32, "top_p": 0.99, "seed": 42}, # large top-p
+        # Test top-k settings
+        # {"temperature": 1.0, "top_k": 1, "top_p": 0.95, "seed": 42},  # top-k=1
+        # # {"temperature": 1.0, "top_k": 64, "top_p": 0.95, "seed": 42}, # top-k=64 (max is 64) # Sampling op currently does't support top-k>32
+        # Test temperature settings
+        # {"temperature": 0.001, "top_k": 32, "top_p": 0.95, "seed": 42},  # temperature 0.001
+        # {"temperature": 0.7, "top_k": 32, "top_p": 0.95, "seed": 42},  # temperature 0.7
+        # {"temperature": 1.0, "top_k": 32, "top_p": 0.95, "seed": 42},  # temperature 1.0
     ),
 )
 @pytest.mark.parametrize(
@@ -352,10 +358,15 @@ def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_devic
     if sampling_params["top_k"] == 1 or sampling_params["top_p"] == 0.0:  # argmax can be compared directly
         # PCC
         pcc_required = 1.0
-        pcc_passing, pcc_message = comp_allclose(reference_output, tt_output_torch, pcc_required)
+        pcc_passing, pcc_message = comp_allclose(
+            torch.tensor(reference_outputs), torch.tensor(tt_outputs_torch), pcc_required
+        )
         passing = passing and pcc_passing
 
         logger.info(f"PCC: {pcc_message}")
+        assert (
+            passing
+        ), f"Llama Sampling output does not meet PCC requirement {pcc_message}/{pcc_required}; KL={d_kl:.4f} bits"
 
     if passing:
         logger.info("Llama Sampling Passed!")
