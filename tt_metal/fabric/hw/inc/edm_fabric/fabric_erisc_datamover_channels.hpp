@@ -223,7 +223,7 @@ struct EdmChannelWorkerInterface {
     }
 
     FORCE_INLINE void notify_worker_of_read_counter_update() {
-        noc_inline_dw_write<false, true>(
+        noc_inline_dw_write<true, true>(
             this->cached_worker_semaphore_address,
             local_read_counter.counter,
             0xf,
@@ -242,6 +242,7 @@ struct EdmChannelWorkerInterface {
     //
     template <bool posted = false>
     FORCE_INLINE void teardown_worker_connection() const {
+        invalidate_l1_cache();
         const auto& worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x,
@@ -257,6 +258,7 @@ struct EdmChannelWorkerInterface {
     }
 
     FORCE_INLINE void cache_producer_noc_addr() {
+        invalidate_l1_cache();
         const auto& worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
@@ -264,9 +266,11 @@ struct EdmChannelWorkerInterface {
     }
 
     [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const {
+        invalidate_l1_cache();
         return *connection_live_semaphore == tt::tt_fabric::EdmToEdmSender<0>::close_connection_request_value;
     }
     [[nodiscard]] FORCE_INLINE bool connection_is_live() const {
+        invalidate_l1_cache();
         return *connection_live_semaphore == tt::tt_fabric::EdmToEdmSender<0>::open_connection_value;
     }
 
