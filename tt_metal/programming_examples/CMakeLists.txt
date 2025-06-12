@@ -46,7 +46,6 @@ install(
         hello_world_datamovement_kernel
         hello_world_datatypes_kernel
         loopback
-        pad_multi_core
         shard_data_rm
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
     # FIXME(afuller): Something funky is happening when installing files into
@@ -69,7 +68,6 @@ install(
         hello_world_datamovement_kernel
         hello_world_datatypes_kernel
         loopback
-        pad_multi_core
         shard_data_rm
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples
