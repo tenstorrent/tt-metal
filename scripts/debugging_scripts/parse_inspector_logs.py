@@ -119,7 +119,7 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, Program
         elif "program_destroyed" in entry:
             info = entry["program_destroyed"]
             program_id = int(info.get("id"))
-            programs.pop(program_id, None)
+            del programs[program_id]
             if verbose:
                 print_log(int(info.get("timestamp_ns")), f"Program {program_id} destroyed")
         elif "program_compile_started" in entry:
