@@ -98,7 +98,7 @@ def test_llama_attention_inference(
     seq_len = 1
 
     generation_start_pos = 127
-    generation_length = 1
+    generation_length = 10
     all_tests_pass = True
 
     # Setup RoPE transformation matrices
