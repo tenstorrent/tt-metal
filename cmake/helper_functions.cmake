@@ -54,7 +54,10 @@ function(CREATE_PGM_EXAMPLES_EXE TESTLIST SUBDIR)
                 m
                 pthread
         )
+
         target_include_directories(${TEST_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        message(STATUS "Setting include dirs for ${TEST_TARGET} to: ${CMAKE_CURRENT_SOURCE_DIR}")
+
         set_target_properties(
             ${TEST_TARGET}
             PROPERTIES
