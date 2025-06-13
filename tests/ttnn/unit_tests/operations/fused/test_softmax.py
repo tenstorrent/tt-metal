@@ -27,7 +27,6 @@ def test_large_softmax(device, batch_size, h, w, dim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((batch_size, h, w), -1, 1, dtype=torch.bfloat16)
-    print(torch_input_tensor)
     torch_output_tensor = F.softmax(torch_input_tensor, dim=dim, dtype=torch.bfloat16)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
