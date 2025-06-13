@@ -2510,6 +2510,7 @@ void Run1DFabricPacketSendTest(
             params.fabric_mode == FabricTestMode::RingAsLinear,
         "This test can only be run with disable_end_workers_in_backward_direction set to true or fabric_mode set to "
         "Linear");
+    bool use_t3k = num_devices == 8;
     bool use_galaxy = num_devices == 32;
     bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
     bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
@@ -2529,9 +2530,9 @@ void Run1DFabricPacketSendTest(
         !(params.num_fabric_rows > 0 && params.num_fabric_cols > 0),
         "Only one of num_fabric_rows and num_fabric_cols may be greater than 0. Test support for both axes live at the "
         "same time is not yet supported");
-    TT_FATAL(
-        use_device_init_fabric ^ (params.num_fabric_rows == 0 && params.num_fabric_cols == 0),
-        "Device init fabric is only supported in this test when launching with multiple fabric rows and/or columns");
+    if (use_device_init_fabric && params.num_fabric_rows == 0 && params.num_fabric_cols == 0) {
+        TT_FATAL(use_t3k, "Using the full mesh as one ring topoplogy is only supported for T3K");
+    }
 
     ttnn::ccl::Topology topology;
     FabricTestMode fabric_mode = params.fabric_mode;
