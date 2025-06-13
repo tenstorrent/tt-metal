@@ -837,6 +837,7 @@ inline void noc_async_write_multicast(
         noc_async_write_multicast_one_packet(src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked);
     } else {
         WAYPOINT("NMWW");
+        NOC_TRACE_QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
         DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
         ncrisc_noc_fast_write_any_len<noc_mode>(
             noc,
@@ -1556,7 +1557,7 @@ FORCE_INLINE void noc_inline_dw_write(
             be,  // byte-enable
             vc,
             false,  // mcast
-            false   // posted
+            posted  // posted
         );
         WAYPOINT("NWID");
         return;
@@ -1579,7 +1580,7 @@ FORCE_INLINE void noc_inline_dw_write(
         false,  // linked
         1,      // num_dests
         true,   // multicast_path_reserve
-        false   // posted
+        posted  // posted
     );
     noc_async_writes_flushed(noc);
 #else
@@ -1624,7 +1625,11 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, addr & 0xFFFFFFFF);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT));
+#ifdef ARCH_BLACKHOLE
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(addr >> 32) & 0x1000000F);
+#endif
+    NOC_CMD_BUF_WRITE_REG(
+        noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
     WAYPOINT("NWID");
 }
