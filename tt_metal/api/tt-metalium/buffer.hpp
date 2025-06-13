@@ -171,7 +171,7 @@ struct BufferRegion {
     BufferRegion(DeviceAddr offset, DeviceAddr size) : offset(offset), size(size) {}
 };
 
-class Buffer final {
+class Buffer final : public std::enable_shared_from_this<Buffer> {
     // Used in public Buffer constructors so they are only callable within Buffer
     // Buffer constructors are public so we can call std::make_shared on Buffer
     struct Private {
@@ -207,6 +207,8 @@ public:
         const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameter = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
+
+    std::shared_ptr<Buffer> view(const BufferRegion& region);
 
     Buffer(const Buffer& other) = delete;
     Buffer& operator=(const Buffer& other) = delete;
@@ -245,28 +247,20 @@ public:
 
     DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
 
-    DeviceAddr bank_local_page_address(uint32_t bank_id, uint32_t page_index) const;
     uint32_t alignment() const;
     DeviceAddr aligned_page_size() const;
     DeviceAddr aligned_size() const;
     DeviceAddr aligned_size_per_bank() const;
 
     // SHARDED API STARTS HERE
-    // If buffer contains BufferDistributionSpec, it is considered ND sharded
-    bool is_nd_sharded() const;
     const std::optional<BufferDistributionSpec>& buffer_distribution_spec() const;
-
-    // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
-
-    DeviceAddr sharded_page_address(uint32_t bank_id, uint32_t page_index) const;
-
     ShardSpecBuffer shard_spec() const;
     void set_shard_spec(const ShardSpecBuffer& shard_spec);
-
-    // TODO: Consolidate with interleaved and delete this (maybe get from BufferDistributionSpec)
     std::optional<uint32_t> num_cores() const;
+    const std::shared_ptr<const CompressedBufferPageMapping>& get_buffer_page_mapping();
 
-    const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
+    std::shared_ptr<Buffer> root_buffer();
+    BufferRegion root_buffer_region() const { return BufferRegion(root_buffer_offset_, size_); }
 
     std::optional<SubDeviceId> sub_device_id() const { return sub_device_id_; }
 
@@ -321,9 +315,12 @@ private:
     // These members must be only accessed on the device worker thread
     DeviceAddr page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     std::optional<ShardSpecBuffer> shard_parameters_;
-    std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
+    std::shared_ptr<const CompressedBufferPageMapping> buffer_page_mapping_;
 
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
+
+    std::shared_ptr<Buffer> root_buffer_;
+    DeviceAddr root_buffer_offset_ = 0;
 
     size_t unique_id_ = 0;
     static std::atomic<size_t> next_unique_id;
