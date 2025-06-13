@@ -6,14 +6,24 @@
 
 #include <array>
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
-class PayloadBuffer {
+inline uint32_t prng_next(uint32_t n) {
+    uint32_t x = n;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    return x;
+}
+
+struct PayloadBuffer {
 public:
     static constexpr uint32_t WORD_SIZE = sizeof(uint32_t);
 
@@ -57,6 +67,7 @@ public:
         uint32_t expected_value = start_value + payload_size_ / WORD_SIZE - 1;
         uint32_t packet_end_addr = curr_address_ + payload_size_ - WORD_SIZE;
         auto* addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(packet_end_addr);
+        DPRINT << "expected value: " << expected_value << ", current value: " << *addr << ENDL();
         return *addr == expected_value;
     }
 
@@ -188,12 +199,6 @@ struct NocUnicastWriteFields {
     NocUnicastWriteFields(uint32_t payload_size_bytes, uint32_t dst_address, uint32_t dst_noc_encoding) :
         payload_size_bytes(payload_size_bytes), dst_address(dst_address), dst_noc_encoding(dst_noc_encoding) {}
 
-    NocUnicastWriteFields(const NocUnicastWriteFields& other) {
-        this->payload_size_bytes = other.payload_size_bytes;
-        this->dst_address = other.dst_address;
-        this->dst_noc_encoding = other.dst_noc_encoding;
-    }
-
     uint32_t payload_size_bytes;
     uint32_t dst_address;
     uint32_t dst_noc_encoding;
@@ -219,13 +224,6 @@ struct NocUnicastAtomicIncFields {
         dst_address(dst_address),
         dst_noc_encoding(dst_noc_encoding) {}
 
-    NocUnicastAtomicIncFields(const NocUnicastAtomicIncFields& other) {
-        this->atomic_inc_val = other.atomic_inc_val;
-        this->atomic_inc_wrap = other.atomic_inc_wrap;
-        this->dst_address = other.dst_address;
-        this->dst_noc_encoding = other.dst_noc_encoding;
-    }
-
     uint16_t atomic_inc_val;
     uint16_t atomic_inc_wrap;
     uint32_t dst_address;
@@ -250,9 +248,7 @@ struct NocUnicastWriteAtomicIncFields {
 template <typename T>
 void setup_2d_unicast_route(
     uint32_t packet_header_address, eth_chan_directions outgoing_direction, const ChipUnicastFields2D& unicast_fields) {
-    static_assert(
-        std::is_same_v<T, MeshPacketHeader> || std::is_same_v<T, LowLatencyMeshPacketHeader>,
-        "T must be MeshPacketHeader or LowLatencyMeshPacketHeader");
+    // Template constraint: T must be MeshPacketHeader or LowLatencyMeshPacketHeader
     fabric_set_unicast_route(
         (T*)packet_header_address,
         outgoing_direction,
@@ -264,9 +260,7 @@ void setup_2d_unicast_route(
 
 template <typename T>
 void setup_2d_mcast_route(uint32_t packet_header_address, const ChipMulticastFields2D& mcast_fields) {
-    static_assert(
-        std::is_same_v<T, MeshPacketHeader> || std::is_same_v<T, LowLatencyMeshPacketHeader>,
-        "T must be MeshPacketHeader or LowLatencyMeshPacketHeader");
+    // Template constraint: T must be MeshPacketHeader or LowLatencyMeshPacketHeader
     fabric_set_mcast_route(
         (T*)packet_header_address,
         mcast_fields.dst_device_id,
@@ -334,8 +328,8 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, false, USE_DYNAMIC_ROUT
         volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
         WorkerToFabricEdmSender* fabric_connection_handle) {
         const auto mcast_fields = ChipMulticastFields1D::build_from_args(arg_idx);
-        packet_header->to_chip_multicast(
-            MulticastRoutingCommandHeader{mcast_fields.mcast_start_hops, static_cast<uint8_t>(mcast_fields.num_hops)});
+        packet_header->to_chip_multicast(MulticastRoutingCommandHeader{
+            static_cast<uint8_t>(mcast_fields.mcast_start_hops), static_cast<uint8_t>(mcast_fields.num_hops)});
     }
 };
 
@@ -356,141 +350,36 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, true, USE_DYNAMIC_ROUTI
     }
 };
 
-/**
- * NOC Send Type handlers - specialized template classes for different NoC operations.
- * Each specialization handles:
- * - Parsing arguments from runtime args
- * - Setting up packet headers
- * - Creating appropriate buffers
- * - Updating headers for subsequent packets
- */
-template <NocSendType noc_type>
-struct NocSendTypeHandler {
-    using FieldType = void;  // Will be specialized
-    static FieldType parse_and_setup(
-        size_t& arg_idx,
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-        PayloadBuffer*& payload_buffer,
-        uint32_t payload_buffer_address,
-        uint32_t payload_buffer_size) {
-        return FieldType{};
-    }
+// Forward declaration for NOC operation function pointer types
+struct SenderKernelTrafficConfig;
+
+namespace NocOperationTypes {
+using ParseSetupFunc = void (*)(SenderKernelTrafficConfig*, size_t&, volatile tt_l1_ptr PACKET_HEADER_TYPE*);
+using UpdateHeaderFunc = void (*)(SenderKernelTrafficConfig*);
+
+struct Operations {
+    ParseSetupFunc parse_and_setup;
+    UpdateHeaderFunc update_header;
+};
+}  // namespace NocOperationTypes
+
+// NOC Operation Class Declarations (implementations after SenderKernelTrafficConfig)
+struct NocWriteSenderOperations {
+    static void parse_and_setup_impl(
+        SenderKernelTrafficConfig* config, size_t& arg_idx, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header);
+    static void update_header_impl(SenderKernelTrafficConfig* config);
 };
 
-// NOC_UNICAST_WRITE specialization
-template <>
-struct NocSendTypeHandler<NocSendType::NOC_UNICAST_WRITE> {
-    using FieldType = NocUnicastWriteFields;
-
-    static FieldType parse_and_setup(
-        size_t& arg_idx,
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-        PayloadBuffer*& payload_buffer,
-        uint32_t payload_buffer_address,
-        uint32_t payload_buffer_size) {
-        // Parse fields
-        auto fields = FieldType::build_from_args<true>(arg_idx);
-
-        payload_buffer = new PayloadBuffer(payload_buffer_address, payload_buffer_size, fields.payload_size_bytes);
-
-        uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
-        packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_addr}, fields.payload_size_bytes);
-
-        return fields;
-    }
-
-    static void update_header(
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, const FieldType& fields, PayloadBuffer* payload_buffer) {
-        // Calculate destination address offset based on buffer position
-        uint32_t buffer_offset = payload_buffer->current_address() - payload_buffer->base_address();
-        uint32_t dest_address = fields.dst_address + buffer_offset;
-        uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, dest_address);
-        packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_addr}, fields.payload_size_bytes);
-    }
+struct NocAtomicSenderOperations {
+    static void parse_and_setup_impl(
+        SenderKernelTrafficConfig* config, size_t& arg_idx, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header);
+    static void update_header_impl(SenderKernelTrafficConfig* config);
 };
 
-// NOC_UNICAST_ATOMIC_INC specialization
-template <>
-struct NocSendTypeHandler<NocSendType::NOC_UNICAST_ATOMIC_INC> {
-    using FieldType = NocUnicastAtomicIncFields;
-
-    static FieldType parse_and_setup(
-        size_t& arg_idx,
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-        PayloadBuffer*& payload_buffer,
-        uint32_t payload_buffer_address,
-        uint32_t payload_buffer_size) {
-        // Parse fields
-        auto fields = FieldType::build_from_args<true>(arg_idx);
-
-        // No buffer needed for atomic operations
-        payload_buffer = nullptr;
-
-        // Setup header
-        uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
-        packet_header->to_noc_unicast_atomic_inc(
-            NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, fields.atomic_inc_wrap});
-
-        return fields;
-    }
-
-    static void update_header(
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, const FieldType& fields, PayloadBuffer* payload_buffer) {
-        // No-op - atomic operations use fixed addresses
-    }
-};
-
-// NOC_FUSED_UNICAST_ATOMIC_INC specialization
-template <>
-struct NocSendTypeHandler<NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC> {
-    using FieldType = NocUnicastWriteAtomicIncFields;
-
-    static FieldType parse_and_setup(
-        size_t& arg_idx,
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-        PayloadBuffer*& payload_buffer,
-        uint32_t payload_buffer_address,
-        uint32_t payload_buffer_size) {
-        // Parse fields
-        auto fields = FieldType::build_from_args<true>(arg_idx);
-
-        payload_buffer =
-            new PayloadBuffer(payload_buffer_address, payload_buffer_size, fields.write_fields.payload_size_bytes);
-
-        // Setup header
-        uint64_t write_noc_addr =
-            get_noc_addr_helper(fields.write_fields.dst_noc_encoding, fields.write_fields.dst_address);
-        uint64_t atomic_noc_addr =
-            get_noc_addr_helper(fields.atomic_inc_fields.dst_noc_encoding, fields.atomic_inc_fields.dst_address);
-
-        packet_header->to_noc_fused_unicast_write_atomic_inc(
-            NocUnicastAtomicIncFusedCommandHeader{
-                write_noc_addr,
-                atomic_noc_addr,
-                fields.atomic_inc_fields.atomic_inc_val,
-                fields.atomic_inc_fields.atomic_inc_wrap},
-            fields.write_fields.payload_size_bytes);
-
-        return fields;
-    }
-
-    static void update_header(
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, const FieldType& fields, PayloadBuffer* payload_buffer) {
-        // Calculate write destination address offset based on buffer position
-        uint32_t buffer_offset = payload_buffer->current_address() - payload_buffer->base_address();
-        uint32_t write_dest_address = fields.write_fields.dst_address + buffer_offset;
-        uint64_t write_noc_addr = get_noc_addr_helper(fields.write_fields.dst_noc_encoding, write_dest_address);
-        uint64_t atomic_noc_addr =
-            get_noc_addr_helper(fields.atomic_inc_fields.dst_noc_encoding, fields.atomic_inc_fields.dst_address);
-
-        packet_header->to_noc_fused_unicast_write_atomic_inc(
-            NocUnicastAtomicIncFusedCommandHeader{
-                write_noc_addr,
-                atomic_noc_addr,
-                fields.atomic_inc_fields.atomic_inc_val,
-                fields.atomic_inc_fields.atomic_inc_wrap},
-            fields.write_fields.payload_size_bytes);
-    }
+struct NocFusedSenderOperations {
+    static void parse_and_setup_impl(
+        SenderKernelTrafficConfig* config, size_t& arg_idx, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header);
+    static void update_header_impl(SenderKernelTrafficConfig* config);
 };
 
 struct SenderKernelTrafficConfig {
@@ -506,7 +395,11 @@ struct SenderKernelTrafficConfig {
         payload_buffer_(nullptr),
         payload_buffer_address_(payload_buffer_address),
         payload_buffer_size_(payload_buffer_size) {
-        this->packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
+        packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
+
+        // Initialize function pointers to null (will be set in parse_and_setup_noc_send_type)
+        noc_ops_.parse_and_setup = nullptr;
+        noc_ops_.update_header = nullptr;
     }
 
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
@@ -525,63 +418,68 @@ struct SenderKernelTrafficConfig {
     }
 
     void parse_and_setup_noc_send_type(size_t& arg_idx) {
-        noc_send_type_ = static_cast<NocSendType>(get_arg_val<uint32_t>(arg_idx++));
+        uint32_t noc_type_raw = get_arg_val<uint32_t>(arg_idx++);
+        noc_send_type_ = static_cast<NocSendType>(noc_type_raw);
 
-        if (noc_send_type_ == NocSendType::NOC_UNICAST_WRITE) {
-            auto fields = NocSendTypeHandler<NocSendType::NOC_UNICAST_WRITE>::parse_and_setup(
-                arg_idx, packet_header, payload_buffer_, payload_buffer_address_, payload_buffer_size_);
-            noc_fields_.write_fields = fields;
-        } else if (noc_send_type_ == NocSendType::NOC_UNICAST_ATOMIC_INC) {
-            auto fields = NocSendTypeHandler<NocSendType::NOC_UNICAST_ATOMIC_INC>::parse_and_setup(
-                arg_idx, packet_header, payload_buffer_, payload_buffer_address_, payload_buffer_size_);
-            noc_fields_.atomic_inc_fields = fields;
-        } else if (noc_send_type_ == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
-            auto fields = NocSendTypeHandler<NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>::parse_and_setup(
-                arg_idx, packet_header, payload_buffer_, payload_buffer_address_, payload_buffer_size_);
-            noc_fields_.write_atomic_inc_fields = fields;
-        } else {
-            ASSERT(false);
+        // Validate NOC send type and set up operations
+        switch (noc_send_type_) {
+            case NocSendType::NOC_UNICAST_WRITE:
+                noc_ops_.parse_and_setup = NocWriteSenderOperations::parse_and_setup_impl;
+                noc_ops_.update_header = NocWriteSenderOperations::update_header_impl;
+                break;
+            case NocSendType::NOC_UNICAST_ATOMIC_INC:
+                noc_ops_.parse_and_setup = NocAtomicSenderOperations::parse_and_setup_impl;
+                noc_ops_.update_header = NocAtomicSenderOperations::update_header_impl;
+                break;
+            case NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC:
+                noc_ops_.parse_and_setup = NocFusedSenderOperations::parse_and_setup_impl;
+                noc_ops_.update_header = NocFusedSenderOperations::update_header_impl;
+                break;
+            default: ASSERT(false && "Invalid NOC send type"); break;
         }
 
-        this->payload_size_bytes = this->packet_header->get_payload_size_including_header();
+        ASSERT(noc_ops_.parse_and_setup != nullptr);
+        ASSERT(noc_ops_.update_header != nullptr);
+
+        noc_ops_.parse_and_setup(this, arg_idx, packet_header);
     }
 
-    bool has_packets_to_send() const { return this->num_packets_processed < this->metadata.num_packets; }
+    bool has_packets_to_send() const { return num_packets_processed < metadata.num_packets; }
 
     template <bool BENCHMARK_MODE>
     void send_packets() {
         uint32_t num_packets_to_send = 1;
         if constexpr (BENCHMARK_MODE) {
-            num_packets_to_send = this->metadata.num_packets;
+            num_packets_to_send = metadata.num_packets;
         }
 
         uint64_t start_timestamp = get_timestamp();
         for (uint32_t i = 0; i < num_packets_to_send; i++) {
-            this->fabric_connection_handle->wait_for_empty_write_slot();
+            fabric_connection_handle->wait_for_empty_write_slot();
 
             if constexpr (!BENCHMARK_MODE) {
-                if (this->payload_size_bytes > 0 && payload_buffer_) {
-                    payload_buffer_->fill_data(this->metadata.seed);
+                if (payload_size_bytes > 0 && payload_buffer_) {
+                    payload_buffer_->fill_data(metadata.seed);
 
-                    this->fabric_connection_handle->send_payload_without_header_non_blocking_from_address(
-                        payload_buffer_->current_address(), this->payload_size_bytes);
+                    fabric_connection_handle->send_payload_without_header_non_blocking_from_address(
+                        payload_buffer_->current_address(), payload_size_bytes);
                 }
             }
 
-            this->fabric_connection_handle->send_payload_flush_non_blocking_from_address(
-                (uint32_t)this->packet_header, sizeof(PACKET_HEADER_TYPE));
+            fabric_connection_handle->send_payload_flush_non_blocking_from_address(
+                (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 
             if constexpr (!BENCHMARK_MODE) {
-                if (this->payload_size_bytes > 0 && payload_buffer_) {
+                if (payload_size_bytes > 0 && payload_buffer_) {
                     payload_buffer_->advance();
                     update_header_for_next_packet();
                 }
-                this->metadata.seed = prng_next(this->metadata.seed);
+                metadata.seed = prng_next(metadata.seed);
             }
         }
 
-        this->elapsed_cycles += get_timestamp() - start_timestamp;
-        this->num_packets_processed += num_packets_to_send;
+        elapsed_cycles += get_timestamp() - start_timestamp;
+        num_packets_processed += num_packets_to_send;
     }
 
     void advance_dst_address() {
@@ -600,16 +498,16 @@ struct SenderKernelTrafficConfig {
 
     bool has_wrapped() const { return payload_buffer_ ? payload_buffer_->has_wrapped() : false; }
 
+    // Friend classes for operation implementations
+    friend struct NocWriteSenderOperations;
+    friend struct NocAtomicSenderOperations;
+    friend struct NocFusedSenderOperations;
+
 private:
     void update_header_for_next_packet() {
-        if (noc_send_type_ == NocSendType::NOC_UNICAST_WRITE && payload_buffer_) {
-            NocSendTypeHandler<NocSendType::NOC_UNICAST_WRITE>::update_header(
-                packet_header, noc_fields_.write_fields, payload_buffer_);
-        } else if (noc_send_type_ == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC && payload_buffer_) {
-            NocSendTypeHandler<NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>::update_header(
-                packet_header, noc_fields_.write_atomic_inc_fields, payload_buffer_);
+        if (payload_buffer_) {
+            noc_ops_.update_header(this);
         }
-        // NOC_UNICAST_ATOMIC_INC: No update needed - uses fixed address
     }
 
 public:
@@ -622,19 +520,109 @@ public:
 
 private:
     NocSendType noc_send_type_;
+    NocOperationTypes::Operations noc_ops_;
 
     union NocFields {
         NocUnicastWriteFields write_fields;
         NocUnicastAtomicIncFields atomic_inc_fields;
         NocUnicastWriteAtomicIncFields write_atomic_inc_fields;
+
+        // Constructor needed because member types have user-defined constructors
+        NocFields() {}  // Will be properly initialized later based on NOC type
     } noc_fields_;
 
+    alignas(PayloadBuffer) std::array<char, sizeof(PayloadBuffer)> payload_buffer_storage;
     PayloadBuffer* payload_buffer_;
     uint32_t payload_buffer_address_;
     uint32_t payload_buffer_size_;
 };
 
+// NOC Operation Implementations (now that SenderKernelTrafficConfig is fully defined)
+inline void NocWriteSenderOperations::parse_and_setup_impl(
+    SenderKernelTrafficConfig* config, size_t& arg_idx, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
+    auto fields = NocUnicastWriteFields::build_from_args<true>(arg_idx);
+
+    config->payload_buffer_ = new (config->payload_buffer_storage.data())
+        PayloadBuffer(config->payload_buffer_address_, config->payload_buffer_size_, fields.payload_size_bytes);
+
+    uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
+    packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_addr}, fields.payload_size_bytes);
+
+    config->noc_fields_.write_fields = fields;
+    config->payload_size_bytes = fields.payload_size_bytes;
+}
+
+inline void NocWriteSenderOperations::update_header_impl(SenderKernelTrafficConfig* config) {
+    const auto& fields = config->noc_fields_.write_fields;
+    uint32_t buffer_offset = config->payload_buffer_->current_address() - config->payload_buffer_->base_address();
+    uint32_t dest_address = fields.dst_address + buffer_offset;
+    uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, dest_address);
+    config->packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_addr}, fields.payload_size_bytes);
+}
+
+inline void NocAtomicSenderOperations::parse_and_setup_impl(
+    SenderKernelTrafficConfig* config, size_t& arg_idx, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
+    auto fields = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
+
+    // No buffer needed for atomic operations
+    config->payload_buffer_ = nullptr;
+
+    uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
+    packet_header->to_noc_unicast_atomic_inc(
+        NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, fields.atomic_inc_wrap});
+
+    config->noc_fields_.atomic_inc_fields = fields;
+    config->payload_size_bytes = 0;
+}
+
+inline void NocAtomicSenderOperations::update_header_impl(SenderKernelTrafficConfig* config) {
+    // No-op - atomic operations use fixed addresses
+}
+
+inline void NocFusedSenderOperations::parse_and_setup_impl(
+    SenderKernelTrafficConfig* config, size_t& arg_idx, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
+    auto fields = NocUnicastWriteAtomicIncFields::build_from_args<true>(arg_idx);
+
+    config->payload_buffer_ = new (config->payload_buffer_storage.data()) PayloadBuffer(
+        config->payload_buffer_address_, config->payload_buffer_size_, fields.write_fields.payload_size_bytes);
+
+    uint64_t write_noc_addr =
+        get_noc_addr_helper(fields.write_fields.dst_noc_encoding, fields.write_fields.dst_address);
+    uint64_t atomic_noc_addr =
+        get_noc_addr_helper(fields.atomic_inc_fields.dst_noc_encoding, fields.atomic_inc_fields.dst_address);
+
+    packet_header->to_noc_fused_unicast_write_atomic_inc(
+        NocUnicastAtomicIncFusedCommandHeader{
+            write_noc_addr,
+            atomic_noc_addr,
+            fields.atomic_inc_fields.atomic_inc_val,
+            fields.atomic_inc_fields.atomic_inc_wrap},
+        fields.write_fields.payload_size_bytes);
+
+    config->noc_fields_.write_atomic_inc_fields = fields;
+    config->payload_size_bytes = fields.write_fields.payload_size_bytes;
+}
+
+inline void NocFusedSenderOperations::update_header_impl(SenderKernelTrafficConfig* config) {
+    const auto& fields = config->noc_fields_.write_atomic_inc_fields;
+    uint32_t buffer_offset = config->payload_buffer_->current_address() - config->payload_buffer_->base_address();
+    uint32_t write_dest_address = fields.write_fields.dst_address + buffer_offset;
+    uint64_t write_noc_addr = get_noc_addr_helper(fields.write_fields.dst_noc_encoding, write_dest_address);
+    uint64_t atomic_noc_addr =
+        get_noc_addr_helper(fields.atomic_inc_fields.dst_noc_encoding, fields.atomic_inc_fields.dst_address);
+
+    config->packet_header->to_noc_fused_unicast_write_atomic_inc(
+        NocUnicastAtomicIncFusedCommandHeader{
+            write_noc_addr,
+            atomic_noc_addr,
+            fields.atomic_inc_fields.atomic_inc_val,
+            fields.atomic_inc_fields.atomic_inc_wrap},
+        fields.write_fields.payload_size_bytes);
+}
+
 struct SenderKernelMemoryAllocator {
+    SenderKernelMemoryAllocator() {}
+
     static SenderKernelMemoryAllocator build_from_args(size_t& arg_idx) { return SenderKernelMemoryAllocator(arg_idx); }
 
     uint32_t get_packet_header_address() {
@@ -647,7 +635,8 @@ struct SenderKernelMemoryAllocator {
     uint32_t get_payload_buffer_address(uint32_t size) {
         uint32_t addr = curr_payload_buffer_address_;
         ASSERT(addr + size < highest_usable_address_);
-        // TODO: make sure the addresses follow noc alignment
+
+        // TODO: ensure noc alignment
         curr_payload_buffer_address_ += size;
         return addr;
     }
@@ -684,31 +673,51 @@ struct SenderKernelConfig {
 
     void open_connections() {
         for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
-            fabric_connections[i].open();
+            fabric_connections()[i].open();
         }
     }
 
     void close_connections() {
         for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
-            fabric_connections[i].close();
+            fabric_connections()[i].close();
         }
     }
 
     SenderKernelMemoryAllocator memory_allocator;
-    std::array<WorkerToFabricEdmSender, NUM_FABRIC_CONNECTIONS> fabric_connections;
+    alignas(WorkerToFabricEdmSender)
+        std::array<char, NUM_FABRIC_CONNECTIONS * sizeof(WorkerToFabricEdmSender)> fabric_connections_storage;
     std::array<uint8_t, NUM_TRAFFIC_CONFIGS> traffic_config_to_fabric_connection_map;
-    std::array<SenderKernelTrafficConfig*, NUM_TRAFFIC_CONFIGS> traffic_configs;
+    alignas(SenderKernelTrafficConfig)
+        std::array<char, NUM_TRAFFIC_CONFIGS * sizeof(SenderKernelTrafficConfig)> traffic_configs_storage;
+    std::array<SenderKernelTrafficConfig*, NUM_TRAFFIC_CONFIGS> traffic_config_ptrs;
+
+    // Helper accessors
+    WorkerToFabricEdmSender* fabric_connections() {
+        return reinterpret_cast<WorkerToFabricEdmSender*>(fabric_connections_storage.data());
+    }
+    SenderKernelTrafficConfig* traffic_configs(uint8_t idx) {
+        return reinterpret_cast<SenderKernelTrafficConfig*>(
+            traffic_configs_storage.data() + idx * sizeof(SenderKernelTrafficConfig));
+    }
+    SenderKernelTrafficConfig* get_traffic_config(uint8_t idx) { return traffic_config_ptrs[idx]; }
 
 private:
     SenderKernelConfig(size_t& arg_idx) {
         this->memory_allocator = SenderKernelMemoryAllocator::build_from_args(arg_idx);
 
+        // Initialize fabric connections using placement new
         for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
-            fabric_connections[i] = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+            auto connection = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+            new (&fabric_connections()[i]) WorkerToFabricEdmSender(connection);
         }
 
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             traffic_config_to_fabric_connection_map[i] = get_arg_val<uint32_t>(arg_idx++);
+        }
+
+        // Initialize traffic config pointers
+        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+            traffic_config_ptrs[i] = nullptr;
         }
 
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
@@ -716,20 +725,24 @@ private:
             const auto fabric_connection_idx = traffic_config_to_fabric_connection_map[i];
             ASSERT(fabric_connection_idx < NUM_FABRIC_CONNECTIONS);
 
-            uint32_t packet_header_address = this->memory_map.get_packet_header_address();
+            uint32_t packet_header_address = this->memory_allocator.get_packet_header_address();
             uint32_t payload_buffer_size = metadata.payload_buffer_size;
-            uint32_t payload_buffer_address = this->memory_map.get_payload_buffer_address(payload_buffer_size);
+            uint32_t payload_buffer_address = this->memory_allocator.get_payload_buffer_address(payload_buffer_size);
 
-            traffic_configs[i] = new SenderKernelTrafficConfig(
-                &fabric_connections[fabric_connection_idx],
+            // Get pointer to pre-allocated storage and initialize with placement new
+            SenderKernelTrafficConfig* config_ptr = traffic_configs(i);
+            traffic_config_ptrs[i] = config_ptr;
+
+            new (config_ptr) SenderKernelTrafficConfig(
+                &fabric_connections()[fabric_connection_idx],
                 metadata,
                 packet_header_address,
                 payload_buffer_address,
                 payload_buffer_size);
 
-            traffic_configs[i]->template parse_and_setup_chip_send_type<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
+            traffic_config_ptrs[i]->template parse_and_setup_chip_send_type<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
                 arg_idx, packet_header_address);
-            traffic_configs[i]->parse_and_setup_noc_send_type(arg_idx);
+            traffic_config_ptrs[i]->parse_and_setup_noc_send_type(arg_idx);
         }
     };
 };
@@ -768,17 +781,21 @@ struct TrafficValidationConfigBase {
         UpdateFunc update;
     };
 
-    TrafficValidationConfigBase(const ReceiverTrafficConfigMetadata& metadata, const ValidationOps& ops) :
-        metadata(metadata), ops(ops) {}
+    TrafficValidationConfigBase(const ReceiverTrafficConfigMetadata& metadata) : metadata(metadata) {
+        // Function pointers will be set by derived classes
+        ops.poll = nullptr;
+        ops.validate = nullptr;
+        ops.update = nullptr;
+    }
 
-    bool has_packets_to_validate() const { return this->num_packets_processed < this->metadata.num_packets; }
+    bool has_packets_to_validate() const { return num_packets_processed < metadata.num_packets; }
 
     bool poll() { return ops.poll(this); }
 
     bool validate() { return ops.validate(this); }
 
     void advance() {
-        this->num_packets_processed++;
+        num_packets_processed++;
         ops.update(this);
     }
 
@@ -790,13 +807,18 @@ struct TrafficValidationConfigBase {
 struct AtomicIncValidationConfig : public TrafficValidationConfigBase {
     AtomicIncValidationConfig(
         const NocUnicastAtomicIncFields& atomic_inc_fields, const ReceiverTrafficConfigMetadata& metadata) :
-        TrafficValidationConfigBase(metadata, {poll_impl, validate_impl, update_impl}) {
-        this->poll_address = reinterpret_cast<tt_l1_ptr uint32_t*>(atomic_inc_fields.dst_address);
-        this->value_step_size = atomic_inc_fields.atomic_inc_val;
-        this->wrap_boundary = atomic_inc_fields.atomic_inc_wrap;
+        TrafficValidationConfigBase(metadata) {
+        // Set up function pointers
+        ops.poll = poll_impl;
+        ops.validate = validate_impl;
+        ops.update = update_impl;
+
+        poll_address = reinterpret_cast<tt_l1_ptr uint32_t*>(atomic_inc_fields.dst_address);
+        value_step_size = atomic_inc_fields.atomic_inc_val;
+        wrap_boundary = atomic_inc_fields.atomic_inc_wrap;
 
         // set the initial expected value equal to the step size
-        this->expected_value = this->value_step_size;
+        expected_value = value_step_size;
     }
 
     static bool poll_impl(TrafficValidationConfigBase* base_config) {
@@ -826,9 +848,14 @@ struct AtomicIncValidationConfig : public TrafficValidationConfigBase {
 
 struct WriteValidationConfig : public TrafficValidationConfigBase {
     WriteValidationConfig(const NocUnicastWriteFields& write_fields, const ReceiverTrafficConfigMetadata& metadata) :
-        TrafficValidationConfigBase(metadata, {poll_impl, validate_impl, update_impl}) {
-        payload_buffer_ =
-            new PayloadBuffer(write_fields.dst_address, metadata.payload_buffer_size, write_fields.payload_size_bytes);
+        TrafficValidationConfigBase(metadata) {
+        // Set up function pointers
+        ops.poll = poll_impl;
+        ops.validate = validate_impl;
+        ops.update = update_impl;
+
+        payload_buffer_ = new (payload_buffer_storage.data())
+            PayloadBuffer(write_fields.dst_address, metadata.payload_buffer_size, write_fields.payload_size_bytes);
     }
 
     static bool poll_impl(TrafficValidationConfigBase* base_config) {
@@ -847,23 +874,29 @@ struct WriteValidationConfig : public TrafficValidationConfigBase {
         config->payload_buffer_->advance();
     }
 
+    alignas(PayloadBuffer) std::array<char, sizeof(PayloadBuffer)> payload_buffer_storage;
     PayloadBuffer* payload_buffer_;
 };
 
 struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
     WriteAtomicIncValidationConfig(
         const NocUnicastWriteAtomicIncFields& write_atomic_inc_fields, const ReceiverTrafficConfigMetadata& metadata) :
-        TrafficValidationConfigBase(metadata, {poll_impl, validate_impl, update_impl}) {
+        TrafficValidationConfigBase(metadata) {
+        // Set up function pointers
+        ops.poll = poll_impl;
+        ops.validate = validate_impl;
+        ops.update = update_impl;
+
         const auto& write_fields = write_atomic_inc_fields.write_fields;
         const auto& atomic_fields = write_atomic_inc_fields.atomic_inc_fields;
 
-        payload_buffer_ =
-            new PayloadBuffer(write_fields.dst_address, metadata.payload_buffer_size, write_fields.payload_size_bytes);
+        payload_buffer_ = new (payload_buffer_storage.data())
+            PayloadBuffer(write_fields.dst_address, metadata.payload_buffer_size, write_fields.payload_size_bytes);
 
-        this->atomic_inc_address = reinterpret_cast<tt_l1_ptr uint32_t*>(atomic_fields.dst_address);
-        this->atomic_inc_val = atomic_fields.atomic_inc_val;
-        this->atomic_inc_wrap = atomic_fields.atomic_inc_wrap;
-        this->expected_atomic_value = atomic_inc_val;
+        atomic_inc_address = reinterpret_cast<tt_l1_ptr uint32_t*>(atomic_fields.dst_address);
+        atomic_inc_val = atomic_fields.atomic_inc_val;
+        atomic_inc_wrap = atomic_fields.atomic_inc_wrap;
+        expected_atomic_value = atomic_inc_val;
     }
 
     static bool poll_impl(TrafficValidationConfigBase* base_config) {
@@ -897,6 +930,7 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
         config->payload_buffer_->advance();
     }
 
+    alignas(PayloadBuffer) std::array<char, sizeof(PayloadBuffer)> payload_buffer_storage;
     PayloadBuffer* payload_buffer_;
     volatile tt_l1_ptr uint32_t* atomic_inc_address;
     uint32_t atomic_inc_val;
@@ -908,6 +942,8 @@ template <uint8_t NUM_TRAFFIC_CONFIGS>
 struct ReceiverKernelConfig {
     static ReceiverKernelConfig build_from_args(size_t& arg_idx) { return ReceiverKernelConfig(arg_idx); }
 
+    alignas(TrafficValidationConfigBase)
+        std::array<char, NUM_TRAFFIC_CONFIGS * sizeof(WriteAtomicIncValidationConfig)> validation_configs_storage;
     std::array<TrafficValidationConfigBase*, NUM_TRAFFIC_CONFIGS> traffic_configs;
 
 private:
@@ -920,15 +956,19 @@ private:
             const auto metadata = ReceiverTrafficConfigMetadata::build_from_args(arg_idx);
             NocSendType noc_send_type = static_cast<NocSendType>(get_arg_val<uint32_t>(arg_idx++));
 
+            // Get pointer to pre-allocated storage for this config
+            char* config_storage = validation_configs_storage.data() + i * sizeof(WriteAtomicIncValidationConfig);
+
             if (noc_send_type == NocSendType::NOC_UNICAST_WRITE) {
                 const auto write_fields = NocUnicastWriteFields::build_from_args<false>(arg_idx);
-                this->traffic_configs[i] = new WriteValidationConfig(write_fields, metadata);
+                traffic_configs[i] = new (config_storage) WriteValidationConfig(write_fields, metadata);
             } else if (noc_send_type == NocSendType::NOC_UNICAST_ATOMIC_INC) {
                 const auto atomic_inc_fields = NocUnicastAtomicIncFields::build_from_args<false>(arg_idx);
-                this->traffic_configs[i] = new AtomicIncValidationConfig(atomic_inc_fields, metadata);
+                traffic_configs[i] = new (config_storage) AtomicIncValidationConfig(atomic_inc_fields, metadata);
             } else if (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
                 const auto write_atomic_inc_fields = NocUnicastWriteAtomicIncFields::build_from_args<false>(arg_idx);
-                this->traffic_configs[i] = new WriteAtomicIncValidationConfig(write_atomic_inc_fields, metadata);
+                traffic_configs[i] =
+                    new (config_storage) WriteAtomicIncValidationConfig(write_atomic_inc_fields, metadata);
             } else {
                 ASSERT(false);
             }

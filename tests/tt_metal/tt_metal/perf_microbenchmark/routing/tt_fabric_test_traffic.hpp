@@ -11,42 +11,39 @@
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
-struct FieldsBase {
-    virtual std::vector<uint32_t> get_args() const = 0;
-};
+struct SenderMetadataFields {
+    SenderMetadataFields(uint32_t num_packets, uint32_t seed, uint32_t payload_buffer_size) :
+        num_packets(num_packets), seed(seed), payload_buffer_size(payload_buffer_size) {}
 
-struct SenderMetadataFields : public FieldsBase {
-    SenderMetadataFields(uint32_t outgoing_direction, uint32_t num_packets, uint32_t seed) :
-        outgoing_direction(outgoing_direction), num_packets(num_packets), seed(seed) {}
-
-    std::vector<uint32_t> get_args() const override {
-        std::vector<uint32_t> args = {outgoing_direction, num_packets, seed};
-        return args;
-    }
-
-    uint32_t outgoing_direction;
-    uint32_t num_packets;
-    uint32_t seed;
-};
-
-struct ReceiverMetadataFields : public FieldsBase {
-    ReceiverMetadataFields(uint32_t num_packets, uint32_t seed, uint32_t sender_id) :
-        num_packets(num_packets), seed(seed), sender_id(sender_id) {}
-
-    std::vector<uint32_t> get_args() const override {
-        std::vector<uint32_t> args = {num_packets, seed};
+    std::vector<uint32_t> get_args() const {
+        std::vector<uint32_t> args = {num_packets, seed, payload_buffer_size};
         return args;
     }
 
     uint32_t num_packets;
     uint32_t seed;
-    uint32_t sender_id;
+    uint32_t payload_buffer_size;
 };
 
-struct ChipUnicastFields1D : public FieldsBase {
+struct ReceiverMetadataFields {
+    // TODO: add sender id to these fields
+    ReceiverMetadataFields(uint32_t num_packets, uint32_t seed, uint32_t payload_buffer_size) :
+        num_packets(num_packets), seed(seed), payload_buffer_size(payload_buffer_size) {}
+
+    std::vector<uint32_t> get_args() const {
+        std::vector<uint32_t> args = {num_packets, seed, payload_buffer_size};
+        return args;
+    }
+
+    uint32_t num_packets;
+    uint32_t seed;
+    uint32_t payload_buffer_size;
+};
+
+struct ChipUnicastFields1D {
     ChipUnicastFields1D(uint32_t num_hops) : num_hops(num_hops) {}
 
-    std::vector<uint32_t> get_args() const override {
+    std::vector<uint32_t> get_args() const {
         std::vector<uint32_t> args = {num_hops};
         return args;
     }
@@ -54,11 +51,11 @@ struct ChipUnicastFields1D : public FieldsBase {
     uint32_t num_hops;
 };
 
-struct ChipUnicastFields2D : public FieldsBase {
+struct ChipUnicastFields2D {
     ChipUnicastFields2D(uint16_t src_device_id, uint16_t dst_device_id, uint16_t dst_mesh_id, uint16_t ew_dim) :
         src_device_id(src_device_id), dst_device_id(dst_device_id), dst_mesh_id(dst_mesh_id), ew_dim(ew_dim) {}
 
-    std::vector<uint32_t> get_args() const override {
+    std::vector<uint32_t> get_args() const {
         std::vector<uint32_t> args = {src_device_id, dst_device_id, dst_mesh_id, ew_dim};
         return args;
     }
@@ -69,26 +66,23 @@ struct ChipUnicastFields2D : public FieldsBase {
     uint16_t ew_dim;
 };
 
-struct ChipMulticastFields1D : public FieldsBase {
-    static constexpr default_mcast_start_hops = 1;
+struct ChipMulticastFields1D {
+    static constexpr uint32_t default_mcast_start_hops = 1;
 
     ChipMulticastFields1D(uint32_t num_hops) : num_hops(num_hops) {}
 
     void set_mcast_start_hops(uint32_t value) { this->mcast_start_hops = value; }
 
-    std::vector<uint32_t> get_args() const override {
-        std::vector<uint32_t> args = { mcast_start_hops.value_or(default_mcast_start_hops);
-        num_hops
-    };
-    return args;
-}
+    std::vector<uint32_t> get_args() const {
+        std::vector<uint32_t> args = {mcast_start_hops.value_or(default_mcast_start_hops), num_hops};
+        return args;
+    }
 
-std::optional<uint32_t>
-    mcast_start_hops;
-uint32_t num_hops;
-};  // namespace fabric_tests
+    std::optional<uint32_t> mcast_start_hops;
+    uint32_t num_hops;
+};
 
-struct ChipMulticastFields2D : public FieldsBase {
+struct ChipMulticastFields2D {
     ChipMulticastFields2D(
         uint16_t dst_device_id, uint16_t dst_mesh_id, std::unordered_map<RoutingDirection, uint32_t> hops) :
         dst_device_id(dst_device_id), dst_mesh_id(dst_mesh_id) {
@@ -98,7 +92,7 @@ struct ChipMulticastFields2D : public FieldsBase {
         this->num_hops_w = hops[RoutingDirection::W];
     }
 
-    std::vector<uint32_t> get_args() const override {
+    std::vector<uint32_t> get_args() const {
         std::vector<uint32_t> args = {dst_device_id, dst_mesh_id, num_hops_n, num_hops_s, num_hops_e, num_hops_w};
         return args;
     }
@@ -111,23 +105,24 @@ struct ChipMulticastFields2D : public FieldsBase {
     uint16_t num_hops_w;
 };
 
-struct NocUnicastWriteFields : public FieldsBase {
+struct NocUnicastWriteFields {
+    NocUnicastWriteFields(
+        uint32_t payload_size_bytes, uint32_t dst_address, std::optional<uint32_t> dst_noc_encoding = std::nullopt) :
+        payload_size_bytes(payload_size_bytes), dst_address(dst_address), dst_noc_encoding(dst_noc_encoding) {}
+
     template <bool IS_SOURCE>
-    NocUnicastWriteFields(uint32_t payload_size_bytes, uint32_t dst_address, std::optional<uint32_t> dst_noc_encoding) :
-        payload_size_bytes(payload_size_bytes), dst_address(dst_address), dst_noc_encoding(dst_noc_encoding) {
+    std::vector<uint32_t> get_args() const {
         if constexpr (IS_SOURCE) {
             if (!this->dst_noc_encoding.has_value()) {
-                tt::log_fatal(tt::LogTest, "dst_noc_encoding must be set for source");
+                log_fatal(tt::LogTest, "dst_noc_encoding must be set for source");
                 throw std::runtime_error("Unexpected NocUnicastWriteFields");
             }
         }
-    }
-
-    std::vector<uint32_t> get_args() const override {
         std::vector<uint32_t> args = {payload_size_bytes, dst_address};
         if (dst_noc_encoding.has_value()) {
             args.push_back(dst_noc_encoding.value());
         }
+        return args;
     }
 
     uint32_t payload_size_bytes;
@@ -135,25 +130,24 @@ struct NocUnicastWriteFields : public FieldsBase {
     std::optional<uint32_t> dst_noc_encoding;
 };
 
-struct NocUnicastAtomicIncFields : public FieldsBase {
-    static constexpr default_atomic_inc_val = 1;
-    static constexpr default_atomic_inc_wrap = std::numeric_limits<uint16_t>::max();
+struct NocUnicastAtomicIncFields {
+    static constexpr uint32_t default_atomic_inc_val = 1;
+    static constexpr uint16_t default_atomic_inc_wrap = std::numeric_limits<uint16_t>::max();
 
-    template <bool IS_SOURCE>
-    NocUnicastAtomicIncFields(uint32_t dst_address, std::optional<uint32_t> dst_noc_encoding) :
-        dst_address(dst_address), dst_noc_encoding(dst_noc_encoding) {
-        if constexpr (IS_SOURCE) {
-            if (!this->dst_noc_encoding.has_value()) {
-                tt::log_fatal(tt::LogTest, "dst_noc_encoding must be set for source");
-                throw std::runtime_error("Unexpected NocUnicastAtomicIncFields");
-            }
-        }
-    }
+    NocUnicastAtomicIncFields(uint32_t dst_address, std::optional<uint32_t> dst_noc_encoding = std::nullopt) :
+        dst_address(dst_address), dst_noc_encoding(dst_noc_encoding) {}
 
     void set_atomic_inc_val(uint16_t value) { this->atomic_inc_val = value; }
     void set_atomic_inc_wrap(uint16_t value) { this->atomic_inc_wrap = value; }
 
-    std::vector<uint32_t> get_args() const override {
+    template <bool IS_SOURCE>
+    std::vector<uint32_t> get_args() const {
+        if constexpr (IS_SOURCE) {
+            if (!this->dst_noc_encoding.has_value()) {
+                log_fatal(tt::LogTest, "dst_noc_encoding must be set for source");
+                throw std::runtime_error("Unexpected NocUnicastAtomicIncFields");
+            }
+        }
         std::vector<uint32_t> args = {
             atomic_inc_val.value_or(default_atomic_inc_val),
             atomic_inc_wrap.value_or(default_atomic_inc_wrap),
@@ -161,6 +155,7 @@ struct NocUnicastAtomicIncFields : public FieldsBase {
         if (dst_noc_encoding.has_value()) {
             args.push_back(dst_noc_encoding.value());
         }
+        return args;
     }
 
     std::optional<uint16_t> atomic_inc_val;
@@ -169,14 +164,15 @@ struct NocUnicastAtomicIncFields : public FieldsBase {
     std::optional<uint32_t> dst_noc_encoding;
 };
 
-struct NocUnicastWriteAtomicIncFields : public FieldsBase {
+struct NocUnicastWriteAtomicIncFields {
     NocUnicastWriteAtomicIncFields(NocUnicastWriteFields write_fields, NocUnicastAtomicIncFields atomic_inc_fields) :
         write_fields(write_fields), atomic_inc_fields(atomic_inc_fields) {}
 
-    std::vector<uint32_t> get_args() const override {
+    template <bool IS_SOURCE>
+    std::vector<uint32_t> get_args() const {
         std::vector<uint32_t> args;
-        const auto write_args = write_fields.get_args();
-        const auto atomic_inc_args = atomic_inc_fields.get_args();
+        const auto write_args = write_fields.get_args<IS_SOURCE>();
+        const auto atomic_inc_args = atomic_inc_fields.get_args<IS_SOURCE>();
         args.insert(args.end(), write_args.begin(), write_args.end());
         args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
         return args;
@@ -221,8 +217,9 @@ struct TestTrafficSenderConfig {
     std::unordered_map<RoutingDirection, uint32_t> hops;
     CoreCoord dst_logical_core;
     size_t target_address;
+    uint32_t dst_noc_encoding;  // TODO: decide if we should keep it here or not
 
-    std::vector<uint32_t> get_args();
+    std::vector<uint32_t> get_args() const;
 };
 
 struct TestTrafficReceiverConfig {
@@ -230,29 +227,29 @@ struct TestTrafficReceiverConfig {
     uint32_t sender_id;
     size_t target_address;
 
-    std::vector<uint32_t> get_args();
+    std::vector<uint32_t> get_args() const;
 };
 
 inline void TestTrafficDataConfig::validate() const {
     // TODO remove these once converted to enum classes
     if (this->chip_send_type > ChipSendType::CHIP_SEND_TYPE_LAST) {
-        tt::log_fatal(tt::LogTest, "Unknown chip send type: {}", this->chip_send_type);
+        log_fatal(tt::LogTest, "Unknown chip send type: {}", this->chip_send_type);
         throw std::runtime_error("Unexpected traffic data config");
     }
     if (this->noc_send_type > NocSendType::NOC_SEND_TYPE_LAST) {
-        tt::log_fatal(tt::LogTest, "Unknown noc send type: {}", this->noc_send_type);
+        log_fatal(tt::LogTest, "Unknown noc send type: {}", this->noc_send_type);
         throw std::runtime_error("Unexpected traffic data config");
     }
 
     if (this->num_packets == 0) {
-        tt::log_fatal(tt::LogTest, "Number of packets should be greater than 0");
+        log_fatal(tt::LogTest, "Number of packets should be greater than 0");
         throw std::runtime_error("Unexpected traffic data config");
     }
 
     // TODO: get the max payload size
-    size_t max_payload_size_bytes = 0;
+    size_t max_payload_size_bytes = 4096;
     if (this->payload_size_bytes > max_payload_size_bytes) {
-        tt::log_fatal(
+        log_fatal(
             tt::LogTest,
             "Max allowed payload size is: {}, but got: {}",
             max_payload_size_bytes,
@@ -262,7 +259,7 @@ inline void TestTrafficDataConfig::validate() const {
 
     // payload size can only be 0 for NOC_UNICAST_ATOMIC_INC
     if (this->payload_size_bytes == 0 && this->noc_send_type != NocSendType::NOC_UNICAST_ATOMIC_INC) {
-        tt::log_fatal(tt::LogTest, "Payload size can only be 0 for NOC_UNICAST_ATOMIC_INC");
+        log_fatal(tt::LogTest, "Payload size can only be 0 for NOC_UNICAST_ATOMIC_INC");
         throw std::runtime_error("Unexpected traffic data config");
     }
 }
@@ -272,41 +269,41 @@ inline void TestTrafficConfig::validate() const {
 
     // validate only one of dst chip ids or hops present
     if (!this->dst_phys_chip_ids.has_value() && !this->hops.has_value()) {
-        tt::log_fatal(tt::LogTest, "One of dst phys chip ids or num hops should be present, none specified");
+        log_fatal(tt::LogTest, "One of dst phys chip ids or num hops should be present, none specified");
         throw std::runtime_error("Unexpected traffic config");
     } else if (this->dst_phys_chip_ids.has_value() && this->hops.has_value()) {
-        tt::log_fatal(tt::LogTest, "Only one of dst phys chip ids or num hops should be present, both specified");
+        log_fatal(tt::LogTest, "Only one of dst phys chip ids or num hops should be present, both specified");
         throw std::runtime_error("Unexpected traffic config");
     }
 
     // validate for mcast dst chip ids should not be present -> only for ucast
     if (this->data_config.chip_send_type == ChipSendType::CHIP_MULTICAST && this->dst_phys_chip_ids.has_value()) {
-        tt::log_fatal(tt::LogTest, "For multicast dst chip ids shouldnt be specified, only hops");
+        log_fatal(tt::LogTest, "For multicast dst chip ids shouldnt be specified, only hops");
         throw std::runtime_error("Unexpected traffic config");
     }
 }
 
-inline std::vector<uint32_t> TestTrafficSenderConfig::get_args() {
+inline std::vector<uint32_t> TestTrafficSenderConfig::get_args() const {
     // for now only expect hops in a single direction
     uint32_t hops = 0;
-    eth_chan_directions outgoing_direction;
-    for (const auto& [dir, hops_in_dir] : this->hops) {
+    for (const auto& [_, hops_in_dir] : this->hops) {
         if (hops_in_dir > 0) {
             hops = hops_in_dir;
-            eth_chan_directions = ;  // query the interface to get outgoing direction from routing direction
             break;
         }
     }
 
     if (hops == 0) {
-        tt::log_fatal(tt::LogTest, "Expected non-zero hops only in one direction for 1D");
+        log_fatal(tt::LogTest, "Expected non-zero hops only in one direction for 1D");
         throw std::runtime_error("Unexpected traffic config");
     }
 
     std::vector<uint32_t> args;
 
-    const auto metadata = SenderMetadataFields(
-        static_cast<uint32_t>(outgoing_direction), this->data_config.num_packets, this->data_config.seed);
+    // TODO: get the payload buffer size from the config
+    uint32_t payload_buffer_size = 0x10000;
+    const auto metadata =
+        SenderMetadataFields(this->data_config.num_packets, this->data_config.seed, payload_buffer_size);
     const auto metadata_args = metadata.get_args();
     args.insert(args.end(), metadata_args.begin(), metadata_args.end());
 
@@ -317,7 +314,7 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args() {
     args.push_back(this->data_config.chip_send_type);
 
     if (is_2d_fabric) {
-        tt::log_fatal(tt::LogTest, "2D not supported yet");
+        log_fatal(tt::LogTest, "2D not supported yet");
         throw std::runtime_error("Unexpected traffic config");
     } else {
         if (this->data_config.chip_send_type == ChipSendType::CHIP_UNICAST) {
@@ -325,7 +322,7 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args() {
             const auto chip_unicast_args = chip_unicast_fields.get_args();
             args.insert(args.end(), chip_unicast_args.begin(), chip_unicast_args.end());
         } else {
-            tt::log_fatal(tt::LogTest, "Other chip send types not supported yet");
+            log_fatal(tt::LogTest, "Other chip send types not supported yet");
             throw std::runtime_error("Unexpected traffic config");
         }
     }
@@ -334,24 +331,25 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args() {
     args.push_back(this->data_config.noc_send_type);
 
     if (this->data_config.noc_send_type == NocSendType::NOC_UNICAST_WRITE) {
-        uint32_t dst_noc_encoding = ;  // TODO: get this from the interface
         const auto unicast_write_fields =
-            NocUnicastWriteFields<true>(this->data_config.payload_size_bytes, this->target_address, dst_noc_encoding);
-        const auto unicast_write_args = unicast_write_fields.get_args();
+            NocUnicastWriteFields(this->data_config.payload_size_bytes, this->target_address, this->dst_noc_encoding);
+        const auto unicast_write_args = unicast_write_fields.get_args<true>();
         args.insert(args.end(), unicast_write_args.begin(), unicast_write_args.end());
     } else {
-        tt::log_fatal(tt::LogTest, "Other noc send types not supported yet");
+        log_fatal(tt::LogTest, "Other noc send types not supported yet");
         throw std::runtime_error("Unexpected traffic config");
     }
 
     return args;
 }
 
-inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() {
+inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
     std::vector<uint32_t> args;
 
+    // TODO: get the payload buffer size from the config
+    uint32_t payload_buffer_size = 0x10000;
     const auto metadata =
-        ReceiverMetadataFields(this->data_config.num_packets, this->data_config.seed, this->sender_id);
+        ReceiverMetadataFields(this->data_config.num_packets, this->data_config.seed, payload_buffer_size);
     const auto metadata_args = metadata.get_args();
     args.insert(args.end(), metadata_args.begin(), metadata_args.end());
 
@@ -360,11 +358,11 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() {
 
     if (this->data_config.noc_send_type == NocSendType::NOC_UNICAST_WRITE) {
         const auto unicast_write_fields =
-            NocUnicastWriteFields<false>(this->data_config.payload_size_bytes, this->target_address);
-        const auto unicast_write_args = unicast_write_fields.get_args();
+            NocUnicastWriteFields(this->data_config.payload_size_bytes, this->target_address);
+        const auto unicast_write_args = unicast_write_fields.get_args<false>();
         args.insert(args.end(), unicast_write_args.begin(), unicast_write_args.end());
     } else {
-        tt::log_fatal(tt::LogTest, "Other noc send types not supported yet");
+        log_fatal(tt::LogTest, "Other noc send types not supported yet");
         throw std::runtime_error("Unexpected traffic config");
     }
 

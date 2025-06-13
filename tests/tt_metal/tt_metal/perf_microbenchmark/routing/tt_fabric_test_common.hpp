@@ -22,8 +22,6 @@
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
-class TestContextInterface {};
-
 struct TestFabricFixture {
     tt::ARCH arch_;
     std::vector<chip_id_t> physical_chip_ids_;
@@ -33,9 +31,9 @@ struct TestFabricFixture {
     void setup_devices() {
         slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch_) {
-            tt::log_info(tt::LogTest, "Running fabric tests with slow dispatch");
+            log_info(tt::LogTest, "Running fabric tests with slow dispatch");
         } else {
-            tt::log_info(tt::LogTest, "Running fabric tests with fast dispatch");
+            log_info(tt::LogTest, "Running fabric tests with fast dispatch");
         }
 
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -60,7 +58,7 @@ struct TestFabricFixture {
 
     tt::tt_metal::IDevice* get_device_handle(chip_id_t physical_chip_id) const {
         if (this->devices_map_.find(physical_chip_id) == this->devices_map_.end()) {
-            tt::log_fatal(tt::LogTest, "Unknown physical chip id: {}", physical_chip_id);
+            log_fatal(tt::LogTest, "Unknown physical chip id: {}", physical_chip_id);
             throw std::runtime_error("Unexpected physical chip id for device handle lookup");
         }
         return this->devices_map_.at(physical_chip_id);
@@ -113,7 +111,7 @@ inline void TestPhysCoords::validate_hops(std::unordered_map<RoutingDirection, u
     // TODO: should move to mesh
     if ((hops[RoutingDirection::N] > 0 && hops[RoutingDirection::S] > 0) ||
         (hops[RoutingDirection::E] > 0 && hops[RoutingDirection::W] > 0)) {
-        tt::log_fatal(tt::LogTest, "Hops in only one of the opposite directions should be set, got both");
+        log_fatal(tt::LogTest, "Hops in only one of the opposite directions should be set, got both");
         throw std::runtime_error("Unexpected hops");
     }
 }
@@ -215,7 +213,7 @@ private:
 
 inline void TestPhysicalMesh::validate_physical_chip_id(const chip_id_t physical_chip_id) const {
     if (this->physical_chip_coords_.find(physical_chip_id) == this->physical_chip_coords_.end()) {
-        tt::log_fatal(tt::LogTest, "Unknown chip id: {} for mesh id: {}", physical_chip_id, this->mesh_id_);
+        log_fatal(tt::LogTest, "Unknown chip id: {} for mesh id: {}", physical_chip_id, this->mesh_id_);
         throw std::runtime_error("Unexpected chip id");
     }
 }
@@ -235,7 +233,7 @@ inline chip_id_t TestPhysicalMesh::get_chip_from_coords(const TestPhysCoords& ta
             return pair.second == target_coords;
         });
     if (it == this->physical_chip_coords_.end()) {
-        tt::log_fatal(tt::LogTest, "Unknown chip coords for translation from coords to chip");
+        log_fatal(tt::LogTest, "Unknown chip coords for translation from coords to chip");
         throw std::runtime_error("Unexpected physical chip coords");
     }
 
@@ -305,7 +303,7 @@ inline std::vector<chip_id_t> TestPhysicalMesh::get_chips_from_hops(
     } else if (chip_send_type == ChipSendType::CHIP_UNICAST) {
         dst_phys_chip_ids = {this->get_chip_from_hops(src_phys_chip_id, hops)};
     } else {
-        tt::log_fatal(tt::LogTest, "Unknown chip send type: {} for getting chips from hops", chip_send_type);
+        log_fatal(tt::LogTest, "Unknown chip send type: {} for getting chips from hops", chip_send_type);
         throw std::runtime_error("Unexpected chip send type");
     }
 
@@ -314,7 +312,7 @@ inline std::vector<chip_id_t> TestPhysicalMesh::get_chips_from_hops(
 
 inline void TestPhysicalMesh::print_mesh() const {
     for (const auto& row : this->physical_chip_view_) {
-        tt::log_info(tt::LogTest, "{}", row);
+        log_info(tt::LogTest, "{}", row);
     }
 }
 
@@ -341,13 +339,13 @@ private:
 inline void TestPhysicalMeshes::validate_mesh_id(const MeshId mesh_id) const {
     // TODO: take in a string param for debug/log strings
     if (this->physical_meshes_.find(mesh_id) == this->physical_meshes_.end()) {
-        tt::log_fatal(tt::LogTest, "Unknown mesh id: {}", mesh_id);
+        log_fatal(tt::LogTest, "Unknown mesh id: {}", mesh_id);
         throw std::runtime_error("Unexpected mesh id");
     }
 }
 
 inline void TestPhysicalMeshes::setup_physical_meshes() {
-    this->control_plane_ptr_ = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    this->control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto user_meshes = this->control_plane_ptr_->get_user_physical_mesh_ids();
 
     for (const auto& mesh_id : user_meshes) {
@@ -356,9 +354,9 @@ inline void TestPhysicalMeshes::setup_physical_meshes() {
 }
 
 inline void TestPhysicalMeshes::print_meshes() const {
-    tt::log_info(tt::LogTest, "Printing physical meshes, (total: {})", this->physical_meshes_.size());
+    log_info(tt::LogTest, "Printing physical meshes, (total: {})", this->physical_meshes_.size());
     for (const auto& [mesh_id, mesh] : this->physical_meshes_) {
-        tt::log_info(tt::LogTest, "Mesh id: {}", mesh_id);
+        log_info(tt::LogTest, "Mesh id: {}", mesh_id);
         mesh.print_mesh();
     }
 }
@@ -403,7 +401,7 @@ inline std::unordered_map<RoutingDirection, uint32_t> TestPhysicalMeshes::get_ho
 
     // TODO: enable inter-mesh hop counts
     if (src_mesh_id != dst_mesh_id) {
-        tt::log_fatal(tt::LogTest, "Inter-mesh hops not supported yet");
+        log_fatal(tt::LogTest, "Inter-mesh hops not supported yet");
         throw std::runtime_error("Unexpected hops request b/w meshes");
     }
 

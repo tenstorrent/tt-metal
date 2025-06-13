@@ -11,7 +11,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include "assert.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 #include "impl/context/metal_context.hpp"
 

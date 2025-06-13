@@ -2,20 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "debug/dprint.h"
 #include "tt_fabric_test_kernels_utils.hpp"
-
-using ReceiverKernelConfig = tt::tt_fabric::fabric_tests::SenderKernelConfig;
 
 constexpr uint8_t NUM_TRAFFIC_CONFIGS = get_compile_time_arg_val(0);
 constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(1);
 
 void kernel_main() {
+    using ReceiverKernelConfig = tt::tt_fabric::fabric_tests::ReceiverKernelConfig<NUM_TRAFFIC_CONFIGS>;
+
     size_t rt_args_idx = 0;
-    auto receiver_config = ReceiverKernelConfig::build_from_args<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(rt_args_idx);
+    auto receiver_config = ReceiverKernelConfig::build_from_args(rt_args_idx);
 
     // clear out test results area
 
     bool failed = false;
+
+    DPRINT << "num traffic config: " << (uint32_t)NUM_TRAFFIC_CONFIGS << ENDL();
 
     bool packets_left_to_validate = true;
     while (packets_left_to_validate) {
@@ -25,6 +28,9 @@ void kernel_main() {
             if (!traffic_config->has_packets_to_validate()) {
                 continue;
             }
+
+            // if we are here, this means that we have atleast 1 packet left to validate
+            packets_left_to_validate = true;
 
             bool got_new_data = traffic_config->poll();
             if (!got_new_data) {

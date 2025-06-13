@@ -8,13 +8,14 @@ constexpr uint8_t IS_2D_FABRIC = get_compile_time_arg_val(0);
 constexpr uint8_t USE_DYNAMIC_ROUTING = get_compile_time_arg_val(1);
 constexpr uint8_t NUM_FABRIC_CONNECTIONS = get_compile_time_arg_val(2);
 constexpr uint8_t NUM_TRAFFIC_CONFIGS = get_compile_time_arg_val(3);
-constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(5);
+constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(4);
 
-using SenderKernelConfig = tt::tt_fabric::fabric_tests::SenderKernelConfig;
+using SenderKernelConfig = tt::tt_fabric::fabric_tests::
+    SenderKernelConfig<NUM_FABRIC_CONNECTIONS, NUM_TRAFFIC_CONFIGS, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>;
 
 void kernel_main() {
     size_t rt_args_idx = 0;
-    auto sender_config = SenderKernelConfig::build_from_args<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(rt_args_idx);
+    auto sender_config = SenderKernelConfig::build_from_args(rt_args_idx);
 
     // clear out test results area
 
@@ -25,7 +26,7 @@ void kernel_main() {
     while (packets_left_to_send) {
         packets_left_to_send = false;
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-            auto* traffic_config = sender_config.traffic_configs[i];
+            auto* traffic_config = sender_config.traffic_config_ptrs[i];
             if (!traffic_config->has_packets_to_send()) {
                 continue;
             }

@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_map>
 #include <algorithm>
+#include <chrono>
 
 #include "tt_fabric_test_config.hpp"
 #include "tt_fabric_test_common.hpp"
@@ -15,10 +16,14 @@
 using TestPhysicalMeshes = tt::tt_fabric::fabric_tests::TestPhysicalMeshes;
 using TestFabricFixture = tt::tt_fabric::fabric_tests::TestFabricFixture;
 using TestDevice = tt::tt_fabric::fabric_tests::TestDevice;
+using TestTrafficDataConfig = tt::tt_fabric::fabric_tests::TestTrafficDataConfig;
 using TestTrafficConfig = tt::tt_fabric::fabric_tests::TestTrafficConfig;
 using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderConfig;
 using TestTrafficReceiverConfig = tt::tt_fabric::fabric_tests::TestTrafficReceiverConfig;
 using TestWorkerType = tt::tt_fabric::fabric_tests::TestWorkerType;
+
+using ChipSendType = tt::tt_fabric::ChipSendType;
+using NocSendType = tt::tt_fabric::NocSendType;
 
 const std::string default_sender_kernel_src =
     "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_sender.cpp";
@@ -49,7 +54,7 @@ private:
 
 void TestContext::validate_physical_chip_id(chip_id_t physical_chip_id) const {
     if (this->test_devices_.find(physical_chip_id) == this->test_devices_.end()) {
-        tt::log_fatal(tt::LogTest, "Unknown physical chip id: {}", physical_chip_id);
+        log_fatal(tt::LogTest, "Unknown physical chip id: {}", physical_chip_id);
         throw std::runtime_error("Unexpected physical chip id");
     }
 }
@@ -73,7 +78,7 @@ CoreCoord TestContext::find_receiver_core(const std::vector<chip_id_t>& phys_chi
     }
 
     if (!available_core.has_value()) {
-        tt::log_fatal(tt::LogTest, "Unable to find a common recv core from chips: {}", phys_chip_ids);
+        log_fatal(tt::LogTest, "Unable to find a common recv core from chips: {}", phys_chip_ids);
         throw std::runtime_error("No common cores found for allocation");
     }
 
@@ -112,6 +117,7 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
     }
 
     size_t target_address = dst_rep_test_device.allocate_address_for_sender(dst_logical_core);
+    uint32_t dst_noc_encoding = dst_rep_test_device.get_worker_noc_encoding(dst_logical_core);
     uint32_t sender_id = src_test_device.get_worker_id(src_logical_core);
 
     TestTrafficSenderConfig sender_config = {
@@ -119,7 +125,8 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
         .dst_phys_chip_ids = dst_phys_chip_ids,
         .hops = traffic_config.hops.value(),
         .dst_logical_core = dst_logical_core,
-        .target_address = target_address};
+        .target_address = target_address,
+        .dst_noc_encoding = dst_noc_encoding};
 
     TestTrafficReceiverConfig receiver_config = {
         .data_config = traffic_config.data_config, .sender_id = sender_id, .target_address = target_address};
@@ -203,23 +210,26 @@ void TestContext::process_traffic_config(TestTrafficConfig traffic_config) {
 }
 
 void TestContext::compile_programs() {
-    for (const auto& [_, test_device] : this->test_devices_) {
-        device.create_kernels();
+    // TODO: should we be taking const ref?
+    for (auto& [_, test_device] : this->test_devices_) {
+        test_device.create_kernels();
     }
 }
 
 void TestContext::launch_programs() {
-    for (const auto& [_, test_device] : this->test_devices_) {
-        const auto* device_handle = test_device.get_device_handle();
-        const auto& program_handle = test_device.get_program_handle();
+    // TODO: should we be taking const ref?
+    for (auto& [_, test_device] : this->test_devices_) {
+        auto* device_handle = test_device.get_device_handle();
+        auto& program_handle = test_device.get_program_handle();
         this->fixture_.run_program_non_blocking(device_handle, program_handle);
     }
 }
 
 void TestContext::wait_for_prorgams() {
-    for (const auto& [_, test_device] : this->test_devices_) {
-        const auto* device_handle = test_device.get_device_handle();
-        const auto& program_handle = test_device.get_program_handle();
+    // TODO: should we be taking const ref?
+    for (auto& [_, test_device] : this->test_devices_) {
+        auto* device_handle = test_device.get_device_handle();
+        auto& program_handle = test_device.get_program_handle();
         this->fixture_.wait_for_program_done(device_handle, program_handle);
     }
 }
@@ -251,18 +261,20 @@ int main(int argc, char** argv) {
 
     // fabric setup
     // setup_fabric()
-
+    uint32_t seed = std::chrono::system_clock::now().time_since_epoch().count();
     TestTrafficDataConfig data_config = {
         .chip_send_type = ChipSendType::CHIP_UNICAST,
         .noc_send_type = NocSendType::NOC_UNICAST_WRITE,
-        .seed = 100,
-        .num_packets = 10,
-        .payload_size_bytes = 4096};
+        .seed = seed,
+        .num_packets = 100,
+        .payload_size_bytes = 64};
 
+    chip_id_t src_phys_chip_id = 1;
+    std::vector<chip_id_t> dst_phys_chip_ids = {2};
     TestTrafficConfig traffic_config = {
         .data_config = data_config,
-        .src_phys_chip_id = 1,
-        .dst_phys_chip_ids = {2},
+        .src_phys_chip_id = src_phys_chip_id,
+        .dst_phys_chip_ids = dst_phys_chip_ids,
         .sender_kernel_src = default_sender_kernel_src,
         .receiver_kernel_src = default_receiver_kernel_src};
 
