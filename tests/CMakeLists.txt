@@ -15,6 +15,7 @@ target_link_libraries(
         Boost::algorithm
         Taskflow::Taskflow
         TT::Metalium
+        Taskflow::Taskflow
 )
 
 if(TT_METAL_BUILD_TESTS)
