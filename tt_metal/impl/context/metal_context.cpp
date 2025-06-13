@@ -258,14 +258,6 @@ void MetalContext::set_custom_control_plane_mesh_graph(
     global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
         mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
     this->set_fabric_config(fabric_config_, tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-    // =======
-    //         mesh_graph_desc_file,
-    //         logical_mesh_chip_id_to_physical_chip_id_mapping,
-    //         fabric_config_,
-    //         tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-    //     this->initialize_fabric_config(
-    //         fabric_config_, tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-    // ======
 }
 
 void MetalContext::set_default_control_plane_mesh_graph() {

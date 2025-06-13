@@ -1361,7 +1361,6 @@ void build_tt_fabric_program(
         return;
     }
 
-    // TODO: get the wraparound for a given direction
     const bool wrap_around_mesh = fabric_context.is_wrap_around_mesh(fabric_node_id.mesh_id);
 
     for (const auto& [direction, remote_physical_chip_id] : chip_neighbors) {

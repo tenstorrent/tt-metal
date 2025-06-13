@@ -1102,10 +1102,6 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
         }
     } else {
         std::set<uint32_t> logical_active_eth_channels = cluster_desc_->get_active_eth_channels(chip_id);
-        log_debug(LogDevice, "Active eth channels for chip: {}", chip_id);
-        for (const auto ch : logical_active_eth_channels) {
-            log_debug(LogDevice, "\t{}", ch);
-        }
         for (const auto& eth_channel : logical_active_eth_channels) {
             tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
             const auto& routing_info = this->device_eth_routing_info_.at(chip_id).at(eth_core);
