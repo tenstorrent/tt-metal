@@ -423,6 +423,16 @@ def test_demo(
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
+        # Initial positions continuing from prefill, no need to offset by rope_deltas
+        current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
+
+        # Start decoding
+        iteration = 0
+        # TODO Argmax on device is only supported for batch_size=1
+        # argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
+        argmax_on_device = False
+        users_decoding = True
+        user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
         # Keep track of generated outputs to print out every iteration
         all_outputs = [
             [] for _ in range(batch_size)
@@ -430,19 +440,6 @@ def test_demo(
         for user in range(batch_size):
             user_tok = int(prefilled_token[user].item())
             all_outputs[user].append(user_tok)
-
-        user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
-
-        # TODO Argmax on device is only supported for batch_size=1
-        # argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
-        argmax_on_device = False
-
-        # Initial positions continuing from prefill, no need to offset by rope_deltas
-        current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
-
-        # Start decoding
-        iteration = 0
-        users_decoding = True
 
         out_tok = prefilled_token
 

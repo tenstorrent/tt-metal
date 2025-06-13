@@ -1,28 +1,24 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
-from loguru import logger
 import os
+
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from models.demos.qwen25_vl.tt.vision_attention import VisionAttention
-from models.tt_transformers.tt.model_config import ModelArgs
-from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.tt_transformers.tt.common import (
-    get_rot_transformation_mat,
-)
 from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
+from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.demos.qwen25_vl.tt.vision_attention import VisionAttention
+from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
-    standardize_hf_keys,
     convert_rope_style_hf_to_meta,
+    standardize_hf_keys,
 )
+from models.tt_transformers.tt.model_config import ModelArgs
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
@@ -47,8 +43,6 @@ def test_vision_attention_inference(
     pcc = 0.99
     batch_size = 1  # For prefill we only support batch_size = 1
 
-    mesh_device.enable_async(True)
-
     # Example inputs
     # image_grid_thw (`torch.LongTensor` of shape `(num_images, 3)`, *optional*):
     #     The temporal, height and width of feature shape of each image in LLM.
@@ -69,8 +63,8 @@ def test_vision_attention_inference(
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
 
     # Example inputs and preprocessing
-    # pt_attention_input = torch.randn(1, 1, ref_seq_len, model_args.dim)
-    pt_attention_input = torch.load("ref_1_attn_norm.pt").unsqueeze(0).unsqueeze(0)
+    pt_attention_input = torch.randn(1, 1, ref_seq_len, model_args.dim)
+    # pt_attention_input = torch.load("ref_1_attn_norm.pt").unsqueeze(0).unsqueeze(0)
     cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
         seq_len=ref_seq_len,
         grid_thw=image_grid_thw,

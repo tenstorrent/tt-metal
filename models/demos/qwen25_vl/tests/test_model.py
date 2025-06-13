@@ -1,25 +1,22 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
-from loguru import logger
 import os
+
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
+from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
 from models.demos.qwen25_vl.tt.model import VisionTransformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
-
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
-    standardize_hf_keys,
     convert_rope_style_hf_to_meta,
+    standardize_hf_keys,
 )
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
@@ -51,8 +48,6 @@ def test_vision_model_inference(
     )  # Llama 3 repo allows 0.91 for prefill, vision probably even less sensitive to pcc
     batch_size = 1  # For prefill we only support batch_size = 1
 
-    mesh_device.enable_async(True)
-
     # Example inputs for http://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg
     # pixel_values are produced by Qwen2_5_VLImageProcessor, these come from the above img
     pt_pixel_values = torch.randn([14308, 1176]) * 0.8320 + 1.2969  # std and mean from above img
@@ -83,6 +78,14 @@ def test_vision_model_inference(
     state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
     state_dict_prefix = model_args.get_state_dict_prefix("VisionTransformer")
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
+
+    # Initialize TT model
+    tt_model = VisionTransformer(
+        args=model_args,
+        state_dict=state_dict,
+        weight_cache_path=model_args.weight_cache_path(dtype),
+        dtype=dtype,
+    )
 
     # Get the necessary preprocessing for vision model
     cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(

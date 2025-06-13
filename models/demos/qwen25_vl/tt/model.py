@@ -293,8 +293,10 @@ class DropInVisionTransformer(torch.nn.Module):
 
             # deallocate device tensors that are not needed by decode
             ttnn.deallocate(tt_input)
-            for member in rot_mats:
-                ttnn.deallocate(member)
+            ttnn.deallocate(cos)
+            ttnn.deallocate(sin)
+            ttnn.deallocate(rot_mats[0])
+            ttnn.deallocate(rot_mats[1])
 
             # --- Postprocessing ---
             # 1. Convert TT output back to torch tensor

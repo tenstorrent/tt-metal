@@ -200,11 +200,18 @@ class Generator:
             # [INFO] logits is a torch tensor
             ttnn.deallocate(tt_logits)
             ttnn.deallocate(prefill_input)
-            ttnn.deallocate(page_table_tt)
+            if page_table is not None:
+                ttnn.deallocate(page_table_tt)
 
             return logits
 
     ## Destructor (used to delete ttnn trace if exists)
 
     def __del__(self):
+        if hasattr(self, "trace_id"):
+            ttnn.release_trace(self.mesh_device, self.trace_id)
+
+        if hasattr(self, "trace_id_text"):
+            ttnn.release_trace(self.mesh_device, self.trace_id_text)
+
         self._ttt_generator.__del__()
