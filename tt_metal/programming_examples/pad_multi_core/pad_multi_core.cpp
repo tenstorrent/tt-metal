@@ -13,10 +13,6 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-#ifndef OVERRIDE_KERNEL_PREFIX
-#define OVERRIDE_KERNEL_PREFIX ""
-#endif
-
 int main() {
     // get program/device
     int device_id = 0;
@@ -27,7 +23,6 @@ int main() {
     // initialize source data
     constexpr uint32_t src_M = 8;
     constexpr uint32_t src_N = 4;
-    constexpr uint32_t dram_page_size = 32;
     constexpr uint32_t packed_data_size = sizeof(uint32_t);
     constexpr uint32_t unpacked_data_size = sizeof(bfloat16);
     constexpr uint32_t packing_ratio = packed_data_size / unpacked_data_size;
@@ -59,8 +54,14 @@ int main() {
     CoreRange cores(start_core, end_core);
     uint32_t num_cores = cores.size();
 
+    uint32_t dram_page_size = 32;
+
     // configure and create DRAM buffers for input, pad, output
     uint32_t src_buffer_size = packed_data_size * src_num_values_packed;
+    if (src_buffer_size % dram_page_size != 0) {
+        src_buffer_size += dram_page_size - (src_buffer_size % dram_page_size);
+    }
+
     tt_metal::InterleavedBufferConfig input_dram_config{
         .device = device,
         .size = src_buffer_size,
@@ -69,7 +70,7 @@ int main() {
     std::shared_ptr<tt::tt_metal::Buffer> src_buffer = CreateBuffer(input_dram_config);
     uint32_t src_addr = src_buffer->address();
 
-    uint32_t pad_buffer_size = packed_data_size * pad_vec.size();
+    uint32_t pad_buffer_size = dram_page_size;
     tt_metal::InterleavedBufferConfig pad_dram_config{
         .device = device,
         .size = pad_buffer_size,
@@ -79,6 +80,10 @@ int main() {
     uint32_t pad_addr = pad_buffer->address();
 
     uint32_t dst_buffer_size = packed_data_size * dst_num_values_packed;
+    if (dst_buffer_size % dram_page_size != 0) {
+        dst_buffer_size += dram_page_size - (dst_buffer_size % dram_page_size);
+    }
+
     tt_metal::InterleavedBufferConfig output_dram_config{
         .device = device,
         .size = dst_buffer_size,
@@ -105,7 +110,7 @@ int main() {
     // create kernels
     KernelHandle reader_id = CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "pad_multi_core/kernels/pad_reader_dims_rm_interleaved.cpp",
+        "tt_metal/programming_examples/pad/kernels/pad_reader_dims_rm_interleaved.cpp",
         cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -113,7 +118,7 @@ int main() {
             .compile_args = reader_compile_time_args});
     KernelHandle writer_id = CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "pad_multi_core/kernels/pad_writer_dims_rm_interleaved.cpp",
+        "tt_metal/programming_examples/pad/kernels/pad_writer_dims_rm_interleaved.cpp",
         cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
