@@ -6,6 +6,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "ttnn/operations/sharding_utilities.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 using namespace tt::constants;
@@ -54,11 +55,19 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
     // Current sharding only supports width, and that input and output are sharded
     if (in_sharded) {
-        all_cores = a.shard_spec().value().grid;
+        if (a.shard_spec().has_value()) {
+            all_cores = a.shard_spec().value().grid;
+        } else {
+            all_cores = a.nd_shard_spec().value().grid;
+        }
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
         core_group_2 = CoreRangeSet();
-        num_cols_per_core_group_1 = NC * (a.shard_spec().value().shape[1] / TILE_WIDTH);
+        if (a.shard_spec().has_value()) {
+            num_cols_per_core_group_1 = NC * (a.shard_spec().value().shape[1] / TILE_WIDTH);
+        } else {
+            num_cols_per_core_group_1 = NC * (a.nd_shard_spec().value().shard_shape[-1] / TILE_WIDTH);
+        }
         num_cols_per_core_group_2 = 0;
     }
 
@@ -66,7 +75,9 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     uint32_t src1_cb_index = CBIndex::c_1;
     CBHandle cb_src1 = 0;
     if (in_sharded) {
-        uint32_t num_shard_tiles = a.shard_spec().value().numel() / TILE_HW;
+        uint32_t volume = a.shard_spec().has_value() ? a.shard_spec().value().numel()
+                                                     : a.nd_shard_spec().value().shard_shape.volume();
+        uint32_t num_shard_tiles = volume / TILE_HW;
         uint32_t num_input_tiles = 2;
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(
@@ -98,7 +109,9 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     uint32_t output_cb_index = CBIndex::c_3;
     CBHandle cb_output;
     if (out_sharded) {
-        uint32_t num_output_tiles = output.shard_spec().value().numel() / TILE_HW;
+        uint32_t volume = output.shard_spec().has_value() ? output.shard_spec().value().numel()
+                                                          : output.nd_shard_spec().value().shard_shape.volume();
+        uint32_t num_output_tiles = volume / TILE_HW;
         tt_metal::CircularBufferConfig cb_output_config =
             tt_metal::CircularBufferConfig(
                 num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
@@ -121,14 +134,40 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
     uint32_t chunk_size = out_sharded ? 1 : ttnn::get_dest_reg_count(compute_kernel_config);
 
+    bool use_nd_sharding = false;
     if (in_sharded) {
         std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index};
         std::map<string, string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
+        use_nd_sharding = !a.shard_spec().has_value();
+        std::string reader_kernel_path = "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/";
+        if (use_nd_sharding) {
+            auto tile = a.tensor_spec().tile().get_tile_shape();
+            uint32_t tile_elements = tile[0] * tile[1];
+            const tt::tt_metal::Buffer* buffer = a.buffer();
+            const auto aligned_page_size = buffer->aligned_page_size();
+
+            // Set up sharded accessor compile-time args for reader kernel
+            const auto input_buffer_distribution_spec = buffer->buffer_distribution_spec();
+            const auto input_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
+                *device->get_mesh_device().get(), input_buffer_distribution_spec.value(), buffer->core_type());
+            reader_compile_time_args.push_back((uint32_t)tile_elements);
+            reader_compile_time_args.push_back((uint32_t)src0_cb_data_format);
+            reader_compile_time_args.push_back(aligned_page_size);
+            reader_compile_time_args.push_back(input_sharded_accessor_args.rank);
+            reader_compile_time_args.push_back(input_sharded_accessor_args.num_banks);
+            reader_compile_time_args.insert(
+                reader_compile_time_args.end(),
+                input_sharded_accessor_args.shapes_and_bank_coords.cbegin(),
+                input_sharded_accessor_args.shapes_and_bank_coords.cend());
+
+            reader_kernel_path += "reader_unary_transpose_wh_nd_input_cols_partitioned.cpp";
+        } else {
+            reader_kernel_path += "reader_unary_transpose_wh_interleaved_input_cols_partitioned_sharded.cpp";
+        }
         reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-            "reader_unary_transpose_wh_interleaved_input_cols_partitioned_sharded.cpp",
+            reader_kernel_path,
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
@@ -209,11 +248,35 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     const auto& cores =
         grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
     if (in_sharded && out_sharded) {
+        std::vector<uint32_t> reader_rt_args;
         uint32_t shard_Wt = num_cols_per_core_group_1 / NC;
-        uint32_t shard_row_size = shard_Wt * src0_single_tile_size;
-        uint32_t shard_batch_size = shard_row_size * Ht;
-        std::vector<uint32_t> reader_rt_args = {
-            num_cols_per_core_group_1 * Ht, shard_Wt, Ht, NC, shard_row_size, shard_batch_size, packed_scaler_value};
+        if (use_nd_sharding) {
+            auto tile = a.tensor_spec().tile().get_tile_shape();
+            uint32_t tile_elements = tile[0] * tile[1];
+            uint32_t shard_tile_row_elements = shard_Wt * tile_elements;
+            uint32_t shard_batch_elements = shard_tile_row_elements * Ht;
+            const auto input_bank_base_address = a.mesh_buffer()->address();
+            reader_rt_args = {
+                num_cols_per_core_group_1 * Ht,
+                shard_Wt,
+                Ht,
+                NC,
+                shard_tile_row_elements,
+                shard_batch_elements,
+                input_bank_base_address,
+                packed_scaler_value};
+        } else {
+            uint32_t shard_row_size = shard_Wt * src0_single_tile_size;
+            uint32_t shard_batch_size = shard_row_size * Ht;
+            reader_rt_args = {
+                num_cols_per_core_group_1 * Ht,
+                shard_Wt,
+                Ht,
+                NC,
+                shard_row_size,
+                shard_batch_size,
+                packed_scaler_value};
+        }
         tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores, reader_rt_args);
 
         std::vector<uint32_t> writer_rt_args = {num_cols_per_core_group_1};
