@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
-from itertools import accumulate
 
 import torch
 from llama_models.llama3.api.datatypes import InterleavedTextMedia, StopReason
@@ -56,10 +55,15 @@ class Generator:
         self.formatter = formatter
         self.data_parallel = len(self.model)
 
+        max_batch_size = self.model_args[0].max_batch_size
+        assert all(
+            self.model_args[i].max_batch_size == max_batch_size for i in range(self.data_parallel)
+        ), "All models must have the same max batch size"
+
     # Note: This function is called by vLLM
     def prefill_forward_text(self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None):
         batch_size, batch_seq_len = tokens.shape
-        batch_size_per_model = self._get_batch_size_per_model(batch_size)
+        max_batch_size_per_model, batch_size_per_model = self._get_batch_size_per_model(batch_size)
 
         # Each model expected to run the same model, safe to use 1st vocab size
         output_logits = torch.zeros(batch_size, 1, self.model_args[0].vocab_size)
@@ -70,9 +74,13 @@ class Generator:
             page_table = torch.split(page_table, batch_size_per_model)
 
         out_list = []
-        user_id = 0
-        for model_id in range(self.data_parallel):
-            for group_user_id in range(batch_size_per_model[model_id]):
+        for group_user_id in range(max_batch_size_per_model):
+            for model_id in range(self.data_parallel):
+                if group_user_id >= batch_size_per_model[model_id]:
+                    # Skip users that are not in this model's batch size
+                    continue
+
+                user_id = group_user_id + model_id * max_batch_size_per_model
                 logger.info(f"Prefilling User {user_id + 1}")
                 seq_len = int(prompt_lens[user_id])
                 last_token_idx = seq_len - 1
@@ -95,13 +103,16 @@ class Generator:
                     model_id=model_id,
                 )
                 out_list.append(logits)
-                user_id += 1
 
         # We gather data back to how at the end of prefill
-        user_id = 0
-        for model_id in range(self.data_parallel):
-            for group_user_id in range(batch_size_per_model[model_id]):
-                out = out_list[user_id]
+        for group_user_id in range(max_batch_size_per_model):
+            for model_id in range(self.data_parallel):
+                if group_user_id >= batch_size_per_model[model_id]:
+                    # Skip users that are not in this model's batch size
+                    continue
+
+                user_id = group_user_id + model_id * max_batch_size_per_model
+                out = out_list[group_user_id]
 
                 seq_len = int(prompt_lens[user_id])
                 last_token_idx = seq_len - 1
@@ -110,8 +121,6 @@ class Generator:
                 output_logits[user_id] = self.model[model_id].process_output_prefill(
                     out, last_token_idx=(last_token_idx % 32)
                 )
-
-                user_id += 1
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
@@ -484,7 +493,7 @@ class Generator:
         Batched version of _prefill_forward_single_user for vision model.
         """
         batch_size, batch_seq_len = tokens.shape
-        batch_size_per_model = self._get_batch_size_per_model(batch_size)
+        max_batch_size_per_model, batch_size_per_model = self._get_batch_size_per_model(batch_size)
 
         output_logits = torch.zeros(batch_size, 1, self.model_args[0].vocab_size)
 
@@ -500,9 +509,13 @@ class Generator:
             assert isinstance(cross_page_table, torch.Tensor), "cross_page_table mush be torch.Tensor"
             cross_page_table = torch.split(cross_page_table, batch_size_per_model)
 
-        user_id = 0
-        for model_id in range(self.data_parallel):
-            for group_user_id in range(batch_size_per_model[model_id]):
+        for group_user_id in range(max_batch_size_per_model):
+            for model_id in range(self.data_parallel):
+                if group_user_id >= batch_size_per_model[model_id]:
+                    # Skip users that are not in this model's batch size
+                    continue
+
+                user_id = group_user_id + model_id * max_batch_size_per_model
                 logger.info(f"Prefilling User {user_id + 1}")
                 seq_len = int(prompt_lens[user_id])
                 user_page_table = page_table[model_id] if page_table is not None else None
@@ -533,18 +546,18 @@ class Generator:
                 output_xattn_masks[user_id] = cross_attention_masks
                 output_full_text_row_masked_out_masks[user_id] = full_text_row_masked_out_mask
 
-                user_id += 1
-
         # We gather prefill output at the end of prefill to reduce unnecessary device sync
-        user_id = 0
-        for model_id in range(self.data_parallel):
-            for group_user_id in range(batch_size_per_model[model_id]):
+        for group_user_id in range(max_batch_size_per_model):
+            for model_id in range(self.data_parallel):
+                if group_user_id >= batch_size_per_model[model_id]:
+                    # Skip users that are not in this model's batch size
+                    continue
+
+                user_id = group_user_id + model_id * max_batch_size_per_model
                 last_token_idx = prompt_lens[user_id] - 1
                 output_logits[user_id] = self.model[model_id].process_output_prefill(
                     out_list[model_id][group_user_id], 1, last_token_idx=(last_token_idx % 32)
                 )
-
-                user_id += 1
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
 
@@ -565,18 +578,18 @@ class Generator:
         read_from_device=True,
     ):
         batch_size = tokens.shape[0]
-        batch_size_per_model = self._get_batch_size_per_model(batch_size)
+        max_batch_size_per_model, batch_size_per_model = self._get_batch_size_per_model(batch_size)
 
         tokens = torch.split(tokens, batch_size_per_model)
         start_pos = torch.split(start_pos, batch_size_per_model)
 
         cross_attention_masks = [
-            cross_attention_masks[i:j]
-            for i, j in zip([0] + list(accumulate(batch_size_per_model))[:-1], accumulate(batch_size_per_model))
+            cross_attention_masks[i * max_batch_size_per_model : (i + 1) * max_batch_size_per_model]
+            for i in range(self.data_parallel)
         ]
         full_text_row_masked_out_mask = [
-            full_text_row_masked_out_mask[i:j]
-            for i, j in zip([0] + list(accumulate(batch_size_per_model))[:-1], accumulate(batch_size_per_model))
+            full_text_row_masked_out_mask[i * max_batch_size_per_model : (i + 1) * max_batch_size_per_model]
+            for i in range(self.data_parallel)
         ]
 
         page_table = torch.split(page_table, batch_size_per_model) if page_table is not None else None
@@ -608,14 +621,21 @@ class Generator:
         """
         Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
+        _, batch_size_per_model = self._get_batch_size_per_model(unpadded_batch)
+
         logits = []
         for i in range(self.data_parallel):
+            if batch_size_per_model[i] == 0:
+                continue
             logits_i = self.model[i].process_output_decode(
-                tt_out[i], B=self.model_args[i].max_batch_size, S=1, is_tokens=is_tokens
+                tt_out[i], B=batch_size_per_model[i], S=1, is_tokens=is_tokens
             )
             logits.append(logits_i)
+
         logits = torch.cat(logits, 0)
-        return logits[:unpadded_batch]
+        assert logits.shape[0] == unpadded_batch
+
+        return logits
 
     def _decode_forward_no_trace(
         self,
@@ -1172,12 +1192,14 @@ class Generator:
 
     def _get_batch_size_per_model(self, batch_size):
         """
-        Returns a list of batch sizes for each model in the data parallel group.
+        Returns the maximum batch size per model and a list of batch sizes for each model.
         """
-        max_batch_sizes = [0] + [self.model_args[i].max_batch_size for i in range(self.data_parallel)]
-        acc_batch_sizes = list(accumulate(max_batch_sizes))
+        max_batch_size_per_model = (batch_size + self.data_parallel - 1) // self.data_parallel
 
-        return [max(0, min(batch_size - acc_batch_sizes[i], max_batch_sizes[i + 1])) for i in range(self.data_parallel)]
+        return max_batch_size_per_model, [
+            max(min(max_batch_size_per_model, batch_size - i * max_batch_size_per_model), 0)
+            for i in range(self.data_parallel)
+        ]
 
     ## Destructor
 
