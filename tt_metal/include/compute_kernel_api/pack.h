@@ -51,7 +51,7 @@ namespace ckernel {
 // clang-format on
 template <bool out_of_order_output = false>
 ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0) {
-    PACK((llk_pack<DEST_ACCUM_MODE, out_of_order_output, false>(ifrom_dst, icb, output_tile_index)));
+    PACK((llk_pack<DST_ACCUM_MODE, out_of_order_output, false>(ifrom_dst, icb, output_tile_index)));
 }
 
 // clang-format off
