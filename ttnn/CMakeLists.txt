@@ -368,7 +368,6 @@ list(
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/tensor_accessor_args.cpp
 )
 
-
 ##################################################
 # Build the libraries!
 ##################################################
