@@ -188,7 +188,7 @@ void py_module(py::module& module) {
 
     auto m_generic = module.def_submodule("generic", "ttnn generic operation interface");
     generic::bind_generic_operation(m_generic);
-    
+
     auto m_point_to_point = module.def_submodule("point_to_point", "point_to_point operations");
     point_to_point::py_bind_point_to_point(m_point_to_point);
 }

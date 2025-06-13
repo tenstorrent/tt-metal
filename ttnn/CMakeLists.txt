@@ -339,7 +339,6 @@ list(
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/operations/trace.cpp
 )
 
-
 ##################################################
 # Build the libraries!
 ##################################################
