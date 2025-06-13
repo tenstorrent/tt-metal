@@ -10,10 +10,6 @@ set(PROGRAMMING_EXAMPLES_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/hello_world_datamovement_kernel/hello_world_datamovement_kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/hello_world_datatypes_kernel/hello_world_datatypes_kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/loopback/loopback.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/matmul_multi_core/matmul_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/matmul_multicore_reuse/matmul_multicore_reuse.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/matmul_multicore_reuse_mcast/matmul_multicore_reuse_mcast.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/matmul_single_core/matmul_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pad_multi_core/pad_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shard_data_rm/shard_data_rm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vecadd_sharding/vecadd_sharding.cpp
@@ -28,6 +24,7 @@ CREATE_PGM_EXAMPLES_EXE("${PROGRAMMING_EXAMPLES_SRCS}" "") # no subdir, output b
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/profiler)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/contributed)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/distributed)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/matmul)
 
 add_custom_target(
     programming_examples
