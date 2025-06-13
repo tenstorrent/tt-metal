@@ -1725,9 +1725,6 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
     ptr[0] = 0xAABB0000 | (heartbeat & 0xFFFF);
 }
 
-FORCE_INLINE
-uint32_t min(uint32_t a, uint32_t b) { return (a < b) ? a : b; }
-
 template <bool use_vc>
 FORCE_INLINE uint32_t noc_async_read_tile_dram_sharded_set_state(
     uint32_t bank_base_address,

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include <algorithm>
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 #define ALWI inline __attribute__((always_inline))
@@ -78,10 +79,10 @@ void kernel_main() {
 
                 uint32_t x1 = int(x);
                 uint32_t y1 = int(y);
-                uint32_t x2 = min(x1 + 1, in_w - 1);
+                uint32_t x2 = std::min(x1 + 1, in_w - 1);
                 uint32_t y2 = y1 + 1;
                 if (is_last_row) {
-                    y2 = min(y2, in_image_rows_per_core);  // if last row, y2 should be in_image_rows_per_core
+                    y2 = std::min(y2, in_image_rows_per_core);  // if last row, y2 should be in_image_rows_per_core
                 }
 
                 fill_four_val(
