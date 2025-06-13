@@ -15,12 +15,28 @@ set_target_properties(
             Metalium
 )
 
+include(flatbuffers)
+GENERATE_FBS_HEADER(
+    api/tt-metalium/serialized_descriptors/mesh_coordinate.fbs
+    TARGET TT::Metalium
+    OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/api/tt-metalium/serialized_descriptors/
+)
+set(API_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
+
+add_custom_target(
+    metalium_GeneratedHeaders
+    DEPENDS
+        ${API_GENERATED_HEADERS}
+    COMMENT "Generating all FlatBuffer headers"
+)
+
 target_sources(
     tt_metal
     PRIVATE
         tt_metal.cpp
         graph/graph_tracking.cpp
         hal.cpp
+        ${API_GENERATED_HEADERS}
 )
 
 target_sources(
@@ -28,7 +44,7 @@ target_sources(
     PUBLIC
         FILE_SET api
         TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_BINARY_DIR}/api
         FILES
             api/tt-metalium/allocator.hpp
             api/tt-metalium/allocator_types.hpp
@@ -102,6 +118,8 @@ target_sources(
             api/tt-metalium/vector_aligned.hpp
             api/tt-metalium/work_split.hpp
             api/tt-metalium/distributed_context.hpp
+            api/tt-metalium/serialized_descriptors/mesh_coordinate.fbs
+            ${API_GENERATED_HEADERS}
 )
 
 # TODO(afuller): this should be self-describing modules.
@@ -374,6 +392,7 @@ target_include_directories(
     tt_metal
     PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/api>"
     PRIVATE
         api/tt-metalium # FIXME: Re-home the tests and remove this
 )
@@ -398,6 +417,7 @@ endif()
 include_directories(
     api
     api/tt-metalium
+    ${CMAKE_CURRENT_BINARY_DIR}/api
 )
 
 add_subdirectory(logging)

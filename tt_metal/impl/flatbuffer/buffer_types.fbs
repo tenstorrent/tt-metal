@@ -1,5 +1,5 @@
-include "flatbuffer/base_types.fbs";
-include "flatbuffer/program_types.fbs"; // For CoreRangeSet
+include "base_types.fbs";
+include "program_types.fbs"; // For CoreRangeSet
 
 namespace tt.tt_metal.flatbuffer;
 
