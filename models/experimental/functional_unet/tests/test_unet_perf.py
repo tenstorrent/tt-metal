@@ -17,7 +17,7 @@ from models.utility_functions import (
 from models.experimental.functional_unet.tests.common import UNET_TRACE_REGION_SIZE, UNET_L1_SMALL_REGION_SIZE
 from models.experimental.functional_unet.tests.test_unet_model import run_unet_model
 
-UNET_DEVICE_TEST_TOTAL_ITERATIONS = 8
+UNET_DEVICE_TEST_TOTAL_ITERATIONS = 4
 
 
 @pytest.mark.parametrize("batch", [1])
@@ -30,6 +30,7 @@ def test_unet_model(batch, groups, device, iterations, use_program_cache, reset_
         and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110
     ):
         pytest.skip(f"Shallow UNet only support 110 cores on BH (was {device.compute_with_storage_grid_size()})")
+    device.disable_and_clear_program_cache()  # Needed to give consistent device perf between iterations
     run_unet_model(batch, groups, device, iterations)
 
 
@@ -37,7 +38,7 @@ def test_unet_model(batch, groups, device, iterations, use_program_cache, reset_
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, groups, expected_device_perf_fps",
-    ((1, 4, 1410.0),),
+    ((1, 4, 1415.0),),
 )
 def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: float):
     command = f"pytest models/experimental/functional_unet/tests/test_unet_perf.py::test_unet_model"
