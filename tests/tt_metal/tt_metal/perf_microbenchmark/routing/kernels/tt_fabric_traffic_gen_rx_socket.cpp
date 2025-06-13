@@ -75,7 +75,7 @@ void kernel_main() {
     zero_l1_buf((uint32_t*)client_pull_req_buf, sizeof(chan_req_buf));
     test_results[TT_FABRIC_MISC_INDEX] = 0xff000003;
 
-    client_interface->gk_interface_addr = ((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l;
+    client_interface->gk_interface_addr = get_noc_addr_helper(gk_interface_addr_h, gk_interface_addr_l);
     client_interface->gk_msg_buf_addr = client_interface->gk_interface_addr + offsetof(gatekeeper_info_t, gk_msg_buf);
     client_interface->pull_req_buf_addr = xy_local_addr | client_pull_req_buf_addr;
     test_results[TT_FABRIC_MISC_INDEX] = 0xff000004;

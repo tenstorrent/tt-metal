@@ -125,19 +125,6 @@ std::vector<T> slice(std::vector<T> const& v, int m, int n) {
     return vec;
 }
 
-void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const std::string& name) {
-    std::cout << name << ": " << std::endl;
-    int index = 0;
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            std::cout << data.at(index).to_float() << " ";
-            index++;
-        }
-        std::cout << std::endl;
-    }
-    std::cout << std::endl;
-}
-
 int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
@@ -246,8 +233,8 @@ int main(int argc, char** argv) {
         auto identity = create_identity_matrix(Kt * 32, Nt * 32, std::min(Kt, Nt) * 32);  // bflaot16 identity
 
         if (print_tensor) {
-            print_vec(tensor.get_values(), 2, Kt * 32, std::string("Activation first row"));
-            print_vec(identity, 2, Nt * 32, std::string("Weights first row"));
+            print_vec_of_bfloat16(tensor.get_values(), 1, "Activation first row");
+            print_vec_of_bfloat16(identity, 1, "Weights first row");
         }
 
         log_info(LogTest, "Slicing input tensors and copying them to L1");
@@ -363,11 +350,8 @@ int main(int argc, char** argv) {
                     auto result_untilized = untilize_swizzled(result_flat_layout, per_core_Mt * 32, per_core_Nt * 32);
 
                     if (print_tensor) {
-                        print_vec(
-                            result_untilized,
-                            2,
-                            Nt * 32,
-                            std::string("result_untilized" + std::to_string(r) + " " + std::to_string(c)));
+                        print_vec_of_bfloat16(
+                            result_untilized, 1, "result_untilized" + std::to_string(r) + " " + std::to_string(c));
                     }
 
                     if (!(per_core_golden == result_untilized)) {

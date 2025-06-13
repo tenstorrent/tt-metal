@@ -61,7 +61,8 @@ FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
         this->is_receiver_channel_serviced_.fill(true);
     } else if (arch == tt::ARCH::BLACKHOLE) {
         this->is_sender_channel_serviced_.fill(risc_id == 0);
-        this->is_receiver_channel_serviced_.fill(risc_id == 1);
+        // TODO: set this to be risc_id == 1 when we want to split sender/receiver on the two eriscs
+        this->is_receiver_channel_serviced_.fill(risc_id == 0);
         this->enable_context_switch_ = false;
         this->enable_interrupts_ = false;
     } else {
@@ -597,7 +598,6 @@ void append_worker_to_fabric_edm_sender_rt_args(
         "sender_worker_flow_control_semaphore_id is not being interpreted as a semaphore ID for worker connection");
 
     const std::vector<uint32_t> values = {
-        connection.persistent_fabric,
         connection.edm_direction,
         edm_noc_xy.to_uint32(),
         connection.edm_buffer_base_addr,
@@ -650,7 +650,6 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 
     const FabricEriscDatamoverConfig& config,
     eth_chan_directions direction,
-    bool enable_persistent_mode,
     bool build_in_worker_connection_mode,
     bool dateline_connection) :
     my_eth_core_logical(my_eth_core_logical),
@@ -686,7 +685,6 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     termination_signal_ptr(config.termination_signal_address),
     edm_local_sync_ptr(config.edm_local_sync_address),
     edm_status_ptr(config.edm_status_address),
-    enable_persistent_mode(enable_persistent_mode),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
     dateline_connection(dateline_connection) {
     std::fill(
@@ -770,7 +768,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->termination_signal_ptr,
         this->edm_local_sync_ptr,
         this->edm_status_ptr,
-        this->enable_persistent_mode,
 
         // fabric counters
         FabricEriscDatamoverConfig::enable_fabric_counters,
@@ -949,7 +946,6 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     chip_id_t local_chip_id,
     chip_id_t peer_chip_id,
     const FabricEriscDatamoverConfig& config,
-    bool enable_persistent_mode,
     bool build_in_worker_connection_mode,
     bool dateline_connection,
     eth_chan_directions direction) {
@@ -960,149 +956,103 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         receiver_channels_downstream_flow_control_semaphore_id;
     std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
         receiver_channels_downstream_teardown_semaphore_id;
-    if (enable_persistent_mode) {
-        if (build_in_worker_connection_mode) {
-            for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
-                receiver_channels_downstream_flow_control_semaphore_id[i] = 0;
-                receiver_channels_downstream_teardown_semaphore_id[i] = 0;
-            }
-            // Sender channel 0 uses addresses instead of ids in persistent mode
-            sender_channels_buffer_index_semaphore_id[0] = config.sender_channels_buffer_index_semaphore_address[0];
-            sender_channels_flow_control_semaphore_id[0] =
-                config.sender_channels_local_flow_control_semaphore_address[0];
-            sender_channels_connection_semaphore_id[0] = config.sender_channels_connection_semaphore_address[0];
-            for (uint32_t i = 1; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
-                sender_channels_flow_control_semaphore_id[i] = 0;
-                sender_channels_connection_semaphore_id[i] = 0;
-                sender_channels_buffer_index_semaphore_id[i] = 0;
-            }
-        } else {
-            bool mesh = config.topology == Topology::Mesh;
-            uint32_t num_vc0_downstream_edms = mesh ? FabricEriscDatamoverConfig::num_downstream_edms_2d_vc0
-                                                    : FabricEriscDatamoverConfig::num_downstream_edms_vc0;
+    if (build_in_worker_connection_mode) {
+        for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
+            receiver_channels_downstream_flow_control_semaphore_id[i] = 0;
+            receiver_channels_downstream_teardown_semaphore_id[i] = 0;
+        }
+        // Sender channel 0 uses addresses instead of ids in persistent mode
+        sender_channels_buffer_index_semaphore_id[0] = config.sender_channels_buffer_index_semaphore_address[0];
+        sender_channels_flow_control_semaphore_id[0] = config.sender_channels_local_flow_control_semaphore_address[0];
+        sender_channels_connection_semaphore_id[0] = config.sender_channels_connection_semaphore_address[0];
+        for (uint32_t i = 1; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+            sender_channels_flow_control_semaphore_id[i] = 0;
+            sender_channels_connection_semaphore_id[i] = 0;
+            sender_channels_buffer_index_semaphore_id[i] = 0;
+        }
+    } else {
+        bool mesh = config.topology == Topology::Mesh;
+        uint32_t num_vc0_downstream_edms = mesh ? FabricEriscDatamoverConfig::num_downstream_edms_2d_vc0
+                                                : FabricEriscDatamoverConfig::num_downstream_edms_vc0;
 
-            // Setup VC0 downstrteam edm semaphore settings.
-            // 1D has 1 downstream edm. 2D has 3 downstream EDMs
-            // 2D uses the reserved addresses in L1 from FabricEriscDatamoverConfig
-            for (uint32_t i = 0; i < num_vc0_downstream_edms; i++) {
-                if (mesh) {
-                    receiver_channels_downstream_flow_control_semaphore_id[i] =
-                        config.receiver_channels_downstream_flow_control_semaphore_address[i];
-                    receiver_channels_downstream_teardown_semaphore_id[i] =
-                        config.receiver_channels_downstream_teardown_semaphore_address[i];
-                } else {
-                    receiver_channels_downstream_flow_control_semaphore_id[i] =
-                        tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-                    receiver_channels_downstream_teardown_semaphore_id[i] =
-                        tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-                }
-            }
-            // Setup VC1 downstream edm
-            // 1D and 2D have 1 downstream edm for VC1 in the diretion of respective axis
+        // Setup VC0 downstrteam edm semaphore settings.
+        // 1D has 1 downstream edm. 2D has 3 downstream EDMs
+        // 2D uses the reserved addresses in L1 from FabricEriscDatamoverConfig
+        for (uint32_t i = 0; i < num_vc0_downstream_edms; i++) {
             if (mesh) {
-                receiver_channels_downstream_flow_control_semaphore_id[num_vc0_downstream_edms] =
-                    config.receiver_channels_downstream_flow_control_semaphore_address[num_vc0_downstream_edms];
-                receiver_channels_downstream_teardown_semaphore_id[num_vc0_downstream_edms] =
-                    config.receiver_channels_downstream_teardown_semaphore_address[num_vc0_downstream_edms];
-
+                receiver_channels_downstream_flow_control_semaphore_id[i] =
+                    config.receiver_channels_downstream_flow_control_semaphore_address[i];
+                receiver_channels_downstream_teardown_semaphore_id[i] =
+                    config.receiver_channels_downstream_teardown_semaphore_address[i];
             } else {
-                receiver_channels_downstream_flow_control_semaphore_id[num_vc0_downstream_edms] =
+                receiver_channels_downstream_flow_control_semaphore_id[i] =
                     tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-                receiver_channels_downstream_teardown_semaphore_id[num_vc0_downstream_edms] =
+                receiver_channels_downstream_teardown_semaphore_id[i] =
                     tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
             }
-            uint32_t num_sender_channels = mesh ? FabricEriscDatamoverConfig::num_sender_channels_2d
-                                                : FabricEriscDatamoverConfig::num_sender_channels_1d;
-            for (uint32_t i = 0; i < num_sender_channels; i++) {
-                if (mesh) {
+        }
+        // Setup VC1 downstream edm
+        // 1D and 2D have 1 downstream edm for VC1 in the diretion of respective axis
+        if (mesh) {
+            receiver_channels_downstream_flow_control_semaphore_id[num_vc0_downstream_edms] =
+                config.receiver_channels_downstream_flow_control_semaphore_address[num_vc0_downstream_edms];
+            receiver_channels_downstream_teardown_semaphore_id[num_vc0_downstream_edms] =
+                config.receiver_channels_downstream_teardown_semaphore_address[num_vc0_downstream_edms];
+
+        } else {
+            receiver_channels_downstream_flow_control_semaphore_id[num_vc0_downstream_edms] =
+                tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+            receiver_channels_downstream_teardown_semaphore_id[num_vc0_downstream_edms] =
+                tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+        }
+        uint32_t num_sender_channels = mesh ? FabricEriscDatamoverConfig::num_sender_channels_2d
+                                            : FabricEriscDatamoverConfig::num_sender_channels_1d;
+        for (uint32_t i = 0; i < num_sender_channels; i++) {
+            if (mesh) {
+                sender_channels_buffer_index_semaphore_id[i] = config.sender_channels_buffer_index_semaphore_address[i];
+                sender_channels_flow_control_semaphore_id[i] =
+                    config.sender_channels_local_flow_control_semaphore_address[i];
+                sender_channels_connection_semaphore_id[i] = config.sender_channels_connection_semaphore_address[i];
+            } else {
+                if (i == 0) {
+                    // Sender channel 0 uses addresses instead of ids in persistent mode
                     sender_channels_buffer_index_semaphore_id[i] =
                         config.sender_channels_buffer_index_semaphore_address[i];
                     sender_channels_flow_control_semaphore_id[i] =
                         config.sender_channels_local_flow_control_semaphore_address[i];
                     sender_channels_connection_semaphore_id[i] = config.sender_channels_connection_semaphore_address[i];
                 } else {
-                    if (i == 0) {
-                        // Sender channel 0 uses addresses instead of ids in persistent mode
-                        sender_channels_buffer_index_semaphore_id[i] =
-                            config.sender_channels_buffer_index_semaphore_address[i];
-                        sender_channels_flow_control_semaphore_id[i] =
-                            config.sender_channels_local_flow_control_semaphore_address[i];
-                        sender_channels_connection_semaphore_id[i] =
-                            config.sender_channels_connection_semaphore_address[i];
-                    } else {
-                        sender_channels_flow_control_semaphore_id[i] =
-                            tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-                        sender_channels_connection_semaphore_id[i] =
-                            tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-                        sender_channels_buffer_index_semaphore_id[i] =
-                            tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-                    }
+                    sender_channels_flow_control_semaphore_id[i] =
+                        tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+                    sender_channels_connection_semaphore_id[i] =
+                        tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
+                    sender_channels_buffer_index_semaphore_id[i] =
+                        tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
                 }
             }
         }
-        return FabricEriscDatamoverBuilder(
-            ethernet_core,
-            device->ethernet_core_from_logical_core(ethernet_core).x,
-            device->ethernet_core_from_logical_core(ethernet_core).y,
-            local_chip_id,
-            peer_chip_id,
-
-            receiver_channels_downstream_flow_control_semaphore_id,
-            receiver_channels_downstream_teardown_semaphore_id,
-            sender_channels_flow_control_semaphore_id,
-            sender_channels_connection_semaphore_id,
-            sender_channels_buffer_index_semaphore_id,
-
-            config,
-            direction,
-            enable_persistent_mode,
-            build_in_worker_connection_mode,
-            dateline_connection);
-
-    } else {
-        for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
-            receiver_channels_downstream_flow_control_semaphore_id[i] =
-                tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-            receiver_channels_downstream_teardown_semaphore_id[i] =
-                tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-        }
-
-        for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels_1d; i++) {
-            sender_channels_flow_control_semaphore_id[i] =
-                tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-            sender_channels_connection_semaphore_id[i] =
-                tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-            sender_channels_buffer_index_semaphore_id[i] =
-                tt::tt_metal::CreateSemaphore(program, ethernet_core, 0, CoreType::ETH);
-        }
-
-        return FabricEriscDatamoverBuilder(
-            ethernet_core,
-            device->ethernet_core_from_logical_core(ethernet_core).x,
-            device->ethernet_core_from_logical_core(ethernet_core).y,
-            local_chip_id,
-            peer_chip_id,
-
-            receiver_channels_downstream_flow_control_semaphore_id,
-            receiver_channels_downstream_teardown_semaphore_id,
-            sender_channels_flow_control_semaphore_id,
-            sender_channels_connection_semaphore_id,
-            sender_channels_buffer_index_semaphore_id,
-
-            config,
-            direction,
-            enable_persistent_mode,
-            build_in_worker_connection_mode,
-            dateline_connection);
     }
+    return FabricEriscDatamoverBuilder(
+        ethernet_core,
+        device->ethernet_core_from_logical_core(ethernet_core).x,
+        device->ethernet_core_from_logical_core(ethernet_core).y,
+        local_chip_id,
+        peer_chip_id,
+
+        receiver_channels_downstream_flow_control_semaphore_id,
+        receiver_channels_downstream_teardown_semaphore_id,
+        sender_channels_flow_control_semaphore_id,
+        sender_channels_connection_semaphore_id,
+        sender_channels_buffer_index_semaphore_id,
+
+        config,
+        direction,
+        build_in_worker_connection_mode,
+        dateline_connection);
 }
 
 SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_channel() const {
-    if (this->enable_persistent_mode) {
-        log_trace(tt::LogOp, "Building connection to persistent fabric");
-    } else {
-        log_trace(tt::LogOp, "Building connection to non-persistent fabric");
-    }
+    log_trace(tt::LogOp, "Building connection to persistent fabric");
     static constexpr uint32_t worker_chan = 0;
     TT_FATAL(
         sender_channels_buffer_index_semaphore_id[worker_chan] !=
@@ -1119,7 +1069,6 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_
         this->config.sender_channels_worker_conn_info_base_address[worker_chan],
         this->config.channel_buffer_size_bytes,
         this->sender_channels_buffer_index_semaphore_id[worker_chan],
-        this->enable_persistent_mode,
         this->direction};
 }
 
@@ -1140,7 +1089,6 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
         this->config.sender_channels_worker_conn_info_base_address[ds_edm],
         this->config.channel_buffer_size_bytes,
         this->sender_channels_buffer_index_semaphore_id[ds_edm],
-        false,
         eth_chan_directions::EAST};
 }
 

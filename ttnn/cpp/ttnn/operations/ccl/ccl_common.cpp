@@ -26,19 +26,19 @@ void SyncModeSpec::add_signal(uint32_t sem_id, uint32_t wait_count) {
 
 LineTopology::LineTopology(size_t line_size, size_t line_index) : _line_size(line_size), _line_index(line_index) {}
 
-bool LineTopology::is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const {
-    if (direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD) {
+bool LineTopology::is_first_device_in_line(ttnn::ccl::LineDirection direction) const {
+    if (direction == ttnn::ccl::LineDirection::FORWARD) {
         return _line_index == 0;
     } else {
-        TT_ASSERT(direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
+        TT_ASSERT(direction == ttnn::ccl::LineDirection::BACKWARD);
         return _line_index == _line_size - 1;
     }
 }
-bool LineTopology::is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const {
-    if (direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD) {
+bool LineTopology::is_last_device_in_line(ttnn::ccl::LineDirection direction) const {
+    if (direction == ttnn::ccl::LineDirection::BACKWARD) {
         return _line_index == 0;
     } else {
-        TT_ASSERT(direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
+        TT_ASSERT(direction == ttnn::ccl::LineDirection::FORWARD);
         return _line_index == _line_size - 1;
     }
 }
@@ -49,8 +49,8 @@ size_t LineTopology::line_size() const { return _line_size; }
 
 size_t LineTopology::line_index() const { return _line_index; }
 
-size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const {
-    if (direction == ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD) {
+size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::LineDirection direction) const {
+    if (direction == ttnn::ccl::LineDirection::FORWARD) {
         return (_line_size - _line_index) - 1;
     } else {
         return _line_index;
@@ -151,7 +151,7 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
     const uint32_t num_devices,
     const ttnn::SmallVector<uint32_t>& unpad_elements,
-    const int dim){
+    const int dim) {
     std::vector<ttnn::Tensor> combined_tensors;
 
     ttnn::SmallVector<uint32_t> begins = {0, 0, 0, 0};
@@ -1496,10 +1496,8 @@ std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
     size_t num_targets_backward = 0;
     if (topology == Topology::Linear) {
         LineTopology line_topology(ring_size, ring_index);
-        num_targets_forward =
-            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
-        num_targets_backward =
-            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
+        num_targets_forward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::FORWARD);
+        num_targets_backward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::BACKWARD);
     } else if (topology == ccl::Topology::Ring) {
         // TODO: Commonize
         num_targets_forward = tt::div_up(ring_size - 1, 2);

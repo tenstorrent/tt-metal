@@ -59,10 +59,11 @@ class TT_CCL:
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
         if mode == "prefill":
-            self.support_seqlens = [32 * 1024, 16 * 1024, 8192, 4096, 1024, 2048, 128]
+            self.support_seqlens = [8192, 4096, 1024, 2048, 128]
             if allocate_prefill_buffers:
                 self.persistent_buffers = self.get_prefill_reduce_scatter_buffers()
                 self.all_gather_buffers = self.get_prefill_all_gather_buffers()
+
             else:
                 for seqlen in self.support_seqlens:
                     self.persistent_buffers[seqlen] = {}
@@ -167,18 +168,6 @@ class TT_CCL:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         persistent_buffers["LAYERNORM"] = tt_buffer
-
-        # Sampling
-        # # TODO: remove this when not needed for llama_model ttnn_decode_forward anymore, see issue #22924
-        tt_buffer = ttnn.from_torch(
-            torch.zeros((1, 1, 32, 128 * 1024)),
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        persistent_buffers["SAMPLING"] = tt_buffer
 
         # Sampling values
         tt_buffer = ttnn.from_torch(
@@ -561,6 +550,55 @@ class TT_CCL:
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return xqkv_reduced, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD
 
+    def matmul_line_reduce_scatter(
+        self,
+        # Matmul
+        matmul_input,
+        matmul_weight,
+        # Reduce Scatter
+        input_tensor_mesh,
+        # Matmul
+        compute_kernel_config=None,
+        dtype=None,
+        program_config=None,
+        memory_config=None,
+        global_cb=None,
+        sub_device_id=None,
+        # Reduce Scatter
+        dim=3,
+        num_links=1,
+        math_op=ttnn.ReduceType.Sum,
+        buffer_key=None,
+        RS_memory_config=None,
+        cluster_axis=1,
+    ):
+        persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
+            self.reduce_scatter_buffer_idx[cluster_axis]
+        ]
+        w3_out, ttnn_tensor_out = ttnn.experimental.llama_rs_matmul(
+            matmul_input,
+            matmul_weight,
+            input_tensor_mesh,
+            persistent_interim_buffer,
+            dim,
+            self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            cluster_axis,
+            self.mesh_device,
+            num_links,
+            self.worker_sub_device_id,
+            memory_config_rs=RS_memory_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=dtype,
+            program_config=program_config,
+            memory_config_mm=memory_config,
+            global_cb=global_cb,
+            topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
+        )
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        self.reduce_scatter_buffer_idx[cluster_axis] = (self.reduce_scatter_buffer_idx[cluster_axis] + 1) % self.num_cbs
+        # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
+        return ttnn_tensor_out, w3_out
+
     def llama_rs_create_heads(
         self,
         input_tensor_mesh,
@@ -609,8 +647,11 @@ class TT_CCL:
                 input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
             )
             seqlen = input_tensor_mesh.shape[-2]
-            persistent_buffers = self.persistent_buffers[seqlen].get(buffer_key, None)
-
+            persistent_buffers = (
+                None
+                if seqlen not in self.persistent_buffers.keys()
+                else self.persistent_buffers[seqlen].get(buffer_key, None)
+            )
             ttnn_tensor_out = ttnn.experimental.reduce_scatter_async(
                 input_tensor_mesh,
                 dim,
@@ -669,7 +710,11 @@ class TT_CCL:
                     input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
                 )
                 seqlen = input_tensor_mesh.shape[-2]
-                persistent_buffer = self.all_gather_buffers[seqlen].get(buffer_key, None)
+                persistent_buffer = (
+                    None
+                    if seqlen not in self.all_gather_buffers.keys()
+                    else self.all_gather_buffers[seqlen].get(buffer_key, None)
+                )
         else:
             topology = ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear
             assert buffer_key is not None, "buffer_key is None"
