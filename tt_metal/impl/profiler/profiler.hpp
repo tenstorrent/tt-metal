@@ -207,7 +207,6 @@ private:
         IDevice* device,
         const CoreCoord& worker_core,
         const ProfilerDumpState state,
-        const std::vector<uint32_t>& data_buffer,
         const ProfilerDataBufferSource data_source,
         const std::optional<ProfilerOptionalMetadata>& metadata,
         std::ofstream& log_file_ofs,
