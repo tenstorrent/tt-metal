@@ -331,7 +331,6 @@ class TtLlamaAttention(LightweightModule):
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
         # Which leads to slightly different outputs from attention (due to accumulated errors)
         sdpa_out_mem_cfg = self.model_config["SDPA_RM_OUTPUT_MEMCFG"](self.batch_size_per_device_group)
-
         if page_table:
             attn_output_1G4D_sharded = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads_1BQD,
@@ -355,7 +354,6 @@ class TtLlamaAttention(LightweightModule):
                 compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
                 memory_config=sdpa_out_mem_cfg,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
             )
-
         ttnn.deallocate(q_heads_1BQD)
 
         # print("done attention")
