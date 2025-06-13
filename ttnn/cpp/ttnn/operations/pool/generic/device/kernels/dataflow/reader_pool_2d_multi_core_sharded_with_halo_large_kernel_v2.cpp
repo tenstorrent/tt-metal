@@ -84,9 +84,6 @@ void kernel_main() {
     // fill the clear cb
     fill_with_val(get_write_ptr(clear_value_cb_id), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
 
-    // ensure the clear CB is full before proceeding
-    cb_push_back(sync_cb_id1, 1);
-
     constexpr uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
     // initialize buffers
     clear_out_tiles<in_cb_id, clear_value_cb_id>();
@@ -94,15 +91,12 @@ void kernel_main() {
     if constexpr (one_scalar_per_core) {
         fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16);
     }
-    DPRINT << "READER scalar" << ENDL();
-    tt::data_movement::common::print_bf16_pages(get_read_ptr(in_scalar_cb_id_0), 32, 1);
+    // DPRINT << "READER scalar" << ENDL();
+    // tt::data_movement::common::print_bf16_pages(get_read_ptr(in_scalar_cb_id_0), 32, 1);
     if constexpr (is_avg_pool) {
         // for avgpool, we use a one's CB to avoid double division by kernel size for large kernel case.
         fill_with_val(get_write_ptr(in_one_cb_id), TILE_WIDTH, bf16_one_u16);
     }
-
-    // ensure initialization is done before proceeding
-    cb_push_back(sync_cb_id1, 1);
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
@@ -118,7 +112,6 @@ void kernel_main() {
     constexpr bool wide_reduction = in_nblocks_c > 1;
     constexpr uint32_t in_write_inc =
         wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
-    DPRINT << "READER in_write_inc: " << in_write_inc << ENDL();
 
     if constexpr (!one_scalar_per_core) {
         config_l1_addr = get_read_ptr(config_cb_id);
@@ -129,8 +122,9 @@ void kernel_main() {
         scalar_index++;
     }
 
-    while (counter < reader_nindices) {
+    for (uint32_t n = 0; n < reader_nindices; ++n) {
         if constexpr (!one_scalar_per_core) {
+            // DPRINT << "HIT" << ENDL();
             cb_reserve_back(in_scalar_cb_id, 1);
             while ((counter >= scalar_end) && scalar_end != reader_nindices) {
                 scalar_start = scalar_end;
@@ -151,68 +145,46 @@ void kernel_main() {
         }
 
         uint32_t out_l1_write_addr = get_write_ptr(out_cb_id);
+        const uint16_t top_left_local_index = reader_indices_ptr[counter];
+        const uint64_t in_l1_write_addr_base = get_write_ptr(in_cb_id);
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             const uint32_t read_bytes = !wide_reduction ? in_nbytes_c
                                         : c_i != in_nblocks_c - 1
                                             ? MAX_ELE_PER_REDUCTION
                                             : (in_c - c_i * TILE_WIDTH * MAX_TILES_PER_REDUCTION) * BYTES_PER_ELEM;
-            DPRINT << "READER read_bytes: " << read_bytes << ENDL();
-            const uint16_t top_left_local_index = reader_indices_ptr[counter];
             uint32_t processed_rows = 0;
-            const uint32_t in_l1_write_addr_base = get_write_ptr(in_cb_id);
-            // if (c_i == in_nblocks_c - 1) {  // re-initialize the entire buffer to overwite old data since this is a
-            //                                 // partially filled iteration
-            //     clear_out_tiles<clear_value_cb_id, in_cb_ntiles>(
-            //         get_noc_addr(in_l1_write_addr_base), get_noc_addr(get_read_ptr(clear_value_cb_id)));
-            // } else {  // initialize only the first row where the running max / total is stored
             fill_with_val(in_l1_write_addr_base, read_bytes / BYTES_PER_ELEM, bf16_init_value);
-            //}
-            uint32_t in_l1_write_addr =
-                in_l1_write_addr_base + in_write_inc;  // skip the first row where the running max / total is stored
-            for (uint32_t h = 0; h < window_h; ++h) {
-                for (uint32_t w = 0; w < window_w; w++) {
-                    const uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
-                    const uint32_t read_offset =
-                        in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);
-                    noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes);
-                    in_l1_write_addr += in_write_inc;
-                    processed_rows++;
-                    if ((processed_rows % (max_rows_for_reduction - 1)) == 0) {
-                        noc_async_read_barrier();
-                        DPRINT << "READER processed rows: " << processed_rows << ENDL();
-                        tt::data_movement::common::print_bf16_pages(in_l1_write_addr_base, 256, 32);
-                        in_l1_write_addr = in_l1_write_addr_base + in_write_inc;  // reset to the first row again
-                        cb_push_back(in_cb_id, 2);
-                        cb_reserve_back(in_cb_id, 2);
-                        if (is_avg_pool && total_elems_to_reduce - processed_rows < max_rows_for_reduction - 1) {
-                            DPRINT << "READER resetting for last batch" << ENDL();
-                            fill_with_val(
-                                in_l1_write_addr,
-                                (max_rows_for_reduction - 1) * in_write_inc / BYTES_PER_ELEM,
-                                bf16_init_value);
-                        }
+            for (uint32_t i = 0; i < interm_reduction_chunks; i++) {
+                cb_reserve_back(sync_cb_id1, 2);
+                for (uint32_t r = 1; r < max_rows_for_reduction; ++r) {
+                    uint32_t in_l1_write_addr = in_l1_write_addr_base + r * in_write_inc;
+                    if (processed_rows < total_elems_to_reduce) {  // fill with data
+                        uint32_t h = processed_rows / window_w;
+                        uint32_t w = processed_rows % window_w;
+                        const uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
+                        const uint32_t read_offset =
+                            in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);
+                        noc_async_read(get_noc_addr(read_offset), in_l1_write_addr, read_bytes);
+                    } else if (is_avg_pool) {  // fill with padding
+                        fill_with_val(in_l1_write_addr, read_bytes / BYTES_PER_ELEM, bf16_init_value);
                     }
+                    processed_rows++;
                 }
-            }
-            if (remaining_elems) {
                 noc_async_read_barrier();
-                DPRINT << "READER processed rows: " << processed_rows << ENDL();
-                tt::data_movement::common::print_bf16_pages(in_l1_write_addr_base, 256, 32);
-                in_l1_write_addr = in_l1_write_addr_base + in_write_inc;  // reset to the first row again
-                cb_push_back(in_cb_id, 2);
-                cb_reserve_back(in_cb_id, 2);
+                // DPRINT << "READER chunk i: " << i << ENDL();
+                // tt::data_movement::common::print_bf16_pages(in_l1_write_addr_base, in_write_inc / 2, 32);
+                cb_push_back(sync_cb_id1, 2);
             }
-            // wait for compute to finish this top left index
+            cb_wait_front(sync_cb_id2, 2);
+
             // write the final result to the output buffer
-            noc_async_read_one_packet(
-                get_noc_addr(in_l1_write_addr_base), out_l1_write_addr, read_bytes);  // write the first row
-            DPRINT << "READER output" << ENDL();
-            tt::data_movement::common::print_bf16_pages(in_l1_write_addr_base, 256, 32);
+            noc_async_read(get_noc_addr(in_l1_write_addr_base), out_l1_write_addr, read_bytes);  // write the first row
+            noc_async_read_barrier();
+            // DPRINT << "READER output:" << ENDL();
+            // tt::data_movement::common::print_bf16_pages(out_l1_write_addr, read_bytes / 2, 1);
             out_l1_write_addr += read_bytes;
-            noc_async_read_barrier();  // write only read bytes out
+
+            cb_pop_front(sync_cb_id2, 2);
         }
-        cb_reserve_back(sync_cb_id1, 2);
-        cb_push_back(sync_cb_id1, 2);  // signal that we are done with this top left index
-        counter++;
     }
 }  // kernel_main()

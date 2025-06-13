@@ -106,6 +106,8 @@ def run_avg_pool2d(
     ttnn_output = ttnn.to_torch(ttnn_output)
 
     ## Assertion
+    # print(ttnn_output)
+    # print(torch_output)
     assert_with_pcc(torch_output, ttnn_output, 0.99)
     allclose = torch.allclose(ttnn_output, torch_output, rtol=0.02)
     assert allclose, " Reference and output tensor are not close"
@@ -130,7 +132,16 @@ def run_avg_pool2d(
         # [1, 288, 56, 56],
         # [1, 256, 132, 20],
         # [1, 32, 264, 40],
+        [1, 32, 9, 9],
+        [1, 64, 9, 9],
+        [1, 128, 9, 9],
         [1, 256, 9, 9],
+        [1, 288, 9, 9],
+        [1, 384, 9, 9],
+        [1, 512, 9, 9],
+        [1, 576, 9, 9],
+        [1, 640, 9, 9],
+        [1, 800, 9, 9],
     ),
 )
 @pytest.mark.parametrize(

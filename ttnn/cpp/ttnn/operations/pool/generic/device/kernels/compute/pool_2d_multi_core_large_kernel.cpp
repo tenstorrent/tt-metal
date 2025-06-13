@@ -18,9 +18,9 @@
 template <
     uint32_t num_output_tiles,
     bool is_partial_tile,
-    uint32_t max_rows_for_reduction,
     uint32_t split_reader,
     uint32_t unpA_face_r_dim,
+    uint32_t num_faces_in_tile,
     bool neginf_srca_maxpool,
     bool zero_srca_avgpool>
 inline void reduce_h_fused(
@@ -28,32 +28,22 @@ inline void reduce_h_fused(
     const uint32_t in_cb_id_1,
     const uint32_t in_scalar_cb_id,
     const uint32_t in_stick_index,
-    const uint32_t interm_index,
-    const uint32_t interm_cb_id) {
-    constexpr uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : max_rows_for_reduction < 32 ? 2 : 4;
-    constexpr uint32_t num_faces_in_output_tile = is_partial_tile ? 1 : 2;
+    const uint32_t out_cb_id) {
     constexpr uint32_t num_out_rows = 1;
-
+    constexpr uint32_t num_output_faces = (is_partial_tile ? 1 : 2);
     const uint32_t curr_in_cb_id = in_cb_id_0;
-    cb_wait_front(curr_in_cb_id, 2);
 
     tile_regs_acquire();
     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-        curr_in_cb_id,
-        in_scalar_cb_id,
-        num_output_tiles,
-        0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
-        num_faces_in_input_tile /* unpack 1 or 2 faces ) */,
-        unpA_face_r_dim);
+        curr_in_cb_id, in_scalar_cb_id, num_output_tiles, 0, num_faces_in_tile, unpA_face_r_dim);
     for (uint32_t c_i = 0; c_i < num_output_tiles; ++c_i) {
-        reduce_tile_math(c_i, num_faces_in_input_tile /* reduce 1 or 2 faces */);
+        reduce_tile_math(c_i, num_faces_in_tile);
     }
     tile_regs_wait();
     tile_regs_commit();
     pack_untilize_dst<num_output_tiles>(
-        in_cb_id_0, 1 /*out_subblock_h*/, 0, num_out_rows, num_faces_in_output_tile); /* pack 1 row (1x16 or 1x32) */
+        out_cb_id, 1 /*out_subblock_h*/, 0, num_out_rows, num_output_faces); /* pack 1 row (1x16 or 1x32) */
     tile_regs_release();
-    cb_pop_front(curr_in_cb_id, 2);
 }
 
 namespace NAMESPACE {
@@ -69,7 +59,7 @@ void MAIN {
 
     constexpr uint32_t split_reader = get_compile_time_arg_val(5);
 
-    constexpr uint32_t nsticks_per_core_by_nblocks = get_compile_time_arg_val(6);
+    constexpr uint32_t reader_nindices = get_compile_time_arg_val(6);
     constexpr uint32_t in_c = get_compile_time_arg_val(7);
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(8);
     constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(9);
@@ -87,8 +77,7 @@ void MAIN {
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
-    constexpr uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : max_rows_for_reduction < 32 ? 2 : 4;
-    constexpr uint32_t num_faces_in_output_tile = is_partial_tile ? 1 : 2;
+    constexpr uint32_t num_faces_in_tile = is_partial_tile ? 1 : max_rows_for_reduction < 32 ? 2 : 4;
     constexpr uint32_t num_out_rows = 1;
 
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
@@ -103,58 +92,51 @@ void MAIN {
 
     constexpr uint32_t face_r_dim = 16;
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-        in_cb_id_0,
-        in_scalar_cb_id_0,
-        max_tiles_per_iter,
-        in_cb_id_0,  // TODO is this right?
-        num_faces_in_input_tile,
-        max_rows_for_reduction);
-    pack_untilize_dst_init_short<max_tiles_per_iter>(in_cb_id_0, num_out_rows, num_faces_in_output_tile);
+        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, in_cb_id_0, num_faces_in_tile, face_r_dim);
+    pack_untilize_dst_init_short<max_tiles_per_iter>(in_cb_id_0, num_out_rows, num_faces_in_tile);
 
     constexpr uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_rows_for_reduction + 1 : window_size_hw / max_rows_for_reduction;
 
-    DPRINT << "interm_reduction_chunks: " << interm_reduction_chunks << ENDL();
+    // DPRINT << "interm_reduction_chunks: " << interm_reduction_chunks << ENDL();
 
-    for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++i) {
-        // wait for initialization to complete
-        cb_wait_front(sync_cb_id1, 2);
-
+    for (uint32_t n = 0; n < reader_nindices; ++n) {
         const uint32_t curr_scalar_cb_id = in_scalar_cb_id_0;
         if constexpr (!one_scalar_per_core) {
             cb_wait_front(curr_scalar_cb_id, 1);
         }
-        for (uint32_t b_i = 0; b_i < in_nblocks_c; b_i++) {
+        for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             // perform the intermediate reductions over the first N - 1 whole chunks
             // For 5x5 kernel as an example, reduction over first 16 sticks AND next 9 sticks. It runs
             // twice, and both results are written to interm_cb_id. interm_cb_id will be the input to the
             // next level of reduction.
-            for (uint32_t h = 0; h < interm_reduction_chunks; h++) {
-                MATH(DPRINT << "COMPUTE h, b_i, i: " << h << ", " << b_i << ", " << i << ENDL());
+            cb_reserve_back(sync_cb_id2, 2);
+            for (uint32_t i = 0; i < interm_reduction_chunks; i++) {
+                cb_wait_front(sync_cb_id1, 2);
+                // MATH(DPRINT << "COMPUTE i, c_i, n: " << i << ", " << c_i << ", " << n << ENDL());
                 reduce_h_fused<
                     max_tiles_per_iter,
                     is_partial_tile,
-                    max_rows_for_reduction,
                     split_reader,
-                    max_rows_for_reduction,
+                    face_r_dim,
+                    num_faces_in_tile,
                     neginf_srca_maxpool,
                     zero_srca_avgpool>(
                     in_cb_id_0,
                     in_cb_id_1,
-                    (REDUCE_OP == PoolType::MAX || (REDUCE_OP == PoolType::SUM && h == interm_reduction_chunks - 1))
+                    (REDUCE_OP == PoolType::MAX || (REDUCE_OP == PoolType::SUM && i == interm_reduction_chunks - 1))
                         ? in_scalar_cb_id_0
                         : in_one_cb_id,
-                    i,
-                    h,
-                    interm_cb_id);
+                    n,
+                    in_cb_id_0);
+                cb_pop_front(sync_cb_id1, 2);
             }
+            cb_push_back(sync_cb_id2, 2);
         }
         if constexpr (!one_scalar_per_core) {
             cb_pop_front(curr_scalar_cb_id, 1);
         }
-
-        cb_pop_front(sync_cb_id1, 2);  // signal to the reader that we are done with this stick index
     }
 }
 
