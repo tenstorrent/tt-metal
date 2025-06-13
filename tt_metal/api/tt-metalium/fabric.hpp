@@ -46,9 +46,9 @@ size_t get_tt_fabric_channel_buffer_size_bytes();
 // connection appropriately. The API will not perform any checks to ensure that the
 // connection is indeed a 1D connection b/w all the workers.
 void append_fabric_connection_rt_args(
-    const chip_id_t src_chip_id,
-    const chip_id_t dst_chip_id,
-    const uint32_t link_idx,
+    chip_id_t src_chip_id,
+    chip_id_t dst_chip_id,
+    uint32_t link_idx,
     tt::tt_metal::Program& worker_program,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,

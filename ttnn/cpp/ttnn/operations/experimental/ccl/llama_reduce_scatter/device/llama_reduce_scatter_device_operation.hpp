@@ -111,12 +111,12 @@ struct LlamaReduceScatterDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
         ttnn::Tensor& intermediate_packet_buffer,
-        const int32_t dim,
+        int32_t dim,
         const GlobalSemaphore& semaphore,
-        const tt::tt_metal::SubDeviceId subdevice_id,
-        const uint32_t cluster_axis,
-        const uint32_t ring_devices,
-        const uint32_t num_links,
+        tt::tt_metal::SubDeviceId subdevice_id,
+        uint32_t cluster_axis,
+        uint32_t ring_devices,
+        uint32_t num_links,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear);
 };

@@ -209,15 +209,11 @@ std::vector<CoreCoord> grid_to_cores(CoreCoord start, CoreCoord end, bool row_wi
 
 // Noop cores are appended at the end with no guarantees on ordering
 std::vector<CoreCoord> grid_to_cores_with_noop(
-    const uint32_t bbox_x,
-    const uint32_t bbox_y,
-    const uint32_t grid_size_x,
-    const uint32_t grid_size_y,
-    const bool row_wise = false);
+    uint32_t bbox_x, uint32_t bbox_y, uint32_t grid_size_x, uint32_t grid_size_y, bool row_wise = false);
 
 // Noop cores are appended at the end with no guarantees on ordering
 std::vector<CoreCoord> grid_to_cores_with_noop(
-    const CoreRangeSet& used_cores, const CoreRangeSet& all_cores, const bool row_wise = false);
+    const CoreRangeSet& used_cores, const CoreRangeSet& all_cores, bool row_wise = false);
 
 std::vector<CoreCoord> corerange_to_cores(
     const CoreRangeSet& crs, std::optional<uint32_t> max_cores = std::nullopt, bool row_wise = false);

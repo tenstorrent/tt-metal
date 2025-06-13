@@ -32,7 +32,7 @@ public:
     DispatchMemMap& operator=(DispatchMemMap&& other) noexcept = delete;
     DispatchMemMap(const DispatchMemMap&) = delete;
     DispatchMemMap(DispatchMemMap&& other) noexcept = delete;
-    DispatchMemMap(const CoreType& core_type, const uint32_t num_hw_cqs);
+    DispatchMemMap(const CoreType& core_type, uint32_t num_hw_cqs);
 
     uint32_t prefetch_q_entries() const;
 
@@ -85,7 +85,7 @@ public:
 
 private:
     // Reset the instance using the settings for the core_type and num_hw_cqs.
-    void reset(const CoreType& core_type, const uint32_t num_hw_cqs);
+    void reset(const CoreType& core_type, uint32_t num_hw_cqs);
 
     std::pair<uint32_t, uint32_t> get_device_l1_info(const CoreType& core_type) const;
 

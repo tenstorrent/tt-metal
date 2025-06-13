@@ -61,10 +61,10 @@ public:
     uint32_t add_to_map(const Kernel* obj);
     void remove_from_map(const Kernel* obj);
     uint32_t get_global_id(const Kernel* obj);
-    bool is_in_map(const CBHandle handle);
-    uint32_t add_to_map(const CBHandle handle);
-    void remove_from_map(const CBHandle handle);
-    uint32_t get_global_id(const CBHandle handle);
+    bool is_in_map(CBHandle handle);
+    uint32_t add_to_map(CBHandle handle);
+    void remove_from_map(CBHandle handle);
+    uint32_t get_global_id(CBHandle handle);
 
 private:
     LightMetalCaptureContext();  // Private constructor

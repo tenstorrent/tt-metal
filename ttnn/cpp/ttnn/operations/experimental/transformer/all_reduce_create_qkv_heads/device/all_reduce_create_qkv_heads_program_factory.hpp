@@ -38,15 +38,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     std::vector<Tensor>& output_tensors,
-    const DataType dtype,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    DataType dtype,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const uint32_t num_q_heads,
-    const uint32_t num_kv_heads,
-    const uint32_t head_dim);
+    uint32_t num_q_heads,
+    uint32_t num_kv_heads,
+    uint32_t head_dim);
 
 }  // namespace ttnn

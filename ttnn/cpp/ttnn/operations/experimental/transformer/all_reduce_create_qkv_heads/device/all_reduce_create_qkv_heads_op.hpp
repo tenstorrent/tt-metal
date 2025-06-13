@@ -123,12 +123,12 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
     const Tensor& batch_offset_tensor,
-    const uint32_t cluster_axis,
+    uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const ttnn::ccl::Topology topology,
+    ttnn::ccl::Topology topology,
     const GlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& all_reduce_memory_config = std::nullopt,
-    const std::optional<size_t> num_preferred_links = std::nullopt,
+    std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     uint32_t head_dim = 0,
     uint32_t num_heads = 8,
@@ -136,7 +136,7 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     bool input_on_subcoregrids = false,
     std::optional<const uint32_t> slice_size = std::nullopt,
     const std::optional<MemoryConfig>& final_memory_config = std::nullopt,
-    const std::optional<const DataType> dtype = std::nullopt);
+    std::optional<const DataType> dtype = std::nullopt);
 
 }  // namespace ccl
 }  // namespace experimental

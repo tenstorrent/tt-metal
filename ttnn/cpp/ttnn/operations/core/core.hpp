@@ -22,7 +22,7 @@ namespace core {
 
 ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor);
 
-ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank);
+ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, int rank);
 
 ttnn::Tensor to_device(
     const ttnn::Tensor& tensor,

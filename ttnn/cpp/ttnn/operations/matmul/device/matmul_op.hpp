@@ -287,7 +287,7 @@ Tensor matmul(
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias = std::nullopt,
     const struct Matmul& parameters = Matmul{},
-    const QueueId queue_id = DefaultQueueId,
+    QueueId queue_id = DefaultQueueId,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 std::vector<Tensor> matmul_batched_weights(
@@ -295,7 +295,7 @@ std::vector<Tensor> matmul_batched_weights(
     const std::vector<Tensor>& input_tensors_b,
     const std::optional<const Tensor>& bias = std::nullopt,
     const struct Matmul& parameters = Matmul{},
-    const QueueId queue_id = DefaultQueueId,
+    QueueId queue_id = DefaultQueueId,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 }  // namespace matmul
@@ -307,11 +307,11 @@ std::vector<Tensor> matmul_batched_weights(
 namespace bmm_op_utils {
 
 std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
-    const uint32_t per_core_M,
-    const uint32_t per_core_N,
-    const bool per_core_M_equals_subblock_h_constraint,
-    const bool per_core_N_equals_subblock_w_constraint,
-    const bool fp32_dest_acc_en);
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    bool per_core_M_equals_subblock_h_constraint,
+    bool per_core_N_equals_subblock_w_constraint,
+    bool fp32_dest_acc_en);
 
 }  // namespace bmm_op_utils
 

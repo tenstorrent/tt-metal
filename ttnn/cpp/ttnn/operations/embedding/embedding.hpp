@@ -21,7 +21,7 @@ struct EmbeddingOperation {
         const std::optional<int>& pad_token = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
         EmbeddingsType embeddings_type = EmbeddingsType::GENERIC,
-        const std::optional<const DataType> dtype = std::nullopt,
+        std::optional<const DataType> dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
     static ttnn::Tensor invoke(
@@ -30,7 +30,7 @@ struct EmbeddingOperation {
         const std::optional<int>& pad_token = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
         EmbeddingsType embeddings_type = EmbeddingsType::GENERIC,
-        const std::optional<const DataType> dtype = std::nullopt,
+        std::optional<const DataType> dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };

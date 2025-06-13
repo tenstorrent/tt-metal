@@ -27,7 +27,7 @@ struct WhereOperation {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& predicate,
-        const float value_true,
+        float value_true,
         const Tensor& value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt);
@@ -36,15 +36,15 @@ struct WhereOperation {
         QueueId queue_id,
         const Tensor& predicate,
         const Tensor& value_true,
-        const float value_false,
+        float value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt);
 
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& predicate,
-        const float value_true,
-        const float value_false,
+        float value_true,
+        float value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt);
 

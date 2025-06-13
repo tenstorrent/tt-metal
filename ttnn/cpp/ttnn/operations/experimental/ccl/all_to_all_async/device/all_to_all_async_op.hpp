@@ -95,11 +95,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
-    const uint32_t in_dim,
-    const uint32_t out_dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t in_dim,
+    uint32_t out_dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
@@ -113,12 +113,12 @@ Tensor all_to_all_async(
     const Tensor& input_tensor,
     Tensor& persistent_intermediate_buffer,
     Tensor& persistent_output_buffer,
-    const int32_t in_dim,
-    const int32_t out_dim,
+    int32_t in_dim,
+    int32_t out_dim,
     const GlobalSemaphore& multi_device_global_semaphore,
-    const uint32_t num_links = 1,
+    uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
 }  // namespace ccl
