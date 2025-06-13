@@ -15,8 +15,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 TEST_SHAPES = [
-    (1, 1, 2, 16),
     (1, 1, 1, 16),
+    (1, 1, 2, 16),
     (1, 1, 1, 64),
     (1, 1, 3, 128),
     (1, 13, 1, 32),

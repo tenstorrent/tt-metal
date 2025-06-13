@@ -4,7 +4,6 @@
 ///
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 #include "dprint_pages.h"
@@ -88,7 +87,7 @@ void kernel_main() {
 
             ++packet_page_idx;
             if (packet_page_idx == curr_pages_per_packet) {
-                const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer_addrgen);
+                const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer_addrgen, 0, 0);
 
                 packet_header_ptr->to_noc_unicast_write(
                     tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, payload_size_bytes);
