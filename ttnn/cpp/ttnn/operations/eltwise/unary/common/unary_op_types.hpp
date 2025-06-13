@@ -49,6 +49,7 @@ enum class UnaryOpType {
     RSQRT,
     RELU6,
     ATAN,
+    ASINH,
     ERF,
     ERFC,
     ISINF,
