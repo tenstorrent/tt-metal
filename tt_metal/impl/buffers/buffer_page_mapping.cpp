@@ -66,10 +66,14 @@ CompressedBufferPageMapping::CompressedBufferPageMapping(const BufferPageMapping
         if (core_host_page_indices.empty()) {
             continue;
         }
+        auto host_ranges = CMAKE_UNIQUE_NAMESPACE::to_host_page_ranges(core_host_page_indices);
+        if (host_ranges.empty()) {
+            continue;
+        }
         core_page_mapping.push_back(BufferCorePageMapping{
             .start_page = 0,
             .num_pages = static_cast<uint32_t>(core_host_page_indices.size()),
-            .host_ranges = CMAKE_UNIQUE_NAMESPACE::to_host_page_ranges(core_host_page_indices),
+            .host_ranges = std::move(host_ranges),
         });
     }
 }
