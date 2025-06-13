@@ -138,7 +138,6 @@ target_sources(
             fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
             fabric/hw/inc/fabric_routing_mode.h
-            fabric/hw/inc/noc_addr.h
             impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
             impl/dispatch/kernels/cq_helpers.hpp
