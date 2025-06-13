@@ -59,7 +59,6 @@
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
-#include "util.hpp"
 #include "vector_aligned.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
@@ -85,6 +84,21 @@ std::shared_ptr<Kernel> GetKernel(const ProgramImpl& program, KernelHandle kerne
 namespace program_dispatch {
 
 namespace {
+
+struct CommandConstants {
+    CoreType dispatch_core_type;
+    NOC noc_index;
+    uint32_t max_prefetch_command_size;
+    uint32_t packed_write_max_unicast_sub_cmds;
+};
+
+enum DispatchWriteOffsets {
+    DISPATCH_WRITE_OFFSET_ZERO = 0,
+    DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE = 1,
+    DISPATCH_WRITE_OFFSET_TENSIX_BINARY_L1_CONFIG_BASE = 2,
+    DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE = 3,
+};
+
 CoreCoord get_sub_device_worker_origin(
     const tt::tt_metal::IDevice* device,
     tt::tt_metal::SubDeviceId sub_device_id,
@@ -96,20 +110,19 @@ CoreCoord get_sub_device_worker_origin(
     return grid.bounding_box().start_coord;
 }
 
-struct CommandConstants {
-    CoreType dispatch_core_type;
-    NOC noc_index;
-    uint32_t max_prefetch_command_size;
-    uint32_t packed_write_max_unicast_sub_cmds;
-};
-};  // namespace
+DispatchWriteOffsets get_dispatch_write_offset(CoreType core_type, bool prefer_zero = false) {
+    switch (core_type) {
+        case CoreType::ETH:
+        case CoreType::ACTIVE_ETH:
+        case CoreType::IDLE_ETH: return DispatchWriteOffsets::DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE;
+        case CoreType::WORKER:
+            return prefer_zero ? DispatchWriteOffsets::DISPATCH_WRITE_OFFSET_ZERO
+                               : DispatchWriteOffsets::DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE;
+        default: TT_THROW("Invalid core type get_dispatch_write_offset {}", magic_enum::enum_name(core_type));
+    }
+}
 
-enum DispatchWriteOffsets {
-    DISPATCH_WRITE_OFFSET_ZERO = 0,
-    DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE = 1,
-    DISPATCH_WRITE_OFFSET_TENSIX_BINARY_L1_CONFIG_BASE = 2,
-    DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE = 3,
-};
+};  // namespace
 
 uint32_t configure_rta_offsets_for_kernel_groups(
     uint32_t programmable_core_type_index,
@@ -297,59 +310,53 @@ uint32_t finalize_kernel_bins(
 
         for (int class_id = 0; class_id < DISPATCH_CLASS_MAX; class_id++) {
             auto& optional_id = kg->kernel_ids[class_id];
-            if (optional_id) {
-                const auto& kernel = kernels.at(optional_id.value());
-                const auto& kernel_impl = KernelImpl::from(*kernel);
-                const std::vector<const ll_api::memory*>& binaries = kernel_impl.binaries(
-                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
-                // TODO: this is really ugly, save me future-HAL!
-                if (programmable_core_type_index ==
-                    hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
-                    uint32_t binary_packed_size = kernel_impl.get_binary_packed_size(device, 0);
+            if (!optional_id.has_value()) {
+                continue;
+            }
+            const auto& kernel = kernels.at(optional_id.value());
+            const auto& kernel_impl = KernelImpl::from(*kernel);
+            const std::vector<const ll_api::memory*>& binaries = kernel_impl.binaries(
+                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
+            // TODO: this is really ugly, save me future-HAL!
+            if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
+                const auto binary_packed_size = kernel_impl.get_binary_packed_size(device, 0);
 
-                    if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
-                        kg->kernel_bin_sizes[0] = binary_packed_size;
-                        kg->kernel_text_offsets[0] = offset;
-                        kg->launch_msg.kernel_config.kernel_text_offset[0] = offset;
+                if (class_id == DISPATCH_CLASS_TENSIX_COMPUTE) {
+                    constexpr uint32_t k_MaxMathProcessorsCount = 3;
+                    for (uint32_t proc_type_index = 0; proc_type_index < k_MaxMathProcessorsCount; proc_type_index++) {
+                        uint32_t binary_packed_size = kernel_impl.get_binary_packed_size(device, proc_type_index);
+                        kg->kernel_bin_sizes[2 + proc_type_index] = binary_packed_size;
+                        kg->kernel_text_offsets[2 + proc_type_index] = offset;
+                        kg->launch_msg.kernel_config.kernel_text_offset[2 + proc_type_index] = offset;
                         offset += binary_packed_size;
                         offset = tt::align(offset, l1_alignment);
-                    } else if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
-                        kg->kernel_bin_sizes[1] = binary_packed_size;
-                        kg->kernel_text_offsets[1] = offset;
-                        kg->launch_msg.kernel_config.kernel_text_offset[1] = offset;
-                        offset += binary_packed_size;
-                        offset = tt::align(offset, l1_alignment);
-
-                        uint32_t binary_text_size = kernel_impl.get_binary_text_size(device, 0);
-                        TT_ASSERT(binary_text_size >> 4 <= std::numeric_limits<uint16_t>::max());
-                        kg->launch_msg.kernel_config.ncrisc_kernel_size16 = (binary_text_size + 15) >> 4;
-                    } else {
-                        constexpr uint32_t max_math_processors_count = 3;
-                        for (uint32_t proc_type_index = 0; proc_type_index < max_math_processors_count;
-                             proc_type_index++) {
-                            uint32_t binary_packed_size = kernel_impl.get_binary_packed_size(device, proc_type_index);
-                            kg->kernel_bin_sizes[2 + proc_type_index] = binary_packed_size;
-                            kg->kernel_text_offsets[2 + proc_type_index] = offset;
-                            kg->launch_msg.kernel_config.kernel_text_offset[2 + proc_type_index] = offset;
-                            offset += binary_packed_size;
-                            offset = tt::align(offset, l1_alignment);
-                        }
                     }
                 } else {
-                    uint32_t binary_packed_size = kernel_impl.get_binary_packed_size(device, 0);
                     kg->kernel_bin_sizes[class_id] = binary_packed_size;
+                    kg->kernel_text_offsets[class_id] = offset;
+                    kg->launch_msg.kernel_config.kernel_text_offset[class_id] = offset;
+                    offset += binary_packed_size;
+                    offset = tt::align(offset, l1_alignment);
 
-                    // No kernel config buffer on active eth yet
-                    if (hal.get_programmable_core_type(kg->programmable_core_type_index) ==
-                        HalProgrammableCoreType::IDLE_ETH) {
-                        kg->kernel_text_offsets[class_id] = offset;
-                        kg->launch_msg.kernel_config.kernel_text_offset[class_id] = offset;
-                        offset += binary_packed_size;
-                        offset = tt::align(offset, l1_alignment);
-                    } else {
-                        kg->kernel_text_offsets[class_id] = binaries[0]->get_text_addr();
-                        kg->launch_msg.kernel_config.kernel_text_offset[class_id] = binaries[0]->get_text_addr();
-                    }
+                    // Provide text size for copying to NCRISC IRAM (not used in other processors)
+                    const auto binary_text_size = kernel_impl.get_binary_text_size(device, 0);
+                    TT_ASSERT(binary_text_size >> 4 <= std::numeric_limits<uint16_t>::max());
+                    kg->launch_msg.kernel_config.ncrisc_kernel_size16 = (binary_text_size + 15) >> 4;
+                }
+            } else {
+                // All other core types
+                const auto binary_packed_size = kernel_impl.get_binary_packed_size(device, 0);
+                kg->kernel_bin_sizes[class_id] = binary_packed_size;
+
+                if (hal.get_core_has_kernel_config_buffer(
+                        hal.get_programmable_core_type(programmable_core_type_index))) {
+                    kg->kernel_text_offsets[class_id] = offset;
+                    kg->launch_msg.kernel_config.kernel_text_offset[class_id] = offset;
+                    offset += binary_packed_size;
+                    offset = tt::align(offset, l1_alignment);
+                } else {
+                    kg->kernel_text_offsets[class_id] = binaries[0]->get_text_addr();
+                    kg->launch_msg.kernel_config.kernel_text_offset[class_id] = binaries[0]->get_text_addr();
                 }
             }
         }
@@ -765,8 +772,7 @@ BatchedTransfers assemble_runtime_args_commands(
                     unique_rt_args_data,
                     constants,
                     false,
-                    core_type == CoreType::WORKER ? DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE
-                                                  : DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
+                    get_dispatch_write_offset(core_type));
                 for (auto& data_per_kernel : unique_rt_data_and_sizes) {
                     for (auto& data_and_sizes : data_per_kernel) {
                         RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, std::get<1>(data_and_sizes));
@@ -863,8 +869,7 @@ BatchedTransfers assemble_runtime_args_commands(
                                 common_rt_args_data,
                                 constants,
                                 true,
-                                core_type == CoreType::WORKER ? DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE
-                                                              : DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
+                                get_dispatch_write_offset(core_type));
                             sub_cmds.clear();
                         },
                         common_sub_cmds);
@@ -1109,11 +1114,21 @@ public:
                     kernel_bins_unicast_cmds.emplace_back(2 * hal.get_alignment(HalMemType::HOST));
                     constexpr bool flush_prefetch = false;
                     calculator.add_dispatch_write_linear<flush_prefetch>(0);
+
+                    // Set write offset if required
+                    auto write_offset = DISPATCH_WRITE_OFFSET_ZERO;
+                    if (hal.get_core_has_kernel_config_buffer(
+                            get_programmable_core_type_from_riscv(kg_transfer_info.riscvs[kernel_idx]))) {
+                        write_offset = get_dispatch_write_offset(
+                            get_core_type_from_riscv(kg_transfer_info.riscvs[kernel_idx]), true);
+                    }
                     kernel_bins_unicast_cmds.back().add_dispatch_write_linear<flush_prefetch>(
                         num_mcast_dests,  // num_mcast_dests
                         noc_encoding,     // noc_xy_addr
                         kg_transfer_info.dst_base_addrs[kernel_idx],
-                        kg_transfer_info.lengths[kernel_idx]);
+                        kg_transfer_info.lengths[kernel_idx],
+                        nullptr,
+                        write_offset);
                     RecordDispatchData(
                         program.get_id(),
                         DISPATCH_DATA_BINARY,
@@ -1795,8 +1810,12 @@ void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, 
     // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
     // previous launch message.
     config_buffer_mgr.init_add_buffer(0, launch_msg_buffer_num_entries - 1);
-    // There's no ring buffer for active ethernet binaries, so keep track of them separately.
-    config_buffer_mgr.init_add_buffer(0, 1);
+    if (hal.get_core_has_kernel_config_buffer(HalProgrammableCoreType::ACTIVE_ETH)) {
+        // TODO: Same for now
+        config_buffer_mgr.init_add_buffer(0, 1);
+    } else {
+        config_buffer_mgr.init_add_buffer(0, 1);
+    }
 }
 
 void reserve_space_in_kernel_config_buffer(

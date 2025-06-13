@@ -35,6 +35,31 @@ namespace tt {
 
 namespace tt_metal {
 
+HalProgrammableCoreType get_programmable_core_type_from_riscv(RISCV riscv_processor, bool is_idle_eth) {
+    switch (riscv_processor) {
+        case RISCV::BRISC:
+        case RISCV::NCRISC:
+        case RISCV::COMPUTE: return HalProgrammableCoreType::TENSIX;
+        case RISCV::ERISC0:
+        case RISCV::ERISC1:
+            return is_idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
+        default: TT_ASSERT(false, "Unsupported kernel processor {}", magic_enum::enum_name(riscv_processor));
+    }
+    return HalProgrammableCoreType::TENSIX;
+}
+
+CoreType get_core_type_from_riscv(RISCV riscv_processor) {
+    switch (riscv_processor) {
+        case RISCV::BRISC:
+        case RISCV::NCRISC:
+        case RISCV::COMPUTE: return CoreType::WORKER;
+        case RISCV::ERISC0:
+        case RISCV::ERISC1: return CoreType::ETH;
+        default: TT_ASSERT(false, "Unsupported kernel processor {}", magic_enum::enum_name(riscv_processor));
+    }
+    return CoreType::WORKER;
+}
+
 Kernel::Kernel(
     const KernelSource &kernel_src,
     const CoreRangeSet &core_range_set,
@@ -102,31 +127,10 @@ bool Kernel::is_on_logical_core(const CoreCoord &logical_core) const {
 }
 
 HalProgrammableCoreType Kernel::get_kernel_programmable_core_type() const {
-    RISCV riscv_processor = this->processor();
-    switch (riscv_processor) {
-        case RISCV::BRISC:
-        case RISCV::NCRISC:
-        case RISCV::COMPUTE: return HalProgrammableCoreType::TENSIX;
-        case RISCV::ERISC0:
-        case RISCV::ERISC1:
-            return this->is_idle_eth() ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
-        default: TT_ASSERT(false, "Unsupported kernel processor!");
-    }
-    return HalProgrammableCoreType::TENSIX;
+    return tt::tt_metal::get_programmable_core_type_from_riscv(processor(), is_idle_eth());
 }
 
-CoreType Kernel::get_kernel_core_type() const {
-    RISCV riscv_processor = this->processor();
-    switch (riscv_processor) {
-        case RISCV::BRISC:
-        case RISCV::NCRISC:
-        case RISCV::COMPUTE: return CoreType::WORKER;
-        case RISCV::ERISC0:
-        case RISCV::ERISC1: return CoreType::ETH;
-        default: TT_ASSERT(false, "Unsupported kernel processor!");
-    }
-    return CoreType::WORKER;
-}
+CoreType Kernel::get_kernel_core_type() const { return tt::tt_metal::get_core_type_from_riscv(processor()); }
 
 const std::string& KernelImpl::get_full_kernel_name() const { return this->kernel_full_name_; }
 
@@ -498,12 +502,12 @@ void EthernetKernel::read_binaries(IDevice* device) {
     std::vector<ll_api::memory const*> binaries;
     uint32_t erisc_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
+    constexpr auto k_EthDmClassIndex = magic_enum::enum_integer(HalProcessorClassType::DM);
     int erisc_id = magic_enum::enum_integer(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-        device->build_id(), erisc_core_type, dm_class_idx, erisc_id);
+        device->build_id(), erisc_core_type, erisc_id, k_EthDmClassIndex);
     // TODO: fix when active eth supports relo
-    auto load_type = MetalContext::instance().hal().get_jit_build_config(erisc_core_type, erisc_id, 0).memory_load;
+    auto load_type = MetalContext::instance().hal().get_jit_build_config(erisc_core_type, erisc_id, k_EthDmClassIndex).memory_load;
     const ll_api::memory& binary_mem = llrt::get_risc_binary(
         build_state.get_target_out_path(this->kernel_full_name_), load_type, [this](ll_api::memory& binary_mem) {
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_erisc_iram_enabled() &&
@@ -629,15 +633,18 @@ bool EthernetKernel::configure(IDevice* device, const CoreCoord &logical_core, u
     const ll_api::memory& binary_mem =
         *this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)[0];
 
-    if (this->config_.eth_mode == Eth::IDLE) {
-        uint32_t offset_idx = magic_enum::enum_integer(HalProcessorClassType::DM) + magic_enum::enum_integer(this->config_.processor);
+    if (tt::tt_metal::MetalContext::instance().hal().get_core_has_kernel_config_buffer(
+            this->get_kernel_programmable_core_type())) {
+        uint32_t offset_idx =
+            magic_enum::enum_integer(HalProcessorClassType::DM) + magic_enum::enum_integer(this->config_.processor);
         llrt::write_binary_to_address(binary_mem, device_id, ethernet_core, base_address + offsets[offset_idx]);
     } else {
-        uint32_t erisc_core_type =
+        const auto erisc_core_index =
             MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-        uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
-        int erisc_id = magic_enum::enum_integer(this->config_.processor);
-        tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, ethernet_core, erisc_core_type, dm_class_idx, erisc_id);
+        const auto dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
+        const auto erisc_id = magic_enum::enum_integer(this->config_.processor);
+        tt::llrt::test_load_write_read_risc_binary(
+            binary_mem, device_id, ethernet_core, erisc_core_index, dm_class_idx, erisc_id);
     }
 
     return true;
