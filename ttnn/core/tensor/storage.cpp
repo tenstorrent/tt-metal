@@ -52,11 +52,6 @@ bool DeviceStorage::is_uniform_storage() const {
     return coords.size() == mesh_buffer->device()->num_devices();
 }
 
-std::optional<HostBuffer> MultiDeviceHostStorage::get_shard_at_origin() const {
-    return distributed_buffer_.get_shard(
-        distributed::MeshCoordinate::zero_coordinate(distributed_buffer_.shape().dims()));
-}
-
 const DistributedHostBuffer& MultiDeviceHostStorage::distributed_buffer() const { return distributed_buffer_; }
 
 MultiDeviceHostStorage::MultiDeviceHostStorage(std::vector<HostBuffer> buffers) :
