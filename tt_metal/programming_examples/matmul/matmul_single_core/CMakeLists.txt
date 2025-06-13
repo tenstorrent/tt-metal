@@ -5,4 +5,11 @@ add_executable(metal_example_matmul_single_core)
 target_sources(metal_example_matmul_single_core PRIVATE matmul_single_core.cpp)
 
 find_package(TT-Metalium REQUIRED)
-target_link_libraries(metal_example_matmul_single_core PUBLIC TT::Metalium)
+find_package(matmul-common REQUIRED)
+
+target_link_libraries(
+    metal_example_matmul_single_core
+    PUBLIC
+        TT::Metalium
+        Matmul::Common
+)

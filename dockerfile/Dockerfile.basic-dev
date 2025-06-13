@@ -30,8 +30,8 @@ RUN set -eux; \
     rm -rf "$TMP_DIR" && \
     rm -rf /var/lib/apt/lists/*
 
-# RUN mkdir -p /debians
-# COPY .build/default/*.deb /debians/
+RUN mkdir -p /debians
+COPY .build/default/*.deb /debians/
 
-# COPY build_cmake_stuff.sh /build_cmake_stuff.sh
-# RUN chmod +x /build_cmake_stuff.sh
+COPY build_cmake_stuff.sh /build_cmake_stuff.sh
+RUN chmod +x /build_cmake_stuff.sh
