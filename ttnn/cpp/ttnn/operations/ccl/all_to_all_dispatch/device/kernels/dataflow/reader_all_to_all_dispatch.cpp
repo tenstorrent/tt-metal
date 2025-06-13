@@ -43,6 +43,12 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(26);
     constexpr bool is_ring_topology = (bool)get_compile_time_arg_val(27);
 
+    constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(28);
+    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(29);
+    constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(30);
+    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(31);
+    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(32);
+
     uint32_t input_tensor_address = get_arg_val<uint32_t>(0);
     uint32_t indices_tensor_address = get_arg_val<uint32_t>(1);
     uint32_t mapping_tensor_address = get_arg_val<uint32_t>(2);
@@ -56,32 +62,34 @@ void kernel_main() {
     const auto mapping_addr_gen = get_interleaved_addr_gen<mapping_is_dram, mapping_page_size>(mapping_tensor_address);
 
     // read in expert indices
-    cb_reserve_back(indices_tensor_cb_id, indices_pages);
-    uint32_t l1_write_addr = get_write_ptr(indices_tensor_cb_id);
+
     for (uint32_t i = 0; i < indices_pages; i++) {
+        cb_reserve_back(indices_tensor_cb_id, 1);
+        uint32_t l1_write_addr = get_write_ptr(indices_tensor_cb_id);
         noc_async_read_page(i, indices_addr_gen, l1_write_addr);
-        l1_write_addr += indices_page_size;
-    }
-    cb_reserve_back(mapping_tensor_cb_id, mapping_pages);
-    l1_write_addr = get_write_ptr(mapping_tensor_cb_id);
-    for (uint32_t i = 0; i < mapping_pages; i++) {
-        noc_async_read_page(i, mapping_addr_gen, l1_write_addr);
-        l1_write_addr += mapping_page_size;
+        cb_push_back(indices_tensor_cb_id, 1);
     }
 
-    cb_reserve_back(input_tensor_cb_id, input_pages);
-    l1_write_addr = get_write_ptr(input_tensor_cb_id);
+    for (uint32_t i = 0; i < mapping_pages; i++) {
+        cb_reserve_back(mapping_tensor_cb_id, 1);
+        uint32_t l1_write_addr = get_write_ptr(mapping_tensor_cb_id);
+        noc_async_read_page(i, mapping_addr_gen, l1_write_addr);
+        cb_push_back(mapping_tensor_cb_id, 1);
+    }
+
     for (uint32_t i = 0; i < input_pages; i++) {
+        cb_reserve_back(input_tensor_cb_id, 1);
+        uint32_t l1_write_addr = get_write_ptr(input_tensor_cb_id);
         noc_async_read_page(i, input_addr_gen, l1_write_addr);
-        l1_write_addr += input_page_size;
+        cb_push_back(input_tensor_cb_id, 1);
     }
 
     noc_async_read_barrier();
     DPRINT << "SUCCESSFULLY READ IN ALL TENSORS" << ENDL();
-    cb_push_back(indices_tensor_cb_id, indices_pages);
-    cb_push_back(mapping_tensor_cb_id, mapping_pages);
-    cb_push_back(input_tensor_cb_id, input_pages);
+
+    DPRINT << "WAITING FOR SEMAPHORE" << ENDL();
     noc_semaphore_wait((uint32_t*)global_semaphore_address, 2);
+    DPRINT << "SEMAPHORE WAIT COMPLETE" << ENDL();
     noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
     DPRINT << "KERNEL END" << ENDL();
 }

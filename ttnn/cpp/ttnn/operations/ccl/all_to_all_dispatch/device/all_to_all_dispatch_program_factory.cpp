@@ -419,31 +419,17 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     uint32_t selected_experts_k = indices_shape[-1];
     uint32_t experts = mapping_shape[-2];
 
-    auto input_page_size = detail::get_aligned_page_size(input_tensor);
-    auto indices_page_size = detail::get_aligned_page_size(indices_tensor);
-    auto mapping_page_size = detail::get_aligned_page_size(mapping_tensor);
+    auto input_page_size = detail::get_page_size(input_tensor);
+    auto indices_page_size = detail::get_page_size(indices_tensor);
+    auto mapping_page_size = detail::get_page_size(mapping_tensor);
     auto output_page_size = detail::get_page_size(output_tensor);
     auto metadata_page_size = detail::get_page_size(metadata_tensor);
 
     auto input_pages = detail::get_num_pages(input_tensor);
-    tt::log_info(
-        tt::LogAlways,
-        "input shape: {}, input_pages: {}, input_page_size: {}",
-        input_tensor.logical_shape(),
-        input_pages,
-        input_page_size);
     auto indices_pages = detail::get_num_pages(indices_tensor);
-    // tt::log_info(tt::LogAlways, "indices shape: {}, indices_pages: {}, indices_page_size: {}",
-    // indices_tensor.logical_shape(), indices_pages, indices_page_size);
     auto mapping_pages = detail::get_num_pages(mapping_tensor);
-    // tt::log_info(tt::LogAlways, "mapping shape: {}, mapping_pages: {}, mapping_page_size: {}",
-    // mapping_tensor.logical_shape(), mapping_pages, mapping_page_size);
     auto output_pages = detail::get_num_pages(output_tensor);
-    // tt::log_info(tt::LogAlways, "output shape: {}, output_pages: {}, output_page_size: {}",
-    // output_tensor.logical_shape(), output_pages, output_page_size);
     auto metadata_pages = detail::get_num_pages(metadata_tensor);
-    // tt::log_info(tt::LogAlways, "metadata shape: {}, metadata_pages: {}, metadata_page_size: {}",
-    // metadata_tensor.logical_shape(), metadata_pages, metadata_page_size);
 
     auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     auto indices_data_format = tt::tt_metal::datatype_to_dataformat_converter(indices_tensor.get_dtype());
@@ -462,19 +448,65 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     // metadata buffer
     uint32_t send_preparation_buffer_id = tt::CBIndex::c_4;
 
+    uint32_t aligned_input_page_size = detail::get_aligned_page_size(input_tensor);
+    tt::log_info(
+        tt::LogAlways,
+        "input shape: {}, input_pages: {}, input_page_size: {}, aligned_input_page_size: {}",
+        input_tensor.logical_shape(),
+        input_pages,
+        input_page_size,
+        aligned_input_page_size);
+
+    uint32_t aligned_indices_page_size = detail::get_aligned_page_size(indices_tensor);
+    tt::log_info(
+        tt::LogAlways,
+        "indices shape: {}, indices_pages: {}, indices_page_size: {}, aligned_indices_page_size: {}",
+        indices_tensor.logical_shape(),
+        indices_pages,
+        indices_page_size,
+        aligned_indices_page_size);
+
+    uint32_t aligned_mapping_page_size = detail::get_aligned_page_size(mapping_tensor);
+    tt::log_info(
+        tt::LogAlways,
+        "mapping shape: {}, mapping_pages: {}, mapping_page_size: {}, aligned_mapping_page_size: {}",
+        mapping_tensor.logical_shape(),
+        mapping_pages,
+        mapping_page_size,
+        aligned_mapping_page_size);
+
+    uint32_t aligned_output_page_size = detail::get_aligned_page_size(output_tensor);
+    tt::log_info(
+        tt::LogAlways,
+        "output shape: {}, output_pages: {}, output_page_size: {}, aligned_output_page_size: {}",
+        output_tensor.logical_shape(),
+        output_pages,
+        output_page_size,
+        aligned_output_page_size);
+
+    uint32_t aligned_metadata_page_size = detail::get_aligned_page_size(metadata_tensor);
+    tt::log_info(
+        tt::LogAlways,
+        "metadata shape: {}, metadata_pages: {}, metadata_page_size: {}, aligned_metadata_page_size: {}",
+        metadata_tensor.logical_shape(),
+        metadata_pages,
+        metadata_page_size,
+        aligned_metadata_page_size);
+
     tt::tt_metal::CircularBufferConfig cb_input_tensor_config =
-        tt::tt_metal::CircularBufferConfig(input_pages * input_page_size, {{input_tensor_cb_id, input_data_format}})
-            .set_page_size(input_tensor_cb_id, input_page_size);
+        tt::tt_metal::CircularBufferConfig(
+            input_pages * aligned_input_page_size, {{input_tensor_cb_id, input_data_format}})
+            .set_page_size(input_tensor_cb_id, aligned_input_page_size);
 
     tt::tt_metal::CircularBufferConfig cb_indices_tensor_config =
         tt::tt_metal::CircularBufferConfig(
-            indices_page_size * indices_pages, {{indices_tensor_cb_id, indices_data_format}})
-            .set_page_size(indices_tensor_cb_id, indices_page_size);
+            indices_pages * aligned_indices_page_size, {{indices_tensor_cb_id, indices_data_format}})
+            .set_page_size(indices_tensor_cb_id, aligned_indices_page_size);
 
     tt::tt_metal::CircularBufferConfig cb_mapping_tensor_config =
         tt::tt_metal::CircularBufferConfig(
-            mapping_page_size * mapping_pages, {{mapping_tensor_cb_id, mapping_data_format}})
-            .set_page_size(mapping_tensor_cb_id, mapping_page_size);
+            mapping_pages * aligned_mapping_page_size, {{mapping_tensor_cb_id, mapping_data_format}})
+            .set_page_size(mapping_tensor_cb_id, aligned_mapping_page_size);
 
     // Allocate space for the client interface
     static constexpr auto num_packet_headers_storable = 8;
@@ -485,7 +517,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             {{packet_header_cb_id, tt::DataFormat::RawUInt32}})
             .set_page_size(packet_header_cb_id, packet_header_size_bytes);
 
-    uint32_t send_preparation_buffer_size = num_devices * batches_per_device * sizeof(uint16_t);
+    uint32_t send_preparation_buffer_size = num_devices * batches_per_device * aligned_metadata_page_size;
 
     tt::tt_metal::CircularBufferConfig send_preparation_buffer_config =
         tt::tt_metal::CircularBufferConfig(
@@ -572,6 +604,12 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         (uint32_t)src_chip_id,
         mesh_view.num_rows(),
         mesh_view.num_cols(),
+
+        aligned_input_page_size,
+        aligned_indices_page_size,
+        aligned_mapping_page_size,
+        aligned_output_page_size,
+        aligned_metadata_page_size,
     };
 
     auto writer_compile_time_args = reader_compile_time_args;
@@ -600,6 +638,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         sender_core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
+    tt::log_info(tt::LogAlways, "metadata tensor address: {}", metadata_tensor.buffer()->address());
     std::vector<uint32_t> reader_runtime_args = {
         input_tensor.buffer()->address(),
         indices_tensor.buffer()->address(),

@@ -94,6 +94,11 @@ void kernel_main() {
     }
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(30);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(31);  // ew_dim
+    constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(32);
+    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(33);
+    constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(34);
+    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(35);
+    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(36);
 
     size_t rt_args_idx = 0;
     uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -124,6 +129,8 @@ void kernel_main() {
     }
 
     auto output_addr_gen = get_interleaved_addr_gen<output_is_dram, output_page_size>(output_tensor_address);
+    DPRINT << "Metadata is dram: " << (uint32_t)metadata_is_dram << " with page size: " << metadata_page_size
+           << " and address: " << metadata_tensor_address << ENDL();
     auto metadata_addr_gen = get_interleaved_addr_gen<metadata_is_dram, metadata_page_size>(metadata_tensor_address);
 
     uint32_t packet_header_buffer_address = get_read_ptr(packet_header_cb_id);
@@ -205,39 +212,50 @@ void kernel_main() {
     // DPRINT << "SUCCESSFULLY SENT ALL INPUTS" << ENDL();
 
     // send semaphore increment to all other devices
+
+    uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
     for (uint32_t local_token = 0; local_token < batches_per_device; local_token++) {
-        uint32_t b = 0 + batches_per_device * src_chip_id;
-        DPRINT << "Dispatching metadata for local token " << local_token << " global batch " << b << " on device "
-               << src_chip_id << ENDL();
+        uint32_t b = local_token + (batches_per_device * src_chip_id);
+        uint64_t metadata_write_addr = get_noc_addr(b, metadata_addr_gen);
+        uint32_t token_indices_address = get_read_ptr(indices_tensor_cb_id) + (local_token * aligned_indices_page_size);
+        uint16_t* indices = reinterpret_cast<uint16_t*>(token_indices_address);
+        for (uint32_t i = 0; i < selected_experts_k; i++) {
+            DPRINT << "Expert " << i << " is " << indices[i] << ENDL();
+        }
+        DPRINT << ENDL() << "Dispatching metadata for local token " << local_token << " global batch " << b
+               << " on device " << src_chip_id << ENDL();
         for (uint32_t d = 0; d < num_devices; d++) {
             if (dest_chip_ids[d] == src_chip_id) {
                 DPRINT << "Sending metadata to local device " << (uint32_t)dest_chip_ids[d] << ENDL();
                 // send metadata to local device output buffer
-                uint32_t token_indices_address = get_read_ptr(indices_tensor_cb_id) + local_token * indices_page_size;
-                uint64_t metadata_write_addr = get_noc_addr(b, metadata_addr_gen);
-                noc_async_write(token_indices_address, metadata_write_addr, indices_page_size);
+
+                noc_async_write(token_indices_address, metadata_write_addr, metadata_page_size);
                 noc_async_write_barrier();
-                noc_semaphore_inc(get_noc_addr(global_semaphore_address), 1);
+                noc_semaphore_inc(global_noc_semaphore_address, 1);
                 noc_async_atomic_barrier();
                 DPRINT << "Metadata sent to local device" << ENDL();
+
+                uint32_t metaread_cb_l1_addr = get_read_ptr(send_preparation_buffer_cb_id);
+                noc_async_read_page(b, metadata_addr_gen, metaread_cb_l1_addr);
+                noc_async_read_barrier();
+                DPRINT << "Metadata read from L1" << ENDL();
+                uint16_t* metadata_read_ptr = reinterpret_cast<uint16_t*>(metaread_cb_l1_addr);
+                for (uint32_t i = 0; i < selected_experts_k; i++) {
+                    DPRINT << "Expert " << i << " is " << metadata_read_ptr[i] << ENDL();
+                }
+                DPRINT << "Metadata read from L1 completed" << ENDL();
+
             } else {
-                DPRINT << "Sending metadata to remote device " << (uint32_t)dest_chip_ids[d] << ENDL();
                 // send metadata to other devices
-                uint32_t token_indices_address = get_read_ptr(indices_tensor_cb_id) + local_token * indices_page_size;
-                uint64_t metadata_write_addr = get_noc_addr(b, metadata_addr_gen);
-                uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
-
-                metadata_packet_header->to_noc_fused_unicast_write_atomic_inc(
-                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
-                        metadata_write_addr, global_noc_semaphore_address, 1, 32, true),
-                    indices_page_size);
-
-                DPRINT << "Metadata packet header noc unicast write atomic inc set" << ENDL();
+                DPRINT << "Sending metadata to remote device " << (uint32_t)dest_chip_ids[d] << " with address "
+                       << metadata_write_addr << " and page size " << metadata_page_size << ENDL();
+                zero_l1_buf((uint32_t*)metadata_packet_header, sizeof(PACKET_HEADER_TYPE));
 
                 uint32_t route = get_direction(src_chip_id, dest_chip_ids[d], mesh_cols);
                 DPRINT << "From device " << src_chip_id << " to device " << (uint32_t)dest_chip_ids[d] << " via route "
                        << (uint32_t)route << " using direction " << (uint32_t)fabric_connections[route].direction
                        << ENDL();
+
                 fabric_set_unicast_route(
                     (LowLatencyMeshPacketHeader*)metadata_packet_header,
                     (eth_chan_directions)fabric_connections[route].direction,
@@ -245,24 +263,31 @@ void kernel_main() {
                     dest_chip_ids[d],
                     dest_mesh_ids[d],
                     mesh_cols);
-
                 DPRINT << "Fabric unicast route set" << ENDL();
+
+                // metadata_packet_header->to_noc_unicast_write(
+                //     tt::tt_fabric::NocUnicastCommandHeader{metadata_write_addr},
+                //     metadata_page_size);
+                metadata_packet_header->to_noc_fused_unicast_write_atomic_inc(
+                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+                        metadata_write_addr, global_noc_semaphore_address, 1, 32, true),
+                    metadata_page_size);
+
+                DPRINT << "Noc unicast write atomic inc set" << ENDL();
 
                 fabric_connections[route].wait_for_empty_write_slot();
 
-                DPRINT << "Emptying write slot available for fabric connection" << ENDL();
+                DPRINT << "Empty write slot available for fabric connection" << ENDL();
 
                 fabric_connections[route].send_payload_without_header_non_blocking_from_address(
-                    token_indices_address, indices_page_size);
+                    token_indices_address, metadata_page_size);
 
-                DPRINT << "Sending metadata packet " << ENDL();
+                DPRINT << "Payload of size " << metadata_page_size << " sent to fabric connection" << ENDL();
 
                 fabric_connections[route].send_payload_flush_blocking_from_address(
                     (uint32_t)metadata_packet_header, sizeof(PACKET_HEADER_TYPE));
 
                 DPRINT << "Packet flushed from L1 " << ENDL();
-
-                DPRINT << "Metadata sent to remote device" << ENDL();
             }
             DPRINT << ENDL();
         }
@@ -271,7 +296,7 @@ void kernel_main() {
     DPRINT << "SUCCESSFULLY SENT ALL METADATA" << ENDL();
 
     for (uint32_t i = 0; i < 4; i++) {
-        if (directions[i]) {
+        if (directions[i] == true) {
             fabric_connections[i].close();
         }
     }
