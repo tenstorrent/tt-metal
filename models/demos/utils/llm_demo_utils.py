@@ -117,13 +117,14 @@ def verify_perf(
     measurements: dict,
     expected_perf_metrics: dict,
     high_tol_percentage=1.15,  # 15% tolerance (approx +-5% CI variance + 5% real increase)
+    expected_measurements: dict = None,
 ):
     """
     Verify the performance metrics against the expected values.
     The metrics that must be provided are specified in expected_measurements below.
     """
 
-    expected_measurements = {
+    expected_measurements_default = {
         "compile_prefill": False,
         "compile_decode": False,
         "prefill_time_to_token": False,
@@ -132,14 +133,17 @@ def verify_perf(
         "decode_t/s": True,
         "decode_t/s/u": True,
     }
+    expected_measurements_default.update(expected_measurements if expected_measurements else {})
+    expected_measurements = expected_measurements_default
 
     does_pass = True
     for key in expected_measurements:
         if not expected_measurements[key]:
             continue
         assert (
-            key in measurements and key in expected_perf_metrics
+            key in measurements and key in expected_perf_metrics and expected_perf_metrics[key] is not None
         ), f"Metric {key} not found in measurements or expected_perf_metrics"
+
         if measurements[key] < expected_perf_metrics[key]:  # Note: assumes higher is better for metric
             does_pass = False
             logger.warning(f"{key} ({measurements[key]}) is lower than expected {expected_perf_metrics[key]}")

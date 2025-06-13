@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
@@ -848,7 +848,7 @@ def test_demo_text(
     logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
     logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
     logger.info("")
-    logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token*1000, 2)}ms")
+    logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token * 1000, 2)}ms")
     logger.info(
         f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
@@ -917,6 +917,7 @@ def test_demo_text(
             "decode_t/s": target_decode_tok_s,
             "decode_t/s/u": target_decode_tok_s_u,
         }
+
     else:
         logger.info(f"Model {model_name} does not have performance targets set")
         targets = {}
@@ -963,3 +964,106 @@ def test_demo_text(
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )
+
+        # check measurements against CI performance targets
+        # Real measured decode_t/s values from benchmark data
+        # GitHub Actions run: https://github.com/tenstorrent/tt-metal/actions/runs/15598339287
+        # [INFO] filtered by `batch_size=32`
+        ci_target_ttft = {
+            # N150 targets (milliseconds)
+            "N150_Llama3.2-1B": 25,
+            "N150_Llama3.2-3B": 54,
+            "N150_Llama3.1-8B": 106,
+            "N150_Mistral-7B": 101,
+            "N150_Falcon7B": 73,
+            "N150_Mamba-2.8B": 40,
+            # N300 targets
+            "N300_Llama3.1-8B": 126,  # FIXME: not in Github Action results
+            "N300_Mistral-7B": 129,  # FIXME: not in Github Action results
+            "N300_Qwen2.5-7B": 89,
+            # T3K targets
+            "T3K_Llama3.1-70B": 159,
+            "T3K_Falcon7B": 103,
+            "T3K_Mixtral7Bx8": 345,
+            "T3K_Qwen2.5-72B": 200,
+            "T3K_Qwen3-32B": 135,
+            # TG targets
+            "TG_Llama3.1-8B": 105,  # FIXME: not in Github Action results
+            "TG_Llama3.1-70B": 452,  # FIXME: not in Github Action results
+        }
+        ci_target_decode_tok_s_u = {
+            # N150 targets
+            "N150_Llama3.2-1B": 54,
+            "N150_Llama3.2-3B": 33,
+            "N150_Llama3.1-8B": 21,
+            "N150_Llama3.2-11B": 23,  # FIXME: not in Github Action results
+            "N150_Mistral-7B": 24,
+            "N150_Falcon7B": 18,
+            "N150_Mamba-2.8B": 11,
+            # N300 targets
+            "N300_Llama3.2-1B": 250,  # FIXME: not in Github Action results
+            "N300_Llama3.2-3B": 100,  # FIXME: not in Github Action results
+            "N300_Llama3.1-8B": 36,  # FIXME: not in Github Action results
+            "N300_Llama3.2-11B": 38,  # FIXME: not in Github Action results
+            "N300_Mistral-7B": 36,  # FIXME: not in Github Action results
+            "N300_Qwen2.5-7B": 21,
+            # P150 targets
+            "P150_Llama3.1-8B": 23,  # FIXME: not in Github Action results
+            # P300 targets
+            "P300_Llama3.1-8B": 38,  # FIXME: not in Github Action results
+            # T3K targets
+            "T3K_Llama3.2-1B": 300,  # FIXME: not in Github Action results
+            "T3K_Llama3.2-3B": 150,  # FIXME: not in Github Action results
+            "T3K_Llama3.1-8B": 45,  # FIXME: not in Github Action results
+            "T3K_Llama3.2-11B": 45,  # FIXME: not in Github Action results
+            "T3K_Llama3.1-70B": 15,
+            "T3K_Mistral-7B": 45,  # FIXME: not in Github Action results
+            "T3K_Falcon7B": 15,
+            "T3K_Mixtral7Bx8": 13,
+            "T3K_Qwen2.5-72B": 14,
+            "T3K_Qwen3-32B": 20,
+            # TG targets
+            "TG_Llama3.2-1B": 300,  # FIXME: not in Github Action results
+            "TG_Llama3.2-3B": 150,  # FIXME: not in Github Action results
+            "TG_Llama3.1-8B": 39,  # FIXME: not in Github Action results
+            "TG_Llama3.2-11B": 45,  # FIXME: not in Github Action results
+            "TG_Llama3.1-70B": 19,  # FIXME: not in Github Action results
+            "TG_Mistral-7B": 45,  # FIXME: not in Github Action results
+        }
+        ci_target_decode_tok_s = {
+            # N150 targets
+            "N150_Llama3.2-1B": 1728,
+            "N150_Llama3.2-3B": 1060,
+            "N150_Llama3.1-8B": 670,
+            "N150_Mistral-7B": 770,
+            "N150_Falcon7B": 581,
+            "N150_Mamba-2.8B": 354,
+            # N300 targets
+            "N300_Qwen2.5-7B": 657,
+            # T3K targets
+            "T3K_Llama3.1-70B": 485,
+            "T3K_Falcon7B": 3891,
+            "T3K_Mixtral7Bx8": 418,
+            "T3K_Qwen2.5-72B": 443,
+            "T3K_Qwen3-32B": 653,
+        }
+
+        # Only call verify_perf if the model_device_key exists in the targets
+        ci_targets = {}
+        if model_device_key in ci_target_ttft:
+            ci_targets["prefill_time_to_token"] = ci_target_ttft[model_device_key]
+        if model_device_key in ci_target_decode_tok_s_u:
+            ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
+            # Use real measured data when available, otherwise calculate from per-user rate
+            if model_device_key in ci_target_decode_tok_s:
+                ci_targets["decode_t/s"] = ci_target_decode_tok_s[model_device_key]
+            else:
+                ci_targets["decode_t/s"] = ci_target_decode_tok_s_u[model_device_key] * global_batch_size
+
+        if ci_targets:  # Only verify performance if we have targets for this model/device combination
+            verify_perf(
+                measurements,
+                ci_targets,
+                high_tol_percentage=1.15,
+                expected_measurements={k: True for k in ci_targets.keys()},
+            )
