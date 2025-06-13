@@ -56,7 +56,7 @@ For more information regarding TT-KMD see the [TT-KMD GitHub repository](https:/
 
 Upon a successful update of TT-Firmware with TT-Flash, the following output will appear:
 
-(image)
+![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/TT_Flash_Expected_Output.png)
 
 For more information regarding TT-Firmware and TT-Flash see their respective GitHub repositories: [TT-Firmware](https://github.com/tenstorrent/tt-firmware) and [TT-Flash](https://github.com/tenstorrent/tt-flash).
 
@@ -71,7 +71,7 @@ For more information regarding TT-Firmware and TT-Flash see their respective Git
 
 TT-SMI will run without error if your system has been configured correctly. The following display with device information, telemetry, and firmware will appear:
 
-(image)
+![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/TT_SMI_Expected_Output.png)
 
 ## Install Metalium
 
@@ -103,7 +103,7 @@ To perform a reset on a 6U system run the following command:
 
 The following display will appear upon performing a successful system reset:
 
-(image)
+![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/TT_SMI_Successful_Reset.png)
 
 To perform a system information dump see the [TT-SMI README.md](https://github.com/tenstorrent/tt-smi/blob/main/README.md). In the TT-SMI repository there are instructions for building from git, usage, resets, disabling software versions, taking system snapshots, and more.
 
@@ -115,27 +115,27 @@ The following tests are short in runtime and loop over all chips to test for bas
 - `./build/test/tt_metal/tt_fabric/test_system_health` - This test prints Ethernet connnections, link statuses, and performs sanity checks on the system.
   The following expected output will appear upon completion of a successful Ethernet connection test:
 
-  (image)
-  
+![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/Ethernet_Link_Status_Test.png)
+
 - `TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardFixture.*"` - This test ensures that basic Command Queue APIs function correctly.
   The following expected output will appear upon completion of a successful Command Queue API test:
 
-  (image)
+![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/CQ_API_Test.png)
   
 - `TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardProgramFixture.*"` - This test ensures that Metal Program APIs function correctly.
   The following expected output will appear upon completion of a successful Program API test:
 
-  (image)
-  
+![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/Program_API_Test.png)
+
 - `TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filetr="CommandQueueSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"` - This test ensures that basic Metal Buffers read and write to both L1 and DRAM memory buffers.
   The following expected output will appear upon completion of a successful Memory Buffer test:
 
-  (image)
-  
+![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/Memory_Buffer_Test.png)
+
 - `./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"` - This test sets up the Galaxy as a 2D mesh and uses basic Fabric APIs to read and write between chips.
   The following expected output will appear upon completion of a successful Fabric API test:
 
-  (image)
+![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/Fabric_API_Test.png)
 
 ### Ethernet Bandwidth Tests
 The following Ethernet bandwidth tests loop over all active Ethernet links and prints bandwidth. The following tests require a profiler build and therefore take longer to run:
@@ -143,7 +143,7 @@ The following Ethernet bandwidth tests loop over all active Ethernet links and p
 - `pytest tests/tt_metal/microbenchmarks/ethernet/test_all_ethernet_links_bandwidth.py` - This test ensures that Ethernet links are properly sending and receiving data.
   In the following expected output the test is identifying all mismatching values.
 
-  (image)
+![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/Ethernet_Link_Test.png)
 
 > [!NOTE]
 > This test can take several hours to complete.
@@ -151,7 +151,7 @@ The following Ethernet bandwidth tests loop over all active Ethernet links and p
 - `pytest tests/tt_metal/microbenchmarks/ethernet/test_all_ethernet_links_latency.py` - This test prints latency for all Ethernet links.
   In the following expected output the test is identifying high latency of the machine:
 
-  (image)
+![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/Ethernet_Link_Latency_Test.png)
 
 # FAQ
 ## What does Metal infra provision vs. what does Cloud provision?
