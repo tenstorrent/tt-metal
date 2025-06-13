@@ -16,7 +16,9 @@ using namespace tt::tt_metal;
  * 2. Device eltwise performs a unary SFPU operation on the data.
  * 3. Read result back and compare to golden.
  * */
-
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
 int main() {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
@@ -74,18 +76,18 @@ int main() {
         // Create the 2 data movement kernels and the compute kernel.
         KernelHandle unary_reader_kernel_id = CreateKernel(
             program,
-            "tt_metal/programming_examples/eltwise_sfpu/kernels/dataflow/read_tile.cpp",
+            OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/read_tile.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
         KernelHandle unary_writer_kernel_id = CreateKernel(
             program,
-            "tt_metal/programming_examples/eltwise_sfpu/kernels/dataflow/write_tile.cpp",
+            OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/write_tile.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
         KernelHandle eltwise_sfpu_kernel_id = CreateKernel(
             program,
-            "tt_metal/programming_examples/eltwise_sfpu/kernels/compute/eltwise_sfpu.cpp",
+            OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/compute/eltwise_sfpu.cpp",
             core,
             ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
