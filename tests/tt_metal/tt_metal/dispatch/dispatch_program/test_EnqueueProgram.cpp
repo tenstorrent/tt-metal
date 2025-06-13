@@ -133,7 +133,7 @@ KernelHandle create_kernel(
                 tt::tt_metal::ComputeConfig{
                     .compile_args = compile_args,
                 });
-        case tt::RISCV::ERISC:
+        case tt::RISCV::ERISC0:
             return CreateKernel(
                 program,
                 kernel_path,
@@ -141,6 +141,18 @@ KernelHandle create_kernel(
                 tt::tt_metal::EthernetConfig{
                     .eth_mode = idle_eth ? Eth::IDLE : Eth::RECEIVER,
                     .noc = NOC::NOC_0,
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .compile_args = compile_args,
+                });
+        case tt::RISCV::ERISC1:
+            return CreateKernel(
+                program,
+                kernel_path,
+                cr_set,
+                tt::tt_metal::EthernetConfig{
+                    .eth_mode = idle_eth ? Eth::IDLE : Eth::RECEIVER,
+                    .noc = NOC::NOC_0,
+                    .processor = DataMovementProcessor::RISCV_1,
                     .compile_args = compile_args,
                 });
         default: TT_THROW("Unsupported {} processor in test.", magic_enum::enum_name(processor_class));
@@ -802,8 +814,8 @@ bool verify_rt_args(
     std::string label = unique ? "Unique" : "Common";
     // Same idea as ReadFromDeviceL1() but with ETH support.
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
-    auto noc_xy = riscv == tt::RISCV::ERISC ? device->ethernet_core_from_logical_core(logical_core)
-                                            : device->worker_core_from_logical_core(logical_core);
+    auto noc_xy = riscv == tt::RISCV::ERISC0 ? device->ethernet_core_from_logical_core(logical_core)
+                                             : device->worker_core_from_logical_core(logical_core);
     std::vector<uint32_t> args_readback = tt::llrt::read_hex_vec_from_core(device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
     log_debug(tt::LogTest, "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}", expected_rt_args.size(), label, noc_xy, logical_core.str(), addr, incr_val);
 
@@ -840,13 +852,14 @@ std::pair<uint32_t, uint32_t> get_args_addr(const IDevice* device, const tt::RIS
                 device->allocator()->get_base_allocator_addr(HalMemType::L1) + 2 * 256 * sizeof(uint32_t);
             common_args_addr = unique_args_addr + 5 * 256 * sizeof(uint32_t);
             break;
-        case tt::RISCV::ERISC: {
+        case tt::RISCV::ERISC0:
+        case tt::RISCV::ERISC1: {
             HalProgrammableCoreType eth_core_type =
                 idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
             unique_args_addr = MetalContext::instance().hal().get_dev_addr(eth_core_type, HalL1MemAddrType::UNRESERVED);
             common_args_addr = unique_args_addr + 1 * 256 * sizeof(uint32_t);
             break;
-        } break;
+        }
         default: TT_THROW("Unsupported {} processor in get_args_addr.", riscv);
     }
     return {unique_args_addr, common_args_addr};
@@ -975,13 +988,13 @@ void test_my_coordinates(IDevice* device, tt::RISCV processor_class, size_t cq_i
 
     // All logical cores
     CoreRangeSet cr{CoreRange{{2, 2}, {6, 6}}};
-    if (processor_class == tt::RISCV::ERISC) {
+    if (processor_class == tt::RISCV::ERISC0) {
         const auto eth_cores =
             idle_eth ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
         cr = CoreRangeSet{std::set<CoreRange>{eth_cores.begin(), eth_cores.end()}};
     }
 
-    uint32_t cb_addr = processor_class == tt::RISCV::ERISC
+    uint32_t cb_addr = processor_class == tt::RISCV::ERISC0
                            ? hal::get_erisc_l1_unreserved_base()
                            : device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     std::vector<uint32_t> compile_args{
@@ -1281,7 +1294,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthIncrementRuntimeArgsSanity
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
             log_info(tt::LogTest, "Issuing test for eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
             EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
-                device, dummy_program_config, 16, 16, tt::RISCV::ERISC));
+                device, dummy_program_config, 16, 16, tt::RISCV::ERISC0));
         }
     }
 }
@@ -1298,7 +1311,7 @@ TEST_F(
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
             log_info(tt::LogTest, "Issuing test for idle eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
             EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
-                device, dummy_program_config, 16, 16, tt::RISCV::ERISC, true));
+                device, dummy_program_config, 16, 16, tt::RISCV::ERISC0, true));
         }
     }
 }
@@ -1317,7 +1330,7 @@ TEST_F(
             log_info(
                 tt::LogTest, "Issuing test for inactive eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
             EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
-                device, dummy_program_config, 16, 16, tt::RISCV::ERISC, true));
+                device, dummy_program_config, 16, 16, tt::RISCV::ERISC0, true));
         }
     }
 }
@@ -1700,7 +1713,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TestLogicalCoordinatesEth) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";
         }
-        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC0);
     }
 }
 
@@ -1729,8 +1742,8 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesEth) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";
         }
-        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC, 0);
-        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC, 1);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC0, 0);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC0, 1);
     }
 }
 

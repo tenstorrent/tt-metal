@@ -397,7 +397,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixActiveEthTestSubDeviceMyLogic
     tt::tt_metal::verify_kernel_coordinates(
         tt::RISCV::NCRISC, sub_device_2_worker_cores, device, tt::tt_metal::SubDeviceId{1}, cb_addr_worker);
     tt::tt_metal::verify_kernel_coordinates(
-        tt::RISCV::ERISC, sub_device_2_eth_cores, device, tt::tt_metal::SubDeviceId{1}, cb_addr_eth);
+        tt::RISCV::ERISC0, sub_device_2_eth_cores, device, tt::tt_metal::SubDeviceId{1}, cb_addr_eth);
 }
 
 // Ensure the relative coordinate for the worker is updated correctly when it is used for multiple sub device
