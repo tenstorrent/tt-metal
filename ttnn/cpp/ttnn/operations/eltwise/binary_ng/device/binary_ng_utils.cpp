@@ -338,8 +338,22 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case RSUB: return {"rsub_binary_tile_init();", "rsub_binary_tile"};
         case GCD: return {"gcd_tile_init();", "gcd_tile"};
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
-        case LEFT_SHIFT: return {"binary_shift_tile_init();", "binary_left_shift_tile"};
-        case RIGHT_SHIFT: return {"binary_shift_tile_init();", "binary_right_shift_tile"};
+        case LEFT_SHIFT:
+            if (dtype == DataType::UINT32) {
+                return {"binary_shift_tile_init();", "binary_left_shift_uint32_tile"};
+            } else if (dtype == DataType::INT32) {
+                return {"binary_shift_tile_init();", "binary_left_shift_int32_tile"};
+            } else {
+                return {"binary_shift_tile_init();", "binary_left_shift_tile"};
+            }
+        case RIGHT_SHIFT:
+            if (dtype == DataType::UINT32) {
+                return {"binary_shift_tile_init();", "binary_right_shift_uint32_tile"};
+            } else if (dtype == DataType::INT32) {
+                return {"binary_shift_tile_init();", "binary_right_shift_int32_tile"};
+            } else {
+                return {"binary_shift_tile_init();", "binary_right_shift_tile"};
+            }
         case BITWISE_AND:
             if (dtype == DataType::UINT16) {
                 return {"binary_bitwise_tile_init();", "bitwise_and_uint16_binary_tile"};
