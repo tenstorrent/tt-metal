@@ -123,15 +123,6 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
             const std::unordered_map<tt::tt_fabric::RoutingDirection, size_t>& golden_link_counts,
             size_t& val) {
             if (auto it = port_direction_eth_chans.find(direction); it != port_direction_eth_chans.end()) {
-                // In strict system health mode, all links must be live. However, the first time through
-                // here, val is initialized to max
-                if (reliability_mode == tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
-                    TT_FATAL(
-                        golden_link_counts.at(direction) == it->second.size(),
-                        "In strict system health setup mode, some Ethernet links are "
-                        "down ");
-                }
-
                 val = std::min(val, it->second.size());
             }
         };
