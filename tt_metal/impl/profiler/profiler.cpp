@@ -183,7 +183,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(IDevice* device, cons
                 distributed::DeviceMemoryAddress{
                     device_coord, worker_core, reinterpret_cast<DeviceAddr>(profiler_msg->buffer)},
                 core_l1_data_buffers[worker_core].data(),
-                kernel_profiler::PROFILER_L1_VECTOR_SIZE * PROFILER_RISC_COUNT,
+                kernel_profiler::PROFILER_L1_BUFFER_SIZE * PROFILER_RISC_COUNT,
                 true);
     } else {
         dynamic_cast<HWCommandQueue&>(device->command_queue())
@@ -191,7 +191,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(IDevice* device, cons
                 worker_core,
                 core_l1_data_buffers[worker_core].data(),
                 reinterpret_cast<DeviceAddr>(profiler_msg->buffer),
-                kernel_profiler::PROFILER_L1_VECTOR_SIZE * PROFILER_RISC_COUNT,
+                kernel_profiler::PROFILER_L1_BUFFER_SIZE * PROFILER_RISC_COUNT,
                 true);
     }
 }
