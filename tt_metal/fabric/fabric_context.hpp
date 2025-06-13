@@ -24,6 +24,8 @@ public:
 
     bool is_wrap_around_mesh(MeshId mesh_id) const;
 
+    static tt::tt_fabric::Topology get_topology_from_config(tt::tt_metal::FabricConfig fabric_config);
+
     tt::tt_fabric::Topology get_fabric_topology() const;
     tt::tt_metal::FabricConfig get_fabric_config() const { return fabric_config_; }
 

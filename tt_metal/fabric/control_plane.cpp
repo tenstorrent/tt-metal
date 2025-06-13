@@ -112,7 +112,7 @@ static void build_golden_link_counts(
 
 void ControlPlane::initialize_dynamic_routing_plane_counts(
     const IntraMeshConnectivity& intra_mesh_connectivity, tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode) {
-    auto topology = this->get_fabric_context().get_fabric_topology();
+    auto topology = FabricContext::get_topology_from_config(fabric_config);
     size_t min_routing_planes = std::numeric_limits<size_t>::max();
 
     auto apply_min =
