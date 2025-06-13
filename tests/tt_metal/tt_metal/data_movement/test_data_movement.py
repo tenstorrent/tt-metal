@@ -585,9 +585,7 @@ def print_stats(dm_stats):
         logger.info("")
 
 
-def plot_dm_stats(
-    dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement/documentation/perf_plots", arch="blackhole"
-):
+def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", arch="blackhole"):
     # Extract data for plotting
     riscv_1_series = dm_stats["riscv_1"]["analysis"]["series"]
     riscv_0_series = dm_stats["riscv_0"]["analysis"]["series"]
@@ -605,7 +603,7 @@ def plot_dm_stats(
     noc_width = 32 if arch == "wormhole_b0" else 64
 
     # Ensure output directory exists
-    os.makedirs(f"{output_dir}/{arch}", exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
 
     for test_id in test_ids:
         # Create the figure for this test id
@@ -729,7 +727,7 @@ def plot_dm_stats(
         txtObj._get_wrap_line_width = lambda: 0.9 * subsubfig[1].bbox.width
 
         # Save the plot for this test id
-        output_file = os.path.join(f"{output_dir}/{arch}", f"{test_id_to_name.get(test_id, f'Test ID {test_id}')}.png")
+        output_file = os.path.join(output_dir, f"{test_id_to_name.get(test_id, f'Test ID {test_id}')}.png")
         plt.savefig(output_file)
         plt.close(fig)
         logger.info(f"dm_stats plot for test id {test_id} saved at {output_file}")
