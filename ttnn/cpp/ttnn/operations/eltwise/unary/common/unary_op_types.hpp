@@ -99,6 +99,7 @@ enum class UnaryOpType {
     MAXIMUM,
     MINIMUM,
     TANHSHRINK,
+    SELU,
 };
 
 enum class VecMode {

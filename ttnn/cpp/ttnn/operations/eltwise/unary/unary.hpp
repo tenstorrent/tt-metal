@@ -98,6 +98,16 @@ struct Unary_chain {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Selu {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        float scale = 1.0507,   // 1.0507009873554804934193349852946
+        float alpha = 1.67326,  // 1.6732632423543772848170429916717
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Softplus {
     static Tensor invoke(
         QueueId queue_id,
@@ -393,6 +403,8 @@ constexpr auto rad2deg = ttnn::register_operation<"ttnn::rad2deg", ttnn::operati
 constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::operations::unary::Softplus>();
 constexpr auto tanh = ttnn::register_operation<"ttnn::tanh", ttnn::operations::unary::Tanh>();
 constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
+
+constexpr auto selu = ttnn::register_operation<"ttnn::selu", ttnn::operations::unary::Selu>();
 
 constexpr auto sigmoid_accurate =
     ttnn::register_operation<"ttnn::sigmoid_accurate", ttnn::operations::unary::Sigmoid_accurate>();

@@ -421,11 +421,11 @@ def test_unary_composite_polygamma_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_composite_selu_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, 1, 2, device)
+def test_unary_composite_rad2deg_ttnn(input_shapes, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
-    output_tensor = ttnn.selu(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.selu)
+    output_tensor = ttnn.rad2deg(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn.rad2deg)
     golden_tensor = golden_function(in_data1)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])

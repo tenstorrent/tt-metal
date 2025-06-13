@@ -31,7 +31,6 @@ enum class UnaryCompositeOpType {
     HARDSWISH,
     HARDSIGMOID,
     HARDTANH,
-    SELU,
     GLU,
     REGLU,
     GEGLU,
@@ -78,11 +77,6 @@ Tensor _hardsigmoid(
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _hardtanh(
     const Tensor&, float min = -1, float max = 1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-Tensor _selu(
-    const Tensor&,
-    float scale = 1.0507,
-    float alpha = 1.67326,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _glu(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
 Tensor _reglu(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
 Tensor _geglu(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
@@ -205,13 +199,6 @@ template <>
 struct OpHandler<UnaryCompositeOpType::HARDTANH> {
     static Tensor handle(const Tensor& t1, float low, float high, const std::optional<MemoryConfig>& mem_cfg) {
         return _hardtanh(t1, low, high, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::SELU> {
-    static Tensor handle(const Tensor& t1, float scale, float alpha, const std::optional<MemoryConfig>& mem_cfg) {
-        return _selu(t1, scale, alpha, mem_cfg);
     }
 };
 
