@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <algorithm>
 #include "dataflow_api.h"
 
 void kernel_main() {
@@ -34,7 +35,7 @@ void kernel_main() {
     constexpr bool dst0_is_dram = get_compile_time_arg_val(1) == 1;
 
     const InterleavedAddrGen<dst0_is_dram> s0 = {.bank_base_address = dst_addr, .page_size = output_stick_size};
-    const uint32_t noc_write_size = min(output_stick_size, input_stick_size);
+    const uint32_t noc_write_size = std::min(output_stick_size, input_stick_size);
     uint32_t dst_stick_id = start_id;
     uint32_t sticks_read = 0;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
