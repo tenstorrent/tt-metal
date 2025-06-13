@@ -19,19 +19,6 @@
 using std::vector;
 using namespace tt;
 
-void print_vec(const std::vector<bfloat16>& data, int rows, int cols, string name) {
-    std::cout << name << ": " << std::endl;
-    int index = 0;
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            std::cout << data.at(index).to_float() << ", ";
-            index++;
-        }
-        std::cout << std::endl;
-    }
-    std::cout << std::endl;
-}
-
 std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, int N) {
     if (N == K) {
         return data;
@@ -585,10 +572,11 @@ int main(int argc, char** argv) {
                 tt_metal::detail::ReadFromDeviceDRAMChannel(
                     device, dram_bank, dram_address, single_tile_size, result_vec);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-                auto result_flat_layout = convert_to_flat_layout(tt::stl::make_const_span(result_bfp16));
+                auto result_flat_layout =
+                    convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
 
                 // log_info(LogTest, "Tile id {} on dram bank {}, address {}", tile_id, dram_bank, dram_address);
-                // print_vec(result_flat_layout, 32, 32, "Result - tile#" + std::to_string(tile_id));
+                // print_vec_of_bfloat16(result_flat_layout, 1, "Result - tile#" + std::to_string(tile_id));
                 pass &= (golden_tile == result_flat_layout);
             }
         }
