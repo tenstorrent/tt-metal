@@ -7,7 +7,7 @@ import ttnn
 
 
 DEFAULT_SHAPE = (32, 32)
-SHAPES = [tuple([32] * i) for i in range(2, 6)]
+SHAPES = [tuple([32] * i) for i in range(6)]
 ALL_TYPES = [dtype for dtype, _ in ttnn.DataType.__entries.values() if dtype != ttnn.DataType.INVALID]
 
 
