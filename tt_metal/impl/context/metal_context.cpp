@@ -241,7 +241,6 @@ void MetalContext::clear_launch_messages_on_eth_cores(chip_id_t device_id) {
 }
 
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
-    // TT_FATAL(global_control_plane_ != nullptr, "Control plane is not initialized");
     if (!global_control_plane_) {
         this->initialize_control_plane();
     }
