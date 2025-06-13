@@ -180,6 +180,20 @@ def compare_pcc(tt_tensor, golden_tensor, pcc=0.99):
     return status
 
 
+def compare_equal_all_close(tt_tensor, golden_tensor):
+    status = True
+    for i in range(len(tt_tensor)):
+        tt_out_tensor = tt_tensor[i]
+        pt_out_tensor = golden_tensor[i]
+        comp_pass, comp_out = comparison_funcs.comp_equal(pt_out_tensor, tt_out_tensor)
+        comp_all, _ = comparison_funcs.comp_allclose(pt_out_tensor, tt_out_tensor, atol=4, rtol=1e-1)
+        logger.debug(comp_pass)
+        logger.debug(comp_out)
+        logger.debug(comp_all)
+        status = status & (comp_pass | comp_all)
+    return status
+
+
 def compare_equal(tt_tensor, golden_tensor):
     status = True
     for i in range(len(tt_tensor)):
