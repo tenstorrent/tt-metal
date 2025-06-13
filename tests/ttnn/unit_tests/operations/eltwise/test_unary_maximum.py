@@ -36,6 +36,7 @@ def test_unary_max_int32_test(scalar, device):
         (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 2, 64, 120])),
         (torch.Size([1, 3, 320, 320])),
+        (torch.Size([1, 3, 1024, 1024])),
     ),
 )
 @pytest.mark.parametrize(

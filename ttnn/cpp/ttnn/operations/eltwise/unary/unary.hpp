@@ -63,8 +63,9 @@ struct ExecuteUnaryWithFloatParameter {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
-template <UnaryOpType unary_op_type, typename T>
+template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithVariantFloatIntParameter {
+    template <typename T>
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
@@ -295,13 +296,6 @@ struct Tanh {
         "ttnn::" #operation_name,                                                     \
         ttnn::operations::unary::ExecuteUnaryWithFloatParameter<                      \
             ttnn::operations::unary::UnaryOpType::operation_type>>();
-
-#define REGISTER_UNARY_OPERATION_WITH_VARIANT_INT_FLOAT_PARAMETER(operation_name, operation_type, data_type) \
-    constexpr auto operation_name = ttnn::register_operation<                                                \
-        "ttnn::" #operation_name,                                                                            \
-        ttnn::operations::unary::ExecuteUnaryWithVariantFloatIntParameter<                                   \
-            ttnn::operations::unary::UnaryOpType::operation_type,                                            \
-            data_type>>();
 
 #define REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(operation_name, operation_type, data_type) \
     constexpr auto operation_name = ttnn::register_operation<                                      \
