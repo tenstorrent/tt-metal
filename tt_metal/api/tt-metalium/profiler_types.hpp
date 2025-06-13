@@ -8,6 +8,6 @@ namespace tt::tt_metal {
 
 enum class ProfilerDumpState { NORMAL, ONLY_DISPATCH_CORES, LAST_FD_DUMP };
 enum class ProfilerSyncState { INIT, CLOSE_DEVICE };
-enum class ProfilerDataBufferSource { L1, DRAM };
+enum class ProfilerDataBufferSource { L1, DRAM, DRAM_AND_L1 };
 
 }  // namespace tt::tt_metal
