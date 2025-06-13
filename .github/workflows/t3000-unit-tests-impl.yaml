@@ -41,9 +41,7 @@ jobs:
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - arch-wormhole_b0
-      - config-t3000
-      - pipeline-functional
+      - BH-LLMBox
       - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image }}
