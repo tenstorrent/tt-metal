@@ -487,7 +487,7 @@ def test_simple_tensor_gen(mesh_device, mesh_shape):
     assert expert_indices.shape == (batch * mesh_shape[0], 1, 1, select_experts_k)
     assert expert_mapping.shape == (devices, 1, experts, devices)
     assert sparse_output_token_tensor.shape == (devices, batch * mesh_shape[0], 1, hidden_size)
-    assert metadata_tensor.shape == (devices, batch, 1, select_experts_k)
+    assert metadata_tensor.shape == (devices, batch * mesh_shape[0], 1, select_experts_k)
 
     logger.info(f"Expert indices {expert_indices}")
     logger.info(f"Expert mapping {expert_mapping[0, :, :, :]}")
