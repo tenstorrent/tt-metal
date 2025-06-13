@@ -241,7 +241,7 @@ bool cb_config_successful(
 }
 
 void test_dummy_EnqueueProgram_with_runtime_args(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const CoreCoord& eth_core_coord) {
+    std::shared_ptr<distributed::MeshDevice> mesh_device, const CoreCoord& eth_core_coord, DataMovementProcessor erisc_processor = DataMovementProcessor::RISCV_0) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -260,9 +260,20 @@ void test_dummy_EnqueueProgram_with_runtime_args(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
         eth_core_coord,
-        tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0, .defines = dummy_defines0});
+        tt::tt_metal::EthernetConfig{
+            .noc = tt::tt_metal::NOC::NOC_0, .processor = erisc_processor, .defines = dummy_defines0});
 
-    vector<uint32_t> dummy_kernel0_args = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+    constexpr int k_NumDummyArgs = 9;
+    vector<uint32_t> dummy_kernel0_args(k_NumDummyArgs);
+    // Generate 9 random numbers
+    {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dis(0, 100);
+        for (uint32_t i = 0; i < k_NumDummyArgs; i++) {
+            dummy_kernel0_args[i] = dis(gen);
+        }
+    }
     tt::tt_metal::SetRuntimeArgs(program, dummy_kernel0, eth_core_coord, dummy_kernel0_args);
 
     auto& cq = mesh_device->mesh_command_queue();
@@ -1015,7 +1026,15 @@ bool test_increment_runtime_args_sanity(
         idle_eth);
 }
 
-void test_my_coordinates(
+tt::RISCV datamovement_processor_to_riscv(DataMovementProcessor processor) {
+    switch (processor) {
+        case DataMovementProcessor::RISCV_0: return tt::RISCV::ERISC0;
+        case DataMovementProcessor::RISCV_1: return tt::RISCV::ERISC1;
+        default: TT_THROW("Unsupported processor {}", magic_enum::enum_name(processor));
+    }
+}
+
+static void test_my_coordinates(
     std::shared_ptr<distributed::MeshDevice> mesh_device,
     tt::RISCV processor_class,
     size_t cq_id = 0,
@@ -1026,15 +1045,15 @@ void test_my_coordinates(
 
     auto device = mesh_device->get_devices()[0];
 
-    if (processor_class == tt::RISCV::ERISC0) {
+    bool is_erisc = processor_class == tt::RISCV::ERISC0 || processor_class == tt::RISCV::ERISC1;
+    if (is_erisc) {
         const auto eth_cores =
             idle_eth ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
         cr = CoreRangeSet{std::set<CoreRange>{eth_cores.begin(), eth_cores.end()}};
     }
 
-    uint32_t cb_addr = processor_class == tt::RISCV::ERISC0
-                           ? hal::get_erisc_l1_unreserved_base()
-                           : device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    uint32_t cb_addr = is_erisc ? hal::get_erisc_l1_unreserved_base()
+                                : device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     std::vector<uint32_t> compile_args{
         cb_addr,
     };
@@ -1347,7 +1366,17 @@ TEST_F(UnitMeshCQFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
 TEST_F(UnitMeshCQFixture, ActiveEthEnqueueDummyProgram) {
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_devices()[0]->get_active_ethernet_cores(true)) {
-            local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, eth_core);
+            const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+                HalProgrammableCoreType::ACTIVE_ETH);
+            for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+                log_info(
+                    tt::LogTest,
+                    "Test active ethernet enqueue dummy program with runtime args for eth_core: {} DM{}",
+                    eth_core.str(),
+                    erisc_idx);
+                local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+                    device, eth_core, static_cast<DataMovementProcessor>(erisc_idx));
+            }
         }
     }
 }
@@ -1360,9 +1389,23 @@ TEST_F(UnitMeshCQFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovem
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-            log_info(tt::LogTest, "Issuing test for eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
-            EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
-                device, dummy_program_config, 16, 16, tt::RISCV::ERISC0));
+            const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+                HalProgrammableCoreType::ACTIVE_ETH);
+            for (int erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+                log_info(
+                    tt::LogTest,
+                    "Test active ethernet runtime args for eth_core: {} DM{} using cr_set: {}",
+                    eth_core.str(),
+                    erisc_idx,
+                    cr_set.str());
+                EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
+                    device,
+                    dummy_program_config,
+                    16,
+                    16,
+                    local_test_functions::datamovement_processor_to_riscv(
+                        static_cast<DataMovementProcessor>(erisc_idx))));
+            }
         }
     }
 }
@@ -1777,6 +1820,18 @@ TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesCompute) {
 TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesEth) {
     for (const auto& device : devices_) {
         local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC0);
+        if (!does_device_have_active_eth_cores(device->get_devices()[0])) {
+            GTEST_SKIP() << "Skipping test because device " << device->id()
+                         << " does not have any active ethernet cores";
+        }
+        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            HalProgrammableCoreType::ACTIVE_ETH);
+        for (int erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+            log_info(tt::LogTest, "Test logical coordinates active ethernet DM{}", erisc_idx);
+            local_test_functions::test_my_coordinates(
+                device,
+                local_test_functions::datamovement_processor_to_riscv(static_cast<DataMovementProcessor>(erisc_idx)));
+        }
     }
 }
 
@@ -1793,16 +1848,33 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesDataMove
 // Ensure the compute core can access their own logical coordinate. Same binary enqueued to multiple cores.
 TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesCompute) {
     for (const auto& device : devices_) {
-        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE);
-        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE, 1);
+        for (uint32_t cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
+            log_info(tt::LogTest, "Test logical coordinates CQ{} compute core", cq_id);
+            local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE, cq_id);
+        }
     }
 }
 
 // Ensure the eth core can access their own logical coordinate. Same binary enqueued to multiple cores.
 TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesEth) {
     for (const auto& device : devices_) {
-        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC0, 0);
-        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC0, 1);
+        if (!does_device_have_active_eth_cores(device->get_devices()[0])) {
+            GTEST_SKIP() << "Skipping test because device " << device->id()
+                         << " does not have any active ethernet cores";
+        }
+
+        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            HalProgrammableCoreType::ACTIVE_ETH);
+        for (int erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+            for (int cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
+                log_info(tt::LogTest, "Test logical coordinates CQ{} active ethernet DM{}", cq_id, erisc_idx);
+                local_test_functions::test_my_coordinates(
+                    device,
+                    local_test_functions::datamovement_processor_to_riscv(
+                        static_cast<DataMovementProcessor>(erisc_idx)),
+                    cq_id);
+            }
+        }
     }
 }
 

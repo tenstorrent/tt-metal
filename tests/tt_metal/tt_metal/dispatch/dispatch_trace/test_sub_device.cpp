@@ -102,46 +102,50 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixActiveEthTestSubDeviceTraceBasi
         CoreRangeSet(CoreRange(eth_core, eth_core))});
     auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
     device->load_sub_device_manager(sub_device_manager);
+    const auto erisc_count =
+        tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(HalProgrammableCoreType::ACTIVE_ETH);
+    for (int erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+        log_info(tt::LogTest, "Test active ethernet DM{}", erisc_idx);
+        auto [waiter_program, syncer_program, incrementer_program, global_sem] = create_basic_eth_sync_program(
+            device, sub_device_1, sub_device_2, static_cast<DataMovementProcessor>(erisc_idx));
 
-    auto [waiter_program, syncer_program, incrementer_program, global_sem] =
-        create_basic_eth_sync_program(device, sub_device_1, sub_device_2);
-
-    // Compile the programs
-    EnqueueProgram(device->command_queue(), waiter_program, false);
-    device->set_sub_device_stall_group({SubDeviceId{0}});
-    // Test blocking on one sub-device
-    EnqueueProgram(device->command_queue(), syncer_program, true);
-    EnqueueProgram(device->command_queue(), incrementer_program, false);
-    device->reset_sub_device_stall_group();
-    Synchronize(device);
-
-    // Capture the trace
-    auto tid_1 = BeginTraceCapture(device, device->command_queue().id());
-    EnqueueProgram(device->command_queue(), waiter_program, false);
-    EnqueueProgram(device->command_queue(), syncer_program, false);
-    EnqueueProgram(device->command_queue(), incrementer_program, false);
-    EndTraceCapture(device, device->command_queue().id(), tid_1);
-
-    auto tid_2 = BeginTraceCapture(device, device->command_queue().id());
-    EnqueueProgram(device->command_queue(), syncer_program, false);
-    EnqueueProgram(device->command_queue(), incrementer_program, false);
-    EndTraceCapture(device, device->command_queue().id(), tid_2);
-
-    for (uint32_t i = 0; i < num_iters; i++) {
-        // Regular program execution
+        // Compile the programs
         EnqueueProgram(device->command_queue(), waiter_program, false);
+        device->set_sub_device_stall_group({SubDeviceId{0}});
         // Test blocking on one sub-device
         EnqueueProgram(device->command_queue(), syncer_program, true);
         EnqueueProgram(device->command_queue(), incrementer_program, false);
+        device->reset_sub_device_stall_group();
+        Synchronize(device);
 
-        // Full trace execution
-        ReplayTrace(device, device->command_queue().id(), tid_1, false);
-
-        // Partial trace execution
+        // Capture the trace
+        auto tid_1 = BeginTraceCapture(device, device->command_queue().id());
         EnqueueProgram(device->command_queue(), waiter_program, false);
-        ReplayTrace(device, device->command_queue().id(), tid_2, false);
+        EnqueueProgram(device->command_queue(), syncer_program, false);
+        EnqueueProgram(device->command_queue(), incrementer_program, false);
+        EndTraceCapture(device, device->command_queue().id(), tid_1);
+
+        auto tid_2 = BeginTraceCapture(device, device->command_queue().id());
+        EnqueueProgram(device->command_queue(), syncer_program, false);
+        EnqueueProgram(device->command_queue(), incrementer_program, false);
+        EndTraceCapture(device, device->command_queue().id(), tid_2);
+
+        for (uint32_t i = 0; i < num_iters; i++) {
+            // Regular program execution
+            EnqueueProgram(device->command_queue(), waiter_program, false);
+            // Test blocking on one sub-device
+            EnqueueProgram(device->command_queue(), syncer_program, true);
+            EnqueueProgram(device->command_queue(), incrementer_program, false);
+
+            // Full trace execution
+            ReplayTrace(device, device->command_queue().id(), tid_1, false);
+
+            // Partial trace execution
+            EnqueueProgram(device->command_queue(), waiter_program, false);
+            ReplayTrace(device, device->command_queue().id(), tid_2, false);
+        }
+        Synchronize(device);
     }
-    Synchronize(device);
 }
 
 TEST_F(CommandQueueSingleCardTraceFixture, TensixActiveEthTestSubDeviceTraceProgramsReconfigureSubDevices) {
@@ -188,57 +192,62 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixActiveEthTestSubDeviceTraceProg
 
     device->load_sub_device_manager(sub_device_manager_2);
 
-    auto [waiter_program_2, syncer_program_2, incrementer_program_2, global_sem_2] =
-        create_basic_eth_sync_program(device, sub_device_3, sub_device_4);
+    const auto erisc_count =
+        tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(HalProgrammableCoreType::ACTIVE_ETH);
+    for (int erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+        log_info(tt::LogTest, "Test active ethernet DM{}", erisc_idx);
+        auto [waiter_program_2, syncer_program_2, incrementer_program_2, global_sem_2] = create_basic_eth_sync_program(
+            device, sub_device_3, sub_device_4, static_cast<DataMovementProcessor>(erisc_idx));
 
-    // Compile the programs
-    EnqueueProgram(device->command_queue(), waiter_program_2, false);
-    device->set_sub_device_stall_group({SubDeviceId{0}});
-    EnqueueProgram(device->command_queue(), syncer_program_2, false);
-    EnqueueProgram(device->command_queue(), incrementer_program_2, false);
-    device->reset_sub_device_stall_group();
-    Synchronize(device);
-
-    // Capture the trace
-    auto tid_3 = BeginTraceCapture(device, device->command_queue().id());
-    EnqueueProgram(device->command_queue(), waiter_program_2, false);
-    EnqueueProgram(device->command_queue(), syncer_program_2, false);
-    EnqueueProgram(device->command_queue(), incrementer_program_2, false);
-    EndTraceCapture(device, device->command_queue().id(), tid_3);
-
-    auto tid_4 = BeginTraceCapture(device, device->command_queue().id());
-    EnqueueProgram(device->command_queue(), syncer_program_2, false);
-    EnqueueProgram(device->command_queue(), incrementer_program_2, false);
-    EndTraceCapture(device, device->command_queue().id(), tid_4);
-
-    for (uint32_t i = 0; i < num_iters; i++) {
-        device->load_sub_device_manager(sub_device_manager_1);
-        // Regular program execution
-        EnqueueProgram(device->command_queue(), waiter_program_1, false);
-        // Test blocking on one sub-device
-        EnqueueProgram(device->command_queue(), syncer_program_1, false);
-        EnqueueProgram(device->command_queue(), incrementer_program_1, false);
-
-        // Full trace execution
-        ReplayTrace(device, device->command_queue().id(), tid_1, false);
-
-        // Partial trace execution
-        EnqueueProgram(device->command_queue(), waiter_program_1, false);
-        ReplayTrace(device, device->command_queue().id(), tid_2, false);
-
-        device->load_sub_device_manager(sub_device_manager_2);
-        // Regular program execution
+        // Compile the programs
         EnqueueProgram(device->command_queue(), waiter_program_2, false);
-        // Test blocking on one sub-device
+        device->set_sub_device_stall_group({SubDeviceId{0}});
         EnqueueProgram(device->command_queue(), syncer_program_2, false);
         EnqueueProgram(device->command_queue(), incrementer_program_2, false);
+        device->reset_sub_device_stall_group();
+        Synchronize(device);
 
-        // Full trace execution
-        ReplayTrace(device, device->command_queue().id(), tid_3, false);
-
-        // Partial trace execution
+        // Capture the trace
+        auto tid_3 = BeginTraceCapture(device, device->command_queue().id());
         EnqueueProgram(device->command_queue(), waiter_program_2, false);
-        ReplayTrace(device, device->command_queue().id(), tid_4, false);
+        EnqueueProgram(device->command_queue(), syncer_program_2, false);
+        EnqueueProgram(device->command_queue(), incrementer_program_2, false);
+        EndTraceCapture(device, device->command_queue().id(), tid_3);
+
+        auto tid_4 = BeginTraceCapture(device, device->command_queue().id());
+        EnqueueProgram(device->command_queue(), syncer_program_2, false);
+        EnqueueProgram(device->command_queue(), incrementer_program_2, false);
+        EndTraceCapture(device, device->command_queue().id(), tid_4);
+
+        for (uint32_t i = 0; i < num_iters; i++) {
+            device->load_sub_device_manager(sub_device_manager_1);
+            // Regular program execution
+            EnqueueProgram(device->command_queue(), waiter_program_1, false);
+            // Test blocking on one sub-device
+            EnqueueProgram(device->command_queue(), syncer_program_1, false);
+            EnqueueProgram(device->command_queue(), incrementer_program_1, false);
+
+            // Full trace execution
+            ReplayTrace(device, device->command_queue().id(), tid_1, false);
+
+            // Partial trace execution
+            EnqueueProgram(device->command_queue(), waiter_program_1, false);
+            ReplayTrace(device, device->command_queue().id(), tid_2, false);
+
+            device->load_sub_device_manager(sub_device_manager_2);
+            // Regular program execution
+            EnqueueProgram(device->command_queue(), waiter_program_2, false);
+            // Test blocking on one sub-device
+            EnqueueProgram(device->command_queue(), syncer_program_2, false);
+            EnqueueProgram(device->command_queue(), incrementer_program_2, false);
+
+            // Full trace execution
+            ReplayTrace(device, device->command_queue().id(), tid_3, false);
+
+            // Partial trace execution
+            EnqueueProgram(device->command_queue(), waiter_program_2, false);
+            ReplayTrace(device, device->command_queue().id(), tid_4, false);
+        }
     }
     Synchronize(device);
 }
