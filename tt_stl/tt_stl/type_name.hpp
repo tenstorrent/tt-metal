@@ -7,7 +7,7 @@
 #include <source_location>
 #include <string_view>
 
-namespace tt::stl {
+namespace ttsl {
 
 namespace detail {
 
@@ -90,4 +90,10 @@ inline constexpr std::string_view short_type_name = detail::short_name<T>();
 template <typename T>
 inline constexpr std::string_view long_type_name = detail::long_name<T>();
 
-}  // namespace tt::stl
+}  // namespace ttsl
+
+namespace tt {
+namespace [[deprecated("Use ttsl namespace instead")]] stl {
+using namespace ::ttsl;
+}  // namespace stl
+}  // namespace tt

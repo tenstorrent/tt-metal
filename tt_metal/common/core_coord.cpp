@@ -669,7 +669,7 @@ std::size_t hash<CoreRangeSet>::operator()(const CoreRangeSet& core_range_set) c
 
 }  // namespace std
 
-namespace tt::stl::json {
+namespace ttsl::json {
 
 nlohmann::json to_json_t<CoreCoord>::operator()(const CoreCoord& core_coord) noexcept {
     return {{"x", to_json(core_coord.x)}, {"y", to_json(core_coord.y)}};
@@ -704,4 +704,4 @@ CoreRangeSet from_json_t<CoreRangeSet>::operator()(const nlohmann::json& json) n
     return CoreRangeSet(from_json<std::vector<CoreRange>>(json));
 }
 
-}  // namespace tt::stl::json
+}  // namespace ttsl::json

@@ -167,11 +167,11 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Layout& layout);
 }  // namespace tt
 
 template <>
-struct tt::stl::json::to_json_t<tt::tt_metal::MemoryConfig> {
+struct ttsl::json::to_json_t<tt::tt_metal::MemoryConfig> {
     nlohmann::json operator()(const tt::tt_metal::MemoryConfig& config) const;
 };
 
 template <>
-struct tt::stl::json::from_json_t<tt::tt_metal::MemoryConfig> {
+struct ttsl::json::from_json_t<tt::tt_metal::MemoryConfig> {
     tt::tt_metal::MemoryConfig operator()(const nlohmann::json& json_object) const;
 };

@@ -260,7 +260,7 @@ struct hash<CoreRangeSet> {
 
 }  // namespace std
 
-namespace tt::stl::json {
+namespace ttsl::json {
 
 template <>
 struct to_json_t<CoreCoord> {
@@ -302,4 +302,4 @@ struct from_json_t<CoreRangeSet> {
     CoreRangeSet operator()(const nlohmann::json& json) noexcept;
 };
 
-}  // namespace tt::stl::json
+}  // namespace ttsl::json
