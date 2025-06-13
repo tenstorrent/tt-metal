@@ -485,9 +485,9 @@ bool MeshDevice::close() {
     ZoneScoped;
     log_info(tt::LogMetal, "Closing mesh device {}", this->id());
 
-    // We skip dumping profile results for the parent mesh device because parent mesh devices don't
-    // have any active mesh command queues.
-    if (!this->is_parent_mesh()) {
+    // We only dump profile results for mesh devices that don't have any submeshes as they have active mesh command
+    // queues, whereas mesh devices with submeshes don't.
+    if (this->submeshes_.empty()) {
         DumpMeshDeviceProfileResults(*this);
     }
 
