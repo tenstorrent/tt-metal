@@ -167,7 +167,6 @@ class TtTransformer(LightweightModule):
             self.tt_sampling = TTSampling(
                 args=self.args,
                 mesh_device=self.mesh_device,
-                temperature=[1.0] * self.args.max_batch_size,
                 tt_ccl=self.tt_ccl,
             )
         else:
