@@ -68,7 +68,10 @@ public:
         const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
     void set_default_control_plane_mesh_graph();
     void set_fabric_config(
-        tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt, tt_metal::FabricReliabilityMode reliability_mode = tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        tt_metal::FabricConfig fabric_config,
+        tt_metal::FabricReliabilityMode reliability_mode =
+            tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        std::optional<uint8_t> num_routing_planes = std::nullopt);
     void initialize_fabric_config();
     tt_metal::FabricConfig get_fabric_config() const;
 

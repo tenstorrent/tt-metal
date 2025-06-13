@@ -34,8 +34,8 @@ void py_bind_fabric_api(py::module& module) {
         "set_fabric_config",
         &tt::tt_metal::detail::SetFabricConfig,
         py::arg("config"),
-        py::arg("num_planes") = std::nullopt,
-        py::arg("reliability_mode") = tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        py::arg("reliability_mode") = tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        py::arg("num_planes") = std::nullopt);
 }
 
 }  // namespace ttnn::fabric

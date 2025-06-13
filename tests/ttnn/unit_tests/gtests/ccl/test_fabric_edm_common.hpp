@@ -107,7 +107,7 @@ public:
     BaseFabricFixture() : device_open(false) {}
 
     BaseFabricFixture(tt::tt_metal::FabricConfig fabric_config, tt::tt_metal::FabricReliabilityMode reliability_mode = tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) : device_open(false) {
-        tt::tt_metal::detail::SetFabricConfig(fabric_config, std::nullopt, reliability_mode);
+        tt::tt_metal::detail::SetFabricConfig(fabric_config, reliability_mode);
     }
 
     virtual ~BaseFabricFixture() { tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED); }
@@ -219,12 +219,12 @@ public:
         tt::tt_metal::FabricReliabilityMode reliability_mode =
             tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
         device_open(false) {
-        tt::tt_metal::detail::SetFabricConfig(fabric_config, std::nullopt, reliability_mode);
+        tt::tt_metal::detail::SetFabricConfig(fabric_config, reliability_mode);
         this->SetupDevices();
     }
 
-    ~Fabric1DDeviceInitFixture() { 
-        TearDown(); 
+    ~Fabric1DDeviceInitFixture() {
+        TearDown();
         tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
     }
 };
