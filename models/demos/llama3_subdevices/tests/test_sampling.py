@@ -204,12 +204,23 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
     indirect=True,
 )
 def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_device, use_program_cache, reset_seeds):
-    use_tracing = False
+    use_tracing = True
     load_cached_outputs = False
-    num_samples = 10
+    num_samples = 10000
     num_compile_steps = 1
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=32, dummy_weights=True)
     max_top_k = model_args.max_top_k
+
+    top_k = sampling_params["top_k"]
+    if isinstance(top_k, int):
+        top_k = [top_k] * batch_size
+    top_p = sampling_params["top_p"]
+    if isinstance(top_p, float):
+        top_p = [top_p] * batch_size
+    temperature = sampling_params["temperature"]
+    if isinstance(temperature, float):
+        temperature = [temperature] * batch_size
+    seed = sampling_params["seed"]
 
     if load_cached_outputs:
         # Cached model outputs
@@ -264,7 +275,7 @@ def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_devic
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        sampling_params=sampling_params,
+        temperature=temperature,
         tt_ccl=tt_ccl,
     )
 
@@ -272,15 +283,19 @@ def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_devic
         try:
             logger.info("Compile Llama Sampling")
 
-            for i in range(1):
-                tt_outputs = tt_sampling(tt_input, seed=sampling_params["seed"])
+            tt_outputs = tt_sampling(tt_input, k=top_k, p=top_p, seed=seed)  # Setting random seed
+
+            tt_outputs = tt_sampling(
+                tt_input, k=top_k, p=top_p
+            )  # Compiling without seed; will generate new pseudo-random numbers
+
             logger.info("Done comiling Llama Sampling Trace")
 
             logger.info("Capture Llama Sampling Trace")
 
             trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
-            tt_outputs = tt_sampling(tt_input)  # Seed set to default 0 -> will not set a new seed
+            tt_outputs = tt_sampling(tt_input, k=top_k, p=top_p)
 
             ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
 
@@ -323,10 +338,11 @@ def test_llama_sampling_inference(dtype, sampling_params, batch_size, mesh_devic
         tt_outputs_torch = []
         for i in range(num_samples):
             if i == 0:
-                tt_outputs = tt_sampling(tt_input, seed=sampling_params["seed"])
+                tt_outputs = tt_sampling(tt_input, k=top_k, p=top_p, seed=seed)
             else:
-                tt_outputs = tt_sampling(tt_input, seed=0)  # Seed set to default 0 -> will not set a new seed
-                # tt_outputs = tt_sampling(tt_input, seed=np.random.randint(0, 2**32 - 1))
+                tt_outputs = tt_sampling(
+                    tt_input, k=top_k, p=top_p
+                )  # Will generate new pseudo-random numbers based on previously set seed
             tt_output = ttnn.get_device_tensors(tt_outputs)[0]
             tt_output_torch = ttnn.to_torch(
                 tt_output,

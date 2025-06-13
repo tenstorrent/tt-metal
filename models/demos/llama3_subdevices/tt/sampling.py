@@ -15,7 +15,7 @@ class TTSampling(LightweightModule):
         self,
         args,
         mesh_device,
-        sampling_params,
+        temperature,
         tt_ccl,
     ):
         super().__init__()
@@ -27,8 +27,6 @@ class TTSampling(LightweightModule):
         self.num_devices = args.num_devices
         self.max_batch_size = args.max_batch_size
         self.max_top_k = args.max_top_k
-        self.k = [sampling_params["top_k"]] * self.max_batch_size
-        self.p = [sampling_params["top_p"]] * self.max_batch_size
 
         max_num_gather_links = 4 if is_RING_6U else 3
         self.num_gather_links = (
@@ -36,13 +34,12 @@ class TTSampling(LightweightModule):
         )
 
         # Prepare temperature reciprocal tensor
-        temperature = sampling_params["temperature"]
         if temperature is None:
             temperature_reciprocal_scalar = [1.0] * self.max_batch_size
-        elif not isinstance(temperature, list):
+        elif isinstance(temperature, float):
             temperature_reciprocal_scalar = [1.0 / temperature] * self.max_batch_size
         else:
-            temperature_reciprocal_scalar = temperature
+            temperature_reciprocal_scalar = [1.0 / temperature_i for temperature_i in temperature]
 
         temperature_reciprocal_tensor_torch = torch.ones(
             [1, 1, self.max_batch_size, self.args.max_top_k * self.args.cluster_shape[0]], dtype=torch.bfloat16
@@ -57,8 +54,6 @@ class TTSampling(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.args.cluster_shape),
             memory_config=self.args.model_config["DECODE_SAMPLING_INPUT_MEMCFG"],
         )
-
-        assert args.max_top_k >= sampling_params["top_k"]
 
         # Create indices tensor
         indices_device_offsets = torch.ones(
@@ -78,7 +73,13 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def forward(self, x: ttnn.Tensor, seed: int | None = None, tt_out_tok: ttnn.Tensor = None):
+    def forward(
+        self, x: ttnn.Tensor, k: list[int], p: list[float], seed: int | None = None, tt_out_tok: ttnn.Tensor = None
+    ):
+        assert all(k_i <= self.max_top_k for k_i in k)
+        assert type(k) == list and len(k) == x.shape[2]
+        assert type(p) == list and len(p) == x.shape[2]
+
         # Local top k
         topk_values, topk_indices = ttnn.topk(x, k=self.max_top_k, dim=-1, sub_core_grids=self.args.sub_core_grid_topk)
 
@@ -153,10 +154,9 @@ class TTSampling(LightweightModule):
         tt_out_tok = ttnn.sampling(
             topk_values_gathered_bf16_interleaved,
             topk_global_indices_interleaved_untilised,
-            k=self.k,
-            p=self.p,
+            k=k,
+            p=p,
             seed=seed,
-            # seed=np.random.randint(0, 2**32 - 1), # TODO: find solution for constant outputs for constant seed
             sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
                 self.args.start_core, self.max_batch_size, self.args.sub_core_grids, row_wise=True
             ),
