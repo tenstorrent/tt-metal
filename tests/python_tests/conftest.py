@@ -14,6 +14,7 @@ from ttexalens.tt_exalens_lib import arc_msg
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.log_utils import _format_log
+from helpers.perf import delete_reports
 
 
 def set_chip_architecture():
@@ -51,6 +52,11 @@ def set_chip_architecture():
         sys.exit(1)
     os.environ["CHIP_ARCH"] = architecture.value
     return architecture
+
+
+@pytest.fixture(scope="session", autouse=True)
+def delete_perf_reports():
+    delete_reports()
 
 
 @pytest.fixture(scope="session", autouse=True)

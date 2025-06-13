@@ -48,6 +48,7 @@ jobs:
       - name: Run tests
         shell: bash
         env:
+          LLK_HOME: ${{ github.workspace }}
           TEST_GROUPS: ${{ inputs.test_group }}
         run: |
           CHIP_ARCH=unknown
@@ -59,7 +60,8 @@ jobs:
           echo "CHIP_ARCH=$CHIP_ARCH" >> $GITHUB_ENV
           SPLITS=$(echo "$TEST_GROUPS" | jq '. | length')
           cd tests/python_tests/
-          pytest --splits $SPLITS --group ${{ matrix.test_group }} \
+          pytest -m "not perf" \
+                --splits $SPLITS --group ${{ matrix.test_group }} \
                 --override-ini="addopts=-v" --timeout=60 \
                 --junitxml=pytest-report-${CHIP_ARCH}-${{ matrix.test_group }}.xml .
 
