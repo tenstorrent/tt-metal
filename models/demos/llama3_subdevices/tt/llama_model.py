@@ -377,12 +377,13 @@ class TtTransformer(LightweightModule):
         logits = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()[0, 0, 0, :1]
         return logits
 
-    def process_output_decode(self, tt_out, B, S=1):
+    def process_output_decode(self, tt_out):
         """
         Input is ttnn device tensor of tokens. Output is the corresponding torch tensor.
         """
         if isinstance(tt_out, list):
             tt_out = tt_out[0]
+
         tt_out_cpu = tt_out.cpu(blocking=True, cq_id=0)
 
         tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out_cpu)[0])[0, 0, 0, :]
@@ -442,7 +443,7 @@ class TtTransformer(LightweightModule):
         )
 
         # sampling
-        tt_logits = self.tt_sampling(tt_logits[0], x)
+        tt_tok = self.tt_sampling(tt_logits[0], x)
 
         ttnn.plus_one(
             current_pos,
@@ -452,7 +453,7 @@ class TtTransformer(LightweightModule):
             rot_mat_idxs,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
-        return tt_logits
+        return tt_logits, tt_tok
 
     def switch_mode(self, mode):
         if mode == "decode":
