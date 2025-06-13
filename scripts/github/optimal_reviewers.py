@@ -1,7 +1,12 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import os
 import git
 from codeowners import CodeOwners
 
-repo = git.Repo(".")
+repo = git.Repo(os.getenv("TT_METAL_HOME"))
 
 print(repo.active_branch)
 
