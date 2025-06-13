@@ -376,12 +376,13 @@ class TtTransformer(LightweightModule):
         logits = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()[0, 0, 0, :1]
         return logits
 
-    def process_output_decode(self, tt_out, B, S=1):
+    def process_output_decode(self, tt_out):
         """
         Input is ttnn device tensor of tokens. Output is the corresponding torch tensor.
         """
         if isinstance(tt_out, list):
             tt_out = tt_out[0]
+
         tt_out_cpu = tt_out.cpu(blocking=True, cq_id=0)
 
         tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out_cpu)[0])[0, 0, 0, :]
