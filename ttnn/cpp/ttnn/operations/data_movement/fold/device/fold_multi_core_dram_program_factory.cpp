@@ -1,7 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <vector>
 #include "hostdevcommon/kernel_structs.h"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/enum_types.hpp"
@@ -20,94 +20,13 @@
 #include "ttnn/types.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include "fold_device_op.hpp"
-#include "ttnn/operations/cb_utils.hpp"
 namespace ttnn::operations::data_movement {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-static Tensor create_fold_mapping_table(
-    IDevice* device,
-    const uint32_t batch_size,
-    const uint32_t input_height,
-    const uint32_t input_width,
-    const uint32_t stride_h,
-    const uint32_t stride_w,
-    const uint32_t pad_h,
-    const uint32_t pad_w,
-    const uint32_t total_entries,
-    const uint32_t elems_per_core,
-    const CoreRange& all_cores) {
-    // Calculate output dimensions
-    const uint32_t output_height = (input_height + pad_h) / stride_h;
-    const uint32_t output_width = (input_width + pad_w) / stride_w;
-    const uint32_t patch_size = stride_h * stride_w;
-    const uint32_t input_hw = input_height * input_width;
-    const uint32_t output_hw = output_height * output_width;
-
-    // Create vector to store mapping entries (src_index, dst_index, is_padding)
-    std::vector<uint32_t> config_vector(total_entries * 3, 0);
-    uint32_t entry_idx = 0;
-
-    // Iterate over output dimensions and map back to input
-    for (uint32_t b = 0; b < batch_size; b++) {
-        for (uint32_t oh = 0; oh < output_height; oh++) {
-            for (uint32_t ow = 0; ow < output_width; ow++) {
-                for (uint32_t kh = 0; kh < stride_h; kh++) {
-                    for (uint32_t kw = 0; kw < stride_w; kw++) {
-                        // Calculate destination index in output tensor
-                        uint32_t dst_row = (b * output_height + oh) * output_width + ow;
-                        uint32_t dst_col = kh * stride_w + kw;
-                        uint32_t dst_index = dst_row * patch_size + dst_col;
-
-                        // Calculate corresponding input position
-                        int h = oh * stride_h + kh;
-                        int w = ow * stride_w + kw;
-
-                        // Check if this is a padding location
-                        bool is_padding =
-                            (h < 0 || h >= static_cast<int>(input_height) || w < 0 ||
-                             w >= static_cast<int>(input_width));
-
-                        // Add mapping entry
-                        uint32_t base_idx = entry_idx * 3;
-
-                        if (!is_padding) {
-                            uint32_t src_index = b * input_hw + h * input_width + w;
-                            config_vector[base_idx] = src_index;
-                            config_vector[base_idx + 1] = dst_index;
-                            config_vector[base_idx + 2] = 0;
-                        } else {
-                            config_vector[base_idx] = 0;
-                            config_vector[base_idx + 1] = dst_index;
-                            config_vector[base_idx + 2] = 1;
-                        }
-
-                        entry_idx++;
-                    }
-                }
-            }
-        }
-    }
-
-    ttnn::Shape config_shape({tt::div_up(config_vector.size(), elems_per_core * 3), elems_per_core * 3});
-    auto config_buffer = HostBuffer(std::move(config_vector));
-    auto config_tensor = Tensor(std::move(config_buffer), config_shape, DataType::UINT32, Layout::ROW_MAJOR);
-    auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_logical_shape()[-1]});
-    auto config_tensor_shard_orientation = ShardOrientation::ROW_MAJOR;
-    ShardSpec config_shard_spec(all_cores, shard_shape, config_tensor_shard_orientation);
-    MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, config_shard_spec};
-    auto config_tensor_device = config_tensor.to_device(device, memory_config);
-    return config_tensor_device;
-}
-
 Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
-    const Tensor& input_tensor,
-    const Tensor& output,
-    const uint32_t stride_h,
-    const uint32_t stride_w,
-    const uint32_t pad_h,
-    const uint32_t pad_w) {
+    const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
     // Get device and create a new program
     auto device = input_tensor.device();
     auto program = tt::tt_metal::CreateProgram();
@@ -309,12 +228,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
 }
 
 Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
-    const Tensor& input_tensor,
-    const Tensor& output,
-    const uint32_t stride_h,
-    const uint32_t stride_w,
-    const uint32_t pad_h,
-    const uint32_t pad_w) {
+    const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
     auto device = input_tensor.device();
     auto program = tt::tt_metal::CreateProgram();
 
@@ -330,7 +244,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     // Calculate total input work
-    uint32_t total_work = output.get_logical_shape()[0] * output.get_logical_shape()[1] * output.get_logical_shape()[2];
+    uint32_t total_input_work = batch_size * input_height * input_width;
 
     // Get compute grid size and calculate work distribution
     auto compute_grid_size = device->compute_with_storage_grid_size();
@@ -342,22 +256,21 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     log_debug(tt::LogOp, "output_tensor_shape: {}", output.padded_shape());
 
     // Calculate work per core based on input dimensions
-    uint32_t work_per_core = (total_work + num_cores_total - 1) / num_cores_total;
+    uint32_t work_per_core = (total_input_work + num_cores_total - 1) / num_cores_total;
 
     log_debug(
         tt::LogOp,
         "total_work: {}, num_cores_total: {}, work_per_core: {}",
-        total_work,
+        total_input_work,
         num_cores_total,
         work_per_core);
 
     // Create core ranges
-    CoreRange all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    auto all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, true);
 
     // Setup circular buffers
     uint32_t cb_src0_index = tt::CBIndex::c_0;
-    uint32_t cb_src1_index = tt::CBIndex::c_1;
 
     // Calculate buffer sizes
     uint32_t stick_nbytes = input_tensor.padded_shape()[3] * tt::datum_size(cb_data_format);
@@ -377,51 +290,40 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
                              .set_page_size(cb_src0_index, aligned_stick_nbytes);
     auto cb_src0 = CreateCircularBuffer(program, all_cores, src_cb_config);
 
-    Tensor config_tensor_device = create_fold_mapping_table(
-        device,
-        batch_size,
-        input_height,
-        input_width,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        work_per_core * num_cores_total,
-        work_per_core,
-        all_cores);
-
-    tt::DataFormat config_df = tt::DataFormat::RawUInt32;
-    auto config_storage = config_tensor_device.device_storage();
-    auto config_buffer = config_storage.get_buffer();
-    auto config_buffer_page_size = config_buffer->page_size();
-
-    auto [config_cb_id, config_cb] = tt::tt_metal::create_cb(
-        tt::CBIndex::c_2, program, all_cores, config_buffer_page_size, 1, config_df, &*config_buffer);
-
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_nbytes);
     uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_nbytes) : 0;
     // Create reader kernel
-    std::vector<uint32_t> compile_time_args(
-        {stick_nbytes, cb_src0_index, config_cb_id, src_stick_size_is_power_of_two, src_log2_stick_size});
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_for_rm_input.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(
+            {cb_src0_index, 1, src_stick_size_is_power_of_two, src_log2_stick_size}));
     // Create writer kernel
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_for_rm_input.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(
+            {batch_size,
+             input_width,
+             input_height,
+             stride_h,
+             stride_w,
+             stick_nbytes,
+             cb_src0_index,
+             src_stick_size_is_power_of_two,
+             src_log2_stick_size}));
 
     // Set runtime arguments for each core
     std::vector<CoreCoord> cores_with_rtargs;
     for (uint32_t i = 0; i < cores.size(); i++) {
         CoreCoord core = cores[i];
         uint32_t start_input_work = i * work_per_core;
-        uint32_t end_input_work = std::min(start_input_work + work_per_core, total_work);
-        std::vector<uint32_t> reader_runtime_args = {src0_buffer->address(), start_input_work, end_input_work};
+        uint32_t end_input_work = std::min(start_input_work + work_per_core, total_input_work);
+
+        std::vector<uint32_t> reader_runtime_args = {
+            src0_buffer->address(), stick_nbytes, end_input_work - start_input_work + 1, start_input_work};
         std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), start_input_work, end_input_work};
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
@@ -429,18 +331,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
         cores_with_rtargs.push_back(core);
     }
 
-    return {
-        std::move(program),
-        {writer_kernel_id,
-         reader_kernel_id,
-         cores_with_rtargs,
-         config_cb,
-         batch_size,
-         input_height,
-         input_width,
-         num_cores_total,
-         work_per_core,
-         all_cores}};
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, cores_with_rtargs}};
 }
 
 Fold::MultiCoreDRAMFold::cached_program_t Fold::MultiCoreDRAMFold::create(
@@ -450,21 +341,11 @@ Fold::MultiCoreDRAMFold::cached_program_t Fold::MultiCoreDRAMFold::create(
     if (tensor_args.input_tensor.layout() == Layout::TILE) {
         log_debug(tt::LogOp, "Fold operation with DRAM tiled input");
         return fold_multi_core_tiled_interleaved(
-            tensor_args.input_tensor,
-            output_tensor,
-            operation_attributes.stride_h,
-            operation_attributes.stride_w,
-            operation_attributes.pad_h,
-            operation_attributes.pad_w);
+            tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
     }
     log_debug(tt::LogOp, "Fold operation with DRAM row major input");
     return fold_multi_core_row_major_interleaved(
-        tensor_args.input_tensor,
-        output_tensor,
-        operation_attributes.stride_h,
-        operation_attributes.stride_w,
-        operation_attributes.pad_h,
-        operation_attributes.pad_w);
+        tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
 }
 
 void Fold::MultiCoreDRAMFold::override_runtime_arguments(
@@ -483,33 +364,6 @@ void Fold::MultiCoreDRAMFold::override_runtime_arguments(
 
     auto dst_dram_buffer = output_tensor.buffer();
 
-    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        auto stride_h = operation_attributes.stride_h;
-        auto stride_w = operation_attributes.stride_w;
-        auto pad_h = operation_attributes.pad_h;
-        auto pad_w = operation_attributes.pad_w;
-        auto config_cb = cached_program.shared_variables.config_cb.value();
-        auto batch_size = cached_program.shared_variables.batch_size.value();
-        auto input_height = cached_program.shared_variables.input_height.value();
-        auto input_width = cached_program.shared_variables.input_width.value();
-        auto num_cores_total = cached_program.shared_variables.num_cores_total.value();
-        auto work_per_core = cached_program.shared_variables.work_per_core.value();
-        CoreRange all_cores = cached_program.shared_variables.all_cores.value();
-        Tensor config_tensor_device = create_fold_mapping_table(
-            input_tensor.device(),
-            batch_size,
-            input_height,
-            input_width,
-            stride_h,
-            stride_w,
-            pad_h,
-            pad_w,
-            work_per_core * num_cores_total,
-            work_per_core,
-            all_cores);
-
-        UpdateDynamicCircularBufferAddress(program, config_cb, *(config_tensor_device.buffer()));
-    }
     // Update runtime arguments for each core
     for (auto i = 0; i < cores_with_rtargs.size(); i++) {
         CoreCoord core = cores_with_rtargs[i];
