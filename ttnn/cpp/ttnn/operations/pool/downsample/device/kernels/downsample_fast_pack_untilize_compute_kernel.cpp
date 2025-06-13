@@ -38,6 +38,7 @@ void MAIN {
     uint32_t num_output_tiles = num_output_rows_of_tiles * num_output_tiles_in_row;
 
     // untilize_init(input_cb_index, untilize_cb_index);
+    compute_kernel_hw_startup(input_cb_index, untilize_cb_index);
     pack_untilize_init<num_input_tiles_in_row>(input_cb_index, untilize_cb_index);
     pack_reconfig_data_format(untilize_cb_index);
 
