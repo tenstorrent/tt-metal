@@ -180,7 +180,7 @@ void kernel_main() {
                     if ((processed_rows % (max_rows_for_reduction - 1)) == 0) {
                         noc_async_read_barrier();
                         DPRINT << "READER processed rows: " << processed_rows << ENDL();
-                        tt::data_movement::common::print_bf16_pages(in_l1_write_addr_base, 32, 32);
+                        tt::data_movement::common::print_bf16_pages(in_l1_write_addr_base, 256, 32);
                         in_l1_write_addr = in_l1_write_addr_base + in_write_inc;  // reset to the first row again
                         cb_push_back(in_cb_id, 2);
                         cb_reserve_back(in_cb_id, 2);
@@ -197,7 +197,7 @@ void kernel_main() {
             if (remaining_elems) {
                 noc_async_read_barrier();
                 DPRINT << "READER processed rows: " << processed_rows << ENDL();
-                tt::data_movement::common::print_bf16_pages(in_l1_write_addr_base, 32, 32);
+                tt::data_movement::common::print_bf16_pages(in_l1_write_addr_base, 256, 32);
                 in_l1_write_addr = in_l1_write_addr_base + in_write_inc;  // reset to the first row again
                 cb_push_back(in_cb_id, 2);
                 cb_reserve_back(in_cb_id, 2);
@@ -207,7 +207,7 @@ void kernel_main() {
             noc_async_read_one_packet(
                 get_noc_addr(in_l1_write_addr_base), out_l1_write_addr, read_bytes);  // write the first row
             DPRINT << "READER output" << ENDL();
-            tt::data_movement::common::print_bf16_pages(in_l1_write_addr_base, 32, 32);
+            tt::data_movement::common::print_bf16_pages(in_l1_write_addr_base, 256, 32);
             out_l1_write_addr += read_bytes;
             noc_async_read_barrier();  // write only read bytes out
         }
