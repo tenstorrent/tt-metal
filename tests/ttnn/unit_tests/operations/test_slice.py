@@ -155,7 +155,7 @@ def num_to_core_range_set(x):
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, layout, orientation):
     core_grid = device.core_grid
@@ -179,6 +179,8 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
             core_range,
             ttnn.ShardStrategy.HEIGHT,
             orientation,
+            False,
+            True,
         )
         this_ttnn_input = ttnn.from_torch(
             torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]],
