@@ -61,16 +61,16 @@ constexpr uint32_t base_idx_cta = 0;
 constexpr uint32_t base_idx_crta = 1;
 
 // This object keeps track of the location of arguments for the sharded accessor
-auto args_proxy = nd_sharding::make_args_proxy<base_idx_cta, base_idx_crta>();
+auto args = nd_sharding::make_args<base_idx_cta, base_idx_crta>();
 // crta base index can be a runtime variable too:
-auto args_proxy = nd_sharding::make_args_proxy<base_idx_cta>(base_idx_crta);
+auto args = nd_sharding::make_args<base_idx_cta>(base_idx_crta);
 
-constexpr uint32_t new_base_idx_cta = base_idx_cta + args_proxy.compile_time_args_skip();
+constexpr uint32_t new_base_idx_cta = base_idx_cta + args.compile_time_args_skip();
 // new_base_idx_crta might be constexpr if rank and number of banks are static
-uint32_t new_base_idx_crta = base_idx_crta + args_proxy.runtime_args_skip();
+uint32_t new_base_idx_crta = base_idx_crta + args.runtime_args_skip();
 
 // Create a ShardedAccessor with runtime page size
-auto sharded_accessor = nd_sharding::make_sharded_accessor_from_args_proxy(args_proxy, bank_base_address, page_size);
+auto sharded_accessor = nd_sharding::make_sharded_accessor_from_args(args, bank_base_address, page_size);
 ```
 
 **Key Operations**

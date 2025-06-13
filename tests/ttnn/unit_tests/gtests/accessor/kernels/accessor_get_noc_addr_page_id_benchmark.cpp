@@ -9,8 +9,8 @@ void kernel_main() {
     constexpr uint32_t base_idx_cta = 0;
     constexpr uint32_t base_idx_crta = 0;
 
-    auto args_proxy = nd_sharding::make_args_proxy<base_idx_cta, base_idx_crta>();
-    auto sharded_accessor = nd_sharding::make_sharded_accessor_from_args_proxy(args_proxy, 0, 1024);
+    auto args = nd_sharding::make_args<base_idx_cta, base_idx_crta>();
+    auto sharded_accessor = nd_sharding::make_sharded_accessor_from_args(args, 0, 1024);
     /* Benchmark get_noc_addr for both accessors
      * - get_noc_addr is a good proxy for page lookup logic
      * - Use volatile to prevent compiler from optimizing away the calls

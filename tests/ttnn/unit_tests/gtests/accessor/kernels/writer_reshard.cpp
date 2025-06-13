@@ -13,17 +13,16 @@ void kernel_main() {
     constexpr uint32_t base_idx_cta = 0;
     uint32_t base_idx_crta = 1;
 
-    auto args_proxy = nd_sharding::make_args_proxy<base_idx_cta>(base_idx_crta);
-    constexpr uint32_t new_base_idx_cta = base_idx_cta + args_proxy.compile_time_args_skip();
-    uint32_t new_base_idx_crta = base_idx_crta + args_proxy.runtime_args_skip();
+    auto args = nd_sharding::make_args<base_idx_cta>(base_idx_crta);
+    constexpr uint32_t new_base_idx_cta = base_idx_cta + args.compile_time_args_skip();
+    uint32_t new_base_idx_crta = base_idx_crta + args.runtime_args_skip();
 
     constexpr uint32_t cb_id = get_compile_time_arg_val(new_base_idx_cta);
     // TODO: Expose generic interface to get page size for cb operand
     // - get_tile_size(cb_id) only works for tile layout
     constexpr uint32_t page_size = get_compile_time_arg_val(new_base_idx_cta + 1);
 
-    auto sharded_accessor =
-        nd_sharding::make_sharded_accessor_from_args_proxy(args_proxy, bank_base_address, page_size);
+    auto sharded_accessor = nd_sharding::make_sharded_accessor_from_args(args, bank_base_address, page_size);
     // Both rank and num banks can be made constexpr if they are static
     uint32_t rank = sharded_accessor.get_dspec().get_rank();
     uint32_t num_banks = sharded_accessor.get_dspec().get_num_banks();

@@ -245,7 +245,7 @@ private:
  * @return auto DistributionSpec instance built from common runtime arguments.
  */
 template <typename ArgsOffsets>
-auto build_dspec_from_args_proxy(const ArgsOffsets& args_offsets) {
+auto build_dspec_from_args(const ArgsOffsets& args_offsets) {
     using Loc = typename ArgsOffsets::ArgsLoc;
 
     // Dispatch to the appropriate ShapeWrapper and BankCoordsWrapper types based on the "staticness"

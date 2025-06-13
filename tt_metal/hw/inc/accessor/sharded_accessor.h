@@ -131,19 +131,19 @@ public:
 };
 
 template <size_t CTA_BASE, size_t CRTA_BASE>
-FORCE_INLINE auto make_args_proxy() {
+FORCE_INLINE auto make_args() {
     return detail::ArgsOffsets<CTA_BASE, CRTA_BASE>();
 }
 
 template <size_t CTA_BASE>
-FORCE_INLINE auto make_args_proxy(const size_t crta_base) {
+FORCE_INLINE auto make_args(const size_t crta_base) {
     return detail::ArgsOffsets<CTA_BASE>(crta_base);
 }
 
 template <typename ArgsOffsetsT>
-FORCE_INLINE auto make_sharded_accessor_from_args_proxy(
+FORCE_INLINE auto make_sharded_accessor_from_args(
     const ArgsOffsetsT& args, const size_t bank_base_address_in, const uint32_t page_size_in) {
-    auto dspec = detail::build_dspec_from_args_proxy(args);
+    auto dspec = detail::build_dspec_from_args(args);
     return ShardedAccessor<decltype(dspec)>(std::move(dspec), bank_base_address_in, page_size_in);
 }
 
