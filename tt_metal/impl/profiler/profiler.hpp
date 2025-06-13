@@ -207,6 +207,7 @@ private:
         IDevice* device,
         const CoreCoord& worker_core,
         const ProfilerDumpState state,
+        const std::vector<uint32_t>& data_buffer,
         const ProfilerDataBufferSource data_source,
         const std::optional<ProfilerOptionalMetadata>& metadata,
         std::ofstream& log_file_ofs,
@@ -232,9 +233,6 @@ public:
 
     // DRAM Vector
     std::vector<uint32_t> profile_buffer;
-
-    // Data stored in L1 for each core
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> core_l1_data_buffers;
 
     // Number of bytes reserved in each DRAM bank for storing device profiling data
     uint32_t profile_buffer_bank_size_bytes;
@@ -285,10 +283,10 @@ public:
     void issueSlowDispatchReadFromProfilerBuffer(IDevice* device);
 
     // Read data from L1 data buffer using fast dispatch
-    void issueFastDispatchReadFromL1DataBuffer(IDevice* device, const CoreCoord& worker_core);
+    std::vector<uint32_t> issueFastDispatchReadFromL1DataBuffer(IDevice* device, const CoreCoord& worker_core);
 
     // Read data from L1 data buffer using slow dispatch
-    void issueSlowDispatchReadFromL1DataBuffer(IDevice* device, const CoreCoord& worker_core);
+    std::vector<uint32_t> issueSlowDispatchReadFromL1DataBuffer(IDevice* device, const CoreCoord& worker_core);
 };
 
 void write_control_buffer_to_core(
