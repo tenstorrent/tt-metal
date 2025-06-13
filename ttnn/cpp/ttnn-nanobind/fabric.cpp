@@ -18,7 +18,11 @@ void bind_fabric_api(nb::module_& mod) {
         .value("FABRIC_2D", tt::tt_metal::FabricConfig::FABRIC_2D)
         .value("CUSTOM", tt::tt_metal::FabricConfig::CUSTOM);  // DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4
 
-    mod.def("initialize_fabric_config", &tt::tt_metal::detail::InitializeFabricConfig, nb::arg("config"));
+    mod.def(
+        "set_fabric_config",
+        &tt::tt_metal::detail::SetFabricConfig,
+        nb::arg("config"),
+        nb::arg("num_planes") = std::nullopt);
 }
 
 }  // namespace ttnn::fabric
