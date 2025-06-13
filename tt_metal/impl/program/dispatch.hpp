@@ -45,6 +45,12 @@ struct ProgramDispatchMetadata {
     uint32_t sync_count;
     uint32_t stall_first;
     uint32_t stall_before_program;
+
+    struct {
+        uint32_t mesh_max_program_kernels_sizeB;
+        bool is_cached;
+        uint32_t offset;
+    } prefetcher_cache_info;
 };
 
 uint32_t configure_rta_offsets_for_kernel_groups(
@@ -133,7 +139,7 @@ void update_traced_program_dispatch_commands(
     ProgramBinaryStatus program_binary_status,
     std::pair<bool, int> unicast_go_signal_update = {false, -1});
 
-TraceNode create_trace_node(detail::ProgramImpl& program, IDevice* device);
+TraceNode create_trace_node(detail::ProgramImpl& program, IDevice* device, bool use_prefetcher_cache);
 
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,

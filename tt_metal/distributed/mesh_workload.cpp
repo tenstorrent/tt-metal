@@ -16,6 +16,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <atomic>
 
 #include "assert.hpp"
 #include "buffer.hpp"
@@ -35,6 +36,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "util.hpp"
 #include "tracy/Tracy.hpp"
+#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 
 enum class CoreType;
 namespace tt {
@@ -45,7 +47,13 @@ enum class HalProgrammableCoreType;
 }  // namespace tt_metal
 }  // namespace tt
 
+static uint64_t get_next_counter() {
+    static std::atomic<uint64_t> workload_counter = 0;
+    return workload_counter++;
+}
+
 namespace tt::tt_metal::distributed {
+
 namespace {
 
 // Returns an intersecting range from `programs` if it exists, otherwise returns std::nullopt.
@@ -61,7 +69,7 @@ std::optional<MeshCoordinateRange> find_intersection(
 
 }  // namespace
 
-MeshWorkloadImpl::MeshWorkloadImpl() {
+MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {
     ZoneScoped;
     // A MeshWorkload tracks maintains its own handles to kernels across all
     // encapsulated programs
@@ -197,9 +205,15 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     // These commands will be updated based on MeshDevice state when the
     // workload is enqueued.
     auto mesh_device = mesh_cq.device();
+    auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+    uint32_t prefetcher_cache_sizeB = MetalContext::instance().dispatch_mem_map(dispatch_core_type).ringbuffer_size();
+
+    bool use_prefetcher_cache =
+        this->max_program_kernels_sizeB_ and this->max_program_kernels_sizeB_ <= prefetcher_cache_sizeB;
     for (auto& [device_range, program] : programs_) {
-        program.generate_dispatch_commands(mesh_device);
+        program.generate_dispatch_commands(mesh_device, use_prefetcher_cache);
     }
+    this->use_prefetcher_cache_ = use_prefetcher_cache;
 }
 
 bool MeshWorkloadImpl::runs_on_noc_multicast_only_cores() {
@@ -417,7 +431,7 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     }
     tt::stl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
-    tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
+    this->max_program_kernels_sizeB_ = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
         mesh_device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
 
     set_finalized();
