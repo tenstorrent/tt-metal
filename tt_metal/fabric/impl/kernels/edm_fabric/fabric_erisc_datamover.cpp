@@ -449,7 +449,6 @@ FORCE_INLINE void receiver_send_received_ack(
     BufferIndex receiver_buffer_index,
     const tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& local_receiver_buffer_channel) {
     // Set the acknowledgement bits
-    invalidate_l1_cache();
     volatile tt_l1_ptr auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
         local_receiver_buffer_channel.get_buffer_address(receiver_buffer_index));
     const auto src_id = pkt_header->src_ch_id;
@@ -488,7 +487,6 @@ FORCE_INLINE bool can_forward_packet_completely(
     tt_l1_ptr MeshPacketHeader* packet_header,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
     std::array<uint8_t, num_eth_ports>& port_direction_table) {
-    invalidate_l1_cache();
     if (packet_header->is_mcast_active) {
         // mcast downstream needs to check if downstream has space (lookup from set direction field)
         // forward to local and remote
@@ -610,7 +608,6 @@ FORCE_INLINE void receiver_forward_packet(
 #else
         false;
 #endif
-    invalidate_l1_cache();  // Make sure we have the latest packet header in L1
     if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::RoutingFields>) {
         // If the packet is a terminal packet, then we can just deliver it locally
         bool start_distance_is_terminal_value =
@@ -1003,7 +1000,6 @@ void run_receiver_channel_step_impl(
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     bool unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
     if (unwritten_packets) {
-        invalidate_l1_cache();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
         tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
             local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
@@ -1193,7 +1189,6 @@ void run_fabric_edm_main_loop(
     // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
 
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
-        invalidate_l1_cache();
         bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
         if (got_graceful_termination) {
             DPRINT << "EDM Graceful termination\n";
@@ -1293,9 +1288,7 @@ void __attribute__((noinline)) wait_for_static_connection_to_ready(
         if (!sender_ch_live_check_skip[idx]) {
             return;
         }
-        while (!connect_is_requested(*interface.connection_live_semaphore)) {
-            invalidate_l1_cache();
-        }
+        while (!connect_is_requested(*interface.connection_live_semaphore));
         establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids_ordered[idx]);
     });
 }
@@ -2008,10 +2001,8 @@ void kernel_main() {
     }
 #endif
 
-    WAYPOINT("FSCW");
     wait_for_static_connection_to_ready(
         local_sender_channel_worker_interfaces, local_sender_channel_free_slots_stream_ids_ordered);
-    WAYPOINT("FSCD");
 
     //////////////////////////////
     //////////////////////////////

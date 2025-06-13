@@ -14,7 +14,7 @@
 static constexpr size_t VIRTUAL_COORDS_START_X = 16;
 static constexpr size_t VIRTUAL_COORDS_START_Y = 16;
 FORCE_INLINE bool is_using_noc_coords(uint16_t noc_x, uint16_t noc_y) {
-    return !(bool)COORDINATE_VIRTUALIZATION_ENABLED;
+    return noc_x < VIRTUAL_COORDS_START_X && noc_y < VIRTUAL_COORDS_START_Y;
 }
 
 FORCE_INLINE uint64_t
@@ -31,7 +31,8 @@ safe_get_noc_addr(uint8_t dest_noc_x, uint8_t dest_noc_y, uint32_t dest_bank_add
 // TODO: COMMONIZE WITH THE ONE IN `ccl_send_writer.cpp`
 FORCE_INLINE std::pair<ttnn::ccl::WorkerXY, uint32_t> get_noc_address_components(uint64_t noc_addr) {
     const size_t bank_addr = noc_addr & 0xFFFFFFFF;
-    const size_t noc_x = NOC_UNICAST_ADDR_X(noc_addr);
-    const size_t noc_y = NOC_UNICAST_ADDR_Y(noc_addr);
+    const size_t noc_x = (noc_addr >> NOC_ADDR_LOCAL_BITS) & ((1 << NOC_ADDR_NODE_ID_BITS) - 1);
+    const size_t noc_y =
+        (noc_addr >> (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) & ((1 << NOC_ADDR_NODE_ID_BITS) - 1);
     return {ttnn::ccl::WorkerXY(noc_x, noc_y), bank_addr};
 }

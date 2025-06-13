@@ -64,7 +64,6 @@ void kernel_main() {
 
     status_ptr[0] = tt::tt_fabric::DrainerStatus::READY_FOR_TRAFFIC;
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
-        invalidate_l1_cache();
         bool has_unsent_payload = get_ptr_val(slots_free_stream_id) != NUM_BUFFERS;
         if (has_unsent_payload) {
             worker_interface.local_write_counter.increment();
