@@ -19,7 +19,6 @@ using ::testing::Eq;
 using ::testing::IsEmpty;
 using ::testing::Pointwise;
 using ::testing::SizeIs;
-using ::testing::UnorderedElementsAre;
 
 TEST(DistributedHostBufferTest, InvalidLocalShape) {
     distributed::MeshShape global_shape(2, 3);
@@ -60,6 +59,10 @@ TEST(DistributedHostBufferTest, EmplaceAndGetBuffer) {
     buffer.emplace_shard(distributed::MeshCoordinate(1), []() { return HostBuffer(std::vector<int>{4, 5, 6}); });
     buffer.emplace_shard(distributed::MeshCoordinate(2), []() { return HostBuffer(std::vector<int>{7, 8, 9}); });
 
+    EXPECT_THAT(
+        buffer.shard_coords(),
+        ElementsAre(distributed::MeshCoordinate(0), distributed::MeshCoordinate(1), distributed::MeshCoordinate(2)));
+
     auto optional_buffer = buffer.get_shard(distributed::MeshCoordinate(0));
     ASSERT_TRUE(optional_buffer.has_value());
     EXPECT_THAT(optional_buffer->view_as<int>(), Pointwise(Eq(), {1, 2, 3}));
@@ -80,6 +83,8 @@ TEST(DistributedHostBufferTest, EmplaceAndGetBufferWithUnpopulatedLocalShards) {
     auto buffer = DistributedHostBuffer::create(distributed::MeshShape(3));
 
     buffer.emplace_shard(distributed::MeshCoordinate(1), []() { return HostBuffer(std::vector<int>{1, 2, 3}); });
+
+    EXPECT_THAT(buffer.shard_coords(), ElementsAre(distributed::MeshCoordinate(1)));
 
     auto optional_buffer = buffer.get_shard(distributed::MeshCoordinate(0));
     EXPECT_FALSE(optional_buffer.has_value());
@@ -112,7 +117,7 @@ TEST(DistributedHostBufferTest, EmplaceAndGetBufferWithLocalMeshShape) {
 
     EXPECT_THAT(
         buffer.shard_coords(),
-        UnorderedElementsAre(
+        ElementsAre(
             distributed::MeshCoordinate(0, 0),
             distributed::MeshCoordinate(0, 1),
             distributed::MeshCoordinate(0, 2),
@@ -151,6 +156,8 @@ TEST(DistributedHostBufferTest, Transform) {
     buffer.emplace_shard(distributed::MeshCoordinate(0), []() { return HostBuffer(std::vector<int>{1, 2, 3}); });
     buffer.emplace_shard(distributed::MeshCoordinate(1), []() { return HostBuffer(std::vector<int>{4, 5, 6}); });
 
+    EXPECT_THAT(buffer.shard_coords(), ElementsAre(distributed::MeshCoordinate(0), distributed::MeshCoordinate(1)));
+
     auto transformed_buffer = buffer.transform([](const HostBuffer& buffer) {
         auto span = buffer.view_as<int>();
         std::vector<int> new_data(span.begin(), span.end());
@@ -159,6 +166,9 @@ TEST(DistributedHostBufferTest, Transform) {
         }
         return HostBuffer(std::move(new_data));
     });
+
+    EXPECT_THAT(
+        transformed_buffer.shard_coords(), ElementsAre(distributed::MeshCoordinate(0), distributed::MeshCoordinate(1)));
 
     auto optional_buffer = transformed_buffer.get_shard(distributed::MeshCoordinate(0));
     ASSERT_TRUE(optional_buffer.has_value());
@@ -174,6 +184,8 @@ TEST(DistributedHostBufferTest, TransformWithUnpopulatedLocalShards) {
 
     buffer.emplace_shard(distributed::MeshCoordinate(1), []() { return HostBuffer(std::vector<int>{4, 5, 6}); });
 
+    EXPECT_THAT(buffer.shard_coords(), ElementsAre(distributed::MeshCoordinate(1)));
+
     auto transformed_buffer = buffer.transform([](const HostBuffer& buffer) {
         auto span = buffer.view_as<int>();
         std::vector<int> new_data(span.begin(), span.end());
@@ -182,6 +194,8 @@ TEST(DistributedHostBufferTest, TransformWithUnpopulatedLocalShards) {
         }
         return HostBuffer(std::move(new_data));
     });
+
+    EXPECT_THAT(transformed_buffer.shard_coords(), ElementsAre(distributed::MeshCoordinate(1)));
 
     auto optional_buffer = transformed_buffer.get_shard(distributed::MeshCoordinate(0));
     ASSERT_FALSE(optional_buffer.has_value());
@@ -206,6 +220,11 @@ TEST(DistributedHostBufferTest, TransformWithLocalShape) {
     buffer.emplace_shard(distributed::MeshCoordinate(1, 0), []() { return HostBuffer(std::vector<int>{4, 5, 6}); });
     buffer.emplace_shard(distributed::MeshCoordinate(2, 0), []() { return HostBuffer(std::vector<int>{7, 8, 9}); });
 
+    EXPECT_THAT(
+        buffer.shard_coords(),
+        ElementsAre(
+            distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(1, 0), distributed::MeshCoordinate(2, 0)));
+
     auto transformed_buffer = buffer.transform([](const HostBuffer& buffer) {
         auto span = buffer.view_as<int>();
         std::vector<int> new_data(span.begin(), span.end());
@@ -214,6 +233,11 @@ TEST(DistributedHostBufferTest, TransformWithLocalShape) {
         }
         return HostBuffer(std::move(new_data));
     });
+
+    EXPECT_THAT(
+        transformed_buffer.shard_coords(),
+        ElementsAre(
+            distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(1, 0), distributed::MeshCoordinate(2, 0)));
 
     auto optional_buffer = transformed_buffer.get_shard(distributed::MeshCoordinate(1, 0));
     ASSERT_TRUE(optional_buffer.has_value());
