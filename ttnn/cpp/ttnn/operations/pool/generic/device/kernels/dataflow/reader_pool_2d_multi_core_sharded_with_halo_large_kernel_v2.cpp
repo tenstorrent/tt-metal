@@ -203,7 +203,9 @@ void kernel_main() {
             // wait for compute to finish this top left index
             // write the final result to the output buffer
             noc_async_read_one_packet(
-                get_noc_addr(out_l1_write_addr), in_l1_write_addr_base, read_bytes);  // write the first row
+                get_noc_addr(in_l1_write_addr_base), out_l1_write_addr, read_bytes);  // write the first row
+            DPRINT << "READER output" << ENDL();
+            tt::data_movement::common::print_bf16_pages(in_l1_write_addr_base, 32, 32);
             out_l1_write_addr += read_bytes;
             noc_async_read_barrier();  // write only read bytes out
         }
