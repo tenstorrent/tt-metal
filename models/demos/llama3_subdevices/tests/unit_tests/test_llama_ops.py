@@ -1,13 +1,13 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 import torch
 import pytest
-
 from models.utility_functions import comp_pcc
 
 from models.utility_functions import skip_for_blackhole
+from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import FF1_CRS_RS_OUT
 from tests.ttnn.unit_tests.operations.test_distributed_layernorm_sharded import (
     create_input_and_weight_tensors,
     create_tt_tensors,
@@ -28,6 +28,9 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_l
     run_test_rotary_embedding_llama,
     run_test_row_major_rotary_embedding_llama,
 )
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_eltwise_binary import run_elt_binary_mul_with_sub_devices
+
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_embedding import run_embeddings_tests
 
 
 @pytest.mark.parametrize(
@@ -170,8 +173,9 @@ def test_llama_tg_LayerNorm(
         ),
     ],
 )
+@pytest.mark.parametrize("q_layout", [ttnn.TILE_LAYOUT], ids=["tile"])
 def test_llama_tg_ScaledDotProductAttentionDecode(
-    device, use_program_cache, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids
+    device, use_program_cache, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids, q_layout
 ):
     run_test_sdpa_decode_paged_attention_single_iter(
         device,
@@ -191,6 +195,109 @@ def test_llama_tg_ScaledDotProductAttentionDecode(
         sharded_out=True,
         start_core=start_core,
         sub_core_grids=sub_core_grids,
+        q_layout=q_layout,
+    )
+    assert device.num_program_cache_entries() == 1
+
+
+## Op Tests for BinaryMult + SiLU
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("seq_len", [32])
+@pytest.mark.parametrize("dim", [512])
+@pytest.mark.parametrize("num_heads", [1])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("pcc", [0.9995])
+def test_llama_tg_BinaryDeviceOperation(use_program_cache, device, batch_size, seq_len, dim, num_heads, dtype, pcc):
+    in_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            FF1_CRS_RS_OUT,
+            [32, 32],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    out_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            FF1_CRS_RS_OUT,
+            [32, 32],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    run_elt_binary_mul_with_sub_devices(
+        batch_size,
+        num_heads,
+        seq_len,
+        dim,
+        dtype,
+        in_mem_config,
+        out_mem_config,
+        device,
+        None,
+        None,
+        pcc,
+    )
+
+
+@pytest.mark.models_device_performance_bare_metal
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "dtype, q_dtype",
+    [
+        [ttnn.bfloat8_b, ttnn.bfloat16],
+    ],
+    ids=[
+        "bfp8_cache_bf16_act",
+    ],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size",
+    ([8, 8, 1, 4096, 128, (8, 4)],),  # Llama2-70B
+)
+@pytest.mark.parametrize(
+    "start_core, sub_core_grids",
+    [
+        (
+            ttnn.CoreCoord(1, 0),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+                ]
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("q_layout", [ttnn.ROW_MAJOR_LAYOUT], ids=["row_major"])
+def test_llama_tg_ScaledDotProductAttentionDecodeRMQ(
+    device, use_program_cache, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids, q_layout
+):
+    run_test_sdpa_decode_paged_attention_single_iter(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        dtype,
+        grid_size,
+        q_dtype,
+        cur_pos=127,
+        block_size=32,
+        q_chunk_size=0,
+        k_chunk_size=0,
+        sharded_in=True,
+        sharded_out=True,
+        start_core=start_core,
+        sub_core_grids=sub_core_grids,
+        q_layout=q_layout,
     )
     assert device.num_program_cache_entries() == 1
 
@@ -315,6 +422,48 @@ def test_llama_tg_PagedUpdateCacheDeviceOperation(
     )
 
 
+@pytest.mark.parametrize("paged_update", [True])
+@pytest.mark.parametrize("block_size", [64], ids=["block64"])
+@pytest.mark.parametrize("head_dim", [128])
+@pytest.mark.parametrize("max_seq_len", [2048])
+@pytest.mark.parametrize("num_users", [8])
+@pytest.mark.parametrize("num_heads", [1])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("cache_idx", [127])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("pcc", [0.9995])
+def test_llama_tg_RowMajorPagedUpdateCacheDeviceOperation(
+    device,
+    paged_update,
+    cache_idx,
+    block_size,
+    head_dim,
+    max_seq_len,
+    num_users,
+    num_heads,
+    input_dtype,
+    cache_dtype,
+    use_program_cache,
+    pcc,
+):
+    for _ in range(2):
+        run_test_paged_fused_update_cache_decode(
+            paged_update,
+            cache_idx,
+            block_size,
+            head_dim,
+            max_seq_len,
+            num_users,
+            num_heads,
+            input_dtype,
+            cache_dtype,
+            device,
+            pcc,
+            row_major=True,
+        )
+    assert device.num_program_cache_entries() == 1
+
+
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @pytest.mark.parametrize("batch, seq_len", ((8, 1),))
 @pytest.mark.parametrize(
@@ -365,4 +514,53 @@ def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
 ):
     run_test_row_major_rotary_embedding_llama(
         mesh_device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, 1, datatype, fuse_qk=True
+    )
+
+
+@pytest.mark.parametrize("batch_size", (1,))
+@pytest.mark.parametrize("num_embeddings", (128256,))
+@pytest.mark.parametrize("embedding_dim", (2048,))
+@pytest.mark.parametrize("num_rows", (32,))
+@pytest.mark.parametrize("dtype", (ttnn.bfloat16,))
+@pytest.mark.parametrize("in0_mem_config", (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED),))
+@pytest.mark.parametrize("tilized", (True,))
+@pytest.mark.parametrize(
+    "core_grid_ln, grid_offset",
+    [((8, 2), ttnn.CoreCoord(1, 0))],
+)
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+def test_llama_tg_Embeddings(
+    batch_size,
+    num_embeddings,
+    embedding_dim,
+    num_rows,
+    dtype,
+    in0_mem_config,
+    tilized,
+    core_grid_ln,
+    grid_offset,
+    device,
+):
+    core_range = ttnn.CoreRange(
+        grid_offset,
+        ttnn.CoreCoord(grid_offset.x + core_grid_ln[1] - 1, grid_offset.y + core_grid_ln[0] - 1),
+    )
+    num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
+    out_mem_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1, 32, embedding_dim // num_cores_ln),
+        core_grid=ttnn.CoreRangeSet({core_range}),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    run_embeddings_tests(
+        batch_size,
+        num_embeddings,
+        embedding_dim,
+        num_rows,
+        dtype,
+        in0_mem_config,
+        out_mem_config,
+        device,
+        tilized,
     )

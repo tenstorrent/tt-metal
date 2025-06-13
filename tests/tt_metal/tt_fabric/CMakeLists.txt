@@ -7,7 +7,6 @@ set(UNIT_TESTS_FABRIC_SRC
 )
 
 add_executable(fabric_unit_tests ${UNIT_TESTS_FABRIC_SRC})
-gtest_discover_tests(fabric_unit_tests)
 
 target_link_libraries(
     fabric_unit_tests
@@ -45,7 +44,6 @@ target_link_libraries(
         test_common_libs
 )
 add_executable(test_system_health)
-gtest_discover_tests(test_system_health)
 
 target_include_directories(
     test_system_health_smoke

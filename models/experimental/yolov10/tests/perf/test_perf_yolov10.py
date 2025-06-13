@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -66,6 +66,7 @@ def test_perf(device, use_weights_from_ultralytics):
     durations = []
 
     for i in range(2):
+        torch_input, ttnn_input = create_yolov10x_input_tensors(device)
         start = time.time()
         ttnn_model_output = ttnn_model(ttnn_input)
         end = time.time()
@@ -97,7 +98,7 @@ def test_perf(device, use_weights_from_ultralytics):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 37.28],
+        [1, 41],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

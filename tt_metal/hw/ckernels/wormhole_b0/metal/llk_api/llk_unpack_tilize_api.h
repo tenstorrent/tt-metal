@@ -11,7 +11,7 @@
  * LLK UNPACK TILIZE
  *************************************************************************/
 
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_tilize_hw_configure(const llk_unpack_A_params_t* unpack_tilize_params) {
     constexpr bool within_face_16x16_transpose = false;
     constexpr StochRndType stoch_rnd_mode = StochRndType::None;
@@ -28,7 +28,7 @@ inline void llk_unpack_tilize_hw_configure(const llk_unpack_A_params_t* unpack_t
         unpA_num_faces);
 }
 
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_tilize_hw_configure_disaggregated(const std::uint32_t unpA_operand) {
     const llk_unpack_A_params_t unpack_tilize_params = {.unpA_operand = unpA_operand};
     llk_unpack_tilize_hw_configure<is_fp32_dest_acc_en>(&unpack_tilize_params);
@@ -102,7 +102,7 @@ inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c
  * LLK UNPACK TILIZE SRC A, UNPACK SRC B
  *************************************************************************/
 
-template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
+template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_tilizeA_B_hw_configure(
     const llk_unpack_AB_params_t* unpack_tilizeA_B_params, const int within_face_16x16_transpose = 0) {
     // In0 -> unpA
@@ -126,7 +126,7 @@ inline void llk_unpack_tilizeA_B_hw_configure(
         num_faces);
 }
 
-template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
+template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_tilizeA_B_hw_configure_disaggregated(
     const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const int within_face_16x16_transpose = 0) {
     const llk_unpack_AB_params_t unpack_tilizeA_B_params = {.unpA_operand = unpA_operand, .unpB_operand = unpB_operand};
@@ -209,7 +209,7 @@ inline void llk_unpack_tilizeA_B(
     WAYPOINT("UPTD");
 }
 
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandA,
     std::uint32_t operandB,

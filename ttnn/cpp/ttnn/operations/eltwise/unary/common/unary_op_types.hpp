@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -83,9 +83,7 @@ enum class UnaryOpType {
     BITWISE_OR,
     RIGHT_SHIFT,
     FLOOR,
-    FLOOR_FLOAT32,
     CEIL,
-    CEIL_FLOAT32,
     ROUND,
     LEFT_SHIFT,
     REMAINDER,
@@ -98,6 +96,7 @@ enum class UnaryOpType {
     MISH,
     MAXIMUM,
     MINIMUM,
+    TANHSHRINK,
 };
 
 enum class VecMode {
@@ -120,7 +119,7 @@ struct UnaryWithParam {
     bool has_parameter() const { return params.size() > 0; }
 
     static constexpr auto attribute_names = std::forward_as_tuple("op_type", "param");
-    const auto attribute_values() const { return std::forward_as_tuple(this->op_type, this->params); }
+    auto attribute_values() const { return std::forward_as_tuple(this->op_type, this->params); }
 };
 
 using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;

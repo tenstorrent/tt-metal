@@ -1,6 +1,7 @@
 set(BENCHMARK_SRCS
     "host_tilizer_untilizer/tilizer_untilizer.cpp"
     "padding/pad_rm.cpp"
+    "host_alloc_on_tensor_readback.cpp"
 )
 
 foreach(TEST_SRC ${BENCHMARK_SRCS})
@@ -13,8 +14,9 @@ foreach(TEST_SRC ${BENCHMARK_SRCS})
         ${TEST_TARGET}
         PUBLIC
             ttnn
-            test_metal_common_libs
+            test_common_libs
             benchmark::benchmark
+            Python3::Python
     )
     target_include_directories(
         ${TEST_TARGET}

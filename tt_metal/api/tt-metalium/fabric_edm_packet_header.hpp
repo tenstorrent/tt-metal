@@ -10,9 +10,9 @@
 #include <limits>
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
 #else
 #include <tt-metalium/assert.hpp>
 #endif
@@ -166,6 +166,9 @@ struct PacketHeaderBase {
     inline size_t get_payload_size_including_header() volatile const {
         return get_payload_size_excluding_header() + sizeof(Derived);
     }
+
+    const volatile NocCommandFields& get_command_fields() volatile const { return this->command_fields; }
+    NocSendType get_noc_send_type() volatile const { return this->noc_send_type; }
 
     // Setters for noc_send_type, routing_fields, and command_fields
     inline void set_noc_send_type(NocSendType& type) { this->noc_send_type = type; }

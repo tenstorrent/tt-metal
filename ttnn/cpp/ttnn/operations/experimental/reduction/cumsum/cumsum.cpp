@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <iterator>
 #include "tt-metalium/shape.hpp"
-#include "tt-metalium/small_vector.hpp"
+#include <tt_stl/small_vector.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
@@ -26,7 +26,7 @@ Tensor CumSumOperation::invoke(
     int64_t dim,
     std::optional<ttnn::DataType> dtype,
     std::optional<Tensor> optional_output_tensor) {
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     int tensor_rank = input_shape.rank();
 
     Tensor adjusted_input_tensor = input_tensor;  // Tensor copy, but simplifies code (temporary solution)
@@ -48,7 +48,7 @@ Tensor CumSumOperation::invoke(
         adjusted_input_tensor = converted_tensor;
     }
 
-    if (tensor_rank == 0 || adjusted_input_tensor.get_logical_volume() == 0) {  // empty input tensor => nothing to do
+    if (tensor_rank == 0 || adjusted_input_tensor.logical_volume() == 0) {  // empty input tensor => nothing to do
 
         if (optional_output_tensor.has_value()) {
             auto& out_tensor = optional_output_tensor.value();

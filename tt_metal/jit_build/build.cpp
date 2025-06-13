@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,7 @@
 #include "impl/context/metal_context.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "jit_build_settings.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
 #include "tt_backend_api_types.hpp"
@@ -162,7 +162,7 @@ void JitBuildEnv::init(
         case ARCH::BLACKHOLE: common_flags = "-mcpu=tt-bh -fno-rvtt-sfpu-replay "; break;
         default: TT_ASSERT(false, "Invalid arch"); break;
     }
-    common_flags += "-std=c++17 -flto -ffast-math ";
+    common_flags += "-std=c++17 -flto=auto -ffast-math ";
 
     if (rtoptions.get_riscv_debug_info_enabled()) {
         common_flags += "-g ";
@@ -242,6 +242,10 @@ void JitBuildEnv::init(
         this->defines_ += "-DDISABLE_RELAXED_MEMORY_ORDERING ";
     }
 
+    if (rtoptions.get_gathering_enabled()) {
+        this->defines_ += "-DENABLE_GATHERING ";
+    }
+
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_base_routing_fw_enabled()) {
         this->defines_ += "-DROUTING_FW_ENABLED ";
     }
@@ -317,21 +321,20 @@ void JitBuildState::finish_init() {
     // Append hw build objects compiled offline
     std::string build_dir =
         tt_metal::MetalContext::instance().rtoptions().get_root_dir() + "runtime/hw/lib/" + get_alias(env_.arch_) + "/";
-    if (this->is_fw_) {
-        if (this->target_name_ != "erisc") {
-            this->link_objs_ += build_dir + "tmu-crt0.o ";
-        }
-        if (this->target_name_ == "ncrisc" and this->env_.arch_ == tt::ARCH::WORMHOLE_B0) {
-            this->link_objs_ += build_dir + "ncrisc-halt-wormhole.o ";
+    if (this->is_fw_ and this->target_name_ != "erisc") {
+        this->link_objs_ += build_dir + "tmu-crt0.o ";
+    }
+
+    if (this->env_.arch_ == tt::ARCH::WORMHOLE_B0 and this->target_name_ == "ncrisc") {
+        // ncrisc wormhole kernels have an exciting entry sequence
+        if (this->is_fw_) {
+            this->link_objs_ += build_dir + "wh-iram-trampoline.o ";
             this->link_objs_ += build_dir + "tdma_xmov.o ";
-        }
-    } else {
-        if (this->target_name_ == "ncrisc" and this->env_.arch_ == tt::ARCH::WORMHOLE_B0) {
-            this->link_objs_ += build_dir + "tmu-crt0k-ncrisc.o ";
-        } else if (this->target_name_ != "erisc") {
-            this->link_objs_ += build_dir + "tmu-crt0k.o ";
+        } else {
+            this->link_objs_ += build_dir + "wh-iram-start.o ";
         }
     }
+
     if (this->target_name_ == "brisc" or this->target_name_ == "idle_erisc") {
         this->link_objs_ += build_dir + "noc.o ";
     }

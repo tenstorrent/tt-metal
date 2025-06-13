@@ -8,7 +8,7 @@
 #include <buffer.hpp>
 #include <event.hpp>
 #include <host_api.hpp>
-#include <logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_metal.hpp>
 #include <chrono>
 #include <fstream>
@@ -83,12 +83,6 @@ void ValidateBufferRegion(
 }
 }  // namespace detail
 
-enum DispatchWriteOffsets {
-    DISPATCH_WRITE_OFFSET_ZERO = 0,
-    DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE = 1,
-    DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE = 2,
-};
-
 inline uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
     return device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
 }
@@ -104,7 +98,8 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     uint32_t expected_num_workers_completed,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t unicast_cores_launch_message_wptr,
-    SubDeviceId sub_device_id) :
+    SubDeviceId sub_device_id,
+    program_dispatch::ProgramDispatchMetadata& dispatch_md) :
     command_queue_id(command_queue_id),
     noc_index(noc_index),
     manager(manager),
@@ -114,17 +109,14 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     dispatch_core(dispatch_core),
     multicast_cores_launch_message_wptr(multicast_cores_launch_message_wptr),
     unicast_cores_launch_message_wptr(unicast_cores_launch_message_wptr),
-    sub_device_id(sub_device_id) {
+    sub_device_id(sub_device_id),
+    dispatch_metadata(dispatch_md) {
     this->device = device;
     this->dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     this->packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(this->device);
 }
 
 void EnqueueProgramCommand::process() {
-    // Dispatch metadata contains runtime information based on
-    // the kernel config ring buffer state
-    program_dispatch::ProgramDispatchMetadata dispatch_metadata;
-
     // Compute the total number of workers this program uses
     uint32_t num_workers = 0;
     if (program.runs_on_noc_multicast_only_cores()) {

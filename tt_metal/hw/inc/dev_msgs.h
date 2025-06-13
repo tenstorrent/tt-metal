@@ -52,6 +52,7 @@ static constexpr uint32_t PROFILER_RISC_COUNT = 5;
 constexpr uint32_t RUN_MSG_INIT = 0x40;
 constexpr uint32_t RUN_MSG_GO = 0x80;
 constexpr uint32_t RUN_MSG_RESET_READ_PTR = 0xc0;
+constexpr uint32_t RUN_MSG_RESET_READ_PTR_FROM_HOST = 0xe0;
 constexpr uint32_t RUN_MSG_DONE = 0;
 
 // 0x80808000 is a micro-optimization, calculated with 1 riscv insn
@@ -63,6 +64,7 @@ constexpr uint32_t RUN_SYNC_MSG_WAITING_FOR_RESET = 0x2;
 constexpr uint32_t RUN_SYNC_MSG_INIT_SYNC_REGISTERS = 0x3;
 constexpr uint32_t RUN_SYNC_MSG_DONE = 0;
 constexpr uint32_t RUN_SYNC_MSG_ALL_GO = 0x80808080;
+constexpr uint32_t RUN_SYNC_MSG_ALL_INIT = 0x40404040;
 constexpr uint32_t RUN_SYNC_MSG_ALL_SUBORDINATES_DONE = 0;
 
 struct ncrisc_halt_msg_t {
@@ -132,9 +134,8 @@ struct kernel_config_msg_t {
     volatile uint16_t local_cb_offset;
     volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
-    volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
-
     volatile uint8_t pad1[2];
+    volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
 
     volatile uint8_t mode;  // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
@@ -142,7 +143,6 @@ struct kernel_config_msg_t {
     volatile uint8_t max_local_cb_end_index;
     volatile uint8_t min_remote_cb_start_index;
     volatile uint8_t exit_erisc_kernel;
-    volatile uint8_t enables;
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
     // 32 bit program/launch_msg_id used by the performance profiler
@@ -150,11 +150,22 @@ struct kernel_config_msg_t {
     // [30:10]: program id
     // [31:31]: 0 (specifies that this id corresponds to a program running on device)
     volatile uint32_t host_assigned_id;
+    volatile uint8_t enables;
 
     volatile uint8_t pad2[2];
 
     volatile uint8_t preload;  // Must be at end, so it's only written when all other data is written.
 } __attribute__((packed));
+
+// Baby riscs don't natively support unaligned accesses, so ensure data alignment to prevent slow compiler workarounds.
+static_assert(offsetof(kernel_config_msg_t, kernel_config_base) % sizeof(uint32_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, sem_offset) % sizeof(uint16_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, local_cb_offset) % sizeof(uint16_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
 
 struct go_msg_t {
     union {
@@ -268,8 +279,11 @@ struct debug_ring_buf_msg_t {
 };
 
 struct debug_stack_usage_t {
-    volatile uint16_t max_usage[DebugNumUniqueRiscs];
-    volatile uint16_t watcher_kernel_id[DebugNumUniqueRiscs];
+    struct usage_t {
+        // min free stack, offset by +1 (0 == unset)
+        volatile uint16_t min_free;
+        volatile uint16_t watcher_kernel_id;
+    } cpu[DebugNumUniqueRiscs];
 };
 
 enum watcher_enable_msg_t {

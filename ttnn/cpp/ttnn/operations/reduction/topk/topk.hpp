@@ -5,7 +5,8 @@
 #pragma once
 
 #include <optional>
-#include <functional>
+#include <tuple>
+#include <vector>
 
 #include "ttnn/decorators.hpp"
 

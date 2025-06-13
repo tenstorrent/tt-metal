@@ -24,6 +24,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace tt::stl {
 
@@ -64,7 +65,7 @@ public:
     T index() const { return value >> VERSION_BITS; }
     T version() const { return value & VERSION_MASK; }
 
-    bool operator<=>(const Key& other) const = default;
+    friend auto operator<=>(Key, Key) = default;
 };
 
 #define MAKE_SLOTMAP_KEY(NAME, T, N)     \

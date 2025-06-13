@@ -145,6 +145,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE: {
+            ASSERT(payload_size_bytes > 0);
             // TODO: confirm if we need to adjust dest core count if we span eth or dram cores
             const auto mcast_dest_address = get_noc_multicast_addr(
                 header.command_fields.mcast_write.noc_x_start,
@@ -254,7 +255,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 // !!!WARNING!!! * ENSURE DOWNSTREAM EDM HAS SPACE FOR PACKET BEFORE CALLING
 // !!!WARNING!!!
 // This function does a write, so needs to be volatile to avoid compiler optimizations
-template <uint8_t NUM_SENDER_BUFFERS, bool enable_ring_support, bool stateful_api>
+template <bool enable_ring_support, bool stateful_api, uint8_t NUM_SENDER_BUFFERS>
 FORCE_INLINE void forward_payload_to_downstream_edm(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint16_t payload_size_bytes,

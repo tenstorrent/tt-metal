@@ -17,8 +17,8 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
     TT_FATAL(input_tensors.size() == 3, "Error, Input tensor size should be 3 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& buffer_tensor = input_tensors[1];
-    const auto& layout = input_tensors[0].get_layout();
-    const auto& dtype = input_tensors[0].get_dtype();
+    const auto& layout = input_tensors[0].layout();
+    const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
     TT_FATAL(
@@ -66,7 +66,7 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
         buffer_shard_shape_volume);
 
     // validate for create qkv heads
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     const auto& batch_offset = input_tensors.at(2);
 
     // TODO: Rewrite validation for this decode case
@@ -77,7 +77,7 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
         this->dtype == tt::tt_metal::DataType::BFLOAT16,
         "Unsupported data format{}, currently only bfloat16 is supported",
         this->dtype);
-    TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Only tile layout is supported for input tensor");
+    TT_FATAL(input_tensor.layout() == Layout::TILE, "Only tile layout is supported for input tensor");
 
     // input
     const uint32_t num_users_supported = 32;
@@ -96,7 +96,8 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
             "Current input memory layout is {}. It must be width sharded",
             QKV_memcfg.memory_layout());
         TT_FATAL(
-            input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_padded_shape()[-1],
+            input_tensor.shard_spec().value().shape[0] ==
+                input_tensor.physical_volume() / input_tensor.padded_shape()[-1],
             "Shard shape must be correct");
         TT_FATAL(
             input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
@@ -107,7 +108,7 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
             !(batch_offset.has_value() ^ this->slice_size.has_value()),
             "Both batch_offset and slice_size must be provided or neither");
         if (batch_offset.has_value() && this->slice_size.has_value()) {
-            TT_FATAL(batch_offset.value().get_logical_shape()[0] == 1, "batch_offset must be unary tensor");
+            TT_FATAL(batch_offset.value().logical_shape()[0] == 1, "batch_offset must be unary tensor");
             num_users = this->slice_size.value();
         }
         */
@@ -149,7 +150,7 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
 std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     tt::tt_metal::TensorLayout output_tensor_layout =
         tt::tt_metal::TensorLayout(this->dtype, input_tensor.tensor_spec().page_config(), this->all_reduce_mem_config);
     auto all_reduce_tensor_spec{TensorSpec(input_shape, output_tensor_layout)};
@@ -200,14 +201,13 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
         all_reduce_tensor_spec,
         TensorSpec(
             q_output_shape,
-            tt::tt_metal::TensorLayout(this->dtype, tt::tt_metal::PageConfig(input_tensor.get_layout()), q_mem_config)),
+            tt::tt_metal::TensorLayout(this->dtype, tt::tt_metal::PageConfig(input_tensor.layout()), q_mem_config)),
         TensorSpec(
             k_output_shape,
-            tt::tt_metal::TensorLayout(this->dtype, tt::tt_metal::PageConfig(input_tensor.get_layout()), k_mem_config)),
+            tt::tt_metal::TensorLayout(this->dtype, tt::tt_metal::PageConfig(input_tensor.layout()), k_mem_config)),
         TensorSpec(
             v_output_shape,
-            tt::tt_metal::TensorLayout(
-                this->dtype, tt::tt_metal::PageConfig(input_tensor.get_layout()), v_mem_config))};
+            tt::tt_metal::TensorLayout(this->dtype, tt::tt_metal::PageConfig(input_tensor.layout()), v_mem_config))};
 }
 
 tt::tt_metal::operation::MeshWorkloadWithCallbacks AllReduceCreateQkvHeads::create_mesh_workload(
@@ -224,7 +224,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
     const ttnn::MeshCoordinate& mesh_coord,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
+    log_debug(tt::LogOp, "DEBUG: create_program is called");
 
     const auto& input_tensor = input_tensors[0];
     auto mesh_device = input_tensor.mesh_device();
@@ -253,7 +253,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
         }
     }
 
-    auto input_tensor_shape = input_tensor.get_padded_shape();
+    auto input_tensor_shape = input_tensor.padded_shape();
     auto input_tensor_buffer_layout = input_tensor.buffer()->buffer_layout();
     auto input_tensor_page_layout = input_tensor.layout();
 
@@ -262,21 +262,21 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
     uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec()->grid.num_cores();
     uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec()->grid.num_cores();
 
-    tt::log_debug(tt::LogOp, "input_tensor_shape: {}", input_tensor_shape);
-    tt::log_debug(tt::LogOp, "input_tensor_memory_config: {}", input_tensor_memory_config);
-    tt::log_debug(tt::LogOp, "output_tensor_memory_config: {}", output_tensor_memory_config);
-    tt::log_debug(tt::LogOp, "input_shard_num_cores: {}", input_shard_num_cores);
-    tt::log_debug(tt::LogOp, "output_shard_num_cores: {}", output_shard_num_cores);
-    tt::log_debug(
+    log_debug(tt::LogOp, "input_tensor_shape: {}", input_tensor_shape);
+    log_debug(tt::LogOp, "input_tensor_memory_config: {}", input_tensor_memory_config);
+    log_debug(tt::LogOp, "output_tensor_memory_config: {}", output_tensor_memory_config);
+    log_debug(tt::LogOp, "input_shard_num_cores: {}", input_shard_num_cores);
+    log_debug(tt::LogOp, "output_shard_num_cores: {}", output_shard_num_cores);
+    log_debug(
         tt::LogOp,
         "input_tensor_memory_config.shard_spec()->shape: {}",
         input_tensor_memory_config.shard_spec()->shape);
-    tt::log_debug(
+    log_debug(
         tt::LogOp,
         "output_tensor_memory_config.shard_spec()->shape: {}",
         output_tensor_memory_config.shard_spec()->shape);
 
-    tt::log_debug(tt::LogOp, "Running TG Llama specific all_reduce_create_qkv_heads_minimal_multi_core_with_workers");
+    log_debug(tt::LogOp, "Running TG Llama specific all_reduce_create_qkv_heads_minimal_multi_core_with_workers");
     return all_reduce_create_qkv_heads_minimal_multi_core_with_workers(
         input_tensors,
         target_device,
@@ -297,9 +297,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
 
 tt::tt_metal::operation::Hash AllReduceCreateQkvHeads::compute_program_hash(
     const std::vector<Tensor>& input_tensors) const {
-    auto input_shape = input_tensors[0].get_padded_shape();
-    auto input_memory_layout = input_tensors[0].get_layout();
-    auto input_dtype = input_tensors[0].get_dtype();
+    auto input_shape = input_tensors[0].padded_shape();
+    auto input_memory_layout = input_tensors[0].layout();
+    auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
 
     return tt::tt_metal::operation::hash_operation<AllReduceCreateQkvHeads>(
@@ -355,7 +355,7 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
             input_on_subcoregrids,
             slice_size,
             final_memory_config.value_or(input_tensor.memory_config()),
-            dtype.value_or(input_tensor.get_dtype()),
+            dtype.value_or(input_tensor.dtype()),
             cluster_axis),
         {input_tensor, buffer_tensor, batch_offset_tensor});
     return {output_tensors[0], output_tensors[1], output_tensors[2], output_tensors[3]};
@@ -368,42 +368,36 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores_fuse(
     size_t num_links,
     size_t num_workers_per_link,
-    bool persistent_fabric_mode,
     IDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<CoreRangeSet>& reserved_core_range) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
-    if (persistent_fabric_mode) {
-        const size_t num_workers_preferred = num_workers_per_link * num_links;
-        auto available_cores = device->worker_cores(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX,
-            sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
-        if (reserved_core_range.has_value()) {
-            available_cores = available_cores.subtract(*reserved_core_range);
-        }
-        if (available_cores.num_cores() < num_workers_preferred) {
-            log_warning(
-                tt::LogOp,
-                "AllGather is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
-                "cores ({} per link and {} links) are made available but only {} are available. This may lead to "
-                "performance loss.",
-                num_workers_preferred,
-                num_workers_per_link,
-                num_links,
-                available_cores.num_cores());
-        }
-        for (const auto& cr : available_cores.ranges()) {
-            auto start = cr.start_coord;
-            auto end = cr.end_coord;
-            for (size_t y = start.y; y <= end.y; y++) {
-                for (size_t x = start.x; x <= end.x; x++) {
-                    sender_worker_core_range =
-                        sender_worker_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(x, y), CoreCoord(x, y))));
-                    if (sender_worker_core_range.num_cores() == num_workers_preferred) {
-                        break;
-                    }
-                }
+    const size_t num_workers_preferred = num_workers_per_link * num_links;
+    auto available_cores = device->worker_cores(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX,
+        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    if (reserved_core_range.has_value()) {
+        available_cores = available_cores.subtract(*reserved_core_range);
+    }
+    if (available_cores.num_cores() < num_workers_preferred) {
+        log_warning(
+            tt::LogOp,
+            "AllGather is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
+            "cores ({} per link and {} links) are made available but only {} are available. This may lead to "
+            "performance loss.",
+            num_workers_preferred,
+            num_workers_per_link,
+            num_links,
+            available_cores.num_cores());
+    }
+    for (const auto& cr : available_cores.ranges()) {
+        auto start = cr.start_coord;
+        auto end = cr.end_coord;
+        for (size_t y = start.y; y <= end.y; y++) {
+            for (size_t x = start.x; x <= end.x; x++) {
+                sender_worker_core_range =
+                    sender_worker_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(x, y), CoreCoord(x, y))));
                 if (sender_worker_core_range.num_cores() == num_workers_preferred) {
                     break;
                 }
@@ -412,9 +406,9 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores_fuse(
                 break;
             }
         }
-    } else {
-        sender_worker_core_range =
-            CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_workers_per_link - 1, num_links - 1)));
+        if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+            break;
+        }
     }
     return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
 }

@@ -4,12 +4,10 @@
 
 #pragma once
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
-namespace py = pybind11;
+#include "ttnn-pybind/pybind_fwd.hpp"
 
 namespace ttnn::operations::moreh::moreh_adamw {
+namespace py = pybind11;
 
 void bind_moreh_adamw_operation(py::module& module);
 

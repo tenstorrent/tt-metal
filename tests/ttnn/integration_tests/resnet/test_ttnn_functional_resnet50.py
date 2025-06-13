@@ -1,10 +1,11 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
 import ttnn
 
+from models.demos.blackhole.resnet50.tests.resnet_test_utils import skip_resnet_if_blackhole_p100
 from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
 from models.utility_functions import is_blackhole
 
@@ -25,8 +26,7 @@ def run_resnet_50(
     if batch_size > 16 and not is_blackhole():
         pytest.skip("Batch size > 16 is not supported on non-blackhole devices")
 
-    if is_blackhole() and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 130:
-        pytest.skip("Expected to run only on blackhole devices with 130 cores (unharvested grid), see #21319")
+    skip_resnet_if_blackhole_p100(device)
 
     test_infra = create_test_infra(
         device,

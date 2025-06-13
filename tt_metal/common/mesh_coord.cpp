@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "shape_base.hpp"
-#include "small_vector.hpp"
+#include <tt_stl/small_vector.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -181,6 +181,14 @@ size_t MeshCoordinateRange::dims() const { return start_.dims(); }
 const MeshCoordinate& MeshCoordinateRange::start_coord() const { return start_; }
 const MeshCoordinate& MeshCoordinateRange::end_coord() const { return end_; }
 
+MeshShape MeshCoordinateRange::shape() const {
+    tt::stl::SmallVector<uint32_t> shape_dims;
+    for (size_t i = 0; i < dims(); ++i) {
+        shape_dims.push_back(end_[i] - start_[i] + 1);
+    }
+    return MeshShape(shape_dims);
+}
+
 bool MeshCoordinateRange::contains(const MeshCoordinate& coord) const {
     TT_FATAL(coord.dims() == dims(), "Coordinate dimensions do not match: {} != {}", coord.dims(), dims());
     for (int i = 0; i < coord.dims(); ++i) {
@@ -222,6 +230,12 @@ std::optional<MeshCoordinateRange> MeshCoordinateRange::intersection(const MeshC
 MeshCoordinateRange::Iterator::Iterator(
     const MeshCoordinateRange* range, const MeshCoordinate& current, size_t linear_index) :
     range_(range), current_coord_(current), linear_index_(linear_index) {}
+
+MeshCoordinateRange::Iterator MeshCoordinateRange::Iterator::operator++(int) {
+    Iterator tmp = *this;
+    ++(*this);
+    return tmp;
+}
 
 MeshCoordinateRange::Iterator& MeshCoordinateRange::Iterator::operator++() {
     ++linear_index_;

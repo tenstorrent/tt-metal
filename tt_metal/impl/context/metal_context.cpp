@@ -7,6 +7,8 @@
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
+#include "tt_metal/impl/debug/inspector.hpp"
+#include "tt_metal/impl/debug/inspector_impl.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/debug/debug_helpers.hpp"
@@ -15,6 +17,10 @@
 #include "tt_metal/llrt/get_platform_architecture.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/control_plane.hpp>
+#include "tt_metal/fabric/fabric_host_utils.hpp"
+#include <filesystem>
+#include <tt-metalium/device_pool.hpp>
 
 namespace tt::tt_metal {
 
@@ -25,7 +31,7 @@ void MetalContext::initialize(
     if (initialized_) {
         if (this->dispatch_core_config_ != dispatch_core_config or num_hw_cqs != this->num_hw_cqs_ or
             l1_bank_remap != this->l1_bank_remap_ or fw_compile_hash != this->fw_compile_hash_) {
-            log_warning("Closing and re-initializing MetalContext with new parameters.");
+            log_warning(tt::LogAlways, "Closing and re-initializing MetalContext with new parameters.");
             teardown();
         } else {
             // Re-init request with the same parameters, do nothing
@@ -38,6 +44,9 @@ void MetalContext::initialize(
     num_hw_cqs_ = num_hw_cqs;
     l1_bank_remap_ = l1_bank_remap;
     fw_compile_hash_ = fw_compile_hash;
+
+    // Initialize inspector
+    inspector_data_ = Inspector::initialize();
 
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
@@ -84,6 +93,7 @@ void MetalContext::initialize(
         std::atexit([]() { MetalContext::instance().teardown(); });
         teardown_registered_ = true;
     }
+
 }
 
 void MetalContext::teardown() {
@@ -191,12 +201,11 @@ void MetalContext::clear_dram_state(chip_id_t device_id) {
 
     auto dram_size_per_channel = cluster_->get_soc_desc(device_id).dram_view_size;
     auto num_dram_channels = cluster_->get_soc_desc(device_id).get_num_dram_views();
-    TT_ASSERT(dram_size_per_channel % sizeof(uint32_t) == 0);
     constexpr uint32_t start_address = 0;
-    std::vector<uint32_t> zero_vec(dram_size_per_channel / sizeof(uint32_t), 0);
+    std::vector<uint8_t> zero_vec(dram_size_per_channel, 0);
     for (int channel = 0; channel < num_dram_channels; ++channel) {
         tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
-            zero_vec, device_id, channel, start_address);
+            zero_vec.data(), zero_vec.size(), device_id, channel, start_address);
 
         cluster_->dram_barrier(device_id);
     }
@@ -229,6 +238,134 @@ void MetalContext::clear_launch_messages_on_eth_cores(chip_id_t device_id) {
     for (const auto& eth_core : cluster_->get_inactive_ethernet_cores(device_id)) {
         clear_ethernet_core(eth_core);
     }
+}
+
+tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
+    if (!global_control_plane_) {
+        this->initialize_control_plane();
+    }
+    return global_control_plane_->get_local_node_control_plane();
+}
+
+void MetalContext::set_custom_control_plane_mesh_graph(
+    const std::string& mesh_graph_desc_file,
+    const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+    TT_FATAL(
+        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
+        "Modifying control plane requires no devices to be active");
+
+    global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
+        mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
+    this->set_fabric_config(fabric_config_);
+}
+
+void MetalContext::set_default_control_plane_mesh_graph() {
+    TT_FATAL(
+        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
+        "Modifying control plane requires no devices to be active");
+    global_control_plane_.reset();
+    this->set_fabric_config(fabric_config_);
+}
+
+void MetalContext::teardown_fabric_config() {
+    this->cluster_->configure_ethernet_cores_for_fabric_routers(tt_metal::FabricConfig::DISABLED);
+    this->get_control_plane().clear_fabric_context();
+}
+
+void MetalContext::set_fabric_config(
+    const tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes) {
+    if (this->fabric_config_ == tt_metal::FabricConfig::DISABLED || fabric_config == tt_metal::FabricConfig::DISABLED) {
+        this->fabric_config_ = fabric_config;
+    } else {
+        TT_FATAL(
+            this->fabric_config_ == fabric_config,
+            "Tried to override previous value of fabric config: {}, with: {}",
+            this->fabric_config_,
+            fabric_config);
+    }
+
+    if (this->fabric_config_ == tt_metal::FabricConfig::DISABLED) {
+        if (num_routing_planes.has_value()) {
+            log_warning(
+                tt::LogMetal,
+                "Got num_routing_planes while disabling fabric, ignoring it and disabling all active routing planes");
+        }
+
+        this->teardown_fabric_config();
+        return;
+    }
+
+    if (num_routing_planes.has_value() && num_routing_planes.value() < this->num_fabric_active_routing_planes_) {
+        log_warning(
+            tt::LogMetal,
+            "Got num_routing_planes: {}, which is less than current value: {}, ignoring the override",
+            num_routing_planes.value(),
+            this->num_fabric_active_routing_planes_);
+        return;
+    }
+
+    // if num_routing_planes is not specified, use max available number of routing planes
+    // ideally the highest value should be the maximum number of eth cores in a direction across all chips
+    const auto new_val = std::max(
+        this->num_fabric_active_routing_planes_, num_routing_planes.value_or(std::numeric_limits<uint8_t>::max()));
+    if (new_val != this->num_fabric_active_routing_planes_ && this->num_fabric_active_routing_planes_ > 0) {
+        log_info(
+            tt::LogMetal,
+            "Overriding the number of routing planes to activate from {} to {}",
+            this->num_fabric_active_routing_planes_,
+            new_val);
+    }
+    this->num_fabric_active_routing_planes_ = new_val;
+}
+
+void MetalContext::initialize_fabric_config() {
+    if (this->fabric_config_ == tt_metal::FabricConfig::DISABLED) {
+        return;
+    }
+
+    this->cluster_->configure_ethernet_cores_for_fabric_routers(
+        this->fabric_config_, this->num_fabric_active_routing_planes_);
+    auto& control_plane = this->get_control_plane();
+    if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
+        control_plane.initialize_fabric_context(this->fabric_config_);
+    }
+    control_plane.configure_routing_tables_for_fabric_ethernet_channels();
+}
+
+tt_metal::FabricConfig MetalContext::get_fabric_config() const {
+    return fabric_config_;
+}
+
+void MetalContext::initialize_control_plane() {
+    // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
+    // descriptors
+    std::string mesh_graph_descriptor;
+    auto cluster_type = cluster_->get_cluster_type();
+    switch (cluster_type) {
+        case tt::ClusterType::N150: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::GALAXY:
+            if (tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_type) ==
+                tt::tt_fabric::FabricType::TORUS_2D) {
+                mesh_graph_descriptor = "quanta_galaxy_torus_2d_graph_descriptor.yaml";
+            } else {
+                mesh_graph_descriptor = "quanta_galaxy_mesh_graph_descriptor.yaml";
+            }
+            break;
+        case tt::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::P100: mesh_graph_descriptor = "p100_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::P150_X2: mesh_graph_descriptor = "p150_x2_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::SIMULATOR_WORMHOLE_B0: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::SIMULATOR_BLACKHOLE: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::INVALID: TT_THROW("Unknown cluster type");
+    }
+    const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
+                                                       "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
+
+    global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(mesh_graph_desc_path.string());
 }
 
 }  // namespace tt::tt_metal

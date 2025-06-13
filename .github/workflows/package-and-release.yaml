@@ -4,7 +4,7 @@ on:
   schedule:
     # Create rc every day at EOD of PST Mon-Fri + night of Sunday to kick off
     # releases for beginning of work week
-    - cron: "0 1,14 * * *"
+    - cron: "0 0 * * *"
 
 permissions:
   contents: write
@@ -14,12 +14,16 @@ jobs:
   build-artifact:
     needs: create-tag
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       version: 22.04
       build-wheel: true
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       version: 22.04
@@ -75,6 +79,15 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: topology-6u
+  blackhole-demos:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
+    with:
+      runner-label: BH
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   get-params:
     runs-on: ubuntu-latest
     outputs:
@@ -232,3 +245,23 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     secrets: inherit
+  publish-to-test-pypi:
+    name: >-
+      Publish Python 🐍 distribution 📦 to Test PyPI
+    needs: [build-artifact, test-wheels]
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/ttnn
+    permissions:
+      id-token: write  # IMPORTANT: mandatory for trusted publishing
+    steps:
+    - name: Download all the dists
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+        path: dist/
+    - name: Publish distribution 📦 to Test PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        repository-url: https://test.pypi.org/legacy/

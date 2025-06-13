@@ -34,7 +34,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "matmul_test_utils.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -530,7 +530,7 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(tt_metal::IDevice* device)
                 convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
 
             // log_info(LogTest, "Tile id {} on dram bank {}, address {}", tile_id, dram_bank, dram_address);
-            // print_vec(result_flat_layout, 32, 32, "Result - tile#" + std::to_string(tile_id));
+            // print_vec_of_bfloat16(result_flat_layout, 1, "Result - tile#" + std::to_string(tile_id));
             pass &= (golden_tile == result_flat_layout);
         }
     }
@@ -542,7 +542,7 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(tt_metal::IDevice* device)
 
 TEST_F(DispatchFixture, TensixMatmulMultiCoreMultiDRAMIn0MCastIn1MCast) {
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-        tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
+        log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
     }
     for (unsigned int id = 0; id < devices_.size(); id++) {

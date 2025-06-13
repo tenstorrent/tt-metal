@@ -10,9 +10,6 @@
 #include <optional>
 #include <vector>
 
-// TODO: empty struct to facilitate Tensor template logic. Reconsider how/why templating is supported in Tensor
-struct bfloat8_b {};
-
 std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(
     tt::stl::Span<const float> fp32_vec,
     bool row_major_input,

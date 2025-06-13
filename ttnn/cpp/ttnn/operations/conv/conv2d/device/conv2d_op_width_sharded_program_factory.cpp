@@ -44,6 +44,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
     bool enable_act_double_buffer,
+    bool enable_weights_double_buffer,
     bool enable_split_reader,
     bool enable_subblock_padding) {
     using tt::tt_metal::CBHandle;
@@ -54,9 +55,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     bool pass = true;
     enable_split_reader = false;
     tt_metal::IDevice* device = a.device();
-    TT_FATAL(a.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "Conv activation should be in row major layout");
+    TT_FATAL(a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
-    TT_FATAL(output_channels <= b.get_padded_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
+    TT_FATAL(output_channels <= b.padded_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
     uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
@@ -66,11 +67,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     // out_subblock_h_ntiles = 8;
 
-    tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
-    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat bias_df =
-        has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().get_dtype()) : tt::DataFormat::Float16_b;
+        has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().dtype()) : tt::DataFormat::Float16_b;
     tt::DataFormat tilized_act_df = out_df;
 
     log_debug(LogOp, "act_df: {}", act_df);
@@ -98,9 +99,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     uint32_t max_subblock_h = fp32_dest_acc_en ? 4 : 8;
     uint32_t act_block_h_ntiles_padded = act_block_h_ntiles;
     uint32_t out_subblock_h_ntiles_padded = out_subblock_h_ntiles;
-    // bool enable_subblock_padding = false;
-    // bool enable_split_reader = false;
-    // enable_act_double_buffer = false;
     if (enable_subblock_padding) {
         TT_FATAL(
             act_block_h_ntiles == out_block_h_ntiles, "to pad subblock, the number of blocks on height dim must be 1");
@@ -136,11 +134,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         act_block_h_ntiles);
 
     // Tensor b has weights and it should be tiled layout after converting conv weights into weight matrix
-    TT_FATAL(b.get_layout() == tt::tt_metal::Layout::TILE, "Conv weights should be in tiled layout");
-    TT_FATAL(b.get_padded_shape()[0] == 1, "Conv weight matrix shape is invalid");
-    TT_FATAL(b.get_padded_shape()[1] == 1, "Conv weight matrix shape is invalid");
-    uint32_t weight_matrix_height = b.get_padded_shape()[2];
-    uint32_t weight_matrix_width = b.get_padded_shape()[3];
+    TT_FATAL(b.layout() == tt::tt_metal::Layout::TILE, "Conv weights should be in tiled layout");
+    TT_FATAL(b.padded_shape()[0] == 1, "Conv weight matrix shape is invalid");
+    TT_FATAL(b.padded_shape()[1] == 1, "Conv weight matrix shape is invalid");
+    uint32_t weight_matrix_height = b.padded_shape()[2];
+    uint32_t weight_matrix_width = b.padded_shape()[3];
     uint32_t weight_matrix_height_ntiles = weight_matrix_height / TILE_HEIGHT;
     uint32_t weight_matrix_width_ntiles = weight_matrix_width / TILE_WIDTH;
 
@@ -233,7 +231,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         // Tensor bias is of shape {output_channels}
         TT_FATAL(bias.has_value(), "Error");
         TT_FATAL(bias.value().buffer() != nullptr, "Error");
-        auto bias_shape_without_padding = bias.value().get_logical_shape();
+        auto bias_shape_without_padding = bias.value().logical_shape();
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
 
@@ -630,14 +628,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         a.buffer());
 
     cb_indices.act_cb = cb_indices.get_next_cb_index();
+    const uint32_t act_cb_num_tiles =
+        enable_act_double_buffer ? act_block_num_tiles_split * 2 : act_block_num_tiles_split;
     tt::tt_metal::create_cb(
-        cb_indices.act_cb, program, all_cores, tilized_act_tile_size, act_block_num_tiles_split, tilized_act_df);
+        cb_indices.act_cb, program, all_cores, tilized_act_tile_size, act_cb_num_tiles, tilized_act_df);
     log_debug(
-        LogOp,
-        "Act CB: {}, npages: {}, pagesize: {}",
-        cb_indices.act_cb,
-        act_block_num_tiles_split,
-        tilized_act_tile_size);
+        LogOp, "Act CB: {}, npages: {}, pagesize: {}", cb_indices.act_cb, act_cb_num_tiles, tilized_act_tile_size);
 
     // Used for placing tilized activations
     cb_indices.tilize_mode_tilized_act_cb = cb_indices.get_next_cb_index();
@@ -657,23 +653,25 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         tilized_act_tile_size);
 
     cb_indices.weight_cb = cb_indices.get_next_cb_index();
+    const uint32_t weights_cb_num_tiles =
+        enable_weights_double_buffer ? weight_block_num_tiles * 2 : weight_block_num_tiles;
     tt::tt_metal::create_cb(
-        cb_indices.weight_cb, program, all_cores, weight_tile_size, weight_block_num_tiles, weight_df);
+        cb_indices.weight_cb, program, all_cores, weight_tile_size, weights_cb_num_tiles, weight_df);
     log_debug(
         LogOp,
         "Weight CB: {}, npages: {}, pagesize: {}, ",
         cb_indices.weight_cb,
-        weight_block_num_tiles,
+        weights_cb_num_tiles,
         weight_tile_size);
 
     cb_indices.act_cb_row_major_bfloat16 = cb_indices.get_next_cb_index();
     tt::tt_metal::create_cb(
-        cb_indices.act_cb_row_major_bfloat16, program, all_cores, act_tile_size, act_block_num_tiles_split, act_df);
+        cb_indices.act_cb_row_major_bfloat16, program, all_cores, act_tile_size, 2 * act_block_w_ntiles, act_df);
     log_debug(
         LogOp,
         "Act Row Major CB: {}, npages: {}, pagesize: {}",
         cb_indices.act_cb_row_major_bfloat16,
-        act_block_num_tiles_split,
+        2 * act_block_w_ntiles,
         act_tile_size);
 
     auto conv_reader_indices_storage = conv_reader_indices.value().device_storage();

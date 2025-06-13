@@ -26,6 +26,7 @@
 #include <nlohmann/json.hpp>
 #include <magic_enum/magic_enum.hpp>
 #include <tt_stl/type_name.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt {
 namespace stl {
@@ -142,9 +143,9 @@ struct Attribute final {
     static constexpr std::size_t ALIGNMENT = 32;
     using storage_t = std::array<std::byte, 1312>;
 
-    const std::string to_string() const { return this->implementations.to_string_impl_(this->type_erased_storage); }
-    const std::size_t to_hash() const { return this->implementations.to_hash_impl_(this->type_erased_storage); }
-    const nlohmann::json to_json() const { return this->implementations.to_json_impl_(this->type_erased_storage); }
+    std::string to_string() const { return this->implementations.to_string_impl_(this->type_erased_storage); }
+    std::size_t to_hash() const { return this->implementations.to_hash_impl_(this->type_erased_storage); }
+    nlohmann::json to_json() const { return this->implementations.to_json_impl_(this->type_erased_storage); }
 
     template <typename Type, typename BaseType = std::decay_t<Type>>
     Attribute(Type&& object) :
@@ -166,7 +167,7 @@ struct Attribute final {
         }},
 
         implementations{
-            .to_string_impl_ = [](const storage_t& storage) -> const std::string {
+            .to_string_impl_ = [](const storage_t& storage) -> std::string {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
                 if constexpr (std::is_pointer_v<BaseType>) {
                     return fmt::format("{}*", get_type_name<BaseType>());
@@ -174,11 +175,11 @@ struct Attribute final {
                     return fmt::format("{}", object);
                 }
             },
-            .to_hash_impl_ = [](const storage_t& storage) -> const std::size_t {
+            .to_hash_impl_ = [](const storage_t& storage) -> std::size_t {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
                 return hash::detail::hash_object(object);
             },
-            .to_json_impl_ = [](const storage_t& storage) -> const nlohmann::json {
+            .to_json_impl_ = [](const storage_t& storage) -> nlohmann::json {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
                 return json::to_json(object);
             }} {
@@ -248,9 +249,9 @@ private:
     void* (*move_storage)(storage_t& storage, void*) = nullptr;
 
     struct implementations_t {
-        const std::string (*to_string_impl_)(const storage_t&) = nullptr;
-        const std::size_t (*to_hash_impl_)(const storage_t&) = nullptr;
-        const nlohmann::json (*to_json_impl_)(const storage_t&) = nullptr;
+        std::string (*to_string_impl_)(const storage_t&) = nullptr;
+        std::size_t (*to_hash_impl_)(const storage_t&) = nullptr;
+        nlohmann::json (*to_json_impl_)(const storage_t&) = nullptr;
     };
 
     implementations_t implementations;
@@ -662,7 +663,7 @@ struct transform_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     T operator()(auto&& callback, T&& value) const {
-        log_debug("Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
+        log_debug(tt::LogAlways, "Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
         return value;
     }
 
@@ -675,7 +676,7 @@ struct transform_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     T operator()(auto&& callback, const T& value) const {
-        log_debug("Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
+        log_debug(tt::LogAlways, "Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
         return value;
     }
 };
@@ -805,13 +806,13 @@ template <typename T>
 struct get_first_object_of_type_t<T> {
     template <typename object_t>
         requires std::same_as<std::decay_t<T>, object_t>
-    const auto operator()(const T& value) const {
+    auto operator()(const T& value) const {
         return value;
     }
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    const auto operator()(const T& value) const {
+    auto operator()(const T& value) const {
         throw std::runtime_error("Unsupported get first object of type: " + get_type_name<T>());
     }
 };
@@ -819,7 +820,7 @@ struct get_first_object_of_type_t<T> {
 template <typename T>
 struct get_first_object_of_type_t<std::optional<T>> {
     template <typename object_t>
-    const auto operator()(const std::optional<T>& value) const {
+    auto operator()(const std::optional<T>& value) const {
         if (value.has_value()) {
             const auto& tensor = value.value();
             return get_first_object_of_type<object_t>(tensor);
@@ -830,7 +831,7 @@ struct get_first_object_of_type_t<std::optional<T>> {
 template <typename T>
 struct get_first_object_of_type_t<std::vector<T>> {
     template <typename object_t>
-    const auto operator()(const std::vector<T>& value) const {
+    auto operator()(const std::vector<T>& value) const {
         for (auto& tensor : value) {
             return get_first_object_of_type<object_t>(tensor);
         }
@@ -841,7 +842,7 @@ struct get_first_object_of_type_t<std::vector<T>> {
 template <typename T, auto N>
 struct get_first_object_of_type_t<std::array<T, N>> {
     template <typename object_t>
-    const auto operator()(const std::array<T, N>& value) const {
+    auto operator()(const std::array<T, N>& value) const {
         for (auto& tensor : value) {
             return get_first_object_of_type<object_t>(tensor);
         }
@@ -851,7 +852,7 @@ struct get_first_object_of_type_t<std::array<T, N>> {
 template <typename... Ts>
 struct get_first_object_of_type_t<std::tuple<Ts...>> {
     template <typename object_t>
-    const auto operator()(const std::tuple<Ts...>& value) const {
+    auto operator()(const std::tuple<Ts...>& value) const {
         return get_first_object_of_type<object_t>(std::get<0>(value));
     }
 };
@@ -861,13 +862,13 @@ template <typename T>
 struct get_first_object_of_type_t<T> {
     template <typename object_t>
         requires(std::same_as<std::decay_t<T>, object_t>)
-    const auto operator()(const T& object) const {
+    auto operator()(const T& object) const {
         return object;
     }
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    const auto operator()(const T& object) const {
+    auto operator()(const T& object) const {
         constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
         return get_first_object_of_type<object_t>(object.attribute_values());
     }
@@ -878,13 +879,13 @@ template <typename T>
 struct get_first_object_of_type_t<T> {
     template <typename object_t>
         requires(std::same_as<std::decay_t<T>, object_t>)
-    const auto operator()(const T& object) const {
+    auto operator()(const T& object) const {
         return object;
     }
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    const auto operator()(const T& object) const {
+    auto operator()(const T& object) const {
         return get_first_object_of_type<object_t>(reflect::get<0>(object));
     }
 };
@@ -1304,7 +1305,6 @@ template <typename T, std::size_t N>
 struct to_json_t<std::array<T, N>> {
     nlohmann::json operator()(const std::array<T, N>& array) noexcept {
         nlohmann::json json_array = nlohmann::json::array();
-        std::size_t hash = 0;
         [&array, &json_array]<size_t... Ns>(std::index_sequence<Ns...>) {
             (
                 [&array, &json_array] {

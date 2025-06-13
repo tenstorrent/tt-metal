@@ -10,7 +10,8 @@ import ttnn
 from loguru import logger
 
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -78,11 +79,12 @@ def run_normalization(device, tensor_shape, op) -> tuple:
 
     ttnn_errored = False
     ttnn_error_msg = ""
+    start_time = start_measuring_time()
     try:
         if op == "rms_norm":
-            ttnn_result = ttnn.rms_norm(ttnn_tensor, epsilon=epsilon, weight=ttnn_weight, bias=ttnn_bias)
+            op_ttnn_result = ttnn.rms_norm(ttnn_tensor, epsilon=epsilon, weight=ttnn_weight, bias=ttnn_bias)
         elif op == "layer_norm":
-            ttnn_result = ttnn.layer_norm(ttnn_tensor, epsilon=epsilon, weight=ttnn_weight, bias=ttnn_bias)
+            op_ttnn_result = ttnn.layer_norm(ttnn_tensor, epsilon=epsilon, weight=ttnn_weight, bias=ttnn_bias)
         else:
             raise ValueError(f"Unsupported operation: {op}")
 
@@ -103,19 +105,22 @@ def run_normalization(device, tensor_shape, op) -> tuple:
         logger.warning(f"both torch and ttnn raised errors: torch: {torch_error_msg}, ttnn: {ttnn_error_msg}")
         return (True, "")
 
-    ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
-
-    pcc_result, msg = check_with_pcc(torch_result, ttnn_result, 0.99)
-
-    if not pcc_result:
-        return (False, msg)
+    ttnn_result = ttnn.to_torch(ttnn.from_device(op_ttnn_result))
+    e2e_perf = stop_measuring_time(start_time)
 
     atol = rtol = 0.1
 
-    return (
-        torch.allclose(torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True),
-        f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}",
-    )
+    allclose = (torch.allclose(torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True),)
+    if not allclose:
+        return [(False, f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}"), e2e_perf]
+
+    expected_pcc = 0.99
+    tensors = [ttnn_tensor, op_ttnn_result]
+    if ttnn_weight is not None:
+        tensors.append(ttnn_weight)
+    if ttnn_bias is not None:
+        tensors.append(ttnn_bias)
+    return get_run_return(torch_result, ttnn_result, expected_pcc, tensors, e2e_perf)
 
 
 @pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))

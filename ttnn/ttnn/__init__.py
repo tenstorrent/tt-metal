@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -97,15 +97,16 @@ def manage_config(name, value):
 from ttnn._ttnn.multi_device import (
     CppMeshToTensor,
     CppTensorToMesh,
-    Shard2dConfig,
-    Concat2dConfig,
+    MeshMapperConfig,
+    MeshComposerConfig,
     get_device_tensors,
     aggregate_as_tensor,
+    combine_device_tensors,
     replicate_tensor_to_mesh_mapper,
     shard_tensor_to_mesh_mapper,
-    shard_tensor_to_2d_mesh_mapper,
+    create_mesh_mapper,
     concat_mesh_to_tensor_composer,
-    concat_2d_mesh_to_tensor_composer,
+    create_mesh_composer,
     aggregate_tensor,
     distribute_tensor,
     get_t3k_physical_device_ids_ring,
@@ -130,7 +131,7 @@ from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
-from ttnn._ttnn.fabric import FabricConfig, initialize_fabric_config
+from ttnn._ttnn.fabric import FabricConfig, set_fabric_config
 
 from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,
@@ -162,6 +163,7 @@ from ttnn.types import (
     ShardOrientation,
     ShardMode,
     ShardSpec,
+    NdShardSpec,
     CoreRangeSet,
     CoreRange,
     CoreCoord,
@@ -357,6 +359,7 @@ from ttnn.operations.conv2d import (
     prepare_conv_bias,
     prepare_conv_transpose2d_weights,
     prepare_conv_transpose2d_bias,
+    SlidingWindowParallelConfig,
 )
 from ttnn._ttnn.operations.conv import (
     convert_conv_weight_tensor_to_tiled_layout,

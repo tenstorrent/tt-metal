@@ -45,6 +45,12 @@ struct ProgramDispatchMetadata {
     uint32_t sync_count;
     uint32_t stall_first;
     uint32_t stall_before_program;
+
+    struct {
+        uint32_t mesh_max_program_kernels_sizeB;
+        bool is_cached;
+        uint32_t offset;
+    } prefetcher_cache_info;
 };
 
 uint32_t configure_rta_offsets_for_kernel_groups(
@@ -130,11 +136,10 @@ void update_traced_program_dispatch_commands(
     CoreCoord dispatch_core,
     CoreType dispatch_core_type,
     SubDeviceId sub_device_id,
-    const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
     std::pair<bool, int> unicast_go_signal_update = {false, -1});
 
-TraceNode create_trace_node(detail::ProgramImpl& program, IDevice* device);
+TraceNode create_trace_node(detail::ProgramImpl& program, IDevice* device, bool use_prefetcher_cache);
 
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
@@ -142,7 +147,8 @@ void write_program_command_sequence(
     uint32_t command_queue_id,
     CoreType dispatch_core_type,
     bool stall_first,
-    bool stall_before_program);
+    bool stall_before_program,
+    bool send_binary = true);
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 

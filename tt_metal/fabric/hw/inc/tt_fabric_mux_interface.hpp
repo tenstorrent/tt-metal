@@ -16,6 +16,7 @@ template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
 WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_connection_to_fabric_endpoint(
     uint8_t fabric_mux_x,
     uint8_t fabric_mux_y,
+    uint8_t fabric_mux_channel_id,
     uint8_t fabric_mux_num_buffers_per_channel,
     size_t fabric_mux_channel_buffer_size_bytes,
     size_t fabric_mux_channel_base_address,
@@ -26,8 +27,13 @@ WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_connection_to_fabr
     uint32_t local_flow_control_address,
     uint32_t local_teardown_address,
     uint32_t local_buffer_index_address) {
+    auto get_mux_channel_stream_id_from_channel_id = [](uint8_t fabric_mux_channel_id) -> uint32_t {
+        return fabric_mux_channel_id;
+    };
     auto local_flow_control_ptr = reinterpret_cast<volatile uint32_t* const>(local_flow_control_address);
     auto local_teardown_ptr = reinterpret_cast<volatile uint32_t* const>(local_teardown_address);
+
+    auto mux_channel_credits_stream_id = get_mux_channel_stream_id_from_channel_id(fabric_mux_channel_id);
     return WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>(
         true, /* ignored, connected_to_persistent_fabric */
         0,    /* ignored, direction */
@@ -43,6 +49,8 @@ WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS> build_connection_to_fabr
         local_flow_control_ptr,
         local_teardown_ptr,
         local_buffer_index_address,
+        mux_channel_credits_stream_id,
+        StreamId{0},  // my stream id -- As a sender I currently do NOT get acks over stream regs
         write_reg_cmd_buf,
         write_at_cmd_buf);
 }
@@ -55,6 +63,7 @@ FORCE_INLINE void wait_for_fabric_endpoint_ready(
     uint64_t noc_addr = get_noc_addr(fabric_ep_x, fabric_ep_y, fabric_ep_status_address);
     auto local_fabric_ep_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_fabric_ep_status_address);
 
+    local_fabric_ep_status_ptr[0] = tt::tt_fabric::FabricEndpointStatus::TERMINATED;
     while (local_fabric_ep_status_ptr[0] != tt::tt_fabric::FabricEndpointStatus::READY_FOR_TRAFFIC) {
         noc_async_read_one_packet(noc_addr, local_fabric_ep_status_address, 4);
         noc_async_read_barrier();
@@ -81,7 +90,7 @@ FORCE_INLINE void fabric_async_write(
     connection_handle.wait_for_empty_write_slot();
     connection_handle.send_payload_without_header_non_blocking_from_address(
         source_payload_address, packet_payload_size_bytes);
-    connection_handle.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+    connection_handle.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
 // assumes packet header is correctly populated

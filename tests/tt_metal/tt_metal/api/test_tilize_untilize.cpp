@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt_stl/span.hpp>

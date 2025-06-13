@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,7 +34,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void binary_max_int32_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binary_max_int32<APPROX>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_binary_max<APPROX, InstrModLoadStore::INT32_2S_COMP>(idst0, idst1)));
 }
 
 // clang-format off
@@ -56,7 +56,7 @@ ALWI void binary_max_int32_tile(uint32_t idst0, uint32_t idst1) {
  */
 // clang-format on
 ALWI void binary_max_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binary_max<APPROX>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_binary_max<APPROX, InstrModLoadStore::DEFAULT>(idst0, idst1)));
 }
 
 /**
@@ -83,7 +83,7 @@ ALWI void binary_max_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_max
  */
 // clang-format on
 ALWI void binary_min_int32_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binary_min_int32<APPROX>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_binary_min<APPROX, InstrModLoadStore::INT32_2S_COMP>(idst0, idst1)));
 }
 
 // clang-format off
@@ -105,7 +105,7 @@ ALWI void binary_min_int32_tile(uint32_t idst0, uint32_t idst1) {
  */
 // clang-format on
 ALWI void binary_min_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binary_min<APPROX>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_binary_min<APPROX, InstrModLoadStore::DEFAULT>(idst0, idst1)));
 }
 
 /**

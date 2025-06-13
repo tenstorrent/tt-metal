@@ -120,7 +120,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
             .compile_args = writer_compile_args});
 
     // Assign unique id
-    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Launch program and record outputs
@@ -135,10 +135,10 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
         packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
 
     if (!pcc) {
-        log_error("PCC Check failed");
-        log_info("Golden vector");
+        log_error(tt::LogTest, "PCC Check failed");
+        log_info(tt::LogTest, "Golden vector");
         print_vector<uint32_t>(packed_golden);
-        log_info("Output vector");
+        log_info(tt::LogTest, "Output vector");
         print_vector<uint32_t>(packed_output);
     }
 
@@ -183,14 +183,14 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPacketSizes) {
 
 /* ========== Test case for varying core locations; Test id = 1 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedCoreLocations) {
-    uint32_t num_of_transactions = 1;     // Bound for testing different number of transactions
-    uint32_t transaction_size_pages = 1;  // Bound for testing different transaction sizes
+    uint32_t num_of_transactions = 128;     // Bound for testing different number of transactions
+    uint32_t transaction_size_pages = 128;  // Bound for testing different transaction sizes
     uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
 
     for (unsigned int id = 0; id < num_devices_; id++) {
         // Cores
         auto grid_size = devices_.at(id)->compute_with_storage_grid_size();
-        log_info("Grid size x: {}, y: {}", grid_size.x, grid_size.y);
+        log_info(tt::LogTest, "Grid size x: {}, y: {}", grid_size.x, grid_size.y);
 
         for (unsigned int x = 0; x < grid_size.x; x++) {
             for (unsigned int y = 0; y < grid_size.y; y++) {
@@ -253,8 +253,8 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
                 .tensor_shape_in_pages = tensor_shape_in_pages,
                 .num_dram_banks = num_dram_banks};
 
-            log_info("Tensor shape in pages: {}", tensor_shape_in_pages);
-            log_info("Number of dram banks: {}", num_dram_banks);
+            log_info(tt::LogTest, "Tensor shape in pages: {}", tensor_shape_in_pages);
+            log_info(tt::LogTest, "Number of dram banks: {}", num_dram_banks);
 
             // Run
             for (unsigned int id = 0; id < num_devices_; id++) {

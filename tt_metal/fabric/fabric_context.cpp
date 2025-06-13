@@ -8,6 +8,7 @@
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/assert.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <magic_enum/magic_enum.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
@@ -16,11 +17,11 @@
 
 namespace tt::tt_fabric {
 
-std::unordered_map<mesh_id_t, bool> FabricContext::check_for_wrap_around_mesh() const {
-    std::unordered_map<mesh_id_t, bool> wrap_around_mesh;
+std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() const {
+    std::unordered_map<MeshId, bool> wrap_around_mesh;
 
-    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    auto mesh_ids = control_plane->get_user_physical_mesh_ids();
+    auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto mesh_ids = control_plane.get_user_physical_mesh_ids();
     for (const auto& mesh_id : mesh_ids) {
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG) {
             // skip wrapping around mesh for TG since the corner chips connected to the gateway will be
@@ -32,7 +33,7 @@ std::unordered_map<mesh_id_t, bool> FabricContext::check_for_wrap_around_mesh() 
         const uint32_t corner_chip_id = 0;
         uint32_t corner_chip_connections = 0;
         for (const auto& direction : FabricContext::routing_directions) {
-            if (!control_plane->get_intra_chip_neighbors(mesh_id, corner_chip_id, direction).empty()) {
+            if (!control_plane.get_intra_chip_neighbors(FabricNodeId(mesh_id, corner_chip_id), direction).empty()) {
                 corner_chip_connections++;
             }
         }
@@ -90,12 +91,30 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
 
     this->router_config_ =
         std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(this->channel_buffer_size_bytes_, this->topology_);
+    // disable upstream buffering optimization for now for device init.
+    auto dateline_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
+        .edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline,
+        .enable_dateline_sender_extra_buffer_slots = false,
+        .enable_dateline_receiver_extra_buffer_slots = true,
+        .enable_dateline_upstream_sender_extra_buffer_slots = false,
+        .enable_dateline_upstream_receiver_extra_buffer_slots = false,
+    };
     this->dateline_router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
-        this->channel_buffer_size_bytes_, this->topology_, true);
+        this->channel_buffer_size_bytes_, this->topology_, dateline_edm_options);
+
+    this->num_devices = tt::tt_metal::GetNumAvailableDevices();
+    auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
+    if (this->num_devices != 4 && num_pcie_devices == 4) {
+        // adding TG's 4 dispatch devices
+        this->num_devices += num_pcie_devices;
+    }
+    this->master_router_chans_.resize(num_devices, UNINITIALIZED_MASTER_ROUTER_CHAN);
+    this->num_initialized_routers_.resize(num_devices, UNINITIALIZED_ROUTERS);
+
     set_routing_mode(this->topology_, this->fabric_config_);
 }
 
-bool FabricContext::is_wrap_around_mesh(mesh_id_t mesh_id) const {
+bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {
     auto it = this->wrap_around_mesh_.find(mesh_id);
     TT_FATAL(it != this->wrap_around_mesh_.end(), "Querying wrap around mesh for an unknown mesh id");
     return it->second;
@@ -120,31 +139,39 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
 };
 
 void FabricContext::set_num_fabric_initialized_routers(chip_id_t chip_id, size_t num_routers) {
-    auto it = this->num_initialized_routers_.find(chip_id);
+    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
     TT_FATAL(
-        it == this->num_initialized_routers_.end(),
-        "Error, tried to set num initialized routers again for the same device");
+        this->num_initialized_routers_[chip_id] == UNINITIALIZED_ROUTERS,
+        "Error, tried to set num initialized routers again for device {}",
+        chip_id);
     this->num_initialized_routers_[chip_id] = num_routers;
 }
 
 uint32_t FabricContext::get_num_fabric_initialized_routers(chip_id_t chip_id) const {
-    auto it = this->num_initialized_routers_.find(chip_id);
+    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
     TT_FATAL(
-        it != this->num_initialized_routers_.end(), "Error, querying num initialized routers for an unknown device");
-    return it->second;
+        this->num_initialized_routers_[chip_id] != UNINITIALIZED_ROUTERS,
+        "Error, querying num initialized routers for an unknown device {}",
+        chip_id);
+    return this->num_initialized_routers_[chip_id];
 }
 
 void FabricContext::set_fabric_master_router_chan(chip_id_t chip_id, chan_id_t chan_id) {
-    auto it = this->master_router_chans_.find(chip_id);
+    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
     TT_FATAL(
-        it == this->master_router_chans_.end(), "Error, tried to set master router channel again for the same device");
+        this->master_router_chans_[chip_id] == UNINITIALIZED_MASTER_ROUTER_CHAN,
+        "Error, tried to set master router channel again for the same device {}",
+        chip_id);
     this->master_router_chans_[chip_id] = chan_id;
 }
 
 chan_id_t FabricContext::get_fabric_master_router_chan(chip_id_t chip_id) const {
-    auto it = this->master_router_chans_.find(chip_id);
-    TT_FATAL(it != this->master_router_chans_.end(), "Error, querying master router channel for an unknown device");
-    return it->second;
+    TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
+    TT_FATAL(
+        this->master_router_chans_[chip_id] != UNINITIALIZED_MASTER_ROUTER_CHAN,
+        "Error, querying master router channel for an unknown device {}",
+        chip_id);
+    return this->master_router_chans_[chip_id];
 }
 
 std::vector<size_t> FabricContext::get_fabric_router_addresses_to_clear() const {

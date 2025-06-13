@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -91,7 +91,7 @@ void kernel_main() {
                             // loop over output channels, width of the output/weights.
                             for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles;
                                  ++weight_tile_w_i) {
-                                s_weight.noc_async_read_tile(weight_tile_id, weight_write_l1_addr);
+                                noc_async_read_tile(weight_tile_id, s_weight, weight_write_l1_addr);
                                 weight_write_l1_addr += weight_tile_nbytes;
                                 weights_block_size_bytes += weight_tile_nbytes;
                                 weight_tile_id += 1;
@@ -111,7 +111,7 @@ void kernel_main() {
                 cb_reserve_back(bias_cb_id, weight_block_width_ntiles);
                 uint32_t bias_l1_addr = get_write_ptr(bias_cb_id);
                 for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
-                    s_bias.noc_async_read_tile(bias_start_tile_id, bias_l1_addr);
+                    noc_async_read_tile(bias_start_tile_id, s_bias, bias_l1_addr);
                     bias_l1_addr += bias_pagesize;
                     bias_start_tile_id += 1;
                 }

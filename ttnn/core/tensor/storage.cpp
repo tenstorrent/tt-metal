@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <vector>
 
 #include "tt-metalium/mesh_coord.hpp"
 
@@ -12,25 +13,9 @@ namespace tt::tt_metal {
 
 DeviceStorage::DeviceStorage(std::shared_ptr<Buffer> buffer_) { buffer = std::move(buffer_); }
 
-MemoryConfig DeviceStorage::memory_config() const {
-    auto* buffer_to_use = get_buffer();
-
-    std::optional<ShardSpec> shard_spec = std::nullopt;
-
-    if (is_sharded(buffer_to_use->buffer_layout())) {
-        shard_spec = buffer_to_use->shard_spec().tensor_shard_spec;
-    }
-    return MemoryConfig{
-        buffer_to_use->buffer_layout(),
-        buffer_to_use->buffer_type(),
-        shard_spec,
-    };
-}
-
 DeviceStorage::DeviceStorage(
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
-    std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs_) :
-    specs(std::move(specs_)), mesh_buffer(std::move(mesh_buffer_)) {}
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords_) :
+    coords(std::move(coords_)), mesh_buffer(std::move(mesh_buffer_)) {}
 
 Buffer* DeviceStorage::get_buffer() const {
     if (this->mesh_buffer.get() != nullptr) {
@@ -60,30 +45,27 @@ IDevice* DeviceStorage::get_device() const {
     return this->buffer->device();
 }
 
-void DeviceStorage::update_specs(const TensorSpec& new_spec) {
-    for (auto& [_, spec] : this->specs) {
-        spec = new_spec;
-    }
-}
-
 bool DeviceStorage::is_uniform_storage() const {
     if (mesh_buffer.get() == nullptr) {
         return true;
     }
-    return specs.size() == mesh_buffer->device()->num_devices() &&
-           std::all_of(specs.begin(), specs.end(), [this](const auto& spec) { return spec.second == specs[0].second; });
+    return coords.size() == mesh_buffer->device()->num_devices();
 }
 
-HostBuffer MultiDeviceHostStorage::get_buffer(int buffer_index) const {
-    TT_FATAL(buffer_index < buffers_.size(), "Buffer not found for buffer_index {}", buffer_index);
-    return buffers_[buffer_index];
+std::optional<HostBuffer> MultiDeviceHostStorage::get_shard_at_origin() const {
+    return distributed_buffer_.get_shard(
+        distributed::MeshCoordinate::zero_coordinate(distributed_buffer_.shape().dims()));
 }
 
-TensorSpec MultiDeviceHostStorage::get_tensor_spec(int spec_index) const {
-    TT_FATAL(spec_index < specs_.size(), "Spec for device {} not found in spec list", spec_index);
-    return specs_[spec_index];
-}
+const DistributedHostBuffer& MultiDeviceHostStorage::distributed_buffer() const { return distributed_buffer_; }
 
-size_t MultiDeviceHostStorage::num_buffers() const { return buffers_.size(); }
+MultiDeviceHostStorage::MultiDeviceHostStorage(std::vector<HostBuffer> buffers) :
+    distributed_buffer_(DistributedHostBuffer::create(tt::tt_metal::distributed::MeshShape(buffers.size()))) {
+    for (size_t i = 0; i < buffers.size(); ++i) {
+        distributed_buffer_.emplace_shard(
+            tt::tt_metal::distributed::MeshCoordinate(i), [&buffers, i]() { return std::move(buffers[i]); });
+    }
+}
+MultiDeviceHostStorage::MultiDeviceHostStorage(DistributedHostBuffer buffer) : distributed_buffer_(std::move(buffer)) {}
 
 }  // namespace tt::tt_metal

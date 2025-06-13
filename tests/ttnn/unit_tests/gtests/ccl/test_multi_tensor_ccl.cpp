@@ -45,11 +45,11 @@ std::vector<IDevice*> get_line_devices(distributed::MeshDevice* mesh_device) {
 class T3000MultiCQFabricMeshDeviceFixture : public T3000MultiCQMeshDeviceFixture {
 protected:
     T3000MultiCQFabricMeshDeviceFixture() {
-        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::FABRIC_1D);
+        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::FABRIC_1D);
     }
     void TearDown() override {
         T3000MultiCQMeshDeviceFixture::TearDown();
-        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
     }
 };
 
@@ -87,8 +87,9 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AllGatherAsync) {
         tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(devices[dev_idx]));
     }
     auto semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
+    std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {semaphore};
     auto all_gathered = ttnn::experimental::all_gather_async(
-        tensors, 0, semaphore, 1, std::nullopt, ttnn::ccl::Topology::Linear, SubDeviceId(0));
+        tensors, 0, multi_dev_semaphore, 1, std::nullopt, ttnn::ccl::Topology::Linear, SubDeviceId(0));
     for (int dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
         auto data = all_gathered[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {

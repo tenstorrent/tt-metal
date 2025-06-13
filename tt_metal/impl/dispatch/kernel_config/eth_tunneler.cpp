@@ -368,7 +368,7 @@ uint32_t EthTunnelerKernel::GetRouterId(FDKernel* k, bool upstream) {
     std::vector<FDKernel*>& search = (upstream) ? upstream_kernels_ : downstream_kernels_;
     uint32_t router_id = 0;
     for (auto kernel : search) {
-        if (auto router_kernel = dynamic_cast<EthRouterKernel*>(kernel)) {
+        if (dynamic_cast<EthRouterKernel*>(kernel) != nullptr) {
             if (k == kernel) {
                 return router_id;
             }

@@ -327,7 +327,6 @@ def test_upsample_multicore_corerange(
     assert isequal
 
 
-@skip_for_blackhole("Temporary skip until #18200 is not closed")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, num_channels, height, width, scale_h, scale_w",

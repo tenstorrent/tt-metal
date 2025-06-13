@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
@@ -55,6 +54,38 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
     }
 }
 
+MemoryConfig::MemoryConfig(
+    TensorMemoryLayout memory_layout, BufferType buffer_type, std::optional<ShardSpec> shard_spec) :
+    memory_layout_(memory_layout), buffer_type_(buffer_type), shard_spec_(std::move(shard_spec)) {}
+
+MemoryConfig::MemoryConfig(BufferType buffer_type, NdShardSpec nd_shard_spec) :
+    memory_layout_(TensorMemoryLayout::BLOCK_SHARDED),
+    buffer_type_(buffer_type),
+    nd_shard_spec_(std::move(nd_shard_spec)),
+    created_with_nd_shard_spec_(true) {}
+
+MemoryConfig::MemoryConfig(
+    TensorMemoryLayout memory_layout,
+    BufferType buffer_type,
+    std::optional<ShardSpec> shard_spec,
+    std::optional<NdShardSpec> nd_shard_spec,
+    bool created_with_nd_shard_spec) :
+    memory_layout_(memory_layout),
+    buffer_type_(buffer_type),
+    shard_spec_(std::move(shard_spec)),
+    nd_shard_spec_(std::move(nd_shard_spec)),
+    created_with_nd_shard_spec_(created_with_nd_shard_spec) {}
+
+MemoryConfig MemoryConfig::create_with_prepopulated_shard_specs(
+    TensorMemoryLayout memory_layout,
+    BufferType buffer_type,
+    std::optional<ShardSpec> shard_spec,
+    std::optional<NdShardSpec> nd_shard_spec,
+    bool created_with_nd_shard_spec) {
+    return MemoryConfig(
+        memory_layout, buffer_type, std::move(shard_spec), std::move(nd_shard_spec), created_with_nd_shard_spec);
+}
+
 bool MemoryConfig::is_sharded() const {
     switch (this->memory_layout_) {
         case TensorMemoryLayout::HEIGHT_SHARDED:
@@ -80,6 +111,15 @@ std::ostream& operator<<(std::ostream& os, const MemoryConfig& config) {
     return os;
 }
 
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Layout& layout) {
+    switch (layout) {
+        case Layout::ROW_MAJOR: return os << "Layout::ROW_MAJOR";
+        case Layout::TILE: return os << "Layout::TILE";
+        case Layout::INVALID: return os << "Layout::INVALID";
+        default: return os << "Layout::UNKNOWN";
+    }
+}
+
 }  // namespace tt::tt_metal
 
 nlohmann::json tt::stl::json::to_json_t<tt::tt_metal::MemoryConfig>::operator()(
@@ -87,8 +127,15 @@ nlohmann::json tt::stl::json::to_json_t<tt::tt_metal::MemoryConfig>::operator()(
     nlohmann::json json_object;
     json_object["memory_layout"] = config.memory_layout();
     json_object["buffer_type"] = config.buffer_type();
-    if (config.shard_spec().has_value()) {
-        json_object["shard_spec"] = tt::stl::json::to_json(config.shard_spec().value());
+    json_object["created_with_nd_shard_spec"] = config.created_with_nd_shard_spec();
+    if (config.created_with_nd_shard_spec()) {
+        if (config.nd_shard_spec().has_value()) {
+            json_object["nd_shard_spec"] = tt::stl::json::to_json(config.nd_shard_spec().value());
+        }
+    } else {
+        if (config.shard_spec().has_value()) {
+            json_object["shard_spec"] = tt::stl::json::to_json(config.shard_spec().value());
+        }
     }
     return json_object;
 }
@@ -97,9 +144,15 @@ tt::tt_metal::MemoryConfig tt::stl::json::from_json_t<tt::tt_metal::MemoryConfig
     const nlohmann::json& json_object) const {
     auto memory_layout = json_object["memory_layout"].get<tt::tt_metal::TensorMemoryLayout>();
     auto buffer_type = json_object["buffer_type"].get<tt::tt_metal::BufferType>();
-    std::optional<tt::tt_metal::ShardSpec> shard_spec;
-    if (json_object.contains("shard_spec")) {
-        shard_spec = tt::stl::json::from_json<tt::tt_metal::ShardSpec>(json_object["shard_spec"]);
+    auto created_with_nd_shard_spec = json_object["created_with_nd_shard_spec"].get<bool>();
+    if (created_with_nd_shard_spec) {
+        auto nd_shard_spec = tt::stl::json::from_json<tt::tt_metal::NdShardSpec>(json_object["nd_shard_spec"]);
+        return tt::tt_metal::MemoryConfig(buffer_type, std::move(nd_shard_spec));
+    } else {
+        std::optional<tt::tt_metal::ShardSpec> shard_spec;
+        if (json_object.contains("shard_spec")) {
+            shard_spec = tt::stl::json::from_json<tt::tt_metal::ShardSpec>(json_object["shard_spec"]);
+        }
+        return tt::tt_metal::MemoryConfig(memory_layout, buffer_type, std::move(shard_spec));
     }
-    return tt::tt_metal::MemoryConfig(memory_layout, buffer_type, std::move(shard_spec));
 }

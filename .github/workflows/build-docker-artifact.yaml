@@ -28,6 +28,9 @@ on:
       basic-dev-tag:
         description: "Docker tag for the basic dev Docker image for basic development"
         value: ${{ jobs.check-docker-images.outputs.basic-dev-tag }}
+      manylinux-tag:
+        description: "Docker tag for the manylinux Docker image for building TT-Metalium et al"
+        value: ${{ jobs.check-docker-images.outputs.manylinux-tag }}
   workflow_dispatch:
     inputs:
       distro:
@@ -55,6 +58,7 @@ env:
   CI_TEST_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-ci-test-${{ inputs.architecture }}
   DEV_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-dev-${{ inputs.architecture }}
   BASIC_DEV_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-basic-dev-${{ inputs.architecture }}
+  MANYLINUX_IMAGE_NAME: manylinux-${{ inputs.architecture }}
 
 jobs:
   check-docker-images:
@@ -68,6 +72,8 @@ jobs:
       dev-tag: ${{ steps.tags.outputs.dev-tag }}
       basic-dev-exists: ${{ steps.images.outputs.basic-dev-exists }}
       basic-dev-tag: ${{ steps.tags.outputs.basic-dev-tag }}
+      manylinux-exists: ${{ steps.images.outputs.manylinux-exists }}
+      manylinux-tag: ${{ steps.tags.outputs.manylinux-tag }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -93,6 +99,13 @@ jobs:
           BASIC_DEV_HASH=$(cat dockerfile/Dockerfile.basic-dev | sha1sum | cut -d' ' -f1)
           echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
 
+          MANYLINUX_HASH=$(cat \
+            .github/workflows/build-docker-artifact.yaml \
+            dockerfile/Dockerfile.manylinux \
+            tt_metal/sfpi-version.sh \
+            | sha1sum | cut -d' ' -f1)
+          echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
+
       # Assume if dev-tag exists, the others will exist too
       - name: Query images exist
         id: images
@@ -117,12 +130,20 @@ jobs:
             echo "basic-dev-exists=false" >> $GITHUB_OUTPUT
           fi
 
+          if docker manifest inspect ${{ steps.tags.outputs.manylinux-tag }} > /dev/null 2>&1; then
+            echo "${{ steps.tags.outputs.manylinux-tag }} exists"
+            echo "manylinux-exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "${{ steps.tags.outputs.manylinux-tag }} does not exist"
+            echo "manylinux-exists=false" >> $GITHUB_OUTPUT
+          fi
+
   # Assume if dev-tag does not exist, the others will not exist either
   build-docker-image:
     name: "🐳️ Build images"
     needs: check-docker-images
-    if: needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true'
-    timeout-minutes: 60
+    if: needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true' || needs.check-docker-images.outputs.manylinux-exists != 'true'
+    timeout-minutes: 90
     runs-on: tt-beta-ubuntu-2204-large
     steps:
       - name: ⬇️ Checkout
@@ -180,6 +201,16 @@ jobs:
           push: true
           tags: ${{ needs.check-docker-images.outputs.basic-dev-tag }}
           build-args: UBUNTU_VERSION=${{ inputs.version }}
+          cache-to: type=inline
+          pull: true
+      - name: Build and push ManyLinux image
+        if: needs.check-docker-images.outputs.manylinux-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.manylinux
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.manylinux-tag }}
           cache-to: type=inline
           pull: true
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -444,7 +444,6 @@ class resnetBlock2D:
                 weights_dtype=ttnn.bfloat8_b,
                 activation="",
                 shard_layout=self.conv1_shard_layout,
-                transpose_shards=False,
                 reshard_if_not_optimal=False,
             )
             compute_config = ttnn.init_device_compute_kernel_config(
@@ -543,7 +542,6 @@ class resnetBlock2D:
                     weights_dtype=ttnn.bfloat8_b,
                     activation="",
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                    transpose_shards=False,
                     reshard_if_not_optimal=False,
                 )
                 compute_config = ttnn.init_device_compute_kernel_config(
@@ -697,7 +695,6 @@ class resnetBlock2D:
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            transpose_shards=False,
             reshard_if_not_optimal=False,
         )
         compute_config = get_default_compute_config(self.device)
@@ -765,15 +762,14 @@ class resnetBlock2D:
                 weights_dtype=ttnn.bfloat8_b,
                 activation="",
                 shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                transpose_shards=False,
                 reshard_if_not_optimal=False,
             )
             compute_config = ttnn.init_device_compute_kernel_config(
                 self.device.arch(),
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
             )
 
             conv_kwargs_4 = {
