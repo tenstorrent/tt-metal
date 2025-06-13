@@ -44,7 +44,6 @@ class ResnetConvTest(OpTestBase):
         weights_block_h,
         weights_block_w,
         weights_df_on_device,
-        conv_dtype,
         loop_count=1000,
         determinism_check_enabled=False,
         determinism_check_interval=False,
@@ -85,8 +84,8 @@ class ResnetConvTest(OpTestBase):
         self.weights_block_h = weights_block_h
         self.weights_block_w = weights_block_w
         self.weights_df_on_device = weights_df_on_device
-        self.conv_dtype = (conv_dtype,)
         self.reader_patterns_cache = {}
+        self.out_dtype = out_dtype
 
     # Remove weights shape
     def generate_torch_weights(self, shape):
@@ -140,7 +139,7 @@ class ResnetConvTest(OpTestBase):
             conv_config=self.program_config,
             compute_config=self.compute_config,
             groups=self.groups,
-            dtype=self.conv_dtype,
+            dtype=self.out_dtype,
         )
         self.reader_patterns_cache.clear()
         return tt_output_tensor_on_device
@@ -225,7 +224,7 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
         ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),  # see what this does
         in0_dtype,
         in1_dtype,
-        None,  # out_dtype
+        activations_dtype,  # out_dtype
         ttnn.ROW_MAJOR_LAYOUT,
         ttnn.ROW_MAJOR_LAYOUT,
         conv_config,  # program config
@@ -246,7 +245,6 @@ def test_resnet_conv(mesh_device, didt_workload_iterations, determinism_check_in
         weights_block_h,
         weights_block_w,
         weights_dtype,
-        activations_dtype,
         loop_count=didt_workload_iterations,
         determinism_check_enabled=True if determinism_check_interval > 0 else False,
         determinism_check_interval=determinism_check_interval,
