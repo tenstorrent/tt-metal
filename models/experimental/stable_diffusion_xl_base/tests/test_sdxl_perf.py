@@ -53,6 +53,7 @@ def test_unet(
 def test_sdxl_unet_perf_device():
     expected_device_perf_cycles_per_iteration = 383_019_387
 
+
     command = f"pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
