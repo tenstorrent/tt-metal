@@ -53,7 +53,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     bool en_dateline_sender_extra_buffer,
     bool en_dateline_receiver_extra_buffer,
     bool en_dateline_upstream_sender_extra_buffer,
-    bool en_dateline_upstream_receiver_extra_buffer) :
+    bool en_dateline_upstream_receiver_extra_buffer,
+    bool en_dateline_upstream_adjcent_sender_extra_buffer) :
     device_sequence(device_sequence), programs(program_sequence) {
     if (topology == Topology::Ring) {
         TT_FATAL(device_sequence.size() > 2, "Ring topology only supports more than 2 devices");
@@ -138,6 +139,20 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     dest_device->id() == device_sequence.back()->id()) {
                     src_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
                     dest_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
+                } else if (
+                    src_device->id() == device_sequence.at(1)->id() &&
+                    dest_device->id() != device_sequence.front()->id()) {
+                    src_device_edm_type =
+                        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
+                    if (dest_device->id() == device_sequence.at(device_sequence.size() - 2)->id()) {
+                        dest_device_edm_type =
+                            tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
+                    }
+                } else if (
+                    src_device->id() == device_sequence.at(device_sequence.size() - 3)->id() &&
+                    dest_device->id() == device_sequence.at(device_sequence.size() - 2)->id()) {
+                    dest_device_edm_type =
+                        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
                 }
             }
             // if ring topology set extra buffer on dateline edms.
@@ -147,6 +162,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 .enable_dateline_receiver_extra_buffer_slots = en_dateline_receiver_extra_buffer,
                 .enable_dateline_upstream_sender_extra_buffer_slots = en_dateline_upstream_sender_extra_buffer,
                 .enable_dateline_upstream_receiver_extra_buffer_slots = en_dateline_upstream_receiver_extra_buffer,
+                .enable_dateline_upstream_adjcent_sender_extra_buffer_slots =
+                    en_dateline_upstream_adjcent_sender_extra_buffer,
             };
             auto dest_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
                 .edm_type = dest_device_edm_type,
@@ -154,6 +171,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 .enable_dateline_receiver_extra_buffer_slots = en_dateline_receiver_extra_buffer,
                 .enable_dateline_upstream_sender_extra_buffer_slots = en_dateline_upstream_sender_extra_buffer,
                 .enable_dateline_upstream_receiver_extra_buffer_slots = en_dateline_upstream_receiver_extra_buffer,
+                .enable_dateline_upstream_adjcent_sender_extra_buffer_slots =
+                    en_dateline_upstream_adjcent_sender_extra_buffer,
             };
             const auto src_curr_edm_config =
                 tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, src_edm_options);

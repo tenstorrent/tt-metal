@@ -61,7 +61,8 @@ enum class FabricEriscDatamoverType {
     Dateline = 1,
     DatelineUpstream = 2,
     DatelineUpstreamAdjacentDevice = 3,
-    Invalid = 4,
+    DatelineUpstreamAdjacentDeviceUpstream = 4,
+    Invalid = 5,
 };
 
 // enable extra buffer slots configuration based on sender/receiver channel and EDM type.
@@ -71,6 +72,7 @@ struct FabricEriscDatamoverOptions {
     bool enable_dateline_receiver_extra_buffer_slots = false;
     bool enable_dateline_upstream_sender_extra_buffer_slots = false;
     bool enable_dateline_upstream_receiver_extra_buffer_slots = false;
+    bool enable_dateline_upstream_adjcent_sender_extra_buffer_slots = false;
 };
 
 struct FabricEriscDatamoverConfig {
@@ -89,6 +91,7 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t dateline_receiver_channel_skip_idx = 0;
     static constexpr std::size_t dateline_upstream_sender_channel_skip_idx = 1;
     static constexpr std::size_t dateline_upstream_receiver_channel_skip_idx = 1;
+    static constexpr std::size_t dateline_upstream_adjcent_sender_channel_skip_idx = 2;
 
     static constexpr std::size_t num_sender_channels_1d = 3;
     static constexpr std::size_t num_sender_channels_2d = 5;
@@ -217,6 +220,7 @@ struct FabricEriscDatamoverConfig {
     // Dateline Upstream EDM skip connection flag
     bool skip_sender_channel_1_connection = false;
     bool skip_receiver_channel_1_connection = false;
+    bool skip_sender_vc1_channel_connection = false;
 
     // emd vcs
     std::size_t edm_noc_vc = 0;
