@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "interleaved_to_sharded_program_factory.hpp"
+
 #include <math.h>
 
 #include "ttnn/operations/math.hpp"
