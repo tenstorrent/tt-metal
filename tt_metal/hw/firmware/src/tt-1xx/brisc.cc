@@ -85,6 +85,7 @@ uint32_t wIndex __attribute__((used));
 uint32_t stackSize __attribute__((used));
 uint32_t sums[SUM_COUNT] __attribute__((used));
 uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+uint32_t traceCount __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 
@@ -357,6 +358,7 @@ int main() {
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     trigger_sync_register_init();
 
+    DeviceProfilerInit();
     while (1) {
         WAYPOINT("GW");
         uint8_t go_message_signal = RUN_MSG_DONE;
@@ -376,6 +378,7 @@ int main() {
                 // Set the rd_ptr on workers to specified value
                 mailboxes->launch_msg_rd_ptr = 0;
                 if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+                    DeviceTraceProfilerInit();
                     uint32_t go_message_index = mailboxes->go_message_index;
                     // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
                     // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
