@@ -764,7 +764,7 @@ void DumpDeviceProfileResults(
         if (profiler_it != tt_metal_device_profiler_map.end()) {
             DeviceProfiler& profiler = profiler_it->second;
             profiler.setDeviceArchitecture(device->arch());
-            profiler.dumpResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+            profiler.dumpResults(device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
                 profiler.pushTracyDeviceResults();
             }
@@ -803,6 +803,22 @@ void DumpDeviceProfileResults(
     }
 
     DumpDeviceProfileResults(device, virtual_cores, state, metadata);
+#endif
+}
+void ShareTraceIDwithProfiler(chip_id_t device_id, uint32_t trace_id) {
+#if defined(TRACY_ENABLE)
+    auto device = tt::DevicePool::instance().get_active_device(device_id);
+    constexpr uint32_t TRACE_ID_SET_BIT = (1 << 31);
+    for (auto core :
+         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_routing_to_profiler_flat_id(device_id)) {
+        auto* profiler_msg =
+            reinterpret_cast<profiler_msg_t*>(device->get_dev_addr(core.first, HalL1MemAddrType::PROFILER));
+        uint64_t control_addr =
+            reinterpret_cast<uint64_t>(&profiler_msg->control_vector[kernel_profiler::CURRENT_TRACE_ID]);
+        uint32_t traceControl = TRACE_ID_SET_BIT | trace_id;
+        tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
+            &traceControl, tt_cxy_pair(device_id, core.first), control_addr);
+    }
 #endif
 }
 

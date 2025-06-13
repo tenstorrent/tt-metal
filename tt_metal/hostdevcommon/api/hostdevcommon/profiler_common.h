@@ -52,6 +52,7 @@ enum ControlBuffer {
     CORE_COUNT_PER_DRAM,
     DROPPED_ZONES,
     PROFILER_DONE,
+    CURRENT_TRACE_ID
 };
 
 enum PacketTypes { ZONE_START, ZONE_END, ZONE_TOTAL, TS_DATA, TS_EVENT };

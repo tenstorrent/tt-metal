@@ -356,6 +356,7 @@ int main() {
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     trigger_sync_register_init();
 
+    kernel_profiler::init_profiler();
     while (1) {
         WAYPOINT("GW");
         uint8_t go_message_signal = RUN_MSG_DONE;

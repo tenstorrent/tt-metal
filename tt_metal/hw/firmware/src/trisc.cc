@@ -109,6 +109,7 @@ int main(int argc, char *argv[]) {
     *trisc_run = RUN_SYNC_MSG_DONE;
 
     // Cleanup profiler buffer incase we never get the go message
+    kernel_profiler::init_profiler();
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {

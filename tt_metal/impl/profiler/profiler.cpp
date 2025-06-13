@@ -51,13 +51,14 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
 tracy::Color::ColorType getDeviceEventColor(
     uint32_t risc_num,
     const std::array<bool, static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::COUNT)>& zone_name_keyword_flags) {
-    constexpr std::array<tracy::Color::ColorType, 6> colors = {
+    constexpr std::array<tracy::Color::ColorType, 7> colors = {
         tracy::Color::Orange2,
         tracy::Color::SeaGreen3,
         tracy::Color::SkyBlue3,
         tracy::Color::Turquoise2,
         tracy::Color::CadetBlue1,
-        tracy::Color::Yellow3};
+        tracy::Color::Yellow3,
+        tracy::Color::DarkSlateGray3};
     return (zone_name_keyword_flags[static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::PROFILER)])
                ? tracy::Color::Tomato3
                : colors[risc_num % colors.size()];
@@ -478,10 +479,11 @@ void DeviceProfiler::readRiscProfilerResults(
 
     const std::vector<uint32_t>& control_buffer = core_control_buffers.at(worker_core);
 
-    if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
-        (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
-        return;
-    }
+    // if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
+    //(control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
+    // ZoneScopedN("EARLY_RETURN");
+    // return;
+    //}
 
     chip_id_t device_id = device->id();
 
@@ -506,6 +508,7 @@ void DeviceProfiler::readRiscProfilerResults(
     }
 
     for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
+        ZoneScopedN("RISC_LOOP");
         uint32_t bufferEndIndex = control_buffer[riscEndIndex];
         if (data_source == ProfilerDataBufferSource::L1) {
             // Just grab the device end index
@@ -517,6 +520,7 @@ void DeviceProfiler::readRiscProfilerResults(
         } else {
             riscType = 5;
         }
+        riscType = 6;
         if (bufferEndIndex > 0) {
             uint32_t bufferRiscShift = riscEndIndex * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
             if (data_source == ProfilerDataBufferSource::L1) {
@@ -550,6 +554,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
             for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
+                ZoneScopedN("BUFFER_LOOP");
                 if (!newRunStart && data_buffer.at(index) == 0 && data_buffer.at(index + 1) == 0) {
                     newRunStart = true;
                     opTime_H = 0;
@@ -1364,6 +1369,12 @@ void DeviceProfiler::generateZoneSourceLocationsHashes() {
         std::getline(ss, zone_name, ',');
         std::getline(ss, source_file, ',');
         std::getline(ss, line_num_str, ',');
+
+        if (zone_name.find("FW") != std::string::npos) {
+            zone_name = "TRACE-FW";
+        } else if (zone_name.find("KERNEL") != std::string::npos) {
+            zone_name = "TRACE-KERNEL";
+        }
 
         ZoneDetails details(zone_name, source_file, std::stoull(line_num_str));
 

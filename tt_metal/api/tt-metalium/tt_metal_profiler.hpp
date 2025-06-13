@@ -63,6 +63,17 @@ void DumpDeviceProfileResults(
     IDevice* device,
     ProfilerDumpState = ProfilerDumpState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
+/**
+ * Traverse all cores and read device side profiler data and dump results into device side CSV log
+ *
+ * Return value: void
+ *
+ * | Argument      | Description                                       | Type | Valid Range               | Required |
+ * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
+ * | device        | The device holding the program being profiled.    | Device * |                           | True |
+ * | satate        | Dumpprofiler various states                       | ProfilerDumpState |                  | False |
+ * */
+void ShareTraceIDwithProfiler(chip_id_t device_id, uint32_t trace_id);
 
 /**
  * Set the directory for device-side CSV logs produced by the profiler instance in the tt-metal module
