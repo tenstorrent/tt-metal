@@ -329,7 +329,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             }
         case MUL:
             if (dtype == DataType::UINT16) {
-                return {"mul_uint16_tile_init();", "mul_uint16_tile"};
+                return {"mul_int_tile_init();", "mul_uint16_tile"};
             } else {
                 return {"mul_binary_tile_init();", "mul_binary_tile"};
             }

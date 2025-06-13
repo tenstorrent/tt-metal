@@ -35,11 +35,11 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void sub_int32_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_sub_int<APPROX, InstrModLoadStore::INT32>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_sub_int<APPROX, 8, InstrModLoadStore::INT32, false>(idst0, idst1)));
 }
 
 ALWI void sub_uint16_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_sub_int<APPROX, InstrModLoadStore::LO16>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_sub_int<APPROX, 8, InstrModLoadStore::LO16, false>(idst0, idst1)));
 }
 
 /**
