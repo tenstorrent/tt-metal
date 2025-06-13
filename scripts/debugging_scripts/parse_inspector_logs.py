@@ -44,6 +44,22 @@ def fast_parse_yaml_log_file(log_file: str):
         yield yaml.safe_load(log_entry)
 
 
+def read_yaml(yaml_path: str):
+    try:
+        # Try to use ryml for faster parsing if available
+        import ryml
+        from ttexalens.util import ryml_to_lazy
+
+        with open(yaml_path, "r") as f:
+            content = f.read()
+            tree = ryml.parse_in_arena(content)
+            return ryml_to_lazy(tree, tree.root_id())
+    except:
+        # Fallback to standard yaml library
+        with open(yaml_path, "r") as f:
+            return yaml.safe_load(f)
+
+
 @dataclass
 class KernelData:
     watcher_kernel_id: int
@@ -66,8 +82,7 @@ class ProgramData:
 
 def get_kernels(log_directory: str) -> list[KernelData]:
     yaml_path = os.path.join(log_directory, "kernels.yaml")
-    with open(yaml_path, "r") as f:
-        data = yaml.safe_load(f)
+    data = read_yaml(yaml_path)
 
     kernels = []
     for entry in data:
@@ -86,8 +101,7 @@ def get_kernels(log_directory: str) -> list[KernelData]:
 
 def get_programs(log_directory: str, verbose: bool = False) -> dict[int, ProgramData]:
     yaml_path = os.path.join(log_directory, "programs_log.yaml")
-    with open(yaml_path, "r") as f:
-        data = yaml.safe_load(f)
+    data = read_yaml(yaml_path)
     if verbose:
         print("Programs log:")
         startup_yaml_path = os.path.join(log_directory, "startup.yaml")
@@ -225,9 +239,9 @@ def main():
     print("Kernels:")
     for kernel in kernels:
         print(f"  {kernel.watcher_kernel_id}, pid {kernel.program_id}: {kernel.name} ({kernel.path})")
-    devices_in_use = get_devices_in_use(programs)
     print()
 
+    devices_in_use = get_devices_in_use(programs)
     print(f"Devices in use: {devices_in_use}")
     print()
 
