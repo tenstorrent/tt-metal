@@ -1965,6 +1965,8 @@ profile_a_b_shape_pairs = [
 )
 @pytest.mark.parametrize("a_and_b_shape", profile_a_b_shape_pairs)
 def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_config_input):
+    # Since we are going to validate cache entries, we need to clear the cache
+    device.disable_and_clear_program_cache()
     device.enable_program_cache()
     torch.manual_seed(0)
     a_shape, b_shape = a_and_b_shape

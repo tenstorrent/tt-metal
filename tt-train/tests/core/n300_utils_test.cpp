@@ -224,7 +224,6 @@ TEST_F(N300UtilsTest, DropoutDifferentSeed) {
     xt::random::seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
-    device->enable_program_cache();
     auto shapes = {std::vector<int>{64, 1, 256, 384}, std::vector<int>{1, 1, 32, 32}};
     for (auto& shape : shapes) {
         fmt::println("Testing shape: {}", shape);

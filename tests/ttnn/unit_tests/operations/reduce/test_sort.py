@@ -171,6 +171,8 @@ def test_sort_l1_memory_tensor(shape, dim, descending, device):
 )
 def test_sort_program_cache(shape, dim, descending, device):
     torch.manual_seed(0)
+    # Since we are going to validate cache entries, we need to clear the cache
+    device.disable_and_clear_program_cache()
     device.enable_program_cache()
 
     torch_dtype = torch.bfloat16
