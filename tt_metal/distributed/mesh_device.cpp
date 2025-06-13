@@ -488,7 +488,7 @@ bool MeshDevice::close() {
     // We skip dumping profile results for the parent mesh device because parent mesh devices don't
     // have any active mesh command queues.
     if (!this->is_parent_mesh()) {
-        DumpMeshDeviceProfileResults(*this, ProfilerDumpState::LAST_CLOSE_DEVICE);
+        DumpMeshDeviceProfileResults(*this);
     }
 
     // TODO #20966: Remove these calls
