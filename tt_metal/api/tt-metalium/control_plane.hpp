@@ -122,13 +122,6 @@ private:
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
 
-    // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
-    // is expected that any downed devices/links will result in some sort of error condition being
-    // reported. When set to false, the control plane is free to instantiate fewer routing planes
-    // according to which links are available.
-    tt_metal::FabricReliabilityMode system_setup_mode_ =
-        tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
-
     // custom logic to order eth channels
     void order_ethernet_channels();
 

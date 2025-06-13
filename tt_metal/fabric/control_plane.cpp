@@ -870,8 +870,6 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(tt_meta
     const auto& intra_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_intra_mesh_connectivity();
     const auto& inter_mesh_connectivity = this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity();
 
-    // this->initialize_dynamic_routing_plane_counts(intra_mesh_connectivity);
-
     auto add_ethernet_channel_to_router_mapping = [&](MeshId mesh_id,
                                                       chip_id_t chip_id,
                                                       const CoreCoord& eth_core,

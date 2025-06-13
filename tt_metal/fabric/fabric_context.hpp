@@ -26,7 +26,6 @@ public:
 
     tt::tt_fabric::Topology get_fabric_topology() const;
     tt::tt_metal::FabricConfig get_fabric_config() const { return fabric_config_; }
-    // tt::tt_metal::FabricReliabilityMode get_reliability_mode() const { return reliability_mode_; }
 
     size_t get_fabric_packet_header_size_bytes() const;
     size_t get_fabric_max_payload_size_bytes() const;

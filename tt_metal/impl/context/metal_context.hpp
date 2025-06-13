@@ -104,6 +104,11 @@ private:
     std::array<std::unique_ptr<DispatchMemMap>, magic_enum::enum_count<CoreType>()> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::GlobalControlPlane> global_control_plane_;
     tt_metal::FabricConfig fabric_config_ = tt_metal::FabricConfig::DISABLED;
+
+    // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
+    // is expected that any downed devices/links will result in some sort of error condition being
+    // reported. When set to false, the control plane is free to instantiate fewer routing planes
+    // according to which links are available.
     tt_metal::FabricReliabilityMode fabric_reliability_mode_ = tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
     uint8_t num_fabric_active_routing_planes_ = 0;
 };
