@@ -48,6 +48,7 @@ install(
         loopback
         shard_data_rm
         pad_multi_core
+        matmul_common
         matmul_multi_core
         matmul_multicore_reuse
         matmul_single_core
@@ -74,6 +75,7 @@ install(
         loopback
         shard_data_rm
         pad_multi_core
+        matmul_common
         matmul_multi_core
         matmul_multicore_reuse
         matmul_single_core
