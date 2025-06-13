@@ -373,13 +373,14 @@ class Generator:
             "kv_cache": kv_cache,
         }
         if enable_trace:
-            tt_logits = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs)
+            tt_logits, tt_tok = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs)
         else:
-            tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
-        if read_from_device:
-            tt_logits = self.read_decode_output(tt_logits, tokens.shape[0])
+            tt_logits, tt_tok = self._decode_forward_no_trace_text(**decode_kwargs)
 
-        return tt_logits
+        if read_from_device:
+            tt_tok = self.read_decode_output(tt_tok, tokens.shape[0])
+
+        return tt_logits, tt_tok
 
     def _decode_forward_no_trace_text(
         self,
@@ -395,15 +396,14 @@ class Generator:
         tt_tokens, tt_current_pos, rot_mat_idxs, tt_page_table = self.model.prepare_inputs_decode(
             tokens, current_pos, page_table
         )
-        tt_logits = self.model.ttnn_decode_forward(
+        tt_logits, tt_tok = self.model.ttnn_decode_forward(
             tt_tokens,
             tt_current_pos,
             rot_mat_idxs=rot_mat_idxs,
             page_table=tt_page_table,
             kv_cache=kv_cache,
         )
-
-        return tt_logits
+        return tt_logits, tt_tok
 
     def _capture_trace_text(
         self,
@@ -425,11 +425,11 @@ class Generator:
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        tt_out_trace = self.model.ttnn_decode_forward(*device_inputs, kv_cache=kv_cache)
+        tt_out_logits, tt_out_tok = self.model.ttnn_decode_forward(*device_inputs, kv_cache=kv_cache)
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
-        return trace_id, tt_out_trace, *device_inputs
+        return trace_id, tt_out_logits, tt_out_tok, *device_inputs
 
     def _decode_forward_trace_text(
         self,
@@ -459,20 +459,23 @@ class Generator:
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
         tokens = tokens.view(-1, 1)
+        trace_logits_rm = None
         if not hasattr(self, "trace_id_text"):
-            trace_id, tt_out_trace, *device_inputs = self._capture_trace_text(
+            trace_id, tt_out_trace, tt_out_tok, *device_inputs = self._capture_trace_text(
                 tokens, current_pos, page_table=page_table, kv_cache=kv_cache
             )
             self.trace_id_text = trace_id
             self.trace_inputs_text = device_inputs
-            self.trace_output_text = tt_out_trace
+            self.trace_output_text = tt_out_tok
+            trace_logits_rm = tt_out_trace
         if reset_inputs:
             host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
             device_inputs = copy_host_to_device(
                 host_tensors=host_inputs,
                 device_tensors=self.trace_inputs_text,
             )
-        trace_logits_rm = self._decode_forward_trace_text(
+
+        trace_tok_rm = self._decode_forward_trace_text(
             self.trace_id_text,
             self.trace_inputs_text,
             self.trace_output_text,
@@ -480,11 +483,10 @@ class Generator:
             current_pos,
             page_table=page_table,
         )
-
-        return trace_logits_rm
+        return trace_tok_rm, trace_logits_rm
 
     def read_decode_output(self, tt_logits, unpadded_batch, is_tokens=True):
-        logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1)
+        logits = self.model.process_output_decode(tt_logits)
         if self.perm_table_tensor is not None:
             logits = logits[self.perm_table_tensor]
         return logits
