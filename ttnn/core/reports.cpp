@@ -144,6 +144,17 @@ std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::dis
                                 uint32_t device_page =
                                     core_page_mapping.start_page + host_range.device_page_offset + page_idx;
                                 auto page_address = buffer->address() + device_page * buffer->aligned_page_size();
+                                buffer_page_infos.push_back(BufferPageInfo{
+                                    .device_id = device_id,
+                                    .address = address,
+                                    .core_y = core.y,
+                                    .core_x = core.x,
+                                    .bank_id = bank_id,
+                                    .page_index = host_page,
+                                    .page_address = page_address,
+                                    .page_size = page_size,
+                                    .buffer_type = buffer_type,
+                                });
                             }
                         }
                     }
