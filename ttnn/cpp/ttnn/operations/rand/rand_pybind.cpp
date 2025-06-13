@@ -11,7 +11,20 @@ namespace ttnn::operations::rand {
 void bind_rand_operation(py::module& pymodule) {
     std::string doc =
         R"doc(
-        Generates a tensor with the given shape, filled with random values from a uniform distribution over [0, 1).
+        Generates a tensor with the given shape, filled with random values from a uniform distribution.
+        based on the specified data type:
+
+        - DataType.uint8 / uint16 / uint32:
+            Integer values: 0 or 1
+
+        - DataType.float32 / bfloat16:
+            Floating-point values in range [0.0, 1.0)
+
+        - DataType.int32:
+            Integer values: -1, 0, 1
+
+        - DataType.bfloat4_b / bfloat8_b:
+            Not supported for uniform random generation.
 
         Args:
             size (list[int]) - a list of integers defining the shape of the output tensor.
