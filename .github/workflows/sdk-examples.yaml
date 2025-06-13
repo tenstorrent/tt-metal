@@ -55,23 +55,51 @@ jobs:
           set -euo pipefail
           for example in /usr/share/${{ inputs.product }}/examples/*; do
             [ -f "$example/CMakeLists.txt" ] || continue
-            example_name=$(basename "$example")
-            # Wouldn't it be nice if we could have nested groups?
-            # Yeah, others thought so, too. https://github.com/actions/toolkit/issues/1001
-            echo "::group::${example_name} - build"
-            cd `mktemp -d`
-            cmake -G Ninja -S "$example" -B .
-            cmake --build .
-            echo "::endgroup::"
 
-            echo "::group::${example_name} - run"
-            # Find and run the built executable
-            exec_path=$(find . -maxdepth 1 -type f -executable -not -name "*.so")
-            [ "$(echo "$exec_path" | wc -l)" -eq 1 ] || {
-              echo "Expected exactly one executable, found: $(echo "$exec_path" | wc -l)" >&2
-              echo "$exec_path" >&2
-              exit 1
-            }
-            "$exec_path"
-            echo "::endgroup::"
+            # Check if this is a parent directory (no kernels folder)
+            if [ ! -d "$example/kernels" ]; then
+              # This is a parent directory, look for subdirectories
+              for subdir in "$example"/*; do
+                [ -f "$subdir/CMakeLists.txt" ] || continue
+                example_name=$(basename "$subdir")
+                # Wouldn't it be nice if we could have nested groups?
+                # Yeah, others thought so, too. https://github.com/actions/toolkit/issues/1001
+                echo "::group::${example_name} - build"
+                cd `mktemp -d`
+                cmake -G Ninja -S "$subdir" -B .
+                cmake --build .
+                echo "::endgroup::"
+
+                echo "::group::${example_name} - run"
+                # Find and run the built executable
+                exec_path=$(find . -maxdepth 1 -type f -executable -not -name "*.so")
+                [ "$(echo "$exec_path" | wc -l)" -eq 1 ] || {
+                  echo "Expected exactly one executable, found: $(echo "$exec_path" | wc -l)" >&2
+                  echo "$exec_path" >&2
+                  exit 1
+                }
+                "$exec_path"
+                echo "::endgroup::"
+              done
+            else
+              example_name=$(basename "$example")
+              # Wouldn't it be nice if we could have nested groups?
+              # Yeah, others thought so, too. https://github.com/actions/toolkit/issues/1001
+              echo "::group::${example_name} - build"
+              cd `mktemp -d`
+              cmake -G Ninja -S "$example" -B .
+              cmake --build .
+              echo "::endgroup::"
+
+              echo "::group::${example_name} - run"
+              # Find and run the built executable
+              exec_path=$(find . -maxdepth 1 -type f -executable -not -name "*.so")
+              [ "$(echo "$exec_path" | wc -l)" -eq 1 ] || {
+                echo "Expected exactly one executable, found: $(echo "$exec_path" | wc -l)" >&2
+                echo "$exec_path" >&2
+                exit 1
+              }
+              "$exec_path"
+              echo "::endgroup::"
+            fi
           done

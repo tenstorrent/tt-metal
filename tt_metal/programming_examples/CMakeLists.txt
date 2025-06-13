@@ -40,6 +40,7 @@ install(
     DIRECTORY
         add_2_integers_in_compute
         add_2_integers_in_riscv
+        contributed
         eltwise_binary
         eltwise_sfpu
         hello_world_compute_kernel
@@ -47,7 +48,6 @@ install(
         hello_world_datatypes_kernel
         loopback
         shard_data_rm
-        pad_multi_core
         matmul_common
         matmul_multi_core
         matmul_multicore_reuse
@@ -67,6 +67,7 @@ install(
     DIRECTORY
         add_2_integers_in_compute
         add_2_integers_in_riscv
+        contributed
         eltwise_binary
         eltwise_sfpu
         hello_world_compute_kernel
@@ -74,7 +75,6 @@ install(
         hello_world_datatypes_kernel
         loopback
         shard_data_rm
-        pad_multi_core
         matmul_common
         matmul_multi_core
         matmul_multicore_reuse

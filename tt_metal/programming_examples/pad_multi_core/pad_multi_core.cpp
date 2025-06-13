@@ -60,9 +60,6 @@ int main() {
 
     // configure and create DRAM buffers for input, pad, output
     uint32_t src_buffer_size = packed_data_size * src_num_values_packed;
-    if (src_buffer_size % dram_page_size != 0) {
-        src_buffer_size += dram_page_size - (src_buffer_size % dram_page_size);
-    }
 
     tt_metal::InterleavedBufferConfig input_dram_config{
         .device = device,
@@ -72,7 +69,7 @@ int main() {
     std::shared_ptr<tt::tt_metal::Buffer> src_buffer = CreateBuffer(input_dram_config);
     uint32_t src_addr = src_buffer->address();
 
-    uint32_t pad_buffer_size = dram_page_size;
+    uint32_t pad_buffer_size = packed_data_size * pad_vec.size();
     tt_metal::InterleavedBufferConfig pad_dram_config{
         .device = device,
         .size = pad_buffer_size,
@@ -82,9 +79,6 @@ int main() {
     uint32_t pad_addr = pad_buffer->address();
 
     uint32_t dst_buffer_size = packed_data_size * dst_num_values_packed;
-    if (dst_buffer_size % dram_page_size != 0) {
-        dst_buffer_size += dram_page_size - (dst_buffer_size % dram_page_size);
-    }
 
     tt_metal::InterleavedBufferConfig output_dram_config{
         .device = device,
