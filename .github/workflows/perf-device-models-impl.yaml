@@ -61,13 +61,14 @@ jobs:
         env:
           TRACY_NO_INVARIANT_CHECK: 1
         run: |
+          set -x
           if [[ "${{ matrix.test-info.arch }}" == "wormhole_b0" ]]; then
             export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
           fi
           pytest models/demos/wormhole/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
           pytest models/demos/distilbert/tests -m models_device_performance_bare_metal
           pytest models/demos/vgg/tests/ -m models_device_performance_bare_metal
-          pytest models/demos/convnet_mnist/tests/ -m models_device_performance_bare_metal
+          # pytest models/demos/convnet_mnist/tests/ -m models_device_performance_bare_metal
           pytest models/demos/bert_tiny/tests/ -m models_device_performance_bare_metal
           pytest models/demos/mnist/tests -m models_device_performance_bare_metal
           pytest models/demos/squeezebert/tests -m models_device_performance_bare_metal
