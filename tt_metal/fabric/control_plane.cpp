@@ -87,10 +87,14 @@ bool is_chip_on_corner_of_mesh(
 }
 
 template <typename CONNECTIVITY_MAP_T>
-static void build_golden_link_counts_impl(
+static void build_golden_link_counts(
     CONNECTIVITY_MAP_T const& golden_connectivity_map,
     std::unordered_map<MeshId, std::unordered_map<chip_id_t, std::unordered_map<RoutingDirection, size_t>>>&
         golden_link_counts_out) {
+    static_assert(
+        std::is_same_v<CONNECTIVITY_MAP_T, IntraMeshConnectivity> ||
+            std::is_same_v<CONNECTIVITY_MAP_T, InterMeshConnectivity>,
+        "Invalid connectivity map type");
     for (std::uint32_t mesh_id = 0; mesh_id < golden_connectivity_map.size(); mesh_id++) {
         for (std::uint32_t chip_id = 0; chip_id < golden_connectivity_map[mesh_id].size(); chip_id++) {
             for (const auto& [remote_connected_id, router_edge] : golden_connectivity_map[mesh_id][chip_id]) {
@@ -104,20 +108,6 @@ static void build_golden_link_counts_impl(
             }
         }
     }
-};
-
-static void build_golden_link_counts(
-    const IntraMeshConnectivity& golden_intramesh_connectivity,
-    std::unordered_map<MeshId, std::unordered_map<chip_id_t, std::unordered_map<RoutingDirection, size_t>>>&
-        golden_link_counts_out) {
-    build_golden_link_counts_impl(golden_intramesh_connectivity, golden_link_counts_out);
-};
-
-static void build_golden_link_counts(
-    const InterMeshConnectivity& golden_intermesh_connectivity,
-    std::unordered_map<MeshId, std::unordered_map<chip_id_t, std::unordered_map<RoutingDirection, size_t>>>&
-        golden_link_counts_out) {
-    build_golden_link_counts_impl(golden_intermesh_connectivity, golden_link_counts_out);
 };
 
 void ControlPlane::initialize_dynamic_routing_plane_counts(
