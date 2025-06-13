@@ -365,7 +365,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     }
 
     uint32_t clear_value_cb_id = 32;
-    if (max_rows_for_reduction == tt::constants::TILE_HEIGHT || is_large_kernel) {
+    if (max_rows_for_reduction == tt::constants::TILE_HEIGHT || is_large_kernel ||
+        (is_wide_reduction && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0)) {
         // CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
         // is needed only if we use more then 16 sticks per tile for reduction
         // or if we use large kernel size.
