@@ -11,6 +11,8 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/bind_vector.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn-nanobind/export_enum.hpp"

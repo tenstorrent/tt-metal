@@ -17,12 +17,9 @@ namespace ttnn::operations::trace {
 void py_module_types(nb::module_& mod) {
     nb::class_<ttnn::MeshTraceId>(mod, "MeshTraceId")
         .def(nb::init<uint32_t>())
-        .def("__int__", [](const ttnn::MeshTraceId& self) { return static_cast<int>(*self); })
+        .def("__int__", [](const ttnn::MeshTraceId& self) { return self.get(); })
         .def(
-            "__repr__",
-            [](const ttnn::MeshTraceId& self) {
-                return "MeshTraceId(" + std::to_string(static_cast<int>(*self)) + ")";
-            })
+            "__repr__", [](const ttnn::MeshTraceId& self) { return "MeshTraceId(" + std::to_string(self.get()) + ")"; })
         .def(nb::self == nb::self);
 }
 

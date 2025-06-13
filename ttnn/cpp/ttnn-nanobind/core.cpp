@@ -16,16 +16,16 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
-
 #include <reflect>
 
-#include "ttnn/core.hpp"
 #include "tt-metalium/lightmetal_binary.hpp"
 #include "tt-metalium/lightmetal_replay.hpp"
 #include "tt-metalium/mesh_device.hpp"
+#include "ttnn-nanobind/nanobind_helpers.hpp"
+#include "ttnn/config.hpp"
+#include "ttnn/core.hpp"
 
 namespace ttnn::core {
-
 
 void py_module_types(nb::module_& mod) {
     nb::class_<ttnn::Config>(mod, "Config");
@@ -43,9 +43,7 @@ void py_module(nb::module_& mod) {
         });
     reflect::for_each<ttnn::Config::attributes_t>([&py_config](auto I) {
         py_config.def_prop_rw(
-            std::string{reflect::member_name<I, ttnn::Config::attributes_t>()}.c_str(),
-            &ttnn::Config::get<I>,
-            &ttnn::Config::set<I>);
+            reflect::member_name<I, ttnn::Config::attributes_t>().data(), &ttnn::Config::get<I>, &ttnn::Config::set<I>);
     });
     py_config.def_prop_ro("report_path", &ttnn::Config::get<"report_path">);
 
@@ -64,7 +62,7 @@ void py_module(nb::module_& mod) {
         .def_static(
             "create",
             [](LightMetalBinary binary, distributed::MeshDevice* device = nullptr) {
-                return std::make_unique<tt::tt_metal::LightMetalReplay>(std::move(binary), device);
+                return nbh::make_unique<tt::tt_metal::LightMetalReplay>(std::move(binary), device);
             },
             nb::arg("binary"),
             nb::arg("device") = nullptr)

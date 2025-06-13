@@ -71,45 +71,29 @@ struct DataTypeToFormatType {
 //     using type = uint16_t;
 // };
 
-template <class CppType>
-void implement_buffer_protocol(nb::module_& m_tensor, std::string_view name) {
-    auto py_buffer_t = static_cast<nb::class_<CppType>>(m_tensor.attr(name.data()));
-    using DataType = typename CppType::value_type;
-
-    py_buffer_t.def("__getitem__", [](const CppType& self, std::size_t index) { return self[index]; })
-        .def("__len__", [](const CppType& self) { return self.size(); })
-        .def(
-            "__iter__",
-            [](const CppType& self) {
-                return nb::make_iterator(nb::type<py_buffer_t>(), "iterator", self.begin(), self.end());
-            },
-            nb::keep_alive<0, 1>())
-        //.def_buffer([](CppType& self) -> nb::buffer_info {
-        //    using FormatType = typename DataTypeToFormatType<DataType>::type;
-        //    return nb::buffer_info(
-        //        self.begin(),                                /* Pointer to buffer */
-        //        sizeof(DataType),                            /* Size of one scalar */
-        //        nb::format_descriptor<FormatType>::format(), /* Python struct-style format descriptor */
-        //        1,                                           /* Number of dimensions */
-        //        {self.size()},                               /* Buffer dimensions */
-        //        {sizeof(DataType)}                           /* Strides (in bytes) for each index */
-        //    );
-        //})
-        //.def(
-        ;
-
-    // def_buffer removed in nanobind. use nb::ndarray instead
-    // note: ndarray has several gotchas. See for more information:
-    // https://github.com/wjakob/nanobind/blob/master/docs/ndarray.rst
-};
-
 }  // namespace detail
 
 void tensor_mem_config_module_types(nb::module_& m_tensor) {
     export_enum<Layout>(m_tensor);
     export_enum<DataType>(m_tensor);
     export_enum<StorageType>(m_tensor);
-    export_enum<MathFidelity>(m_tensor);
+    // export_enum<MathFidelity>(m_tensor);
+
+    // for whatever reason using magic_enum for this in particular just threw
+    // std::bad_cast errors in the binding code when trying to import ttnn
+    // in python. It threw the error in ttnn-nanobind/operations/core.cpp
+    // when setting a default arg to MathFidelity::Invalid.
+    // The problem went away locally when I did this manually.
+    // Why? I have no idea. There might be some UB buried in export_enum
+    // or magic_enum.
+    nb::enum_<MathFidelity>(m_tensor, "MathFidelity")
+        .value("LoFi", MathFidelity::LoFi)
+        .value("HiFi2", MathFidelity::HiFi2)
+        .value("HiFi3", MathFidelity::HiFi3)
+        .value("HiFi4", MathFidelity::HiFi4)
+        .value("Invalid", MathFidelity::Invalid)
+        .export_values();
+
     export_enum<TensorMemoryLayout>(m_tensor);
     export_enum<ShardOrientation>(m_tensor);
     export_enum<ShardMode>(m_tensor);
@@ -157,6 +141,9 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
 
     // nb::ndarray<uint8_t, nb::shape<-1>, nb::device::cpu, nb::c_contig>
 
+    // def_buffer removed in nanobind. use nb::ndarray instead
+    // note: ndarray has several gotchas. See for more information:
+    // https://github.com/wjakob/nanobind/blob/master/docs/ndarray.rst
     nb::class_<tt::tt_metal::HostBuffer>(m_tensor, "HostBuffer")
         .def("__getitem__", [](const HostBuffer& self, std::size_t index) { return self.view_bytes()[index]; })
         .def("__len__", [](const HostBuffer& self) { return self.view_bytes().size(); })
@@ -170,26 +157,6 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
                     self.view_bytes().end());
             },
             nb::keep_alive<0, 1>());
-    /*
-        nb::class_<tt::tt_metal::owned_buffer::Buffer<uint8_t>>(m_tensor, "owned_buffer_for_uint8_t",
-       nb::buffer_protocol()); nb::class_<tt::tt_metal::owned_buffer::Buffer<uint16_t>>(m_tensor,
-       "owned_buffer_for_uint16_t", nb::buffer_protocol());
-        nb::class_<tt::tt_metal::owned_buffer::Buffer<int32_t>>(m_tensor, "owned_buffer_for_int32_t",
-       nb::buffer_protocol()); nb::class_<tt::tt_metal::owned_buffer::Buffer<uint32_t>>(m_tensor,
-       "owned_buffer_for_uint32_t", nb::buffer_protocol());
-        nb::class_<tt::tt_metal::owned_buffer::Buffer<float>>(m_tensor, "owned_buffer_for_float32_t",
-       nb::buffer_protocol()); nb::class_<tt::tt_metal::owned_buffer::Buffer<::bfloat16>>(m_tensor,
-       "owned_buffer_for_bfloat16_t", nb::buffer_protocol());
-        nb::class_<tt::tt_metal::borrowed_buffer::Buffer<std::uint8_t>>(m_tensor, "borrowed_buffer_for_uint8_t",
-       nb::buffer_protocol()); nb::class_<tt::tt_metal::borrowed_buffer::Buffer<std::uint16_t>>(m_tensor,
-       "borrowed_buffer_for_uint16_t", nb::buffer_protocol());
-        nb::class_<tt::tt_metal::borrowed_buffer::Buffer<std::int32_t>>(m_tensor, "borrowed_buffer_for_int32_t",
-       nb::buffer_protocol()); nb::class_<tt::tt_metal::borrowed_buffer::Buffer<std::uint32_t>>(m_tensor,
-       "borrowed_buffer_for_uint32_t", nb::buffer_protocol());
-        nb::class_<tt::tt_metal::borrowed_buffer::Buffer<float>>(m_tensor, "borrowed_buffer_for_float32_t",
-       nb::buffer_protocol()); nb::class_<tt::tt_metal::borrowed_buffer::Buffer<::bfloat16>>(m_tensor,
-       "borrowed_buffer_for_bfloat16_t", nb::buffer_protocol());
-    */
 }
 
 void tensor_mem_config_module(nb::module_& m_tensor) {
@@ -240,7 +207,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                TensorMemoryLayout memory_layout,
                BufferType buffer_type,
                std::optional<ShardSpec> shard_spec) {
-                new (t) MemoryConfig{memory_layout, buffer_type, std::move(shard_spec)};
+                new (t) MemoryConfig(memory_layout, buffer_type, std::move(shard_spec));
             },
             nb::arg("memory_layout") = TensorMemoryLayout::INTERLEAVED,
             nb::arg("buffer_type") = BufferType::DRAM,
@@ -259,7 +226,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
         .def(
             "__init__",
             [](MemoryConfig* t, BufferType buffer_type, NdShardSpec nd_shard_spec) {
-                new (t) MemoryConfig{buffer_type, std::move(nd_shard_spec)};
+                new (t) MemoryConfig(buffer_type, std::move(nd_shard_spec));
             },
             nb::arg("buffer_type"),
             nb::arg("nd_shard_spec"),
@@ -391,32 +358,6 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             "num_cores", [](const NdShardSpec& self) { return self.grid.num_cores(); }, "Number of cores")
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);
-    /*
-        detail::implement_buffer_protocol<tt::tt_metal::owned_buffer::Buffer<uint8_t>>(m_tensor,
-       "owned_buffer_for_uint8_t");
-        detail::implement_buffer_protocol<tt::tt_metal::owned_buffer::Buffer<uint16_t>>(m_tensor,
-       "owned_buffer_for_uint16_t");
-        detail::implement_buffer_protocol<tt::tt_metal::owned_buffer::Buffer<int32_t>>(m_tensor,
-       "owned_buffer_for_int32_t");
-        detail::implement_buffer_protocol<tt::tt_metal::owned_buffer::Buffer<uint32_t>>(m_tensor,
-       "owned_buffer_for_uint32_t");
-        detail::implement_buffer_protocol<tt::tt_metal::owned_buffer::Buffer<float>>(m_tensor,
-       "owned_buffer_for_float32_t");
-        detail::implement_buffer_protocol<tt::tt_metal::owned_buffer::Buffer<::bfloat16>>(m_tensor,
-       "owned_buffer_for_bfloat16_t");
-        detail::implement_buffer_protocol<tt::tt_metal::borrowed_buffer::Buffer<std::uint8_t>>(m_tensor,
-       "borrowed_buffer_for_uint8_t");
-        detail::implement_buffer_protocol<tt::tt_metal::borrowed_buffer::Buffer<std::uint16_t>>(m_tensor,
-       "borrowed_buffer_for_uint16_t");
-        detail::implement_buffer_protocol<tt::tt_metal::borrowed_buffer::Buffer<std::int32_t>>(m_tensor,
-       "borrowed_buffer_for_int32_t");
-        detail::implement_buffer_protocol<tt::tt_metal::borrowed_buffer::Buffer<std::uint32_t>>(m_tensor,
-       "borrowed_buffer_for_uint32_t");
-        detail::implement_buffer_protocol<tt::tt_metal::borrowed_buffer::Buffer<float>>(m_tensor,
-       "borrowed_buffer_for_float32_t");
-        detail::implement_buffer_protocol<tt::tt_metal::borrowed_buffer::Buffer<::bfloat16>>(m_tensor,
-       "borrowed_buffer_for_bfloat16_t");
-    */
 
     m_tensor.def(
         "dump_tensor",
@@ -427,14 +368,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
         R"doc(
             Dump tensor to file
         )doc");
-    /*
-        m_tensor.def(
-            "load_tensor",
-            nb::overload_cast<const std::string&, IDevice*>(&load_tensor),
-            nb::arg("file_name"),
-            nb::arg("device") = nullptr,
-            R"doc(Load tensor to file)doc");
-    */
+
     m_tensor.def(
         "load_tensor",
         nb::overload_cast<const std::string&, MeshDevice*>(&load_tensor),

@@ -25,8 +25,8 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn-nanobind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "tools/profiler/op_profiler.hpp"
+#include "ttnn-nanobind/small_vector_caster.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include <tt-metalium/device.hpp>
@@ -157,9 +157,7 @@ void device_module(nb::module_& m_device) {
             R"doc(
             Creates a SubDeviceId object with the given ID.
         )doc")
-        .def(
-            "__repr__",
-            [](const SubDeviceId& self) { return "SubDeviceId(" + std::to_string(static_cast<int>(*self)) + ")"; })
+        .def("__repr__", [](const SubDeviceId& self) { return "SubDeviceId(" + std::to_string(self.get()) + ")"; })
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);
 
