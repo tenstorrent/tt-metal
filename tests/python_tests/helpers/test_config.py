@@ -10,13 +10,6 @@ from .format_arg_mapping import (
     MathOperation,
     ReduceDimension,
     ReducePool,
-    math_dict,
-    pack_dst_dict,
-    pack_src_dict,
-    unpack_A_dst_dict,
-    unpack_A_src_dict,
-    unpack_B_dst_dict,
-    unpack_B_src_dict,
 )
 from .format_config import InputOutputFormat
 
@@ -58,6 +51,8 @@ def generate_build_header(
         "// SPDX-License-Identifier: Apache-2.0",
         "// AUTO-GENERATED CONFIGURATION HEADER. DO NOT EDIT MANUALLY!",
         "",
+        '#include "tensix_types.h"',
+        "#include <type_traits>",
         "#pragma once",
         "",
         "// Basic configuration",
@@ -89,18 +84,25 @@ def generate_build_header(
     header_content.extend(["", "// Data format configuration"])
     formats = test_config.get("formats")
     if isinstance(formats, InputOutputFormat):
-        header_content.append(f"#define {unpack_A_src_dict[formats.input_format]}")
-        header_content.append(f"#define {pack_dst_dict[formats.output_format]}")
-    else:
         header_content.extend(
             [
-                f"#define {unpack_A_src_dict[formats.unpack_A_src]}",
-                f"#define {unpack_A_dst_dict[formats.unpack_A_dst]}",
-                f"#define {unpack_B_src_dict[formats.unpack_B_src]}",
-                f"#define {unpack_B_dst_dict[formats.unpack_B_dst]}",
-                f"#define {math_dict[formats.math]}",
-                f"#define {pack_src_dict[formats.pack_src]}",
-                f"#define {pack_dst_dict[formats.pack_dst]}",
+                f"// Activating Data Format Inference Model\n",
+                f"#define DATA_FORMAT_INFERENCE_MODEL true",
+                f"constexpr auto UNPACK_A_IN = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats.input_format.name});",
+                f"constexpr auto PACK_OUT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats.output_format.name});",
+            ]
+        )
+    else:
+        header_content.append(f"#define DATA_FORMAT_INFERENCE_MODEL false")
+        header_content.extend(
+            [
+                f"constexpr auto UNPACK_A_IN = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats.unpack_A_src.name});",
+                f"constexpr auto UNPACK_A_OUT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats.unpack_A_dst.name});",
+                f"constexpr auto UNPACK_B_IN = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats.unpack_B_src.name});",
+                f"constexpr auto UNPACK_B_OUT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats.unpack_B_dst.name});",
+                f"constexpr auto PACK_IN = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats.pack_src.name});",
+                f"constexpr auto PACK_OUT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats.pack_dst.name});",
+                f"constexpr auto MATH_FORMAT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats.math.name});",
             ]
         )
 
