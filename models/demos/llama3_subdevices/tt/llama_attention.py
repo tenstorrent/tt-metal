@@ -375,7 +375,6 @@ class TtLlamaAttention(LightweightModule):
         #     attn_output_1G4D_sharded,
         # )
         # ttnn.deallocate(attn_output_1G4D_sharded)
-        breakpoint()
         attn_output_cat = self.tt_ccl.all_gather_concat(
             attn_output_1G4D_sharded,
             dim=1,
@@ -384,6 +383,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"],
             num_heads=self.n_local_heads,
         )
+        ttnn.deallocate(attn_output_1G4D_sharded)
         # print("done concat heads")
 
         # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
