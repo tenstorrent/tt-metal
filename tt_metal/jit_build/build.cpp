@@ -523,7 +523,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
             this->cflags_ = env_.cflags_ + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
 
             this->defines_ +=
-                "-DCOMPILE_FOR_AERISC "
+                "-DCOMPILE_FOR_AERISC=0 "
                 "-DCOMPILE_FOR_ERISC "  // Used for eth dataflow api
                 "-DERISC "
                 "-DRISC_B0_HW ";
@@ -593,7 +593,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
             this->target_name_ = "subordinate_active_erisc";
             this->cflags_ = env_.cflags_ + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
             this->defines_ +=
-                "-DCOMPILE_FOR_AERISC "
+                "-DCOMPILE_FOR_AERISC=1 "
                 "-DCOMPILE_FOR_ERISC "  // Used for eth dataflow api
                 "-DERISC "
                 "-DRISC_B0_HW "

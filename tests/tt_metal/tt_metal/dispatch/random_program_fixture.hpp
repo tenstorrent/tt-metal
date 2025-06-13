@@ -5,6 +5,7 @@
 #pragma once
 
 #include "command_queue_fixture.hpp"
+#include "data_types.hpp"
 #include "env_lib.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -256,12 +257,13 @@ private:
             {"KERNEL_RUNTIME_MICROSECONDS", std::to_string(kernel_runtime_microseconds)}};
 
         std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> config;
+        DataMovementProcessor processor = this->get_processor();
         if (create_eth_config) {
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::ACTIVE_ETH));
-            config = EthernetConfig{.compile_args = compile_args, .defines = defines};
+            config = EthernetConfig{.processor = processor, .compile_args = compile_args, .defines = defines};
+            log_info(tt::LogTest, "Random ethernet kernel created on DM{}", processor);
         } else {
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
-            DataMovementProcessor processor = this->get_processor();
             config = DataMovementConfig{.processor = processor, .compile_args = compile_args, .defines = defines};
         }
 

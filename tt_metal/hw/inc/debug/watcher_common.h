@@ -26,10 +26,12 @@ inline uint32_t debug_get_which_riscv() {
     return DebugBrisc;
 #elif defined(COMPILE_FOR_NCRISC)
     return DebugNCrisc;
-#elif defined(COMPILE_FOR_ERISC)
+#elif defined(COMPILE_FOR_AERISC)
     return DebugErisc;
 #elif defined(COMPILE_FOR_IDLE_ERISC)
     return DebugIErisc;
+#elif defined(COMPILE_FOR_ERISC)
+    return DebugErisc;
 #else
     return DebugTrisc0 + COMPILE_FOR_TRISC;
 #endif
