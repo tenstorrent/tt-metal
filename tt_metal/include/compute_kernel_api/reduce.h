@@ -17,7 +17,9 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Performs the necessary hardware and software initialization for reduce operation. Needs to be called before reduce_tile.
+ * Performs the necessary hardware and software initialization for reduce operation for provided circular buffer identifiers (CB IDs). In order for reduce
+ * operation to be performed, this function call must be followed by a call to `reduce_tile` or `reduce_tile_math`.
+ * If another reduce op is needed which uses different CB IDs, then another reduce_init needs to be called as a part of that reduce operation.
  *
  * The `icb1` circular buffer must contain the scaling factors for the reduction:
  * - If `reduce_type = SUM`, all scaling factors should be 1.
@@ -45,7 +47,9 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb1, uint32_t ocb) {
 // clang-format off
 /**
  * Reverts the packer edge mask configuration to its default state by clearing any previously set masks. Needed to be called after
- * reduce op to reset the packer state to default.
+ * reduce op to reset the packer state to default. If this function is not called, the packer will continue to use the edge masks
+ * set by the reduce operation, which may lead to incorrect packing behavior in subsequent operations.
+ * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025.
  *
  * | Param Type | Name | Description                                      | Type | Valid Range | Required |
  * |------------|------|--------------------------------------------------|------|-------------|----------|

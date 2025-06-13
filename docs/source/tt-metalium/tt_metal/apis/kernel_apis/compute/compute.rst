@@ -1,6 +1,8 @@
 Compute APIs
 ============
 
+This page will soon contain the summary of tt-metal concepts relevant for the usage of Compute API.
+
 .. toctree::
 
   copy_tile
