@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
@@ -72,7 +73,7 @@ void kernel_main() {
     for (uint32_t i = start_id; i < end_id; ++i) {
         // loop from n_start to n_end
         uint32_t n_start = i * TILE_HEIGHT;
-        uint32_t n_end = min(i * TILE_HEIGHT + TILE_HEIGHT, N);
+        uint32_t n_end = std::min(i * TILE_HEIGHT + TILE_HEIGHT, N);
         uint32_t nt = i;
 
         // target: (1, N)
