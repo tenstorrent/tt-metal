@@ -29,6 +29,7 @@ constexpr bool dynamic_alternate = get_compile_time_arg_val(8);
 constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
 constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
 constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
+constexpr bool packet_scatter = true;
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -90,35 +91,70 @@ void kernel_main() {
     uint32_t shard_tile_id = first_core_tile_start_offset;
     uint32_t core_id = 0;
     while (tiles_read < num_tiles_to_read) {
-        uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
-        num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
-        cb_wait_front(cb0_id, num_tiles_to_read_this_core);
-        size_t l1_read_addr = get_read_ptr(cb0_id);
+        if constexpr (packet_scatter) {
+            uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
+            num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
 
-        uint64_t noc0_dest_noc_addr =
-            get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0 /*noc_id*/);
-        noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
+            uint32_t num_tiles_to_read_next_core =
+                std::min(num_tiles_per_core, packet_size_in_pages - num_tiles_to_read_this_core);
+            num_tiles_to_read_next_core =
+                std::min(num_tiles_to_read - tiles_read - num_tiles_to_read_this_core, num_tiles_to_read_next_core);
 
-        // This issues a flush barrier
-        write_and_advance_local_read_address_for_fabric_write(
-            noc0_dest_noc_addr,
-            pkt_hdr_forward,
-            pkt_hdr_backward,
-            fabric_connection,
-            l1_read_addr,
-            num_tiles_to_read_this_core * tensor0_page_size);
-        if constexpr (dynamic_alternate) {
-            std::swap(
-                pkt_hdr_forward->routing_fields.value,
-                pkt_hdr_backward->routing_fields.value);  // alternate the packet header distance for better balancing
-        }
+            cb_wait_front(cb0_id, num_tiles_to_read_this_core + num_tiles_to_read_next_core);
+            size_t l1_read_addr = get_read_ptr(cb0_id);
 
-        cb_pop_front(cb0_id, num_tiles_to_read_this_core);
-        tiles_read += num_tiles_to_read_this_core;
-        shard_tile_id += num_tiles_to_read_this_core;
-        if (shard_tile_id >= num_tiles_per_core) {
-            shard_tile_id = 0;
-            core_id++;
+            uint64_t noc0_dest_noc_addr =
+                get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0 /*noc_id*/);
+            noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
+            uint64_t noc0_dest_noc_addr_next_core = noc0_dest_noc_addr;
+            if (num_tiles_to_read_next_core > 0) {
+                noc0_dest_noc_addr_next_core =
+                    get_noc_addr(core_noc_x[core_id + 1], core_noc_y[core_id + 1], tensor_address0, 0 /*noc_id*/);
+            }
+
+            // call function to write to fabric
+
+            cb_pop_front(cb0_id, num_tiles_to_read_this_core);
+            tiles_read += num_tiles_to_read_this_core;
+            shard_tile_id += num_tiles_to_read_this_core;
+            if (shard_tile_id >= num_tiles_per_core) {
+                shard_tile_id = 0;
+                core_id++;
+            }
+
+        } else {  // old style that sends partial packets that's smaller than 4K as 1 core might take 2-2-1 packets(in
+                  // tiles)
+            uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
+            num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
+            cb_wait_front(cb0_id, num_tiles_to_read_this_core);
+            size_t l1_read_addr = get_read_ptr(cb0_id);
+
+            uint64_t noc0_dest_noc_addr =
+                get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0 /*noc_id*/);
+            noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
+
+            // This issues a flush barrier
+            write_and_advance_local_read_address_for_fabric_write(
+                noc0_dest_noc_addr,
+                pkt_hdr_forward,
+                pkt_hdr_backward,
+                fabric_connection,
+                l1_read_addr,
+                num_tiles_to_read_this_core * tensor0_page_size);
+            if constexpr (dynamic_alternate) {
+                std::swap(
+                    pkt_hdr_forward->routing_fields.value,
+                    pkt_hdr_backward->routing_fields
+                        .value);  // alternate the packet header distance for better balancing
+            }
+
+            cb_pop_front(cb0_id, num_tiles_to_read_this_core);
+            tiles_read += num_tiles_to_read_this_core;
+            shard_tile_id += num_tiles_to_read_this_core;
+            if (shard_tile_id >= num_tiles_per_core) {
+                shard_tile_id = 0;
+                core_id++;
+            }
         }
     }
 
