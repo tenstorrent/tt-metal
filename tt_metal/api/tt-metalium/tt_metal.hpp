@@ -28,6 +28,7 @@
 namespace tt {
 namespace tt_metal {
 enum class FabricConfig : uint32_t;
+enum class FabricReliabilityMode : uint32_t;
 }  // namespace tt_metal
 }  // namespace tt
 
@@ -55,7 +56,7 @@ bool DispatchStateCheck(bool isFastDispatch);
  * | fabric_config      | Fabric config to set                | FabricConfig      |             | Yes      |
  * | num_routing_planes | Number of routing planes for fabric | optional<uint8_t> |             | No       |
  */
-void SetFabricConfig(FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
+void SetFabricConfig(FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt, FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 
 std::map<chip_id_t, IDevice*> CreateDevices(
     // TODO: delete this in favour of DevicePool

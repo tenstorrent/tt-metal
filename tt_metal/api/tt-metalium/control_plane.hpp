@@ -11,6 +11,11 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/fabric_types.hpp>
 
+#include <map>
+#include <unordered_map>
+#include <memory>
+#include <vector>
+
 namespace tt::tt_fabric {
 
 class FabricContext;
@@ -26,9 +31,11 @@ public:
     // Printing functions
     void print_routing_tables() const;
     void print_ethernet_channels() const;
+    void print_active_ethernet_connections() const;
+    void print_all_ethernet_connections() const;
 
     // Converts chip level routing tables to per ethernet channel
-    void configure_routing_tables_for_fabric_ethernet_channels();
+    void configure_routing_tables_for_fabric_ethernet_channels(tt_metal::FabricReliabilityMode reliability_mode);
     void write_routing_tables_to_all_chips() const;
 
     // Return mesh_id, chip_id from physical chip id
@@ -67,7 +74,15 @@ public:
 
     size_t get_num_active_fabric_routers(FabricNodeId fabric_node_id) const;
 
+    // Number of active ethernet channels, but these may not be participating in active routing planes
+    // (in other words, they are not participating in fabric traffic)
     std::vector<chan_id_t> get_active_fabric_eth_channels_in_direction(
+        FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
+    // Return the active routing planes in a given direction.
+    std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
+        FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
+
+    size_t get_num_available_routing_planes_in_direction(
         FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
 
     std::set<std::pair<chan_id_t, eth_chan_directions>> get_active_fabric_eth_channels(
@@ -80,11 +95,14 @@ public:
     void set_routing_mode(uint16_t mode);
     uint16_t get_routing_mode() const;
 
-    void initialize_fabric_context(tt_metal::FabricConfig fabric_config);
+    void initialize_fabric_context(tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode);
 
     FabricContext& get_fabric_context() const;
 
     void clear_fabric_context();
+
+    // Calculate number of active routing planes for each mesh
+    size_t get_num_active_routing_planes(const IntraMeshConnectivity& intra_mesh_connectivity);
 
 private:
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
@@ -95,11 +113,21 @@ private:
     // map[mesh_fabric_id][direction] has a vector of ethernet channels in that direction
     std::map<FabricNodeId, std::unordered_map<RoutingDirection, std::vector<chan_id_t>>>
         router_port_directions_to_physical_eth_chan_map_;
+    // map[mesh_fabric_id][direction] has the number of live routing planes in that direction
+    std::map<FabricNodeId, std::unordered_map<RoutingDirection, size_t>>
+        router_port_directions_to_num_routing_planes_map_;
     // tables[mesh_fabric_id][eth_chan]
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         intra_mesh_routing_tables_;  // table that will be written to each ethernet core
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
+
+    // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
+    // is expected that any downed devices/links will result in some sort of error condition being
+    // reported. When set to false, the control plane is free to instantiate fewer routing planes
+    // according to which links are available.
+    tt_metal::FabricReliabilityMode system_setup_mode_ =
+        tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
 
     // custom logic to order eth channels
     void order_ethernet_channels();
@@ -119,6 +147,9 @@ private:
 
     void load_physical_chip_mapping(
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+    size_t get_num_live_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
+    void initialize_dynamic_routing_plane_counts(
+        const IntraMeshConnectivity& intra_mesh_connectivity, tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode);
 
     void validate_mesh_connections(MeshId mesh_id) const;
     void validate_mesh_connections() const;

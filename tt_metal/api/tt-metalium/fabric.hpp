@@ -18,9 +18,16 @@ class Program;
 }  // namespace tt_metal
 }  // namespace tt
 
+namespace tt::tt_metal::distributed {
+class MeshDevice;
+}  // namespace tt::tt_metal::distributed
+
 namespace tt::tt_fabric {
 
 size_t get_tt_fabric_channel_buffer_size_bytes();
+
+size_t get_number_of_available_routing_planes(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t cluster_axis, size_t row_or_col);
 
 // Used to get the run-time args for estabilishing connection with the fabric router.
 // The API appends the connection specific run-time args to the set of exisiting
