@@ -6,40 +6,7 @@
 
 #include "debug/dprint.h"
 
-FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
-    constexpr uint32_t one_tile = 1;
-    // Reserve space
-    cb_reserve_back(cb_id, one_tile);
-
-    // Writer config
-    const uint32_t writer_addr = get_write_ptr(cb_id);
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(writer_addr);
-    const uint16_t wt_offset = wt << 5;  // wt * 2^(5)
-
-    // Writer loop
-    uint32_t count = 0;
-    /*
-    The 32x32 tile is subdivided into four 16x16 quadrants(faces): top-left, top-right, bottom-left, and bottom-right.
-    These quadrants are stored contiguously in memory. Therefore, indices must be written in memory according
-    to their respective quadrant, rather than sequentially from left to right across the entire tile.
-    */
-    constexpr uint32_t tile_faces = 2;
-    constexpr uint32_t face_size = 16;
-    for (uint32_t i = 0; i < tile_faces; ++i) {
-        for (uint32_t j = 0; j < tile_faces; ++j) {
-            for (uint32_t k = 0; k < face_size; ++k) {
-                for (uint32_t l = 0; l < face_size; l++) {
-                    const uint16_t value = l + face_size * j + wt_offset;
-                    ptr[count] = value;
-                    count++;
-                }  // l loop
-            }  // k loop
-        }  // j loop
-    }  // i loop
-
-    // Push the tile
-    cb_push_back(cb_id, one_tile);
-}
+#include "sort_dataflow_common.hpp"
 
 /*
 To improve performance of both reader and writer kernels the work has been split so that they both prepare input and
@@ -67,6 +34,7 @@ void kernel_main() {
     constexpr uint32_t total_number_of_cores = get_compile_time_arg_val(5);
     constexpr uint32_t compute_with_storage_grid_size_x = get_compile_time_arg_val(6);
     constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(7);
+    constexpr bool is_32_bit_data = get_compile_time_arg_val(8) == 1;
 
     // Output tensor config
     constexpr uint32_t one_tile = 1;
@@ -85,7 +53,11 @@ void kernel_main() {
 
         // Generate index tiles
         for (uint32_t w = 0; w < Wt; w++) {
-            generate_index_tile(index_tensor_cb_index, w);
+            if (is_32_bit_data) {
+                generate_index_tile<uint32_t>(index_tensor_cb_index, w);
+            } else {
+                generate_index_tile<uint16_t>(index_tensor_cb_index, w);
+            }
         }  // Wt loop
 
         // Write value tensor to DRAM
