@@ -309,6 +309,7 @@ void DeviceProfiler::readRiscProfilerResults(
                 bufferRiscShift = riscEndIndex * kernel_profiler::PROFILER_L1_VECTOR_SIZE;
             }
             if ((control_buffer[kernel_profiler::DROPPED_ZONES] >> riscEndIndex) & 1) {
+                std::cout << "MOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO" << std::endl;
                 std::string warningMsg = fmt::format(
                     "Profiler DRAM buffers were full, markers were dropped! device {}, worker core {}, {}, Risc "
                     "{},  "
