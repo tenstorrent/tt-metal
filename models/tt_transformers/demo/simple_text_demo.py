@@ -101,7 +101,7 @@ def create_tt_model(
     max_seq_len,
     page_params,
     dtype=ttnn.bfloat8_b,
-    use_paged_kv_cache=False,
+    use_paged_kv_cache=True,
     state_dict=None,
 ):
     from models.tt_transformers.tt.model import Transformer
@@ -145,7 +145,9 @@ def create_tt_model(
     return tt_model_args, model, tt_kv_cache, state_dict
 
 
-def create_tt_page_table(global_batch_size, data_parallel, page_params, use_paged_kv_cache):
+def create_tt_page_table(
+    global_batch_size, data_parallel, paged_attention_config: PagedAttentionConfig, use_paged_kv_cache=False
+):
     page_table = None
 
     if paged_attention_config:
@@ -194,7 +196,7 @@ def prepare_generator_args(
             max_batch_size=global_batch_size // data_parallel,
             optimizations=optimizations,
             max_seq_len=max_seq_len,
-            paged_attention_config=paged_attention_config,
+            page_params=page_params,
             dtype=ttnn.bfloat8_b,
             state_dict=state_dict,
         )
