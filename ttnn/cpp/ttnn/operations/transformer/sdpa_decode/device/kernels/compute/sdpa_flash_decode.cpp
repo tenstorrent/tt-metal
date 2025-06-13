@@ -278,8 +278,11 @@ void MAIN {
             pack_reconfig_data_format(cb_out_final);
 
             pack_untilize_init_short<out_chunk_tiles>(cb_out_accumulate_im, cb_out_final);
-            pack_untilize_block<out_chunk_tiles>(cb_out_accumulate_im, 1, cb_out_final);
+            cb_wait_front(cb_out_accumulate_im, out_chunk_tiles);
+            cb_reserve_back(cb_out_final, 8);
+            pack_untilize_block<out_chunk_tiles>(cb_out_accumulate_im, 8, cb_out_final);
             cb_pop_front(cb_out_accumulate_im, out_chunk_tiles);
+            cb_push_back(cb_out_final, 8);
             // copy_block(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
 
             // free up cb_prev_max after K chunks
