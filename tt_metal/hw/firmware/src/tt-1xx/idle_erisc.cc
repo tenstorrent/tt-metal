@@ -136,6 +136,7 @@ int main() {
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     // Cleanup profiler buffer incase we never get the go message
 
+    DeviceProfilerInit();
     while (1) {
         init_sync_registers();
         // Wait...
