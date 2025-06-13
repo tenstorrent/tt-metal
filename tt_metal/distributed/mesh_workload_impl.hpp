@@ -24,6 +24,9 @@ class MeshWorkloadImpl {
     //  - Multi Program Multi Device (Completely Heterogeneous MeshWorkload)
     // Support for configurable runtime arguments will be added in future versions.
 private:
+    uint64_t id;
+
+    uint64_t get_id() const { return id; }
     bool runs_on_noc_multicast_only_cores();
     bool runs_on_noc_unicast_only_cores();
     void compile(MeshDevice* mesh_device);
@@ -59,6 +62,9 @@ private:
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
     friend FDMeshCommandQueue;
     friend class tt::tt_metal::Program;
+
+    uint32_t max_program_kernels_sizeB_ = 0;
+    bool use_prefetcher_cache_ = false;
 
 public:
     // Main User-Facing API building blocks
