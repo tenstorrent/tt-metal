@@ -55,7 +55,7 @@ inline void calculate_unary_max_int32(uint value) {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         // Load input tensor to lreg0
-        TTI_SFPLOAD(p_sfpu::LREG0, 12, ADDR_MOD_3, 0);
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
 
         // Copy value param to lreg2 to lreg1
         TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
@@ -64,7 +64,7 @@ inline void calculate_unary_max_int32(uint value) {
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
 
         // Store the result
-        TTI_SFPSTORE(p_sfpu::LREG1, 12, ADDR_MOD_3, 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
         dst_reg++;
     }
 }
