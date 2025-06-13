@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "tt_metal/api/tt-metalium/fabric_edm_types.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
 #include "dataflow_api.h"
 #include "noc_nonblocking_api.h"
@@ -29,9 +29,9 @@ safe_get_noc_addr(uint8_t dest_noc_x, uint8_t dest_noc_y, uint32_t dest_bank_add
     return get_noc_addr(noc_x, noc_y, dest_bank_addr, noc_id);
 }
 // TODO: COMMONIZE WITH THE ONE IN `ccl_send_writer.cpp`
-FORCE_INLINE std::pair<tt::tt_fabric::WorkerXY, uint32_t> get_noc_address_components(uint64_t noc_addr) {
+FORCE_INLINE std::pair<ttnn::ccl::WorkerXY, uint32_t> get_noc_address_components(uint64_t noc_addr) {
     const size_t bank_addr = noc_addr & 0xFFFFFFFF;
     const size_t noc_x = NOC_UNICAST_ADDR_X(noc_addr);
     const size_t noc_y = NOC_UNICAST_ADDR_Y(noc_addr);
-    return {tt::tt_fabric::WorkerXY(noc_x, noc_y), bank_addr};
+    return {ttnn::ccl::WorkerXY(noc_x, noc_y), bank_addr};
 }
