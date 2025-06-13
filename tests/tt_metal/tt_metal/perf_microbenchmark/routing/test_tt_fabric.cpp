@@ -7,15 +7,18 @@
 #include <unordered_map>
 #include <algorithm>
 #include <chrono>
+#include <fstream>
+#include <random>
+#include <optional>
 
 #include "tt_fabric_test_config.hpp"
 #include "tt_fabric_test_common.hpp"
 #include "tt_fabric_test_device_setup.hpp"
 #include "tt_fabric_test_traffic.hpp"
 
-using TestPhysicalMeshes = tt::tt_fabric::fabric_tests::TestPhysicalMeshes;
-using TestFabricFixture = tt::tt_fabric::fabric_tests::TestFabricFixture;
+using TestFixture = tt::tt_fabric::fabric_tests::TestFixture;
 using TestDevice = tt::tt_fabric::fabric_tests::TestDevice;
+using TestConfig = tt::tt_fabric::fabric_tests::TestConfig;
 using TestTrafficDataConfig = tt::tt_fabric::fabric_tests::TestTrafficDataConfig;
 using TestTrafficConfig = tt::tt_fabric::fabric_tests::TestTrafficConfig;
 using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderConfig;
@@ -24,45 +27,50 @@ using TestWorkerType = tt::tt_fabric::fabric_tests::TestWorkerType;
 
 using ChipSendType = tt::tt_fabric::ChipSendType;
 using NocSendType = tt::tt_fabric::NocSendType;
+using FabricNodeId = tt::tt_fabric::FabricNodeId;
+using RoutingDirection = tt::tt_fabric::RoutingDirection;
+
+using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
+
+using TestConfigBuilder = tt::tt_fabric::fabric_tests::TestConfigBuilder;
+using YamlConfigParser = tt::tt_fabric::fabric_tests::YamlConfigParser;
+using CmdlineParser = tt::tt_fabric::fabric_tests::CmdlineParser;
+using YamlTestConfigSerializer = tt::tt_fabric::fabric_tests::YamlTestConfigSerializer;
 
 const std::string default_sender_kernel_src =
     "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_sender.cpp";
 const std::string default_receiver_kernel_src =
     "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_receiver.cpp";
 
+// TODO: move this to generated directory
+const std::string default_built_tests_dump_file = "built_tests.yaml";
+
 class TestContext {
 public:
-    void init();
-    void handle_test_config();  // parse and process test config
+    void init(TestFixture& fixture);
+    void setup_devices();
+    void reset_devices();
+    void process_traffic_config(const TestConfig& config);
     void open_devices(tt::tt_metal::FabricConfig fabric_config);
-    void process_traffic_config(TestTrafficConfig traffic_config);
     void compile_programs();
     void launch_programs();
     void wait_for_prorgams();
     void close_devices();
 
 private:
-    void validate_physical_chip_id(chip_id_t physical_chip_id) const;
-    CoreCoord find_receiver_core(const std::vector<chip_id_t>& phys_chip_ids);
+    CoreCoord find_receiver_core(const std::vector<FabricNodeId>& phys_chip_ids);
     void add_traffic_config(const TestTrafficConfig& traffic_config);
-    TestDevice& get_test_device(chip_id_t physical_chip_id);
 
-    TestPhysicalMeshes physical_meshes_;
-    TestFabricFixture fixture_;
-    std::unordered_map<chip_id_t, TestDevice> test_devices_;
+    TestFixture* fixture_;
+    std::unordered_map<MeshCoordinate, TestDevice> test_devices_;
 };
 
-void TestContext::validate_physical_chip_id(chip_id_t physical_chip_id) const {
-    if (this->test_devices_.find(physical_chip_id) == this->test_devices_.end()) {
-        log_fatal(tt::LogTest, "Unknown physical chip id: {}", physical_chip_id);
-        throw std::runtime_error("Unexpected physical chip id");
-    }
-}
-
-CoreCoord TestContext::find_receiver_core(const std::vector<chip_id_t>& phys_chip_ids) {
+// TODO: this mapping should come from a global allocator that is multi-host aware
+CoreCoord TestContext::find_receiver_core(const std::vector<FabricNodeId>& node_ids) {
     std::unordered_map<CoreCoord, uint32_t> available_cores_histogram;
-    for (const auto& chip_id : phys_chip_ids) {
-        const auto& available_cores = this->test_devices_.at(chip_id).get_available_worker_cores();
+    for (const auto& node_id : node_ids) {
+        const auto& coord = this->fixture_->get_device_coord(node_id);
+        const auto& available_cores = this->test_devices_.at(coord).get_available_worker_cores();
         for (const auto& core : available_cores) {
             available_cores_histogram[core]++;
         }
@@ -71,14 +79,14 @@ CoreCoord TestContext::find_receiver_core(const std::vector<chip_id_t>& phys_chi
     std::optional<CoreCoord> available_core;
     for (const auto& [core, count] : available_cores_histogram) {
         // for now return the first core that is avaialble across all the chips
-        if (count == phys_chip_ids.size()) {
+        if (count == node_ids.size()) {
             available_core = core;
             break;
         }
     }
 
     if (!available_core.has_value()) {
-        log_fatal(tt::LogTest, "Unable to find a common recv core from chips: {}", phys_chip_ids);
+        log_fatal(tt::LogTest, "Unable to find a common recv core from chips");
         throw std::runtime_error("No common cores found for allocation");
     }
 
@@ -90,17 +98,36 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
     // for now assume that the cores are not shared
     // later we can grab the available address/core pairs
 
-    const auto& src_phys_chip_id = traffic_config.src_phys_chip_id;
-    auto& src_test_device = this->test_devices_.at(src_phys_chip_id);
+    const auto& src_node_id = traffic_config.src_node_id;
+    const auto& src_coord = this->fixture_->get_device_coord(src_node_id);
+    auto& src_test_device = this->test_devices_.at(src_coord);
 
-    const auto& dst_phys_chip_ids = traffic_config.dst_phys_chip_ids.value();
+    std::vector<FabricNodeId> dst_node_ids;
+    std::unordered_map<RoutingDirection, uint32_t> hops;
+
+    if (traffic_config.hops.has_value()) {
+        hops = traffic_config.hops.value();
+        dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
+            traffic_config.src_node_id, hops, traffic_config.data_config.chip_send_type);
+    } else {
+        dst_node_ids = traffic_config.dst_node_ids.value();
+        // TODO: this shouldnt be needed here since the config should be well-formed by now
+        TT_FATAL(dst_node_ids.size() == 1, "Expected only a single dst node id when hops are not specified");
+        hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
+    }
+
+    // TODO: any handling of the src/dst should be host local
+    // Add logic to skip if a srd/dst doesnt belong to one of the local chips
+
     // this is only a representative of the dst devices used for common operations for dst devices
-    auto& dst_rep_test_device = this->test_devices_.at(dst_phys_chip_ids[0]);
+    const auto& dst_rep_coord = this->fixture_->get_device_coord(dst_node_ids[0]);
+    auto& dst_rep_test_device = this->test_devices_.at(dst_rep_coord);
 
     CoreCoord src_logical_core;
     if (traffic_config.src_logical_core.has_value()) {
         src_logical_core = traffic_config.src_logical_core.value();
     } else {
+        // TODO: this allocation should move to a global allocator
         src_logical_core = src_test_device.allocate_worker_core();
     }
     src_test_device.reserve_core_for_worker(TestWorkerType::SENDER, src_logical_core, traffic_config.sender_kernel_src);
@@ -109,21 +136,24 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
     if (traffic_config.dst_logical_core.has_value()) {
         dst_logical_core = traffic_config.dst_logical_core.value();
     } else {
-        dst_logical_core = this->find_receiver_core(dst_phys_chip_ids);
+        dst_logical_core = this->find_receiver_core(dst_node_ids);
     }
-    for (const auto& dst_chip_id : dst_phys_chip_ids) {
-        this->test_devices_.at(dst_chip_id)
-            .reserve_core_for_worker(TestWorkerType::RECEIVER, dst_logical_core, traffic_config.receiver_kernel_src);
+    for (const auto& dst_node_id : dst_node_ids) {
+        // TODO: this allocation should move to a global allocator
+        const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
+        this->test_devices_.at(dst_coord).reserve_core_for_worker(
+            TestWorkerType::RECEIVER, dst_logical_core, traffic_config.receiver_kernel_src);
     }
 
+    // TODO: this allocation should move to a global allocator
     size_t target_address = dst_rep_test_device.allocate_address_for_sender(dst_logical_core);
-    uint32_t dst_noc_encoding = dst_rep_test_device.get_worker_noc_encoding(dst_logical_core);
-    uint32_t sender_id = src_test_device.get_worker_id(src_logical_core);
+    uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(dst_rep_coord, dst_logical_core);
+    uint32_t sender_id = fixture_->get_worker_id(traffic_config.src_node_id, src_logical_core);
 
     TestTrafficSenderConfig sender_config = {
         .data_config = traffic_config.data_config,
-        .dst_phys_chip_ids = dst_phys_chip_ids,
-        .hops = traffic_config.hops.value(),
+        .dst_node_ids = dst_node_ids,
+        .hops = hops,
         .dst_logical_core = dst_logical_core,
         .target_address = target_address,
         .dst_noc_encoding = dst_noc_encoding};
@@ -131,163 +161,170 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
     TestTrafficReceiverConfig receiver_config = {
         .data_config = traffic_config.data_config, .sender_id = sender_id, .target_address = target_address};
 
+    // TODO: make this host aware
     src_test_device.add_sender_traffic_config(src_logical_core, sender_config);
-    for (const auto& dst_chip_id : dst_phys_chip_ids) {
-        this->test_devices_.at(dst_chip_id).add_receiver_traffic_config(dst_logical_core, receiver_config);
+    for (const auto& dst_node_id : dst_node_ids) {
+        const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
+        this->test_devices_.at(dst_coord).add_receiver_traffic_config(dst_logical_core, receiver_config);
     }
 }
 
-TestDevice& TestContext::get_test_device(chip_id_t physical_chip_id) {
-    this->validate_physical_chip_id(physical_chip_id);
-    return this->test_devices_.at(physical_chip_id);
-}
+void TestContext::init(TestFixture& fixture) { fixture_ = &fixture; }
 
-void TestContext::init() {
-    this->physical_meshes_.setup_physical_meshes();
-    this->fixture_.setup_devices();
-    this->physical_meshes_.print_meshes();
-}
-
-void TestContext::open_devices(tt::tt_metal::FabricConfig fabric_config) {
-    this->fixture_.open_devices(fabric_config);
-
-    for (const auto& chip_id : this->fixture_.get_available_chip_ids()) {
-        auto* device_handle = this->fixture_.get_device_handle(chip_id);
-        this->test_devices_.emplace(chip_id, device_handle);
+void TestContext::setup_devices() {
+    const auto& available_coords = this->fixture_->get_available_device_coordinates();
+    for (const auto& coord : available_coords) {
+        test_devices_.emplace(coord, TestDevice(coord, *this->fixture_, *this->fixture_));
     }
 }
 
-void TestContext::process_traffic_config(TestTrafficConfig traffic_config) {
-    traffic_config.validate();
+void TestContext::reset_devices() { test_devices_.clear(); }
 
-    const auto src_chip_id = traffic_config.src_phys_chip_id;
-    this->validate_physical_chip_id(src_chip_id);
-
-    const auto& chip_send_type = traffic_config.data_config.chip_send_type;
-
-    std::vector<chip_id_t> dst_phys_chip_ids;
-    std::vector<std::unordered_map<tt::tt_fabric::RoutingDirection, uint32_t>> hops_vector;
-    if (traffic_config.dst_phys_chip_ids.has_value()) {
-        dst_phys_chip_ids = traffic_config.dst_phys_chip_ids.value();
-        for (const auto& dst_chip_id : dst_phys_chip_ids) {
-            this->validate_physical_chip_id(dst_chip_id);
-        }
-
-        for (const auto& dst_chip_id : dst_phys_chip_ids) {
-            hops_vector.push_back(this->physical_meshes_.get_hops_to_chip(src_chip_id, dst_chip_id));
-        }
-    } else if (traffic_config.hops.has_value()) {
-        // TODO: validate dst chip ids or number of hops based on the topology
-        const auto& hops = traffic_config.hops.value();
-        // get the dest chips based on chip send type. For unicast, hops are for the same dest chip
-        // for mcast, capture each chip along the mcast hops
-        dst_phys_chip_ids = this->physical_meshes_.get_chips_from_hops(src_chip_id, hops, chip_send_type);
-        hops_vector.push_back(hops);
-    }
-
-    // TODO: handle src and dst logical cores
-    // TODO: handle kernel srcs
-
-    // if bidirectional - add sender for every receiver
-
-    // additional handling - if mcast mode then add receivers for every chip in the route
-
-    if (hops_vector.size() == 1) {
-        // single sender config
-        auto config = traffic_config;
-        config.dst_phys_chip_ids = dst_phys_chip_ids;
-        config.hops = hops_vector[0];
-        this->add_traffic_config(config);
-    } else {
-        // each dest chip and hop makes a separate config
-        for (auto idx = 0; idx < hops_vector.size(); idx++) {
-            auto config = traffic_config;
-            config.dst_phys_chip_ids = {dst_phys_chip_ids[idx]};
-            config.hops = {hops_vector[idx]};
-            this->add_traffic_config(config);
-        }
-    }
-}
+void TestContext::open_devices(tt::tt_metal::FabricConfig fabric_config) { fixture_->open_devices(fabric_config); }
 
 void TestContext::compile_programs() {
     // TODO: should we be taking const ref?
-    for (auto& [_, test_device] : this->test_devices_) {
+    for (auto& [coord, test_device] : test_devices_) {
         test_device.create_kernels();
-    }
-}
-
-void TestContext::launch_programs() {
-    // TODO: should we be taking const ref?
-    for (auto& [_, test_device] : this->test_devices_) {
-        auto* device_handle = test_device.get_device_handle();
         auto& program_handle = test_device.get_program_handle();
-        this->fixture_.run_program_non_blocking(device_handle, program_handle);
+        if (program_handle.num_kernels()) {
+            fixture_->enqueue_program(coord, program_handle);
+        }
     }
 }
 
-void TestContext::wait_for_prorgams() {
-    // TODO: should we be taking const ref?
-    for (auto& [_, test_device] : this->test_devices_) {
-        auto* device_handle = test_device.get_device_handle();
-        auto& program_handle = test_device.get_program_handle();
-        this->fixture_.wait_for_program_done(device_handle, program_handle);
+void TestContext::launch_programs() { fixture_->run_programs(); }
+
+void TestContext::wait_for_prorgams() { fixture_->wait_for_programs(); }
+
+void TestContext::close_devices() { fixture_->close_devices(); }
+
+void TestContext::process_traffic_config(const TestConfig& config) {
+    for (const auto& sender : config.senders) {
+        for (const auto& pattern : sender.patterns) {
+            // After merging, these fields must have a value.
+            TT_FATAL(
+                pattern.ftype.has_value(), "Missing 'ftype' in traffic pattern for sender on device {}", sender.device);
+            TT_FATAL(
+                pattern.ntype.has_value(), "Missing 'ntype' in traffic pattern for sender on device {}", sender.device);
+            TT_FATAL(
+                pattern.size.has_value(), "Missing 'size' in traffic pattern for sender on device {}", sender.device);
+            TT_FATAL(
+                pattern.destination.has_value(),
+                "Missing 'destination' in traffic pattern for sender on device {}",
+                sender.device);
+            TT_FATAL(
+                pattern.destination->device.has_value() || pattern.destination->hops.has_value(),
+                "Missing 'device' or 'hops' in destination for sender on device {}",
+                sender.device);
+            TT_FATAL(
+                !pattern.destination->device.has_value() || !pattern.destination->hops.has_value(),
+                "Only one of 'device' and 'hops' should be provided as destination");
+            TT_FATAL(
+                pattern.num_packets.has_value(),
+                "Missing 'num_packets' in traffic pattern for sender on device {}",
+                sender.device);
+
+            TestTrafficDataConfig data_config = {
+                .chip_send_type = pattern.ftype.value(),
+                .noc_send_type = pattern.ntype.value(),
+                .seed = config.seed,
+                .num_packets = pattern.num_packets.value(),
+                .payload_size_bytes = pattern.size.value(),
+            };
+
+            TestTrafficConfig traffic_config = {
+                .data_config = data_config,
+                .src_node_id = sender.device,
+                .src_logical_core = sender.core,
+                // TODO: take this as input?
+                .sender_kernel_src = default_sender_kernel_src,
+                .receiver_kernel_src = default_receiver_kernel_src};
+
+            if (pattern.destination.has_value()) {
+                if (pattern.destination->device.has_value()) {
+                    traffic_config.dst_node_ids = {pattern.destination->device.value()};
+                }
+                if (pattern.destination->core.has_value()) {
+                    traffic_config.dst_logical_core = pattern.destination->core;
+                }
+                if (pattern.destination->hops.has_value()) {
+                    traffic_config.hops = pattern.destination->hops;
+                }
+            }
+
+            this->add_traffic_config(traffic_config);
+        }
     }
 }
-
-void TestContext::close_devices() { this->fixture_.close_devices(); }
-
-// TODO: method to get random chip send type
-// TODO: method to get random noc send type
-// TODO: method to get random hops (based on mode - 1D/2D)
-// TODO: method to get random dest chip (based on mode - 1D/2D)
-
-void setup_fabric(
-    tt::tt_fabric::fabric_tests::TestFabricSetup fabric_setup_config, std::vector<TestDevice>& test_devices) {}
-
-/*
-void setup_traffic_config(TestTrafficDataConfig data_config, chip_id_t src_phys_chip_id);
-
-void setup_traffic_config(TestTrafficDataConfig data_config, chip_id_t src_phys_chip_id);
-*/
 
 int main(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
-    tt::tt_fabric::fabric_tests::parse_config(input_args);
+
+    TestFixture fixture;
+    fixture.init();
 
     TestContext test_context;
-    test_context.init();
+    test_context.init(fixture);
 
+    // fixture is passed to both the parsers since it implements the device interface
+
+    CmdlineParser cmdline_parser(input_args, fixture);
+    std::vector<TestConfig> raw_test_configs;
+
+    if (auto yaml_path = cmdline_parser.get_yaml_config_path()) {
+        YamlConfigParser yaml_parser(fixture);
+        raw_test_configs = yaml_parser.parse_file(yaml_path.value());
+    } else {
+        raw_test_configs = cmdline_parser.generate_default_configs();
+    }
+
+    cmdline_parser.apply_overrides(raw_test_configs);
+
+    if (raw_test_configs.empty()) {
+        log_fatal(tt::LogTest, "No test configurations loaded or generated. Exiting.");
+        return 1;
+    }
+
+    std::optional<uint32_t> master_seed = cmdline_parser.get_master_seed();
+    if (!master_seed.has_value()) {
+        master_seed = std::random_device()();
+        log_info(tt::LogTest, "No master seed provided. Using randomly generated seed: {}", master_seed.value());
+    }
+    std::mt19937 gen(master_seed.value());
+
+    // fixture is passed twice since it implements both interfaces
+    // the builder object does the initial processing of the tests parsed from yaml/cmd line and tries to fill
+    // any gaps/optionals/missing values
+    TestConfigBuilder builder(fixture, fixture, gen);
+    auto built_tests = builder.build_tests(raw_test_configs);
+
+    if (cmdline_parser.dump_built_tests()) {
+        auto dump_path = cmdline_parser.get_built_tests_dump_file_path(default_built_tests_dump_file);
+        YamlTestConfigSerializer::dump(built_tests, dump_path);
+    }
+
+    // TODO: for now assume we are working with the same fabric config, later we need to close and re-open with
+    // different config
     test_context.open_devices(tt::tt_metal::FabricConfig::FABRIC_1D);
 
-    // fabric setup
-    // setup_fabric()
-    uint32_t seed = std::chrono::system_clock::now().time_since_epoch().count();
-    TestTrafficDataConfig data_config = {
-        .chip_send_type = ChipSendType::CHIP_UNICAST,
-        .noc_send_type = NocSendType::NOC_UNICAST_WRITE,
-        .seed = seed,
-        .num_packets = 100,
-        .payload_size_bytes = 64};
+    for (const auto& test_config : built_tests) {
+        log_info(tt::LogTest, "Running Test: {}", test_config.name);
 
-    chip_id_t src_phys_chip_id = 1;
-    std::vector<chip_id_t> dst_phys_chip_ids = {2};
-    TestTrafficConfig traffic_config = {
-        .data_config = data_config,
-        .src_phys_chip_id = src_phys_chip_id,
-        .dst_phys_chip_ids = dst_phys_chip_ids,
-        .sender_kernel_src = default_sender_kernel_src,
-        .receiver_kernel_src = default_receiver_kernel_src};
+        test_context.setup_devices();
 
-    test_context.process_traffic_config(traffic_config);
+        test_context.process_traffic_config(test_config);
 
-    // workers setup
-    test_context.compile_programs();
+        test_context.compile_programs();
 
-    // launch programs
-    test_context.launch_programs();
+        test_context.launch_programs();
 
-    // wait for programs done
-    test_context.wait_for_prorgams();
+        test_context.wait_for_prorgams();
+
+        log_info(tt::LogTest, "Test {} Finished.", test_config.name);
+
+        test_context.reset_devices();
+    }
 
     test_context.close_devices();
 

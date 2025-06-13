@@ -8,421 +8,270 @@
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
+#include <optional>
 
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "impl/context/metal_context.hpp"
+#include "tt_fabric_test_config.hpp"
+#include "tt_fabric_test_interfaces.hpp"
+
+using MeshDevice = tt::tt_metal::distributed::MeshDevice;
+using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
+using MeshShape = tt::tt_metal::distributed::MeshShape;
+using MeshWorkload = tt::tt_metal::distributed::MeshWorkload;
+using MeshCoordinateRange = tt::tt_metal::distributed::MeshCoordinateRange;
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
-struct TestFabricFixture {
-    tt::ARCH arch_;
-    std::vector<chip_id_t> physical_chip_ids_;
-    std::map<chip_id_t, tt::tt_metal::IDevice*> devices_map_;
-    bool slow_dispatch_;
+class TestFixture : public IDeviceInfoProvider, public IRouteManager {
+    // mapping to convert coords to directions
+    static constexpr uint32_t EW_DIM = 1;
+    static constexpr uint32_t NS_DIM = 0;
 
-    void setup_devices() {
-        slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch_) {
-            log_info(tt::LogTest, "Running fabric tests with slow dispatch");
-        } else {
-            log_info(tt::LogTest, "Running fabric tests with fast dispatch");
+public:
+    void init() {
+        control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto user_meshes = control_plane_ptr_->get_user_physical_mesh_ids();
+        TT_FATAL(
+            user_meshes.size() == 1,
+            "Only expected a single user mesh for a single host, but got: {}",
+            user_meshes.size());
+
+        mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(user_meshes[0]);
+        const auto coordinates = MeshCoordinateRange(mesh_shape_);
+        for (const auto& coord : coordinates) {
+            available_device_coordinates_.push_back(coord);
         }
 
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-
-        size_t chip_id_offset = 0;
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG) {
-            chip_id_offset = 4;
+        // TODO: available node ids should be able to capture the node ids for other meshes as well
+        const auto mesh_id = user_meshes[0];
+        for (auto i = 0; i < available_device_coordinates_.size(); i++) {
+            available_node_ids_.emplace_back(FabricNodeId(mesh_id, i));
         }
-        const auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-        this->physical_chip_ids_.resize(num_devices);
-        std::iota(this->physical_chip_ids_.begin(), this->physical_chip_ids_.end(), chip_id_offset);
-
-        // todo: check if and where we need to configure the routing tables
     }
+
+    std::vector<MeshCoordinate> get_available_device_coordinates() const { return this->available_device_coordinates_; }
 
     void open_devices(tt::tt_metal::FabricConfig fabric_config) {
         tt::tt_metal::detail::InitializeFabricConfig(fabric_config);
-        this->devices_map_ = tt::tt_metal::detail::CreateDevices(this->physical_chip_ids_);
-    }
+        mesh_device_ = MeshDevice::create(mesh_shape_);
 
-    std::vector<chip_id_t> get_available_chip_ids() const { return this->physical_chip_ids_; }
-
-    tt::tt_metal::IDevice* get_device_handle(chip_id_t physical_chip_id) const {
-        if (this->devices_map_.find(physical_chip_id) == this->devices_map_.end()) {
-            log_fatal(tt::LogTest, "Unknown physical chip id: {}", physical_chip_id);
-            throw std::runtime_error("Unexpected physical chip id for device handle lookup");
+        for (const auto& coord : available_device_coordinates_) {
+            auto* device = mesh_device_->get_device(coord);
+            const auto fabric_node_id = control_plane_ptr_->get_fabric_node_id_from_physical_chip_id(device->id());
+            mesh_coordinate_to_node_id_.emplace(coord, fabric_node_id);
+            node_id_to_mesh_coordinate_.emplace(fabric_node_id, coord);
         }
-        return this->devices_map_.at(physical_chip_id);
+
+        mesh_workload_ = std::make_unique<MeshWorkload>();
     }
 
-    void run_program_non_blocking(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
-        if (this->slow_dispatch_) {
-            tt::tt_metal::detail::LaunchProgram(device, program, false);
-        } else {
-            tt::tt_metal::CommandQueue& cq = device->command_queue();
-            tt::tt_metal::EnqueueProgram(cq, program, false);
-        }
+    void enqueue_program(const MeshCoordinate& mesh_coord, tt::tt_metal::Program& program) {
+        MeshCoordinateRange device(mesh_coord, mesh_coord);
+        tt::tt_metal::distributed::AddProgramToMeshWorkload(*mesh_workload_, std::move(program), device);
     }
 
-    void wait_for_program_done(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
-        if (this->slow_dispatch_) {
-            // Wait for the program to finish
-            tt::tt_metal::detail::WaitProgramDone(device, program);
-        } else {
-            // Wait for all programs on cq to finish
-            tt::tt_metal::CommandQueue& cq = device->command_queue();
-            tt::tt_metal::Finish(cq);
-        }
+    void run_programs() {
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload_, true);
     }
+
+    void wait_for_programs() { tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue()); }
 
     void close_devices() {
-        tt::tt_metal::detail::CloseDevices(this->devices_map_);
+        mesh_device_->close();
         tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
     }
-};
 
-struct TestPhysCoords {
-public:
-    TestPhysCoords(uint32_t x, uint32_t y);
-    TestPhysCoords(const std::tuple<uint32_t, uint32_t>& mesh_indices);
-    bool operator==(const TestPhysCoords& other) const;
-    std::unordered_map<RoutingDirection, uint32_t> get_hops_to_dst(const TestPhysCoords& dst_coords) const;
-    TestPhysCoords get_dst_from_hops(std::unordered_map<RoutingDirection, uint32_t>& hops) const;
-    TestPhysCoords get_dst_from_hops(const RoutingDirection direction, const uint32_t hops) const;
-
-private:
-    void validate_hops(std::unordered_map<RoutingDirection, uint32_t>& hops) const;
-    void update_coords(const RoutingDirection direction, const uint32_t hops);
-
-    uint32_t x_;
-    uint32_t y_;
-};
-
-inline void TestPhysCoords::validate_hops(std::unordered_map<RoutingDirection, uint32_t>& hops) const {
-    // TODO: should move to mesh
-    if ((hops[RoutingDirection::N] > 0 && hops[RoutingDirection::S] > 0) ||
-        (hops[RoutingDirection::E] > 0 && hops[RoutingDirection::W] > 0)) {
-        log_fatal(tt::LogTest, "Hops in only one of the opposite directions should be set, got both");
-        throw std::runtime_error("Unexpected hops");
-    }
-}
-
-inline TestPhysCoords::TestPhysCoords(uint32_t x, uint32_t y) : x_(x), y_(y) {}
-
-inline TestPhysCoords::TestPhysCoords(const std::tuple<uint32_t, uint32_t>& mesh_indices) {
-    // note the flipped order when converting row/col idx to x,y
-    this->x_ = std::get<1>(mesh_indices);
-    this->y_ = std::get<0>(mesh_indices);
-}
-
-inline bool TestPhysCoords::operator==(const TestPhysCoords& other) const {
-    return (this->x_ == other.x_ && this->y_ == other.y_);
-}
-
-inline std::unordered_map<RoutingDirection, uint32_t> TestPhysCoords::get_hops_to_dst(
-    const TestPhysCoords& dst_coords) const {
-    int x_dist = dst_coords.x_ - this->x_;
-    int y_dist = dst_coords.y_ - this->y_;
-
-    std::unordered_map<RoutingDirection, uint32_t> hops;
-    for (const auto& direction : FabricContext::routing_directions) {
-        hops[direction] = 0;
+    // ======================================================================================
+    // IDeviceInfoProvider methods
+    // ======================================================================================
+    FabricNodeId get_fabric_node_id(const chip_id_t physical_chip_id) const override {
+        return control_plane_ptr_->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
     }
 
-    if (y_dist < 0) {
-        hops[RoutingDirection::N] = std::abs(y_dist);
-    } else if (y_dist > 0) {
-        hops[RoutingDirection::S] = y_dist;
+    FabricNodeId get_fabric_node_id(const MeshCoordinate& device_coord) const override {
+        return mesh_coordinate_to_node_id_.at(device_coord);
     }
 
-    if (x_dist > 0) {
-        hops[RoutingDirection::E] = x_dist;
-    } else if (x_dist < 0) {
-        hops[RoutingDirection::W] = std::abs(x_dist);
+    MeshCoordinate get_device_coord(const FabricNodeId& node_id) const override {
+        auto it = node_id_to_mesh_coordinate_.find(node_id);
+        TT_FATAL(it != node_id_to_mesh_coordinate_.end(), "Unknown node id: {} for querying mesh coord", node_id);
+
+        return it->second;
     }
 
-    return hops;
-}
-
-inline void TestPhysCoords::update_coords(const RoutingDirection direction, const uint32_t hops) {
-    switch (direction) {
-        case RoutingDirection::N: this->y_ -= hops; break;
-        case RoutingDirection::S: this->y_ += hops; break;
-        case RoutingDirection::E: this->x_ += hops; break;
-        case RoutingDirection::W: this->x_ -= hops; break;
-        default: throw std::runtime_error("Unexpected direction");
-    }
-}
-
-inline TestPhysCoords TestPhysCoords::get_dst_from_hops(const RoutingDirection direction, const uint32_t hops) const {
-    TestPhysCoords dst_coords(this->x_, this->y_);
-    dst_coords.update_coords(direction, hops);
-    return dst_coords;
-}
-
-inline TestPhysCoords TestPhysCoords::get_dst_from_hops(std::unordered_map<RoutingDirection, uint32_t>& hops) const {
-    this->validate_hops(hops);  // TODO: should be done in mesh
-
-    TestPhysCoords dst_coords(this->x_, this->y_);
-    for (const auto& direction : FabricContext::routing_directions) {
-        dst_coords.update_coords(direction, hops[direction]);
+    uint32_t get_worker_noc_encoding(const MeshCoordinate& device_coord, const CoreCoord logical_core) const override {
+        auto* device = mesh_device_->get_device(device_coord);
+        const auto virtual_core = device->worker_core_from_logical_core(logical_core);
+        return tt_metal::MetalContext::instance().hal().noc_xy_encoding(virtual_core.x, virtual_core.y);
     }
 
-    return dst_coords;
-}
-
-struct TestPhysicalMesh {
-    static constexpr uint8_t NUM_DIMS = 2;
-    static constexpr uint8_t ROW_IDX = 0;
-    static constexpr uint8_t COL_IDX = 1;
-
-public:
-    TestPhysicalMesh(ControlPlane* control_plane_ptr, const MeshId mesh_id);
-    std::unordered_map<RoutingDirection, uint32_t> get_hops_to_chip(
-        const chip_id_t src_phys_chip_id, const chip_id_t dst_phys_chip_id) const;
-    std::vector<chip_id_t> get_chips_from_hops(
-        const chip_id_t src_phys_chip_id,
-        std::unordered_map<RoutingDirection, uint32_t> hops,
-        const ChipSendType chip_send_type) const;
-    void print_mesh() const;
-
-private:
-    void validate_physical_chip_id(const chip_id_t physical_chip_id) const;
-    void set_mesh_dims_and_size(const std::array<uint32_t, NUM_DIMS>& dims);
-    chip_id_t get_chip_from_coords(const TestPhysCoords& coords) const;
-    chip_id_t get_chip_from_hops(
-        const chip_id_t src_phys_chip_id, const RoutingDirection direction, const uint32_t hops) const;
-    chip_id_t get_chip_from_hops(
-        const chip_id_t src_phys_chip_id, std::unordered_map<RoutingDirection, uint32_t>& hops) const;
-
-    MeshId mesh_id_;
-    std::vector<std::vector<chip_id_t>> physical_chip_view_;
-    std::unordered_map<chip_id_t, TestPhysCoords> physical_chip_coords_;
-    std::array<uint32_t, NUM_DIMS> mesh_dims_;
-    std::array<uint32_t, NUM_DIMS> mesh_dims_size_;  // size along each dim
-};
-
-inline void TestPhysicalMesh::validate_physical_chip_id(const chip_id_t physical_chip_id) const {
-    if (this->physical_chip_coords_.find(physical_chip_id) == this->physical_chip_coords_.end()) {
-        log_fatal(tt::LogTest, "Unknown chip id: {} for mesh id: {}", physical_chip_id, this->mesh_id_);
-        throw std::runtime_error("Unexpected chip id");
-    }
-}
-
-inline void TestPhysicalMesh::set_mesh_dims_and_size(const std::array<uint32_t, NUM_DIMS>& dims) {
-    this->mesh_dims_[ROW_IDX] = dims[ROW_IDX];
-    this->mesh_dims_[COL_IDX] = dims[COL_IDX];
-
-    // note the reversed order
-    this->mesh_dims_size_[ROW_IDX] = dims[COL_IDX];
-    this->mesh_dims_size_[COL_IDX] = dims[ROW_IDX];
-}
-
-inline chip_id_t TestPhysicalMesh::get_chip_from_coords(const TestPhysCoords& target_coords) const {
-    auto it =
-        std::find_if(this->physical_chip_coords_.begin(), this->physical_chip_coords_.end(), [&](const auto& pair) {
-            return pair.second == target_coords;
-        });
-    if (it == this->physical_chip_coords_.end()) {
-        log_fatal(tt::LogTest, "Unknown chip coords for translation from coords to chip");
-        throw std::runtime_error("Unexpected physical chip coords");
+    uint32_t get_worker_noc_encoding(const FabricNodeId& node_id, const CoreCoord logical_core) const override {
+        const auto& device_coord = get_device_coord(node_id);
+        return get_worker_noc_encoding(device_coord, logical_core);
     }
 
-    return it->first;
-}
+    CoreCoord get_worker_grid_size() const override { return mesh_device_->compute_with_storage_grid_size(); }
 
-inline chip_id_t TestPhysicalMesh::get_chip_from_hops(
-    const chip_id_t src_phys_chip_id, const RoutingDirection direction, const uint32_t hops) const {
-    // private method -> chip id already validated
-    const auto& src_chip_coords = this->physical_chip_coords_.at(src_phys_chip_id);
-    const auto dst_chip_coords = src_chip_coords.get_dst_from_hops(direction, hops);
-    return this->get_chip_from_coords(dst_chip_coords);
-}
+    virtual uint32_t get_worker_id(const FabricNodeId& node_id, CoreCoord logical_core) const override {
+        return (*node_id.mesh_id << 12) | (node_id.chip_id << 8) | (logical_core.x << 4) | (logical_core.y);
+    }
 
-inline chip_id_t TestPhysicalMesh::get_chip_from_hops(
-    const chip_id_t src_phys_chip_id, std::unordered_map<RoutingDirection, uint32_t>& hops) const {
-    // private method -> chip id already validated
-    const auto& src_chip_coords = this->physical_chip_coords_.at(src_phys_chip_id);
-    const auto dst_chip_coords = src_chip_coords.get_dst_from_hops(hops);
-    return this->get_chip_from_coords(dst_chip_coords);
-}
+    std::vector<FabricNodeId> get_all_node_ids() const override { return available_node_ids_; }
 
-inline TestPhysicalMesh::TestPhysicalMesh(ControlPlane* control_plane_ptr, const MeshId mesh_id) : mesh_id_(mesh_id) {
-    const auto& mesh_shape = control_plane_ptr->get_physical_mesh_shape(mesh_id);
-    const auto num_rows = mesh_shape[0];
-    const auto num_cols = mesh_shape[1];
+    // ======================================================================================
+    // IRouteManager methods
+    // ======================================================================================
+    // TODO: instead of parsing ChipSendType, this should only care about unicast/mcast
+    // or capturing every device in the path or not
+    std::vector<FabricNodeId> get_dst_node_ids_from_hops(
+        FabricNodeId src_node,
+        const std::unordered_map<RoutingDirection, uint32_t>& hops,
+        ChipSendType chip_send_type) const override {
+        // TODO: get src mesh coord
+        // TODO: add a private method to get dst coord for each increment from the src coord
 
-    this->set_mesh_dims_and_size({num_rows, num_cols});
+        return {};
+    }
 
-    this->physical_chip_view_.resize(num_rows, std::vector<chip_id_t>(num_cols));
-    chip_id_t logical_chip_id = 0;
-    for (uint32_t i = 0; i < num_rows; i++) {
-        for (uint32_t j = 0; j < num_cols; j++) {
-            FabricNodeId fabric_node_id{mesh_id, logical_chip_id};
-            chip_id_t physical_chip_id = control_plane_ptr->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
-            this->physical_chip_view_[i][j] = physical_chip_id;
-            this->physical_chip_coords_.emplace(physical_chip_id, std::make_tuple(i, j));
-            logical_chip_id++;
+    bool are_devices_linear(const std::vector<FabricNodeId>& node_ids) const override {
+        /*
+        if (node_ids.size() <= 1) {
+            return true;
         }
-    }
-}
 
-inline std::unordered_map<RoutingDirection, uint32_t> TestPhysicalMesh::get_hops_to_chip(
-    chip_id_t src_phys_chip_id, chip_id_t dst_phys_chip_id) const {
-    this->validate_physical_chip_id(src_phys_chip_id);
-    this->validate_physical_chip_id(dst_phys_chip_id);
+        // TODO: validation for node ids
 
-    const auto& src_coords = this->physical_chip_coords_.at(src_phys_chip_id);
-    const auto& dst_coords = this->physical_chip_coords_.at(dst_phys_chip_id);
-    return src_coords.get_hops_to_dst(dst_coords);
-}
+        auto first_coord = node_id_to_mesh_coordinate_.at(node_ids[0]);
+        bool all_same_row = true;
+        bool all_same_col = true;
 
-inline std::vector<chip_id_t> TestPhysicalMesh::get_chips_from_hops(
-    chip_id_t src_phys_chip_id,
-    std::unordered_map<RoutingDirection, uint32_t> hops,
-    ChipSendType chip_send_type) const {
-    this->validate_physical_chip_id(src_phys_chip_id);
-
-    std::vector<chip_id_t> dst_phys_chip_ids;
-    if (chip_send_type == ChipSendType::CHIP_MULTICAST) {
-        // TODO: once 2D mcast is supported, update the logic to return the range of chips
-        for (const auto& direction : FabricContext::routing_directions) {
-            for (uint32_t hop = 1; hop < hops[direction]; hop++) {
-                dst_phys_chip_ids.push_back(this->get_chip_from_hops(src_phys_chip_id, direction, hop));
+        for (size_t i = 1; i < node_ids.size(); ++i) {
+            auto next_coord = node_id_to_mesh_coordinate_.at(node_ids[i]);
+            if (next_coord.x != first_coord.x) {
+                all_same_col = false;
+            }
+            if (next_coord.y != first_coord.y) {
+                all_same_row = false;
             }
         }
-    } else if (chip_send_type == ChipSendType::CHIP_UNICAST) {
-        dst_phys_chip_ids = {this->get_chip_from_hops(src_phys_chip_id, hops)};
-    } else {
-        log_fatal(tt::LogTest, "Unknown chip send type: {} for getting chips from hops", chip_send_type);
-        throw std::runtime_error("Unexpected chip send type");
+        return all_same_row || all_same_col;
+        */
+        return true;
     }
 
-    return dst_phys_chip_ids;
-}
-
-inline void TestPhysicalMesh::print_mesh() const {
-    for (const auto& row : this->physical_chip_view_) {
-        log_info(tt::LogTest, "{}", row);
-    }
-}
-
-struct TestPhysicalMeshes {
-public:
-    void setup_physical_meshes();
-    void print_meshes() const;
-    std::vector<chip_id_t> get_other_chips_on_same_row(chip_id_t physical_chip_id);
-    std::vector<chip_id_t> get_other_chips_on_same_col(chip_id_t physical_chip_id);
     std::unordered_map<RoutingDirection, uint32_t> get_hops_to_chip(
-        const chip_id_t src_phys_chip_id, const chip_id_t dst_phys_chip_id) const;
+        FabricNodeId src_node_id, FabricNodeId dst_node_id) const override {
+        const auto& src_coord = get_device_coord(src_node_id);
+        const auto& dst_coord = get_device_coord(dst_node_id);
+
+        const auto distance = get_distance(src_coord, dst_coord);
+        return get_hops_from_distance(distance);
+    }
+
     std::vector<chip_id_t> get_chips_from_hops(
-        const chip_id_t src_phys_chip_id,
-        std::unordered_map<RoutingDirection, uint32_t> hops,
-        const ChipSendType chip_send_type) const;
+        chip_id_t src_chip,
+        const std::unordered_map<RoutingDirection, uint32_t>& hops,
+        ChipSendType chip_send_type) const {
+        std::vector<chip_id_t> dst_chips;
+        /*
+        if (chip_send_type == ChipSendType::CHIP_UNICAST) {
+            dst_chips.push_back(get_chip_from_hops_map(src_chip, hops));
+        } else if (chip_send_type == ChipSendType::CHIP_MULTICAST) {
+            for (const auto& direction : FabricContext::routing_directions) {
+                if (hops.at(direction) > 0) {
+                    for (uint32_t hop = 1; hop <= hops.at(direction); hop++) {
+                        dst_chips.push_back(get_chip_from_hop_count(src_chip, direction, hop));
+                    }
+                }
+            }
+        }*/
+        return dst_chips;
+    }
 
 private:
-    void validate_mesh_id(const MeshId mesh_id) const;
+    ControlPlane* control_plane_ptr_;
+    MeshShape mesh_shape_;
+    std::vector<MeshCoordinate> available_device_coordinates_;
+    std::vector<FabricNodeId> available_node_ids_;
+    std::shared_ptr<MeshDevice> mesh_device_;
+    std::unordered_map<MeshCoordinate, FabricNodeId> mesh_coordinate_to_node_id_;
+    std::unordered_map<FabricNodeId, MeshCoordinate> node_id_to_mesh_coordinate_;
+    std::shared_ptr<MeshWorkload> mesh_workload_;
 
-    std::unordered_map<MeshId, TestPhysicalMesh> physical_meshes_;
-    tt::tt_fabric::ControlPlane* control_plane_ptr_;
+    MeshCoordinate get_distance(const MeshCoordinate& src_coords, const MeshCoordinate& dst_coords) const {
+        TT_FATAL(
+            src_coords.dims() == dst_coords.dims(),
+            "Cannot find distance from coords with different dimensions: {} != {}",
+            src_coords.dims(),
+            dst_coords.dims());
+
+        std::vector<uint32_t> coords(src_coords.dims());
+        for (size_t i = 0; i < src_coords.dims(); ++i) {
+            coords[i] = dst_coords[i] - src_coords[i];
+        }
+        return MeshCoordinate(coords);
+    }
+
+    std::unordered_map<RoutingDirection, uint32_t> get_hops_from_distance(const MeshCoordinate& distance) const {
+        std::unordered_map<RoutingDirection, uint32_t> hops;
+        for (const auto& direction : FabricContext::routing_directions) {
+            hops[direction] = 0;
+        }
+
+        if (distance[EW_DIM] >= mesh_shape_[EW_DIM]) {
+            // wrapped around, negative distance
+            hops[RoutingDirection::W] = std::numeric_limits<uint32_t>::max() - distance[EW_DIM] + 1;
+        } else {
+            hops[RoutingDirection::E] = distance[EW_DIM];
+        }
+
+        // positive y is south direction in ctrl plane
+        if (distance[NS_DIM] >= mesh_shape_[NS_DIM]) {
+            // wrapped around, negative distance
+            hops[RoutingDirection::N] = std::numeric_limits<uint32_t>::max() - distance[NS_DIM] + 1;
+        } else {
+            hops[RoutingDirection::S] = distance[NS_DIM];
+        }
+
+        return hops;
+    }
+
+    chip_id_t get_chip_from_hop_count(chip_id_t src_chip, RoutingDirection direction, uint32_t hop_count) const {
+        /*
+        tt::MeshCoordinate dst_coord = this->mesh_device_->get_device_coord(src_chip);
+        switch (direction) {
+            case RoutingDirection::N: dst_coord.y -= hop_count; break;
+            case RoutingDirection::S: dst_coord.y += hop_count; break;
+            case RoutingDirection::E: dst_coord.x += hop_count; break;
+            case RoutingDirection::W: dst_coord.x -= hop_count; break;
+            default: break;
+        }
+        return this->mesh_device_->get_chip_id(dst_coord); */
+        return src_chip;
+    }
+
+    chip_id_t get_chip_from_hops_map(
+        chip_id_t src_chip, const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
+        /*
+    tt::MeshCoordinate dst_coord = this->mesh_device_->get_device_coord(src_chip);
+    dst_coord.x += hops.at(RoutingDirection::E);
+    dst_coord.x -= hops.at(RoutingDirection::W);
+    dst_coord.y += hops.at(RoutingDirection::S);
+    dst_coord.y -= hops.at(RoutingDirection::N);
+    return this->mesh_device_->get_chip_id(dst_coord); */
+        return src_chip;
+    }
 };
-
-inline void TestPhysicalMeshes::validate_mesh_id(const MeshId mesh_id) const {
-    // TODO: take in a string param for debug/log strings
-    if (this->physical_meshes_.find(mesh_id) == this->physical_meshes_.end()) {
-        log_fatal(tt::LogTest, "Unknown mesh id: {}", mesh_id);
-        throw std::runtime_error("Unexpected mesh id");
-    }
-}
-
-inline void TestPhysicalMeshes::setup_physical_meshes() {
-    this->control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto user_meshes = this->control_plane_ptr_->get_user_physical_mesh_ids();
-
-    for (const auto& mesh_id : user_meshes) {
-        this->physical_meshes_.insert(std::make_pair(mesh_id, TestPhysicalMesh(this->control_plane_ptr_, mesh_id)));
-    }
-}
-
-inline void TestPhysicalMeshes::print_meshes() const {
-    log_info(tt::LogTest, "Printing physical meshes, (total: {})", this->physical_meshes_.size());
-    for (const auto& [mesh_id, mesh] : this->physical_meshes_) {
-        log_info(tt::LogTest, "Mesh id: {}", mesh_id);
-        mesh.print_mesh();
-    }
-}
-
-/*
-inline std::vector<chip_id_t> TestPhysicalMeshes::get_other_chips_on_same_row(chip_id_t physical_chip_id) {
-    const auto& fabric_node_id = this->control_plane_->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
-    const auto mesh_id = fabric_node_id.mesh_id;
-
-    this->validate_mesh_id(mesh_id);
-
-    const auto [chip_row, chip_col] = this->get_chip_location_from_physical_id(mesh_id, physical_chip_id);
-    std::vector<chip_id_t> chips = this->physical_chip_view_[mesh_id][chip_row];
-    chips.erase(std::remove(chips.begin(), chips.end(), physical_chip_id), chips.end());
-
-    return chips;
-}
-
-inline std::vector<chip_id_t> TestPhysicalMeshes::get_other_chips_on_same_col(chip_id_t physical_chip_id) {
-    const auto& fabric_node_id = this->control_plane_->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
-    const auto mesh_id = fabric_node_id.mesh_id;
-
-    this->validate_mesh_id(mesh_id);
-
-    const auto [chip_row, chip_col] = this->get_chip_location_from_physical_id(mesh_id, physical_chip_id);
-    std::vector<chip_id_t> chips;
-    for (uint32_t i = 0; i < this->physical_mesh_dims_[mesh_id][ROW_IDX]; i++) {
-        chips.push_back(this->physical_chip_view_[mesh_id][i][chip_col]);
-    }
-    chips.erase(std::remove(chips.begin(), chips.end(), physical_chip_id), chips.end());
-
-    return chips;
-}
-*/
-
-inline std::unordered_map<RoutingDirection, uint32_t> TestPhysicalMeshes::get_hops_to_chip(
-    const chip_id_t src_phys_chip_id, const chip_id_t dst_phys_chip_id) const {
-    const auto& src_mesh_id =
-        this->control_plane_ptr_->get_fabric_node_id_from_physical_chip_id(src_phys_chip_id).mesh_id;
-    const auto& dst_mesh_id =
-        this->control_plane_ptr_->get_fabric_node_id_from_physical_chip_id(dst_phys_chip_id).mesh_id;
-
-    // TODO: enable inter-mesh hop counts
-    if (src_mesh_id != dst_mesh_id) {
-        log_fatal(tt::LogTest, "Inter-mesh hops not supported yet");
-        throw std::runtime_error("Unexpected hops request b/w meshes");
-    }
-
-    this->validate_mesh_id(src_mesh_id);
-
-    // TODO: enable when inter-mesh hops is enabled
-    // this->validate_mesh_id(dst_mesh_id);
-
-    return this->physical_meshes_.at(src_mesh_id).get_hops_to_chip(src_phys_chip_id, dst_phys_chip_id);
-}
-
-inline std::vector<chip_id_t> TestPhysicalMeshes::get_chips_from_hops(
-    const chip_id_t src_phys_chip_id,
-    std::unordered_map<RoutingDirection, uint32_t> hops,
-    const ChipSendType chip_send_type) const {
-    const auto& src_mesh_id =
-        this->control_plane_ptr_->get_fabric_node_id_from_physical_chip_id(src_phys_chip_id).mesh_id;
-    this->validate_mesh_id(src_mesh_id);
-
-    return this->physical_meshes_.at(src_mesh_id).get_chips_from_hops(src_phys_chip_id, hops, chip_send_type);
-}
 
 }  // namespace fabric_tests
 }  // namespace tt::tt_fabric

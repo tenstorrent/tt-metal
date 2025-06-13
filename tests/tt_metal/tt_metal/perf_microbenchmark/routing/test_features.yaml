@@ -1,0 +1,157 @@
+# This YAML file demonstrates the various features of the fabric performance test framework.
+# It will be updated as new features are added.
+
+Tests:
+  # ======================================================================================
+  # Test 1: A simple, fully specified unicast test.
+  # This demonstrates the most basic configuration.
+  # ======================================================================================
+  - name: "SimpleUnicast"
+    fabric_setup:
+      topology: Linear
+
+    senders:
+      - device: 0 # Source is physical chip 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 100
+            destination:
+              device: 1 # Destination is physical chip 1
+
+  # ======================================================================================
+  # Test 2: Parametrized All-to-All Test on a Mesh.
+  # This shows how to use high-level patterns and parametrization to generate
+  # a matrix of tests that sweep across different parameters.
+  # The test builder will generate a separate test for each combination, e.g.,
+  #   - AllToAll_size_256_num_packets_50
+  #   - AllToAll_size_256_num_packets_100
+  #   - AllToAll_size_512_num_packets_50
+  #   - ... and so on.
+  # =================================C=====================================================
+  - name: "ParametrizedAllToAll"
+    fabric_setup:
+      topology: Mesh
+
+    # These parameters will be used to generate a cross-product of test configurations.
+    parametrization_params:
+      size: [256, 512, 1024]
+      num_packets: [50, 100]
+      ntype: [unicast_write, atomic_inc]
+
+    # Default values that will be applied to all generated traffic patterns unless
+    # overridden by the parametrization.
+    defaults:
+      ftype: unicast
+
+    # High-level patterns automatically generate the sender configurations.
+    patterns:
+      - type: all_to_all_unicast
+        # 'iterations' will run the entire generated test matrix this many times,
+        # each time with a new random seed for the payload data.
+        iterations: 2
+
+  # ======================================================================================
+  # Test 3: Logical Devices and Mixed Traffic Types.
+  # This demonstrates using logical device identifiers and sending multiple different
+  # kinds of traffic from the same sender core.
+  # ======================================================================================
+  - name: "LogicalDevices_MixedTraffic"
+    fabric_setup:
+      topology: Mesh
+
+    senders:
+      - device: [0, 0] # Source is mesh 0, chip 0
+        core: [1, 1]   # Specifies the sender worker core to use
+        patterns:
+          # First traffic stream from core [1,1]
+          - ntype: unicast_write
+            size: 4096
+            num_packets: 200
+            destination:
+              device: [0, 1] # Destination is mesh 0, chip 1
+              core: [1, 5]   # Specifies the receiver worker core
+
+          # A second, different traffic stream from the same sender core
+          - ntype: fused_atomic_inc
+            size: 64 # Payload size for the write part of the fused op
+            num_packets: 500
+            destination:
+              device: [0, 2] # A different destination
+
+    defaults:
+      ftype: unicast # This default applies to both patterns above
+
+  # ======================================================================================
+  # Test 4: Full Device Random Pairing Pattern
+  # This pattern requires an even number of devices and will create random
+  # one-to-one pairings between them. For example, with 4 chips {0,1,2,3},
+  # it might generate pairs (0,3) and (1,2) in one iteration, and (0,1) and
+  # (2,3) in the next.
+  # ======================================================================================
+  - name: "FullDevicePairing"
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 100
+
+    patterns:
+      - type: full_device_random_pairing
+        iterations: 5 # Generate 5 different random pairings
+
+  # ======================================================================================
+  # Test 5: Automatic Randomization of Missing Parameters
+  # This test shows how to specify only the bare minimum (a sender and a
+  # destination) and let the framework randomize the rest of the traffic
+  # parameters (ftype, ntype, size, num_packets).
+  # ======================================================================================
+  - name: "RandomizeMissingParams"
+    fabric_setup:
+      topology: Linear
+
+    on_missing_param_policy: randomize
+
+    senders:
+      - device: 0
+        patterns:
+          # Only the destination is specified. The rest will be randomized.
+          - destination:
+              device: 1
+      - device: 1
+        patterns:
+          # You can also partially specify. Here, size is fixed but other
+          # parameters like ntype and num_packets will be randomized.
+          - size: 333
+            destination:
+              device: 0
+
+  # ======================================================================================
+  # Test 6: Multicast via Hops
+  # This demonstrates how to create a multicast group by specifying the number
+  # of hops in each cardinal direction from the source.
+  # ======================================================================================
+  - name: "MulticastHops"
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ntype: unicast_write
+      size: 128
+      num_packets: 50
+
+    senders:
+      - device: [0, 0] # Source is mesh 0, chip 0
+        patterns:
+          - ftype: mcast
+            destination:
+              # This will send a multicast packet that travels:
+              # - 1 hop South (to chip [0,1])
+              # - 1 hop East (to chip [1,0])
+              hops:
+                S: 1
+                E: 1

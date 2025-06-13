@@ -15,6 +15,13 @@
 #include "assert.hpp"
 #include <tt-logger/tt-logger.hpp>
 
+auto fmt::formatter<tt::tt_fabric::FabricNodeId>::format(
+    const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator {
+    std::stringstream ss;
+    ss << "(" << *node_id.mesh_id << ", " << node_id.chip_id << ")";
+    return fmt::format_to(ctx.out(), "{}", ss.str());
+}
+
 namespace tt::tt_fabric {
 
 FabricNodeId::FabricNodeId(MeshId mesh_id, std::uint32_t chip_id) {

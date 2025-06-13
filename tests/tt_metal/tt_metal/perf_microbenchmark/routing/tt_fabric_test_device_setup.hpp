@@ -18,6 +18,10 @@
 #include "impl/context/metal_context.hpp"
 
 #include "tt_fabric_test_traffic.hpp"
+#include "tt_fabric_test_interfaces.hpp"
+#include "tt_fabric_test_common.hpp"
+
+using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
@@ -122,6 +126,7 @@ public:
     TestWorker(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void set_kernel_src(const std::string_view& kernel_src);
     void create_kernel(
+        const MeshCoordinate& device_coord,
         const std::vector<uint32_t>& ct_args,
         const std::vector<uint32_t>& rt_args,
         const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear) const;
@@ -179,17 +184,14 @@ public:
 
 struct TestDevice {
 public:
-    TestDevice(tt::tt_metal::IDevice* device_handle);
-    chip_id_t get_physical_chip_id() const;
-    tt::tt_metal::IDevice* get_device_handle();
+    TestDevice(const MeshCoordinate& coord, IDeviceInfoProvider& device_info_provider, IRouteManager& route_manager);
     tt::tt_metal::Program& get_program_handle();
+    const FabricNodeId& get_node_id();
     void reserve_core_for_worker(
         TestWorkerType worker_type, CoreCoord logical_core, std::optional<std::string_view> kernel_src);
     CoreCoord allocate_worker_core() const;
     std::vector<CoreCoord> get_available_worker_cores() const;
     uint32_t allocate_address_for_sender(CoreCoord receiver_core);
-    uint32_t get_worker_noc_encoding(CoreCoord logical_core) const;
-    uint32_t get_worker_id(CoreCoord logical_core) const;
     void add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config);
     void add_receiver_traffic_config(CoreCoord logical_core, TestTrafficReceiverConfig config);
     void create_kernels();
@@ -199,10 +201,11 @@ private:
     void create_sender_kernels();
     void create_receiver_kernels();
 
-    tt::tt_metal::IDevice* device_handle_;
-    chip_id_t physical_chip_id_;
-    MeshId mesh_id_;
-    chip_id_t logical_chip_id_;
+    MeshCoordinate coord_;
+    IDeviceInfoProvider& device_info_provider_;
+    IRouteManager& route_manager_;
+
+    FabricNodeId fabric_node_id_ = FabricNodeId(MeshId{0}, 0);
 
     tt_metal::Program program_handle_;
 
@@ -297,8 +300,8 @@ inline void TestFabricRouter::set_loopback_flag() {
     if (!this->downstream_router_chans_.empty()) {
         log_fatal(
             tt::LogTest,
-            "For chip: {}, chan: {}, downstream router is already set to: {}, but tried to set as loopback",
-            this->test_device_ptr_->get_physical_chip_id(),
+            "For node: {}, chan: {}, downstream router is already set to: {}, but tried to set as loopback",
+            this->test_device_ptr_->get_node_id(),
             this->my_chan_,
             this->downstream_router_chans_);
         throw std::runtime_error("Tried to set loopback when downstream router chan is already set");
@@ -442,6 +445,7 @@ inline TestWorker::TestWorker(
 inline void TestWorker::set_kernel_src(const std::string_view& kernel_src) { this->kernel_src_ = kernel_src; }
 
 inline void TestWorker::create_kernel(
+    const MeshCoordinate& device_coord,
     const std::vector<uint32_t>& ct_args,
     const std::vector<uint32_t>& rt_args,
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear) const {
@@ -457,11 +461,13 @@ inline void TestWorker::create_kernel(
     tt::tt_metal::SetRuntimeArgs(
         this->test_device_ptr_->get_program_handle(), kernel_handle, this->logical_core_, rt_args);
 
+    // TODO: move this to mesh buffer?
+    /*
     for (const auto& [address, num_bytes] : addresses_and_size_to_clear) {
         std::vector<uint32_t> zero_vec((num_bytes / sizeof(uint32_t)), 0);
-        tt::tt_metal::detail::WriteToDeviceL1(
-            this->test_device_ptr_->get_device_handle(), this->logical_core_, address, zero_vec);
+        tt::tt_metal::detail::WriteToDeviceL1(device_handle, this->logical_core_, address, zero_vec);
     }
+    */
 }
 
 /* ********************
@@ -530,41 +536,28 @@ inline uint32_t TestReceiver::allocate_address_for_sender() { return this->alloc
 /* ********************
  * TestDevice Methods *
  **********************/
-inline uint32_t TestDevice::get_worker_noc_encoding(CoreCoord logical_core) const {
-    auto virtual_core = this->device_handle_->worker_core_from_logical_core(logical_core);
-    return tt_metal::MetalContext::instance().hal().noc_xy_encoding(virtual_core.x, virtual_core.y);
-}
-
 inline void TestDevice::reserve_worker_core(CoreCoord logical_core) {
     if (this->senders_.find(logical_core) != this->senders_.end() ||
         this->receivers_.find(logical_core) != this->receivers_.end()) {
-        log_fatal(
-            tt::LogTest, "On chip: {}, requested core: {} is already reserved", this->physical_chip_id_, logical_core);
+        log_fatal(tt::LogTest, "On chip coord: {}, requested core: {} is already reserved", this->coord_, logical_core);
         throw std::runtime_error("Failed to reserve worker core");
     }
 
     auto it = std::find(
         this->avaialble_worker_logical_cores_.begin(), this->avaialble_worker_logical_cores_.end(), logical_core);
     if (it == this->avaialble_worker_logical_cores_.end()) {
-        log_fatal(tt::LogTest, "On chip: {}, requested core: {} not found", this->physical_chip_id_, logical_core);
+        log_fatal(tt::LogTest, "On chip coord: {}, requested core: {} not found", this->coord_, logical_core);
         throw std::runtime_error("Failed to reserve worker core");
     }
     this->avaialble_worker_logical_cores_.erase(it);
 }
 
-inline TestDevice::TestDevice(tt_metal::IDevice* device_handle) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    this->device_handle_ = device_handle;
-
-    this->physical_chip_id_ = this->device_handle_->id();
-    const auto& fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(this->physical_chip_id_);
-    this->mesh_id_ = fabric_node_id.mesh_id;
-    this->logical_chip_id_ = fabric_node_id.chip_id;
-
-    this->program_handle_ = tt::tt_metal::CreateProgram();
-
-    const auto grid_size = this->device_handle_->compute_with_storage_grid_size();
+inline TestDevice::TestDevice(
+    const MeshCoordinate& coord, IDeviceInfoProvider& device_info_provider, IRouteManager& route_manager) :
+    coord_(coord), device_info_provider_(device_info_provider), route_manager_(route_manager) {
+    program_handle_ = tt::tt_metal::CreateProgram();
+    fabric_node_id_ = device_info_provider_.get_fabric_node_id(coord);
+    const auto grid_size = this->device_info_provider_.get_worker_grid_size();
     for (auto i = 0; i < grid_size.x; i++) {
         for (auto j = 0; j < grid_size.y; j++) {
             this->avaialble_worker_logical_cores_.push_back(CoreCoord({i, j}));
@@ -576,11 +569,9 @@ inline TestDevice::TestDevice(tt_metal::IDevice* device_handle) {
     // TODO: init routers
 }
 
-inline chip_id_t TestDevice::get_physical_chip_id() const { return this->physical_chip_id_; }
-
-inline tt::tt_metal::IDevice* TestDevice::get_device_handle() { return this->device_handle_; }
-
 inline tt::tt_metal::Program& TestDevice::get_program_handle() { return this->program_handle_; }
+
+inline const FabricNodeId& TestDevice::get_node_id() { return this->fabric_node_id_; }
 
 inline void TestDevice::reserve_core_for_worker(
     TestWorkerType worker_type, CoreCoord logical_core, std::optional<std::string_view> kernel_src) {
@@ -601,7 +592,7 @@ inline void TestDevice::reserve_core_for_worker(
 inline CoreCoord TestDevice::allocate_worker_core() const {
     // currently pick from last -> can be configured as a policy (random, optimized etc)
     if (this->avaialble_worker_logical_cores_.empty()) {
-        log_fatal(tt::LogTest, "On chip: {}, no more worker cores avaialble", this->physical_chip_id_);
+        log_fatal(tt::LogTest, "On node: {}, no more worker cores avaialble", fabric_node_id_);
         throw std::runtime_error("Failed to allocate worker core");
     }
 
@@ -613,38 +604,10 @@ inline std::vector<CoreCoord> TestDevice::get_available_worker_cores() const {
     return this->avaialble_worker_logical_cores_;
 }
 
-inline uint32_t TestDevice::get_worker_id(CoreCoord logical_core) const {
-    return (this->physical_chip_id_ << 8) | ((logical_core.x) << 4) | (logical_core.y);
-}
-
-inline void TestDevice::add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config) {
-    auto it = this->senders_.find(logical_core);
-    if (it == this->senders_.end()) {
-        log_fatal(
-            tt::LogTest, "On chip: {}, for logical core: {}, no sender found", this->physical_chip_id_, logical_core);
-        throw std::runtime_error("Failed to add traffic config for sender");
-    }
-    it->second.add_config(config);
-}
-
-inline void TestDevice::add_receiver_traffic_config(CoreCoord logical_core, TestTrafficReceiverConfig config) {
-    auto it = this->receivers_.find(logical_core);
-    if (it == this->receivers_.end()) {
-        log_fatal(
-            tt::LogTest, "On chip: {}, for logical core: {}, no receiver found", this->physical_chip_id_, logical_core);
-        throw std::runtime_error("Failed to add traffic config for receiver");
-    }
-    it->second.add_config(config);
-}
-
 inline uint32_t TestDevice::allocate_address_for_sender(CoreCoord receiver_core) {
     auto it = this->receivers_.find(receiver_core);
     if (it == this->receivers_.end()) {
-        log_fatal(
-            tt::LogTest,
-            "On chip: {}, for logical core: {}, no receiver found",
-            this->physical_chip_id_,
-            receiver_core);
+        log_fatal(tt::LogTest, "On node: {}, for logical core: {}, no receiver found", fabric_node_id_, receiver_core);
         throw std::runtime_error("Failed to allocate address for sender");
     }
 
@@ -652,8 +615,8 @@ inline uint32_t TestDevice::allocate_address_for_sender(CoreCoord receiver_core)
     if (address == 0) {
         log_fatal(
             tt::LogTest,
-            "On chip: {}, for logical core: {}, no space available for sender",
-            this->physical_chip_id_,
+            "On node: {}, for logical core: {}, no space available for sender",
+            fabric_node_id_,
             receiver_core);
         throw std::runtime_error("Failed to allocate address for sender");
     }
@@ -688,19 +651,13 @@ inline void TestDevice::create_sender_kernels() {
         // for now just assume that there is only 1 recv per sender
         // TODO: move this elsewhere and fix the logic
         const auto& temp_config = sender.configs_[0];
-        const auto dst_physical_chip_id = temp_config.dst_phys_chip_ids[0];
+        const auto dst_node_id = temp_config.dst_node_ids[0];
 
-        // get link indices
-        const auto available_links = get_forwarding_link_indices(this->physical_chip_id_, dst_physical_chip_id);
+        const auto available_links = get_forwarding_link_indices(fabric_node_id_, dst_node_id);
         const auto link_idx = available_links[0];
         std::vector<uint32_t> fabric_connection_args;
         append_fabric_connection_rt_args(
-            this->physical_chip_id_,
-            dst_physical_chip_id,
-            link_idx,
-            this->program_handle_,
-            core,
-            fabric_connection_args);
+            fabric_node_id_, dst_node_id, link_idx, this->program_handle_, core, fabric_connection_args);
 
         // TODO: handle this properly when adding configs for the sender
         std::vector<uint32_t> traffic_config_to_fabric_connection_args(sender.configs_.size(), 0);
@@ -721,7 +678,7 @@ inline void TestDevice::create_sender_kernels() {
         rt_args.insert(rt_args.end(), traffic_config_args.begin(), traffic_config_args.end());
 
         // create kernel
-        sender.create_kernel(ct_args, rt_args, {});
+        sender.create_kernel(coord_, ct_args, rt_args, {});
         log_info(tt::LogTest, "created sender kernel on core: {}", core);
     }
 }
@@ -741,18 +698,36 @@ inline void TestDevice::create_receiver_kernels() {
         std::vector<uint32_t> rt_args;
         rt_args.insert(rt_args.end(), traffic_config_args.begin(), traffic_config_args.end());
 
-        receiver.create_kernel(ct_args, rt_args, {});
+        receiver.create_kernel(coord_, ct_args, rt_args, {});
         log_info(tt::LogTest, "created receiver kernel on core: {}", core);
     }
 }
 
 inline void TestDevice::create_kernels() {
-    log_info(tt::LogTest, "creating kernels on device: {}", this->physical_chip_id_);
+    log_info(tt::LogTest, "creating kernels on node: {}", fabric_node_id_);
     // create sender kernels
     this->create_sender_kernels();
 
     // create receiver kernels
     this->create_receiver_kernels();
+}
+
+inline void TestDevice::add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config) {
+    auto it = this->senders_.find(logical_core);
+    if (it == this->senders_.end()) {
+        log_fatal(tt::LogTest, "On node: {}, for logical core: {}, no sender found", fabric_node_id_, logical_core);
+        throw std::runtime_error("Failed to add traffic config for sender");
+    }
+    it->second.add_config(config);
+}
+
+inline void TestDevice::add_receiver_traffic_config(CoreCoord logical_core, TestTrafficReceiverConfig config) {
+    auto it = this->receivers_.find(logical_core);
+    if (it == this->receivers_.end()) {
+        log_fatal(tt::LogTest, "On node: {}, for logical core: {}, no receiver found", fabric_node_id_, logical_core);
+        throw std::runtime_error("Failed to add traffic config for receiver");
+    }
+    it->second.add_config(config);
 }
 
 }  // namespace fabric_tests

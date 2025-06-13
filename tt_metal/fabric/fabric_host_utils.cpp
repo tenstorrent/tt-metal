@@ -65,19 +65,21 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const bool is_2d_fabric = control_plane.get_fabric_context().get_fabric_topology() == Topology::Mesh;
 
     const std::vector<chan_id_t>& fabric_channels =
-        control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
+        control_plane.get_active_fabric_eth_channels_in_direction(src_node_id, direction);
 
     // the subset of routers that support forwarding b/w those chips
     std::vector<chan_id_t> forwarding_channels;
     if (is_2d_fabric) {
-        forwarding_channels =
-            control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id, direction);
+        forwarding_channels = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, direction);
     } else {
         chip_id_t src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
         chip_id_t dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
         // for 1D check if each port has an active connection to the dst_chip_id
+        const auto src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_node_id);
+        const auto dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_node_id);
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& soc_desc = cluster.get_soc_desc(src_chip_id);
+
         for (const auto& channel : fabric_channels) {
             const auto eth_core = soc_desc.get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
             auto [connected_chip_id, connected_eth_core] =
@@ -104,7 +106,7 @@ std::vector<uint32_t> get_forwarding_link_indices(
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // find the forwarding direction b/w src and dest chip
-    const auto& forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    const auto& forwarding_direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
     if (!forwarding_direction.has_value()) {
         return {};
     }
