@@ -476,7 +476,7 @@ static Tensor random(
         case DataType::UINT32: return uniform(0u, 1u, shape, layout);
         case DataType::FLOAT32: return uniform(0.0f, 1.0f, shape, layout);
         case DataType::BFLOAT16: return uniform(::bfloat16(0.0f), ::bfloat16(1.0f), shape, layout);
-        case DataType::INT32: return uniform(int32_t(-1), int32_t(+1), shape, layout);
+        case DataType::INT32: return uniform(int32_t(-1), int32_t(1), shape, layout);
         default: TT_THROW("Unsupported DataType!");
     };
 }
