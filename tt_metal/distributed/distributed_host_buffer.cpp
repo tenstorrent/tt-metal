@@ -41,7 +41,10 @@ DistributedHostBuffer DistributedHostBuffer::create(
             global_shape[dim]);
     }
     return DistributedHostBuffer(
-        global_shape, local_offset, distributed::MeshContainer<Shard>(local_shape, Shard{.is_populated = false}));
+        global_shape,
+        local_offset,
+        distributed::MeshContainer<Shard>(local_shape, Shard{.is_populated = false}),
+        /*populated_shards=*/std::set<distributed::MeshCoordinate>{});
 }
 
 DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshShape& shape) {
@@ -123,8 +126,8 @@ DistributedHostBuffer DistributedHostBuffer::transform(
     DistributedHostBuffer transformed_buffer(
         global_shape_,
         local_offset_,
-        distributed::MeshContainer<Shard>(local_shards_.shape(), std::move(transformed_shards)));
-    return transformed_buffer;
+        distributed::MeshContainer<Shard>(local_shards_.shape(), std::move(transformed_shards)),
+        populated_shards_);
 }
 
 void DistributedHostBuffer::apply(const ApplyFn& fn, ProcessShardExecutionPolicy policy) const {

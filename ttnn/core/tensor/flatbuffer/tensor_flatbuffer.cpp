@@ -98,8 +98,8 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
             const auto& host_storage = std::get<tt::tt_metal::HostStorage>(storage);
             buffer_size = host_storage.buffer.view_bytes().size();
         } else {
-            const auto buffer = std::get<tt::tt_metal::MultiDeviceHostStorage>(storage).get_buffer(0);
-            buffer_size = buffer.view_bytes().size();
+            std::get<tt::tt_metal::MultiDeviceHostStorage>(storage).distributed_buffer().apply(
+                [&buffer_size](const tt::tt_metal::HostBuffer& shard) { buffer_size = shard.view_bytes().size(); });
         }
 
         auto inline_storage = ttnn::flatbuffer::InlineFileStorage(/*offset=*/0, buffer_size);
