@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 from models.common.lightweightmodule import LightweightModule
+from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
 class TtMoeLayer(LightweightModule):
@@ -125,7 +126,7 @@ class TtMoeLayer(LightweightModule):
 
         # MLP and masking
         weights = expert_i_HH(input_i_1SBH, mode=mode)
-
+        weights = ttnn.unsqueeze(weights_1SB1, dim=3)
         results_11BH = ttnn.mul(weights, weights_1SB1)
 
         weights.deallocate(True)
