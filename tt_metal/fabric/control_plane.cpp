@@ -86,22 +86,6 @@ bool is_chip_on_corner_of_mesh(
     }
 }
 
-/// snijjar
-// TODO: commonize with fabric_context.cpp impl
-static tt::tt_fabric::Topology get_topology(tt_metal::FabricConfig fabric_config) {
-    switch (fabric_config) {
-        case tt::tt_metal::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
-        case tt::tt_metal::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
-        case tt::tt_metal::FabricConfig::FABRIC_2D: return tt::tt_fabric::Topology::Mesh;
-        case tt::tt_metal::FabricConfig::FABRIC_2D_TORUS: return tt::tt_fabric::Topology::Torus;
-        case tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC: return tt::tt_fabric::Topology::Mesh;
-        case tt::tt_metal::FabricConfig::DISABLED:
-        case tt::tt_metal::FabricConfig::CUSTOM:
-            TT_THROW("Unsupported fabric config: {}", magic_enum::enum_name(fabric_config));
-    }
-    return tt::tt_fabric::Topology::Linear;
-}
-
 template <typename CONNECTIVITY_MAP_T>
 static void build_golden_link_counts_impl(
     CONNECTIVITY_MAP_T const& golden_connectivity_map,
@@ -138,7 +122,7 @@ static void build_golden_link_counts(
 
 void ControlPlane::initialize_dynamic_routing_plane_counts(
     const IntraMeshConnectivity& intra_mesh_connectivity, tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode) {
-    auto topology = get_topology(fabric_config);
+    auto topology = this->get_fabric_context().get_fabric_topology();
     size_t min_routing_planes = std::numeric_limits<size_t>::max();
 
     auto apply_min =
