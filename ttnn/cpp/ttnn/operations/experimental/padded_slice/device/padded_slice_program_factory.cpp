@@ -683,7 +683,6 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         num_tiles_per_channel = num_tiles_per_channel / num_cores_channels;
     }
 
-    bool pad_output_row = false;
     uint32_t num_tiles_height_per_core = tt::div_up(output_shard_spec.shape[0], tt::constants::TILE_HEIGHT);
     uint32_t num_output_sticks_per_core = output_shard_spec.shape[0];
 
