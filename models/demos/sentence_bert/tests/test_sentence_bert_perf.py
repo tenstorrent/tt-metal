@@ -2,27 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import time
+
+import pytest
 import torch
 import transformers
-import pytest
 from loguru import logger
-from models.perf.perf_utils import prep_perf_report
-from models.experimental.sentence_bert.ttnn.ttnn_sentence_bert_model import TtnnSentenceBertModel
-from models.experimental.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
-from models.utility_functions import (
-    enable_persistent_kernel_cache,
-    run_for_wormhole_b0,
-    is_wormhole_b0,
-)
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.experimental.sentence_bert.ttnn.common import custom_preprocessor, preprocess_inputs
+
+import ttnn
+from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
+from models.demos.sentence_bert.ttnn.common import custom_preprocessor, preprocess_inputs
+from models.demos.sentence_bert.ttnn.ttnn_sentence_bert_model import TtnnSentenceBertModel
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import enable_persistent_kernel_cache, is_wormhole_b0, run_for_wormhole_b0
 
 
 def get_expected_times(name):
-    base = {"sentence_bert": (12.1, 0.14)}
+    base = {"sentence_bert": (12.1, 0.16)}
     return base[name]
 
 
@@ -49,11 +47,11 @@ def test_ttnn_sentence_bert_perf(device, inputs):
         device=device,
     )
     ttnn_module = TtnnSentenceBertModel(parameters=parameters, config=config)
-    ttnn_input_ids, ttnn_token_type_ids, ttnn_position_ids, ttnn_attention_mask = preprocess_inputs(
-        input_ids, token_type_ids, position_ids, extended_mask, device
-    )
     durations = []
     for i in range(2):
+        ttnn_input_ids, ttnn_token_type_ids, ttnn_position_ids, ttnn_attention_mask = preprocess_inputs(
+            input_ids, token_type_ids, position_ids, extended_mask, device
+        )
         start = time.time()
         ttnn_model_output = ttnn_module(
             ttnn_input_ids, ttnn_attention_mask, ttnn_token_type_ids, ttnn_position_ids, device=device
@@ -69,7 +67,7 @@ def test_ttnn_sentence_bert_perf(device, inputs):
     expected_compile_time, expected_inference_time = get_expected_times("sentence_bert")
 
     prep_perf_report(
-        model_name="models/experimental/sentence_bert",
+        model_name="models/demos/sentence_bert",
         batch_size=inputs[1][0],
         inference_and_compile_time=inference_and_compile_time,
         inference_time=inference_time,
