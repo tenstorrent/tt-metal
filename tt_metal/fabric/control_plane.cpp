@@ -141,6 +141,20 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     auto topology = get_topology(fabric_config);
     size_t min_routing_planes = std::numeric_limits<size_t>::max();
 
+    auto print_golden_link_counts =
+        [](const std::unordered_map<
+            MeshId,
+            std::unordered_map<chip_id_t, std::unordered_map<RoutingDirection, size_t>>>& golden_link_counts) {
+            for (const auto& [mesh_id, chip_id_to_link_counts] : golden_link_counts) {
+                for (const auto& [chip_id, link_counts] : chip_id_to_link_counts) {
+                    for (const auto& [direction, count] : link_counts) {
+                        log_info(
+                            tt::LogFabric, "Mesh {} chip {} direction {} count {}", mesh_id, chip_id, direction, count);
+                    }
+                }
+            }
+        };
+
     auto apply_min =
         [this, reliability_mode](
             const std::unordered_map<tt::tt_fabric::RoutingDirection, std::vector<tt::tt_fabric::chan_id_t>>&
@@ -177,20 +191,6 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
         return MeshCoordinate(coord_x, coord_y);
     };
 
-    auto print_golden_link_counts =
-        [](const std::unordered_map<
-            MeshId,
-            std::unordered_map<chip_id_t, std::unordered_map<RoutingDirection, size_t>>>& golden_link_counts) {
-            for (const auto& [mesh_id, chip_id_to_link_counts] : golden_link_counts) {
-                for (const auto& [chip_id, link_counts] : chip_id_to_link_counts) {
-                    for (const auto& [direction, count] : link_counts) {
-                        log_info(
-                            tt::LogFabric, "Mesh {} chip {} direction {} count {}", mesh_id, chip_id, direction, count);
-                    }
-                }
-            }
-        };
-
     std::unordered_map<MeshId, std::unordered_map<chip_id_t, std::unordered_map<RoutingDirection, size_t>>>
         golden_link_counts;
     TT_FATAL(
@@ -224,54 +224,10 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
             const auto& port_directions = this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
 
             const auto& golden_counts = golden_link_counts.at(MeshId{mesh_id}).at(chip_id);
-            auto old = row_min_planes.at(chip_coord_y);
             apply_min(port_directions, RoutingDirection::E, golden_counts, row_min_planes.at(chip_coord_y));
-            if (old != std::numeric_limits<size_t>::max() && old != row_min_planes.at(chip_coord_y)) {
-                log_warning(
-                    tt::LogFabric,
-                    "Chip {} in mesh {} in direction {} does not have all links up. Setting number of routing planes "
-                    "to {}",
-                    chip_id,
-                    mesh_id,
-                    RoutingDirection::E,
-                    row_min_planes.at(chip_coord_y));
-            }
-            old = row_min_planes.at(chip_coord_y);
             apply_min(port_directions, RoutingDirection::W, golden_counts, row_min_planes.at(chip_coord_y));
-            if (old != std::numeric_limits<size_t>::max() && old != row_min_planes.at(chip_coord_y)) {
-                log_warning(
-                    tt::LogFabric,
-                    "Chip {} in mesh {} in direction {} does not have all links up. Setting number of routing planes "
-                    "to {}",
-                    chip_id,
-                    mesh_id,
-                    RoutingDirection::W,
-                    row_min_planes.at(chip_coord_y));
-            }
-            old = col_min_planes.at(chip_coord_x);
             apply_min(port_directions, RoutingDirection::N, golden_counts, col_min_planes.at(chip_coord_x));
-            if (old != std::numeric_limits<size_t>::max() && old != col_min_planes.at(chip_coord_x)) {
-                log_warning(
-                    tt::LogFabric,
-                    "Chip {} in mesh {} in direction {} does not have all links up. Setting number of routing planes "
-                    "to {}",
-                    chip_id,
-                    mesh_id,
-                    RoutingDirection::N,
-                    col_min_planes.at(chip_coord_x));
-            }
-            old = col_min_planes.at(chip_coord_x);
             apply_min(port_directions, RoutingDirection::S, golden_counts, col_min_planes.at(chip_coord_x));
-            if (old != std::numeric_limits<size_t>::max() && old != col_min_planes.at(chip_coord_x)) {
-                log_warning(
-                    tt::LogFabric,
-                    "Chip {} in mesh {} in direction {} does not have all links up. Setting number of routing planes "
-                    "to {}",
-                    chip_id,
-                    mesh_id,
-                    RoutingDirection::S,
-                    col_min_planes.at(chip_coord_x));
-            }
         }
 
         // TODO: specialize by topology for better perf
@@ -296,7 +252,13 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
                 {RoutingDirection::N, col_min_planes.at(chip_coord_x)},
                 {RoutingDirection::S, col_min_planes.at(chip_coord_x)},
             };
+        }
+    }
 
+    // Validation only - no functional impact
+    for (std::uint32_t mesh_id = 0; mesh_id < intra_mesh_connectivity.size(); mesh_id++) {
+        for (std::uint32_t chip_id = 0; chip_id < intra_mesh_connectivity[mesh_id].size(); chip_id++) {
+            const auto fabric_node_id = FabricNodeId(MeshId{mesh_id}, chip_id);
             for (auto dir : {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {
                 auto actual_count = this->router_port_directions_to_num_routing_planes_map_[fabric_node_id].at(dir);
                 if (golden_link_counts[MeshId{mesh_id}][chip_id].find(dir) !=
