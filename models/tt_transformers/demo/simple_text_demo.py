@@ -971,9 +971,9 @@ def test_demo_text(
         # [INFO] filtered by `batch_size=32`
         ci_target_ttft = {
             # N150 targets (milliseconds)
-            "N150_Llama3.1-8B": 106,
             "N150_Llama3.2-1B": 25,
             "N150_Llama3.2-3B": 54,
+            "N150_Llama3.1-8B": 106,
             "N150_Mistral-7B": 101,
             "N150_Falcon7B": 73,
             "N150_Mamba-2.8B": 40,
@@ -1031,12 +1031,6 @@ def test_demo_text(
             "TG_Mistral-7B": 45,  # FIXME: not in Github Action results
         }
         ci_target_decode_tok_s = {
-            # T3K targets
-            "T3K_Llama3.1-70B": 485,
-            "T3K_Falcon7B": 3891,
-            "T3K_Mixtral7Bx8": 418,
-            "T3K_Qwen2.5-72B": 443,
-            "T3K_Qwen3-32B": 653,
             # N150 targets
             "N150_Llama3.2-1B": 1728,
             "N150_Llama3.2-3B": 1060,
@@ -1046,6 +1040,12 @@ def test_demo_text(
             "N150_Mamba-2.8B": 354,
             # N300 targets
             "N300_Qwen2.5-7B": 657,
+            # T3K targets
+            "T3K_Llama3.1-70B": 485,
+            "T3K_Falcon7B": 3891,
+            "T3K_Mixtral7Bx8": 418,
+            "T3K_Qwen2.5-72B": 443,
+            "T3K_Qwen3-32B": 653,
         }
 
         # Only call verify_perf if the model_device_key exists in the targets
