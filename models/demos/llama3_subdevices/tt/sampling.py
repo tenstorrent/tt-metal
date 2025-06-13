@@ -15,8 +15,8 @@ class TTSampling(LightweightModule):
         self,
         args,
         mesh_device,
-        temperature,
         tt_ccl,
+        temperature=None,
     ):
         super().__init__()
         self.args = args
@@ -74,8 +74,18 @@ class TTSampling(LightweightModule):
         )
 
     def forward(
-        self, x: ttnn.Tensor, k: list[int], p: list[float], seed: int | None = None, tt_out_tok: ttnn.Tensor = None
+        self,
+        x: ttnn.Tensor,
+        k: int | list[int] = 1,
+        p: float | list[float] = 0.0,
+        seed: int = 0,
+        tt_out_tok: ttnn.Tensor = None,
     ):
+        if type(k) == int:
+            k = [k] * x.shape[2]
+        if type(p) == float:
+            p = [p] * x.shape[2]
+
         assert all(k_i <= self.max_top_k for k_i in k)
         assert type(k) == list and len(k) == x.shape[2]
         assert type(p) == list and len(p) == x.shape[2]
