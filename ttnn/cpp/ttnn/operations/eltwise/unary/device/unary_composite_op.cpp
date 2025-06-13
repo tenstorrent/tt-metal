@@ -26,27 +26,6 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::operations::unary {
 
-// asinh(x) = log(x + sqrt(x^2 + 1))
-Tensor _asinh(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_FATAL(input_a.storage_type() == StorageType::DEVICE, "Unary operation requires input to be on Device.");
-
-    Tensor ln_res(input_a);
-    {
-        Tensor x_abs = ttnn::abs(input_a, output_mem_config);
-        Tensor x_sq_p1(input_a);
-        {
-            Tensor x_sq = ttnn::square(input_a, output_mem_config);
-            x_sq_p1 = ttnn::add(x_sq, 1.0f, std::nullopt, output_mem_config);
-        }
-        ln_res = ttnn::log(
-            ttnn::add(x_abs, ttnn::sqrt(x_sq_p1, output_mem_config), std::nullopt, output_mem_config),
-            output_mem_config);
-    }
-    // input is negative, output is -asinh(input)
-    Tensor result = ttnn::where(input_a, ln_res, ttnn::neg(ln_res, output_mem_config));
-    return result;
-}
-
 // atanh[x] = 0.5 * ln((1 + x) / (1 - x))
 Tensor _atanh(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL(input_a.storage_type() == StorageType::DEVICE, "Unary operation requires input to be on Device.");
