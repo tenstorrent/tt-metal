@@ -76,6 +76,12 @@ parameters = {
             ((1), None, False),
         ],
     },
+    "pytorch2": {
+        "params": [
+            # ((512, 4096), (0), True),
+            ((1, 1, 512, 4096), (2), True),
+        ],
+    },
     "forge": {
         "params": [
             (
@@ -634,7 +640,30 @@ def run_sum(device, params):
     torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
     torch_output_tensor = torch.sum(torch_input_tensor, dim, keepdim)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    # input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    # 512 x 4096, 4096/256 -> 16 shards: 4x4
+    memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
+            (512, 256),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardMode.PHYSICAL,
+        ),
+    )
+    # 512 x 4096, 4096/256 -> 16 shards: 3x5 - one wraps around
+    memory_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.L1,
+        nd_shard_spec=ttnn.NdShardSpec(
+            (1, 1, 512, 256),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 4))}),
+        ),
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config
+    )
+    print(input_tensor)
 
     start_time = start_measuring_time()
     op_output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
@@ -642,6 +671,7 @@ def run_sum(device, params):
     e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.999
     tensors = [input_tensor, op_output_tensor]
+    print(f"torch_output_tensor {torch_output_tensor}\nvs output_tensor {output_tensor}")
     return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)
 
 
@@ -652,6 +682,12 @@ def test_pytorch(device, params):
     logger.info(msg)
     if e2e_perf:
         logger.info(f"E2E Performance: {e2e_perf}")
+
+
+# 512 x 4096
+@pytest.mark.parametrize("params", parameters["pytorch2"]["params"])
+def test_pytorch2(device, params):
+    run_sum(device, params)
 
 
 @pytest.mark.parametrize("params", parameters["forge"]["params"])
