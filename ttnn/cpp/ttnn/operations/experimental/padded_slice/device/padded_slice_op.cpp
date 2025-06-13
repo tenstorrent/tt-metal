@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
 #include "padded_slice_op.hpp"
 #include "padded_slice_program_factory.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -17,24 +19,23 @@ void PaddedSliceDeviceOperation::validate_with_output_tensors(
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Input to padded_slice must be in row major layout");
-    TT_FATAL(input_tensor_a.get_padded_shape().rank() == 4, "Only 4D tensors are supported for padded_slice");
+    TT_FATAL(input_tensor_a.padded_shape().rank() == 4, "Only 4D tensors are supported for padded_slice");
     TT_FATAL(
-        input_tensor_a.get_padded_shape().rank() == this->padded_slice_start.rank() &&
+        input_tensor_a.padded_shape().rank() == this->padded_slice_start.rank() &&
             this->padded_slice_start.rank() == this->padded_slice_end.rank(),
         "Padded slice start, end and input tensor must all have the same rank");
-    for (uint32_t i = 0; i < input_tensor_a.get_padded_shape().rank(); i++) {
+    for (uint32_t i = 0; i < input_tensor_a.padded_shape().rank(); i++) {
         TT_FATAL(
-            this->padded_slice_start[i] < input_tensor_a.get_padded_shape()[i],
+            this->padded_slice_start[i] < input_tensor_a.padded_shape()[i],
             "Starts {} must be less than the shape of the tensor {} at index {}",
             this->padded_slice_start[i],
-            input_tensor_a.get_padded_shape()[i],
+            input_tensor_a.padded_shape()[i],
             i);
         TT_FATAL(
-            this->padded_slice_end[i] <= input_tensor_a.get_padded_shape()[i],
+            this->padded_slice_end[i] <= input_tensor_a.padded_shape()[i],
             "Ends {} must be less than or equal to the shape of the tensor {}",
             this->padded_slice_end[i],
-            input_tensor_a.get_padded_shape()[i]);
+            input_tensor_a.padded_shape()[i]);
         // Check if start shape is <= end shape
         TT_FATAL(
             this->padded_slice_start[i] <= this->padded_slice_end[i],
@@ -46,10 +47,10 @@ void PaddedSliceDeviceOperation::validate_with_output_tensors(
         const auto output_shape_required = compute_output_specs(input_tensors)[0].logical_shape();
         const auto& out_tensor = output_tensors[0].value();
         TT_FATAL(
-            out_tensor.get_padded_shape() == output_shape_required,
+            out_tensor.padded_shape() == output_shape_required,
             "The input tensors need a shape of {}, however the output tensor is only {}",
             output_shape_required,
-            out_tensor.get_padded_shape());
+            out_tensor.padded_shape());
     }
     auto output_tensor_shape = this->compute_output_specs(input_tensors)[0].logical_shape();
     TT_FATAL(!has_step, "Padded slice does not support strided slices");
@@ -58,7 +59,7 @@ void PaddedSliceDeviceOperation::validate_with_output_tensors(
 std::vector<ttnn::TensorSpec> PaddedSliceDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    SmallVector<uint32_t> out_shape(input_tensor.get_logical_shape().rank());
+    SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
 
     TT_FATAL(out_shape.size() == 4, "Only 4D tensors are supported for padded_slice");
     auto output_dim_i = [this](size_t i) {
@@ -77,7 +78,8 @@ std::vector<ttnn::TensorSpec> PaddedSliceDeviceOperation::compute_output_specs(
     }
 
     ttnn::Shape output_tensor_shape(std::move(out_shape));
-    auto tensor_layout = TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::ROW_MAJOR), this->output_mem_config);
+    auto output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
+    auto tensor_layout = TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), this->output_mem_config);
     return {ttnn::TensorSpec(output_tensor_shape, tensor_layout)};
 }
 

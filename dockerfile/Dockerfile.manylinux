@@ -1,0 +1,108 @@
+FROM quay.io/pypa/manylinux_2_34_x86_64
+
+# Hack for CIv2
+RUN FILES=(/etc/yum.repos.d/*.repo) && \
+  sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
+
+RUN dnf remove -y epel-release || true
+
+# Install system dependencies
+# This should be changed to use install_dependencies.sh so that our
+# dependency lists come from as few sources as possible, after
+# https://github.com/tenstorrent/tt-metal/issues/23060 is resolved
+RUN dnf update -y && \
+    dnf install -y \
+    autoconf \
+    automake \
+    bison \
+    ca-certificates \
+    capstone \
+    capstone-devel \
+    clang \
+    cmake3 \
+    expat-devel \
+    flex \
+    gcc \
+    gcc-c++ \
+    gfortran \
+    git \
+    gmp-devel \
+    gawk \
+    hwloc-devel \
+    libevent-devel \
+    libibverbs-devel \
+    libmpc-devel \
+    libzstd-devel \
+    make \
+    mpfr-devel \
+    ninja-build \
+    numactl-devel \
+    patchutils \
+    pkgconf-pkg-config \
+    pmix-devel \
+    python3 \
+    tbb-devel \
+    texinfo \
+    wget \
+    zlib-devel \
+    && dnf clean all
+
+# Build ccache 4.7 from source
+WORKDIR /tmp
+RUN wget https://github.com/ccache/ccache/releases/download/v4.7/ccache-4.7.tar.gz && \
+    tar xzf ccache-4.7.tar.gz && \
+    cd ccache-4.7 && \
+    mkdir build && \
+    cd build && \
+    cmake \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DENABLE_TESTING=OFF \
+        -DWARNINGS_AS_ERRORS=FALSE \
+        -GNinja \
+        .. && \
+    ninja && \
+    ninja install && \
+    cd /tmp && \
+    rm -rf ccache-4.7* && \
+    echo "Installed ccache from source: $(ccache --version)"
+
+# Build OpenMPI 5.0.7 with ULFM support from source
+ARG OMPI_TAG=v5.0.7
+ARG OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
+WORKDIR /tmp
+RUN git clone --branch ${OMPI_TAG} --depth 1 https://github.com/open-mpi/ompi.git ompi-src && \
+    cd ompi-src && \
+    git submodule update --init --recursive && \
+    ./autogen.pl && \
+    ./configure \
+        --prefix=${OMPI_PREFIX} \
+        --with-ft=ulfm \
+        --enable-wrapper-rpath \
+        --enable-mpirun-prefix-by-default \
+        --disable-mca-dso \
+        --disable-dlopen && \
+    make -j$(nproc) && \
+    make install && \
+    cd .. && \
+    rm -rf ompi-src
+
+COPY tt_metal/sfpi-version.sh /tmp/sfpi-version.sh
+WORKDIR /tmp
+RUN set -x && sfpi_arch_os=$(uname -m)_$(uname -s) && source /tmp/sfpi-version.sh && \
+    sfpi_rpm_md5=$(eval echo "\$sfpi_${sfpi_arch_os}_rpm_md5") && \
+    test "${sfpi_rpm_md5}" && \
+    wget ${sfpi_url}/${sfpi_version}/sfpi-${sfpi_arch_os}.rpm && \
+    test "${sfpi_rpm_md5}" == "$(md5sum -b sfpi-${sfpi_arch_os}.rpm | cut -d' ' -f1)" && \
+    dnf -y install ./sfpi-${sfpi_arch_os}.rpm && \
+    rm -f sfpi-${sfpi_arch_os}.rpm sfpi-version.sh
+
+# ENV needed
+ENV PATH=${OMPI_PREFIX}/bin:$PATH
+ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib:$LD_LIBRARY_PATH
+ENV CPATH=${OMPI_PREFIX}/include
+ENV PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig:$PKG_CONFIG_PATH
+ENV CC=clang
+ENV CXX=clang++
+ENV TRACY_NO_INVARIANT_CHECK=1
+ENV TRACY_NO_ISA_EXTENSIONS=1

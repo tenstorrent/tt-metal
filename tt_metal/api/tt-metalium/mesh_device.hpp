@@ -30,7 +30,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
-#include <tt-metalium/small_vector.hpp>
+#include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <umd/device/types/arch.h>
 
@@ -53,7 +53,6 @@ namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
 class ThreadPool;
-class ProgramCache;
 class TraceDescriptor;
 
 namespace distributed {

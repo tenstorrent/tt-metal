@@ -7,6 +7,14 @@ set(CMAKE_VERIFY_INTERFACE_HEADER_SETS FALSE)
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 
 ############################################################################################################################
+# NUMA
+############################################################################################################################
+find_library(NUMA_LIBRARY NAMES numa)
+if(NOT NUMA_LIBRARY)
+    message(FATAL_ERROR "NUMA library not found")
+endif()
+
+############################################################################################################################
 # Boost
 ############################################################################################################################
 
@@ -271,3 +279,31 @@ if(simd-everywhere_ADDED)
     add_library(simde::simde ALIAS simde)
     target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
 endif()
+
+####################################################################################################################
+# spdlog
+####################################################################################################################
+
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME spdlog-dev)
+CPMAddPackage(
+    NAME spdlog
+    GITHUB_REPOSITORY gabime/spdlog
+    VERSION 1.15.2
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "SPDLOG_FMT_EXTERNAL_HO ON"
+        "SPDLOG_INSTALL ON"
+)
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
+
+####################################################################################################################
+# tt-logger
+####################################################################################################################
+CPMAddPackage(
+    NAME tt-logger
+    GITHUB_REPOSITORY tenstorrent/tt-logger
+    VERSION 1.0.7
+    OPTIONS
+        "TT_LOGGER_INSTALL ON"
+        "TT_LOGGER_BUILD_TESTING OFF"
+)

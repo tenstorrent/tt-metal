@@ -1,7 +1,8 @@
 add_library(ttnn_op_pool ${LIB_TYPE})
-add_library(TT::NN::Ops::Pool ALIAS ttnn_op_pool)
+add_library(TTNN::Ops::Pool ALIAS ttnn_op_pool)
 
 target_precompile_headers(ttnn_op_pool REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_pool)
 
 target_sources(
     ttnn_op_pool
@@ -26,7 +27,7 @@ target_link_libraries(
     ttnn_op_pool
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
 install(TARGETS ttnn_op_pool LIBRARY COMPONENT tar)

@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <boost/container/vector.hpp>
-#include <logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
-#include <small_vector.hpp>
+#include <tt_stl/small_vector.hpp>
 #include <sub_device.hpp>
 #include <system_mesh.hpp>
 #include <tt_metal.hpp>
@@ -789,7 +789,8 @@ bool MeshDevice::initialize(
         SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))})};
 
     // Resource shared across mesh command queues.
-    auto worker_launch_message_buffer_state = std::make_shared<DispatchArray<LaunchMessageRingBufferState>>();
+    auto cq_shared_state = std::make_shared<CQSharedState>();
+    cq_shared_state->sub_device_cq_owner.resize(1);
 
     const auto& allocator = reference_device()->allocator();
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
@@ -801,12 +802,7 @@ bool MeshDevice::initialize(
     if (this->using_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
             mesh_command_queues_.push_back(std::make_unique<FDMeshCommandQueue>(
-                this,
-                cq_id,
-                dispatch_thread_pool_,
-                reader_thread_pool_,
-                worker_launch_message_buffer_state  //
-                ));
+                this, cq_id, dispatch_thread_pool_, reader_thread_pool_, cq_shared_state));
         }
     } else {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {

@@ -25,9 +25,9 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     Tensor& index_tensor) {
     using namespace tt::constants;
     tt::tt_metal::Program program{};
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
-    tt::DataFormat output_val_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(value_tensor.get_dtype());
-    tt::DataFormat output_ind_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat output_val_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(value_tensor.dtype());
+    tt::DataFormat output_ind_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
 
     auto core = corerange_to_cores(sub_core_grids, 1, true).at(0);
 
@@ -43,10 +43,10 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     bool values_is_dram = values_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool index_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    uint32_t num_input_tiles = input_tensor.volume() / TILE_HW;
-    uint32_t num_value_tiles = value_tensor.volume() / TILE_HW;
+    uint32_t num_input_tiles = input_tensor.physical_volume() / TILE_HW;
+    uint32_t num_value_tiles = value_tensor.physical_volume() / TILE_HW;
 
-    auto input_shape = input_tensor.get_padded_shape();
+    auto input_shape = input_tensor.padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     uint32_t Wt = input_shape[3] / TILE_WIDTH;
 
@@ -271,9 +271,9 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     using namespace tt::constants;
     tt::tt_metal::Program program{};
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
-    tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(value_tensor.get_dtype());
-    tt::DataFormat index_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(value_tensor.dtype());
+    tt::DataFormat index_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
 
     auto first_core_range = sub_core_grids.ranges().at(0);
     auto first_core_range_set = CoreRangeSet(first_core_range);
@@ -290,11 +290,11 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     bool values_is_dram = values_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool index_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    uint32_t num_input_tiles = input_tensor.volume() / TILE_HW;
-    uint32_t num_value_tiles = value_tensor.volume() / TILE_HW;
+    uint32_t num_input_tiles = input_tensor.physical_volume() / TILE_HW;
+    uint32_t num_value_tiles = value_tensor.physical_volume() / TILE_HW;
     auto device = input_tensor.device();
 
-    auto input_shape = input_tensor.get_padded_shape();
+    auto input_shape = input_tensor.padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     const auto& [num_cores, local_topk_input_size, rem, final_topk_input_size] = cores_utilized(
         input_shape[dim],

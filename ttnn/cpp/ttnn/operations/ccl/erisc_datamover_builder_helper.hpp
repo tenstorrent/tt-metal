@@ -26,11 +26,14 @@ public:
     EdmLineFabricOpInterface(
         const std::vector<tt::tt_metal::IDevice*>& device_sequence,
         const std::vector<tt::tt_metal::Program*>& program_sequence,
-        bool enable_persistent_mode,
         std::optional<size_t> desired_num_links = std::nullopt,
         bool build_in_worker_connection_mode = false,
         Topology topology = Topology::Linear,
-        bool is_galaxy = false);
+        bool is_galaxy = false,
+        bool en_dateline_sender_extra_buffer = false,
+        bool en_dateline_receiver_extra_buffer = false,
+        bool en_dateline_upstream_sender_extra_buffer = false,
+        bool en_dateline_upstream_receiver_extra_buffer = false);
 
     // Invocable per chip if we want to collectively build the fabric by building this separately per chip
     // (and implicitly building the fabric that way)
@@ -39,7 +42,6 @@ public:
         std::optional<tt::tt_metal::IDevice*> forward_device,
         std::optional<tt::tt_metal::IDevice*> backward_device,
         tt::tt_metal::Program* program,
-        bool enable_persistent_mode,
         std::optional<size_t> desired_num_links,
         bool build_in_worker_connection_mode = false,
         Topology topology = Topology::Linear);
@@ -47,7 +49,6 @@ public:
     static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(
         const std::vector<tt::tt_metal::IDevice*>& device_sequence,
         const std::vector<tt::tt_metal::Program*>& program_sequence,
-        bool enable_persistent_mode,
         std::optional<size_t> desired_num_links = std::nullopt,
         Topology topology = Topology::Linear);
     static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(
@@ -55,7 +56,6 @@ public:
         tt::tt_metal::IDevice* forward_device,
         tt::tt_metal::IDevice* backward_device,
         tt::tt_metal::Program* program,
-        bool enable_persistent_mode,
         std::optional<size_t> desired_num_links = std::nullopt,
         Topology topology = Topology::Linear);
 

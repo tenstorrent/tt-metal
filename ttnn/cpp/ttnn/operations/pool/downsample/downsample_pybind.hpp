@@ -6,10 +6,8 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn::operations::downsample {
-
+namespace py = pybind11;
 void py_bind_downsample(py::module& module);
 
 }  // namespace ttnn::operations::downsample

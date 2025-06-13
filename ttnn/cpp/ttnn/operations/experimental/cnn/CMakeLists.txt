@@ -1,7 +1,8 @@
 add_library(ttnn_op_experimental_cnn OBJECT)
-add_library(TT::NN::Ops::Experimental::CNN ALIAS ttnn_op_experimental_cnn)
+add_library(TTNN::Ops::Experimental::CNN ALIAS ttnn_op_experimental_cnn)
 
 target_precompile_headers(ttnn_op_experimental_cnn REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_cnn)
 
 target_sources(
     ttnn_op_experimental_cnn
@@ -19,7 +20,7 @@ target_link_libraries(
     ttnn_op_experimental_cnn
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
 install(TARGETS ttnn_op_experimental_cnn LIBRARY COMPONENT tar)

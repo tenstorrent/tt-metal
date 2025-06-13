@@ -40,8 +40,7 @@ protected:
         this->slow_dispatch_ = true;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
-            tt::log_info(
-                tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
+            log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
             this->slow_dispatch_ = false;
             GTEST_SKIP();
         }
@@ -61,7 +60,7 @@ protected:
     size_t num_devices_;
 
 public:
-    std::pair<unsigned, unsigned> worker_grid_minimum_dims(void) {
+    std::pair<unsigned, unsigned> worker_grid_minimum_dims() {
         constexpr size_t UMAX = std::numeric_limits<unsigned>::max();
         std::pair<size_t, size_t> min_dims = {UMAX, UMAX};
         for (auto device : devices_) {
@@ -93,8 +92,7 @@ protected:
         this->slow_dispatch_ = true;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
-            tt::log_info(
-                tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
+            log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
             this->slow_dispatch_ = false;
             GTEST_SKIP();
         }

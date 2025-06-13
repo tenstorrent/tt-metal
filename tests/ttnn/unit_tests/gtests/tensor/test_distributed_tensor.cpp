@@ -391,7 +391,7 @@ TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
     for (const auto& tensor : device_tensors) {
-        EXPECT_EQ(tensor.get_logical_shape(), ttnn::Shape({kOuterDim, 1, 2, kInnerDim}));
+        EXPECT_EQ(tensor.logical_shape(), ttnn::Shape({kOuterDim, 1, 2, kInnerDim}));
     }
 
     // Expect the first dim to be replicated.
@@ -407,40 +407,8 @@ TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
         },
         MeshShape(2, 2, 2));
     Tensor aggregated_tensor = aggregate_tensor(sharded_tensor, *composer);
-    EXPECT_EQ(aggregated_tensor.get_logical_shape(), ttnn::Shape({2 * kOuterDim, kNumRows, kNumCols, kInnerDim}));
+    EXPECT_EQ(aggregated_tensor.logical_shape(), ttnn::Shape({2 * kOuterDim, kNumRows, kNumCols, kInnerDim}));
     EXPECT_THAT(aggregated_tensor.to_vector<float>(), Pointwise(FloatEq(), expected_data));
-}
-
-TEST_F(TensorDistributionT3000Test, ShardBorrowedTensor) {
-    constexpr size_t kNumRows = 2;
-    constexpr size_t kNumCols = 4;
-    ASSERT_EQ(mesh_device_->shape(), MeshShape(kNumRows, kNumCols));
-    const int num_devices = kNumRows * kNumCols;
-
-    std::vector<float> test_data;
-    for (int i = 0; i < num_devices * 1024; i++) {
-        test_data.push_back(i);
-    }
-    int num_references_created = 0;
-    Tensor input_tensor = Tensor::from_borrowed_data(
-        tt::stl::Span(test_data),
-        ttnn::Shape{num_devices, 1024},
-        /*on_creation_callback=*/[&num_references_created]() { num_references_created++; },
-        /*on_destruction_callback=*/[]() {});
-    EXPECT_EQ(num_references_created, 1);  // self
-
-    auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 0);
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
-
-    // Validate that we didn't make any copies by updating `test_data`.
-    // Borrowed shards should reflect the changes.
-    for (int i = 0; i < test_data.size(); i++) {
-        test_data[i] = i * 7;
-    }
-
-    auto composer = concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
-    Tensor concatenated_tensor = aggregate_tensor(sharded_tensor, *composer);
-    EXPECT_THAT(concatenated_tensor.to_vector<float>(), Pointwise(FloatEq(), test_data));
 }
 
 }  // namespace ttnn::distributed::test

@@ -17,6 +17,7 @@ env:
   WH_6U_PROFILER_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-profiler-tests-wh-6u
   BLACKHOLE_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh
   BLACKHOLE_PROFILER_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-profiler-tests-bh
+  BLACKHOLE_LLMBOX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-llmbox
 
 jobs:
   build-artifact:
@@ -41,13 +42,10 @@ jobs:
     outputs:
       image-tag-suffix: ${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}
       wh-6u-image-tag: ${{ steps.set-image-tags.outputs.wh-6u-image-tag }}
-      wh-6u-base-image-name: ${{ steps.set-image-tags.outputs.wh-6u-base-image-name }}
       wh-6u-profiler-image-tag: ${{ steps.set-image-tags.outputs.wh-6u-profiler-image-tag }}
-      wh-6u-profiler-base-image-name: ${{ steps.set-image-tags.outputs.wh-6u-profiler-base-image-name }}
       bh-image-tag: ${{ steps.set-image-tags.outputs.bh-image-tag }}
-      bh-base-image-name: ${{ steps.set-image-tags.outputs.bh-base-image-name }}
       bh-profiler-image-tag: ${{ steps.set-image-tags.outputs.bh-profiler-image-tag }}
-      bh-profiler-base-image-name: ${{ steps.set-image-tags.outputs.bh-profiler-base-image-name }}
+      bh-llmbox-image-tag: ${{ steps.set-image-tags.outputs.bh-llmbox-image-tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,13 +58,10 @@ jobs:
         id: set-image-tags
         run: |
           echo "wh-6u-image-tag=${{ env.WH_6U_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "wh-6u-base-image-name=${{ env.WH_6U_IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
           echo "wh-6u-profiler-image-tag=${{ env.WH_6U_PROFILER_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "wh-6u-profiler-base-image-name=${{ env.WH_6U_PROFILER_IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
           echo "bh-image-tag=${{ env.BLACKHOLE_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "bh-base-image-name=${{ env.BLACKHOLE_IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
           echo "bh-profiler-image-tag=${{ env.BLACKHOLE_PROFILER_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "bh-profiler-base-image-name=${{ env.BLACKHOLE_PROFILER_IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
+          echo "bh-llmbox-image-tag=${{ env.BLACKHOLE_LLMBOX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
   build-images:
     needs:
       - build-artifact
@@ -82,25 +77,32 @@ jobs:
         # the images and run them.
         image-config:
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
-            dockerfile: dockerfile/upstream_test_images/Dockerfile
-            test-command: tests/scripts/wh_6u/run_wh_6u_upstream_tests.sh
+            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
+            hw-topology: wh_6u
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
-            dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: tests/scripts/wh_6u/run_wh_6u_upstream_profiler_tests.sh
+            hw-topology: wh_6u
             build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
-            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh blackhole
-            build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
+            hw-topology: blackhole
+            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
-            dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: tests/scripts/single_card/run_bh_upstream_profiler_tests.sh
+            hw-topology: blackhole
             build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
+            dockerfile: dockerfile/upstream_test_images/Dockerfile
+            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
+            hw-topology: blackhole_llmbox
+            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     runs-on: tt-beta-ubuntu-2204-large
     steps:
       - uses: actions/checkout@v4
@@ -130,18 +132,24 @@ jobs:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate Dockerfile
+        shell: bash
+        run: |
+          sudo apt update
+          sudo apt install -y gettext
+          export TEST_COMMAND=${{ matrix.image-config.test-command }}
+          export HW_TOPOLOGY=${{ matrix.image-config.hw-topology }}
+          export TT_METAL_DEV_VERSION=latest
+          export TT_METAL_COMMIT_SHA=${{ github.sha }}
+          envsubst < dockerfile/upstream_test_images/Dockerfile.template > dockerfile/upstream_test_images/Dockerfile-generated
+          cat dockerfile/upstream_test_images/Dockerfile-generated
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          file: ${{ matrix.image-config.dockerfile }}
+          file: dockerfile/upstream_test_images/Dockerfile-generated
           platforms: linux/amd64
           pull: true
           push: true
-          # https://github.com/docker/build-push-action/issues/557#issuecomment-1030412477
-          build-args: |
-            TT_METAL_DEV_VERSION=latest
-            TT_METAL_COMMIT_SHA=${{ github.sha }}
-            TEST_COMMAND=${{ matrix.image-config.test-command }}
           tags: ${{ matrix.image-config.image-tag }}
           context: ${{ github.workspace }}
   test-wh-6u-image:
@@ -160,7 +168,7 @@ jobs:
         timeout-minutes: 10
         run: docker pull ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
       - name: Run image
-        timeout-minutes: 30
+        timeout-minutes: 45
         env:
           SOURCE_LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
           LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
@@ -168,6 +176,20 @@ jobs:
       - name: Run profiler image
         timeout-minutes: 10
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+  test-bh-llmbox-image:
+    needs:
+      - get-image-tags
+      - build-images
+    runs-on:
+      - BH-LLMBox
+      - in-service
+      - cloud-virtual-machine
+    steps:
+      - name: Run image
+        timeout-minutes: 30
+        env:
+          LLAMA_DIR: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
+        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
   test-bh-image:
     needs:
       - get-image-tags
@@ -181,10 +203,16 @@ jobs:
       - ${{ matrix.bh-card }}
       - in-service
       - cloud-virtual-machine
+      # Targeting cloud machines with pipeline-functional per now per
+      # https://github.com/tenstorrent/tt-metal/issues/21738#issuecomment-2925788342
+      - pipeline-functional
     steps:
       - name: Run image
         timeout-minutes: 30
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.bh-image-tag }}
+        env:
+          # For different environments, yyz BH VLAN vs. cloud
+          LLAMA_DIR: ${{ contains(runner.name, 'gh') && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
+        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}

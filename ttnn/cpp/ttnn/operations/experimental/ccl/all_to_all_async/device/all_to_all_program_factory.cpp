@@ -150,7 +150,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
 
     // Basic configuration
     const bool enable_async_output = false;
-    const bool enable_persistent_fabric = true;
     const bool is_first_chip = ring_index == 0;
     const bool is_last_chip = ring_index == ring_size - 1;
 
@@ -187,10 +186,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     uint32_t num_senders_per_link = 1;
     uint32_t num_receivers_per_link = ring_size;
     const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_senders_per_link, enable_persistent_fabric, device, sub_device_id);
+        choose_worker_cores(num_links, num_senders_per_link, device, sub_device_id);
 
-    const auto [total_workers_core_range, total_workers_cores] = choose_worker_cores(
-        num_links, (num_senders_per_link + num_receivers_per_link), enable_persistent_fabric, device, sub_device_id);
+    const auto [total_workers_core_range, total_workers_cores] =
+        choose_worker_cores(num_links, (num_senders_per_link + num_receivers_per_link), device, sub_device_id);
 
     const auto receiver_worker_core_range = total_workers_core_range.subtract(sender_worker_core_range);
     const auto receiver_worker_cores = corerange_to_cores(receiver_worker_core_range, std::nullopt, true);
@@ -208,7 +207,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     const uint32_t cb_pages = all_to_all_detail::TRIPLE_BUFFER_MULTIPLIER * pages_per_packet;
 
     // Create buffers
-    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto [sender_buffer, header_buffer] =
         all_to_all_detail::create_sender_buffers(program, sender_worker_core_range, cb_pages, page_size, data_format);
     auto receiver_buffer = all_to_all_detail::create_receiver_buffer(
@@ -380,10 +379,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         receiver_reader_kernel_config);
 
     // Determine output shape and fracturing
-    const auto input_shape = input_tensor.get_padded_shape();
+    const auto input_shape = input_tensor.padded_shape();
     const auto in_row_tiles = input_shape[2] / tt::constants::TILE_HEIGHT;
     const auto in_col_tiles = input_shape[3] / tt::constants::TILE_WIDTH;
-    auto output_shape = output_buffer.get_padded_shape();
+    auto output_shape = output_buffer.padded_shape();
     const auto out_row_tiles = output_shape[2] / tt::constants::TILE_HEIGHT;
     const auto out_col_tiles = output_shape[3] / tt::constants::TILE_WIDTH;
 

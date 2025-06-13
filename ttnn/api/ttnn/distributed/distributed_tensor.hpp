@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt-metalium/small_vector.hpp"
+#include <tt_stl/small_vector.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
 
@@ -15,7 +15,7 @@ namespace ttnn::distributed {
 class TensorToMesh {
 public:
     virtual ~TensorToMesh() = default;
-    virtual std::vector<Tensor> map(const Tensor& tensor) const = 0;
+    virtual Tensor operator()(const Tensor& tensor) const = 0;
     virtual tt::tt_metal::DistributedTensorConfig config() const = 0;
 };
 

@@ -19,7 +19,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
     ReduceOpMath reduce_op,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     float scaler) {
-    const auto shape = a.get_padded_shape();
+    const auto shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
     uint32_t HW = H * W;
 
@@ -37,15 +37,15 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
 
     CoreRange core({0, 0}, {0, 0});
 
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
     // Scaler datatype is hardcoded bfloat16 due to tile creation in reader
     tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t scaler_single_tile_size = tt_metal::detail::TileSize(scaler_cb_data_format);
-    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
 
-    uint32_t num_tiles = a.volume() / TILE_HW;
+    uint32_t num_tiles = a.physical_volume() / TILE_HW;
 
     tt_metal::Buffer* src0_buffer = a.buffer();
 
@@ -53,7 +53,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
     tt_metal::IDevice* device = a.device();
 
     tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device");
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;

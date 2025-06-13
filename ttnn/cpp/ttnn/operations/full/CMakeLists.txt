@@ -1,7 +1,8 @@
 add_library(ttnn_op_full ${LIB_TYPE})
-add_library(TT::NN::Ops::Full ALIAS ttnn_op_full)
+add_library(TTNN::Ops::Full ALIAS ttnn_op_full)
 
 target_precompile_headers(ttnn_op_full REUSE_FROM TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_full)
 
 target_sources(
     ttnn_op_full
@@ -16,7 +17,7 @@ target_link_libraries(
     ttnn_op_full
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
 install(TARGETS ttnn_op_full LIBRARY COMPONENT tar)

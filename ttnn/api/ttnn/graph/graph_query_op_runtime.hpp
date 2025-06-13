@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <optional>
@@ -42,6 +43,12 @@ auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
     auto transform_arg = [device](auto&& arg) {
         if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
             return create_device_tensor(arg, device);
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::vector<TensorSpec>>) {
+            std::vector<Tensor> result(arg.size());
+            std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& arg) {
+                return create_device_tensor(arg, device);
+            });
+            return result;
         } else {
             return std::forward<decltype(arg)>(arg);
         }
@@ -122,7 +129,7 @@ auto query_op_runtime(Op op, MeshDevice* device, Args&&... args) {
         return RuntimeQueryResponse{ExecutionStatus::Success, runtime};
 
     } catch (const std::exception& e) {
-        tt::log_debug(tt::LogOp, "op_runtime - error: {}", e.what());
+        log_debug(tt::LogOp, "op_runtime - error: {}", e.what());
         return RuntimeQueryResponse{ExecutionStatus::Error, 0, e.what()};
     }
 }

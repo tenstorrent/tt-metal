@@ -364,7 +364,7 @@ def reset_fabric(fabric_config):
     import ttnn
 
     if fabric_config:
-        ttnn.initialize_fabric_config(ttnn.FabricConfig.DISABLED)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 # Set fabric config to passed in value
@@ -375,7 +375,7 @@ def set_fabric(fabric_config):
 
     # If fabric_config is not None, set it to fabric_config
     if fabric_config:
-        ttnn.initialize_fabric_config(fabric_config)
+        ttnn.set_fabric_config(fabric_config)
 
 
 @pytest.fixture(scope="function")
@@ -427,6 +427,9 @@ def mesh_device(request, silicon_arch_name, device_params):
     yield mesh_device
 
     ttnn.DumpDeviceProfiler(mesh_device)
+
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -493,6 +496,9 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
     ttnn.DumpDeviceProfiler(mesh_device)
 
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
+
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
     del mesh_device
@@ -517,6 +523,9 @@ def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     yield mesh_device
 
     ttnn.DumpDeviceProfiler(mesh_device)
+
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
@@ -543,6 +552,9 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     yield mesh_device
 
     ttnn.DumpDeviceProfiler(mesh_device)
+
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
 
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)

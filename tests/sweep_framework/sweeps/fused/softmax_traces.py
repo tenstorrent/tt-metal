@@ -10,6 +10,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
+from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 TIMEOUT = 15
 
@@ -107,11 +108,12 @@ def run_softmax(device, params):
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.softmax(input_tensor, dim)
-    output_tensor = ttnn.to_torch(output_tensor)
+    op_output_tensor = ttnn.softmax(input_tensor, dim)
+    output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.989
-    return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
+    tensors = [input_tensor, op_output_tensor]
+    return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)
 
 
 @pytest.mark.parametrize("params", parameters["default"]["params"])

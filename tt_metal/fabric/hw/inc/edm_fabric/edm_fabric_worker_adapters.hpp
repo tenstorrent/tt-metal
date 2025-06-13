@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,6 @@
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/hw/inc/utils/utils.h"
-#include "tt_metal/hw/inc/wormhole/core_config.h"
 #include "debug/assert.h"
 
 #include <cstdint>
@@ -62,11 +61,11 @@ struct WorkerToFabricEdmSenderImpl {
     static constexpr uint32_t close_connection_request_value = 2;
     // HACK: Need a way to properly set this up
 
-    WorkerToFabricEdmSenderImpl() : from_remote_buffer_free_slots_ptr(nullptr) {}
+    WorkerToFabricEdmSenderImpl() = default;
 
     template <ProgrammableCoreType my_core_type>
     static WorkerToFabricEdmSenderImpl build_from_args(std::size_t& arg_idx) {
-        bool is_persistent_fabric = get_arg_val<uint32_t>(arg_idx++);
+        constexpr bool is_persistent_fabric = true;
         const auto direction = get_arg_val<uint32_t>(arg_idx++);
         const WorkerXY edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
         const auto edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -109,6 +108,7 @@ struct WorkerToFabricEdmSenderImpl {
             write_at_cmd_buf);
     }
 
+    template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
     FORCE_INLINE void init(
         bool connected_to_persistent_fabric,
         uint8_t direction,
@@ -145,11 +145,11 @@ struct WorkerToFabricEdmSenderImpl {
         this->edm_connection_handshake_l1_addr =
             connected_to_persistent_fabric
                 ? edm_connection_handshake_l1_id
-                : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_connection_handshake_l1_id);
+                : get_semaphore<my_core_type>(edm_connection_handshake_l1_id);
         this->edm_worker_location_info_addr = edm_worker_location_info_addr;
         this->edm_copy_of_wr_counter_addr = connected_to_persistent_fabric
                                                 ? edm_buffer_index_id
-                                                : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_buffer_index_id);
+                                                : get_semaphore<my_core_type>(edm_buffer_index_id);
         this->from_remote_buffer_free_slots_ptr = from_remote_buffer_free_slots_ptr;
         this->worker_teardown_addr = worker_teardown_addr;
         this->edm_buffer_base_addr = edm_buffer_base_addr;
@@ -172,7 +172,8 @@ struct WorkerToFabricEdmSenderImpl {
         }
     }
 
-    WorkerToFabricEdmSenderImpl(
+    template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
+    FORCE_INLINE WorkerToFabricEdmSenderImpl(
         bool connected_to_persistent_fabric,
         uint8_t direction,
         uint8_t edm_worker_x,
@@ -191,7 +192,7 @@ struct WorkerToFabricEdmSenderImpl {
         StreamId worker_credits_stream_id,
         uint8_t data_noc_cmd_buf = write_reg_cmd_buf,
         uint8_t sync_noc_cmd_buf = write_at_cmd_buf) {
-        this->init(
+        this->init<my_core_type>(
             connected_to_persistent_fabric,
             direction,
             edm_worker_x,
@@ -224,6 +225,7 @@ struct WorkerToFabricEdmSenderImpl {
     }
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
+        invalidate_l1_cache();
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             return (this->buffer_slot_write_counter.counter - *this->from_remote_buffer_free_slots_ptr) <
                    this->num_buffers_per_channel;
@@ -369,9 +371,12 @@ struct WorkerToFabricEdmSenderImpl {
         // We need to write our read counter value to the register before we signal the EDM
         // As EDM will potentially increment the register as well
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
+            this->buffer_slot_write_counter.reset();
             this->buffer_slot_write_counter.counter = *this->worker_teardown_addr;
             this->buffer_slot_write_counter.index = BufferIndex{static_cast<uint8_t>(this->buffer_slot_write_counter.counter % static_cast<uint32_t>(this->num_buffers_per_channel))};
             this->buffer_slot_index = this->buffer_slot_write_counter.get_buffer_index();
+        } else {
+            this->buffer_slot_index = BufferIndex(0);
         }
 
         // write-back the read counter
@@ -459,7 +464,7 @@ struct WorkerToFabricEdmSenderImpl {
     volatile tt_l1_ptr uint32_t* worker_teardown_addr;
     size_t edm_buffer_base_addr;
 
-    BufferIndex buffer_slot_index{0};
+    BufferIndex buffer_slot_index;
 
     // WORKER ONLY
     ChannelCounter<EDM_NUM_BUFFER_SLOTS> buffer_slot_write_counter;
@@ -496,7 +501,7 @@ private:
         } else {
             const uint64_t noc_sem_addr =
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
-            noc_inline_dw_write(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
+            noc_inline_dw_write<true>(noc_sem_addr, (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC, 0xf, noc);
         }
         if constexpr (I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             // Write to the atomic increment stream register (write of -1 will subtract 1)
@@ -520,7 +525,6 @@ private:
                     BufferIndex{wrap_increment(this->buffer_slot_index.get(), this->num_buffers_per_channel)};
                 this->edm_buffer_addr =
                     this->edm_buffer_base_addr + (this->get_buffer_slot_index() * this->buffer_size_bytes);
-                ;
             } else {
                 this->buffer_slot_index = BufferIndex{wrap_increment(this->buffer_slot_index.get(), this->num_buffers_per_channel)};
                 this->edm_buffer_addr =
@@ -584,7 +588,7 @@ private:
                 source_address,
                 1,
                 size_bytes,
-                get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> 32,
+                get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> NOC_ADDR_COORD_SHIFT,
                 this->edm_buffer_slot_addrs[this->get_buffer_slot_index()],
                 trid,
                 EDM_TO_DOWNSTREAM_NOC,
@@ -594,7 +598,7 @@ private:
                 source_address,
                 1,
                 size_bytes,
-                get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> 32,
+                get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> NOC_ADDR_COORD_SHIFT,
                 this->edm_buffer_addr,
                 trid,
                 EDM_TO_DOWNSTREAM_NOC,

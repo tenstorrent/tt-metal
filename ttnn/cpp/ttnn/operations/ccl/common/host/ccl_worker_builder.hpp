@@ -9,6 +9,7 @@
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include "cpp/ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -23,7 +24,6 @@ class IDevice;
 
 namespace ttnn::ccl {
 class WorkerEdmInterfaceArgs;
-class SenderWorkerAdapterSpec;
 
 namespace worker_detail {
 
