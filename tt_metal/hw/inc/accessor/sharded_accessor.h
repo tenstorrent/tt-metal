@@ -26,7 +26,6 @@ private:
     using StaticDspec = detail::ConditionalStaticInstance<DSpec, DSpec::is_static>;
     detail::ConditionalField<!DSpec::is_static, DSpec> dspec_instance;
 
-    mutable detail::ConditionalField<!DSpec::has_static_rank, uint32_t[detail::MAX_RANK]> _page_coord;
     const size_t bank_base_address;
 
     // Page size is either compile-time constant or runtime value
@@ -85,11 +84,7 @@ public:
         ASSERT(page_id < get_dspec().get_tensor_volume());
         // TODO: Should be possible to directly implement get_bank_and_offset logic with page_id and skip computing the
         // page_coord
-        typename DSpec::ShapeBase page_coord;
-        if constexpr (!DSpec::has_static_rank) {
-            // If rank is not known at compile time, we need to use the _page_coord buffer for span
-            page_coord = typename DSpec::ShapeBase(_page_coord.value, get_dspec().get_rank());
-        }
+        std::array<uint32_t, detail::MAX_RANK> page_coord;
         for (int i = get_dspec().get_rank() - 1; i >= 0; --i) {
             page_coord[i] = page_id % get_dspec().get_tensor_shape()[i];
             page_id /= get_dspec().get_tensor_shape()[i];
