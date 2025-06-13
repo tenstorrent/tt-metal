@@ -58,6 +58,8 @@ jobs:
 
       - name: ${{ matrix.test-info.name }} tests
         timeout-minutes: ${{ matrix.test-info.timeout }}
+        env:
+          TRACY_NO_INVARIANT_CHECK: 1
         run: |
           if [[ "${{ matrix.test-info.arch }}" == "wormhole_b0" ]]; then
             export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
