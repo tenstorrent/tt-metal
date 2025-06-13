@@ -554,17 +554,31 @@ public:
     }
 };
 
-struct LowLatencyMeshRoutingFields {
+union LowLatencyMeshRoutingFields {
     static constexpr uint32_t FIELD_WIDTH = 8;
     static constexpr uint32_t FIELD_MASK = 0b1111;
     static constexpr uint32_t NOOP = 0b0000;
     static constexpr uint32_t FORWARD_EAST = 0b0001;
     static constexpr uint32_t FORWARD_WEST = 0b0010;
-    static constexpr uint32_t FORWARD_NORTH = 0b0100;
-    static constexpr uint32_t FORWARD_SOUTH = 0b1000;
     static constexpr uint32_t WRITE_AND_FORWARD_EW = 0b0011;
+    static constexpr uint32_t FORWARD_NORTH = 0b0100;
+    static constexpr uint32_t WRITE_AND_FORWARD_NE = 0b0101;
+    static constexpr uint32_t WRITE_AND_FORWARD_NW = 0b0110;
+    static constexpr uint32_t WRITE_AND_FORWARD_NEW = 0b0111;
+    static constexpr uint32_t FORWARD_SOUTH = 0b1000;
+    static constexpr uint32_t WRITE_AND_FORWARD_SE = 0b1001;
+    static constexpr uint32_t WRITE_AND_FORWARD_SW = 0b1010;
+    static constexpr uint32_t WRITE_AND_FORWARD_SEW = 0b1011;
     static constexpr uint32_t WRITE_AND_FORWARD_NS = 0b1100;
+    static constexpr uint32_t WRITE_AND_FORWARD_NSE = 0b1101;
+    static constexpr uint32_t WRITE_AND_FORWARD_NSW = 0b1110;
+    static constexpr uint32_t WRITE_AND_FORWARD_NSEW = 0b1111;
     uint32_t value;
+    struct {
+        uint16_t hop_index;
+        uint8_t branch_east_offset;
+        uint8_t branch_west_offset;
+    };
 };
 
 struct LowLatencyMeshPacketHeader : public PacketHeaderBase<LowLatencyMeshPacketHeader> {
@@ -582,6 +596,7 @@ struct MeshPacketHeader : public PacketHeaderBase<MeshPacketHeader> {
     uint16_t dst_start_mesh_id;
     uint16_t mcast_params[4];
     uint8_t is_mcast_active;
+    uint8_t reserved[7];
     void to_chip_unicast_impl(uint8_t distance_in_hops) {}
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
 
@@ -594,7 +609,8 @@ static_assert(sizeof(PacketHeader) == 32, "sizeof(PacketHeader) is not equal to 
 // Host code still hardcoded to sizeof(PacketHeader) so we need to keep this check
 static_assert(
     sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader), "sizeof(LowLatencyPacketHeader) is not equal to 32B");
-static_assert(sizeof(LowLatencyMeshPacketHeader) == 64, "sizeof(LowLatencyPacketHeader) is not equal to 64B");
+static_assert(sizeof(LowLatencyMeshPacketHeader) == 64, "sizeof(LowLatencyMeshPacketHeader) is not equal to 64B");
+static_assert(sizeof(MeshPacketHeader) == 48, "sizeof(MeshPacketHeader) is not equal to 48B");
 
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
