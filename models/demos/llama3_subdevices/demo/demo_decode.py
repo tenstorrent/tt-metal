@@ -503,7 +503,7 @@ def run_llama3_demo(
 
                 if not stress_test:
                     # Increment failure count if throughput is too low
-                    if iteration < 200 and (
+                    if decode_iteration < 200 and (
                         tokens_per_second_per_user < tsu_thresholds["min"]
                         or tokens_per_second_per_user > tsu_thresholds["max"]
                     ):
@@ -562,7 +562,7 @@ def run_llama3_demo(
 
         # print before assertion
         out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
-        tsu_perf_drop_limit = TSU_PERF_DROP_LIMIT_PERCENT * iteration / 100
+        tsu_perf_drop_limit = TSU_PERF_DROP_LIMIT_PERCENT * decode_iteration / 100
         if tsu_failures > tsu_perf_drop_limit:
             logger.info(out_of_targets_msg)
             logger.info(f"Failing iterations sorted by t/s/u")
