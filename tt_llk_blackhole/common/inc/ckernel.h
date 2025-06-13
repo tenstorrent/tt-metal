@@ -10,6 +10,14 @@
 // MT: This should be dissolved and moved to the appropriate place
 #include "tensix.h"
 
+// This header is included on non-trisc builds, for reasons
+// unknown. lltt is only available on trisc
+#if defined(COMPILE_FOR_TRISC)
+#include <utility>
+
+#include "lltt.h"
+#endif
+
 // Compiler hint that a branch is unlikely to be taken
 #define UNLIKELY(condition) __builtin_expect(static_cast<bool>(condition), 0)
 #define UNROLL_LOOP(factor) GCC unroll factor
@@ -667,12 +675,21 @@ inline void enable_gathering()
     asm("csrrc zero, 0x7c0, %0" : : "r"(1 << 18));
 }
 
-// Pass a lambda function (or a regular function pointer) that takes void,
-// returns void, and issues the instructions you want to load into the
-// replay buffer. start, len, and exec_while_loading have the same meaning
-// as they do for the REPLAY instruction, as descired in assembly.yaml.
-template <uint start, uint len, bool exec_while_loading = false, typename F>
-inline void load_replay_buf(F fn)
+#if defined(COMPILE_FOR_TRISC)
+// Place instructions into the replay buffer. EXEC is true to execute
+// when loading (default is false). START is where to place in the
+// replay buffer, and LEN is the number of instructions to record
+// (should match the expansion of CALLABLE). CALLABLE is a callable,
+// to which ARGS are forwarded.
+// When we move to c++23 we can use 'using enum lltt::ExecBool;'
+enum ExecBool : bool
+{
+    NoExec,
+    Exec
+};
+
+template <ExecBool Exec = NoExec, typename Callable, typename... Args>
+[[gnu::always_inline, gnu::flatten]] inline void load_replay_buf(uint start, uint len, Callable &&callable, Args &&...args)
 {
     // ENABLE_GATHERING is controlled by JIT build.
     // Not enabled by default due to tt-metal#16439.
@@ -681,37 +698,16 @@ inline void load_replay_buf(F fn)
 #endif
 
     // Issue instruction to load replay buffer
-    TTI_REPLAY(start, len, exec_while_loading, 1);
+    lltt::record<lltt::ExecBool(Exec)>(start, len);
 
     // Send in the user's desired instructions
-    fn();
+    callable(std::forward<Args>(args)...);
 
 #if defined(ENABLE_GATHERING)
     enable_gathering();
 #endif
 }
-
-// Same as above, but used if start/len/exec_while_loading are not known
-// at compiletime.
-template <typename F>
-inline void load_replay_buf(uint start, uint len, bool exec_while_loading, F fn)
-{
-    // ENABLE_GATHERING is controlled by JIT build.
-    // Not enabled by default due to tt-metal#16439.
-#if defined(ENABLE_GATHERING)
-    disable_gathering();
-#endif
-
-    // Issue instruction to load replay buffer
-    TTI_REPLAY(start, len, exec_while_loading, 1);
-
-    // Send in the user's desired instructions
-    fn();
-
-#if defined(ENABLE_GATHERING)
-    enable_gathering();
-#endif
-}
+#endif // defined(COMPILE_FOR_TRISC)
 
 enum class CSR : uint16_t
 {

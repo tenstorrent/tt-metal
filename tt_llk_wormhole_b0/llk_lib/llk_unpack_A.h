@@ -12,6 +12,8 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "lltt.h"
+#include "sfpi.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -46,7 +48,7 @@ inline void _llk_unpack_A_mop_config_(
     static constexpr uint srcb_set_z_2           = TT_OP_NOP;
     static constexpr uint srcb_clear_z           = TT_OP_NOP;
     constexpr uint replay_buf_len                = 1;
-    TTI_REPLAY(0, 1, 0, 1);
+    lltt::record(0, 1);
     TTI_NOP;
 #else
     static constexpr uint unpack_srca =
@@ -66,13 +68,13 @@ inline void _llk_unpack_A_mop_config_(
     static constexpr uint srca_set_z_1           = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);  // set srcA ch0_z = 1
     static constexpr uint srcb_set_z_2           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2, 0b0001);  // set srcB ch0_z = 2
     static constexpr uint srcb_clear_z           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001);  // set srcB ch0_z = 0
-    TTI_REPLAY(0, 4, 0, 1);
+    lltt::record(0, 4);
     TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
     TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_SET_DVALID);
     TTI_UNPACR(SrcB, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     TTI_UNPACR(SrcB, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr uint unpack_srca_zerosrc_set_dvalid = TT_OP_REPLAY(0, 2, 0, 0);
-    static constexpr uint unpack_srcb_unpack_srcb        = TT_OP_REPLAY(2, 2, 0, 0);
+    static constexpr uint unpack_srca_zerosrc_set_dvalid = lltt::replay_insn(0, 2);
+    static constexpr uint unpack_srcb_unpack_srcb        = lltt::replay_insn(2, 2);
 #endif
 
     if (unpack_to_dest && is_32bit_input(unpack_src_format, unpack_dst_format))
@@ -131,7 +133,7 @@ inline void _llk_unpack_A_mop_config_(
         {
 #if SKIP_UNP == 0
             constexpr uint replay_buf_len = 3;
-            TTI_REPLAY(4, replay_buf_len, 0, 1);
+            lltt::record(4, replay_buf_len);
             TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
             TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID);
             if (num_faces > 2)
@@ -145,8 +147,8 @@ inline void _llk_unpack_A_mop_config_(
 #endif
             const uint32_t outerloop = num_faces < 4 ? 1 : 2;
             const uint32_t innerloop = num_faces < 2 ? 1 : 2;
-            ckernel_template tmp(outerloop, innerloop, TT_OP_REPLAY(4, replay_buf_len, 0, 0)); // Unpack faces 0/2 && 1/3 to srcA
-                                                                                               // or 0/1 for 2 face tile
+            ckernel_template tmp(outerloop, innerloop, lltt::replay_insn(4, replay_buf_len)); // Unpack faces 0/2 && 1/3 to srcA
+                                                                                              // or 0/1 for 2 face tile
             if (num_faces > 2)
             {
                 tmp.set_end_op(srca_set_z_1);

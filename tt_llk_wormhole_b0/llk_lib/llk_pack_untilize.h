@@ -12,6 +12,8 @@
 #include "ckernel_template.h"
 #include "llk_defs.h"
 #include "llk_pack_common.h"
+#include "lltt.h"
+#include "sfpi.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
@@ -106,7 +108,7 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
         if (block_ct_dim != full_ct_dim)
         {
             const std::uint32_t replay_buf_len = 10;
-            TTI_REPLAY(ckernel::packer::replay_buf_offset, replay_buf_len, 0, 1);
+            lltt::record(ckernel::packer::replay_buf_offset, replay_buf_len);
             TTI_PACR(ADDR_MOD_3, 0, 0xf, 0, 0, 1, 1); // close block
             // update l1 address
             TTI_ADDDMAREG(0, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR_OFFSET);
@@ -171,7 +173,7 @@ inline void _llk_pack_untilize_(
             TTI_ADDRCRXY(p_setadc::PAC, 0, 0, 1, 0, 0b0010); // Read new row in the tile
             if constexpr (block_ct_dim != full_ct_dim)
             {
-                TTI_REPLAY(ckernel::packer::replay_buf_offset, 10, 0, 0); // update row address
+                lltt::replay(ckernel::packer::replay_buf_offset, 10); // update row address
             }
         }
     }
