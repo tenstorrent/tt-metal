@@ -156,9 +156,9 @@ def create_tt_model(
         (  # Batch-2 run with single decoder layer (CI only) - two users repeated batch
             "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts.json",  # real multi-user prompts
             True,  # instruct mode
-            2,  # repeat_batches to simulate multiple users with the same prompt
+            4,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
-            2,  # batch_size -- samples to load from the prompt JSON
+            1,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
@@ -342,6 +342,7 @@ def test_demo(
     num_tokens_generated_decode = []
     num_image_tokens = []
 
+    text_outputs = []
     logger.info("Starting inference...")
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
         logger.info(f"Processing batch {batch_idx}")
@@ -389,8 +390,11 @@ def test_demo(
             pad_embedding=reference_model.model.language_model.embed_tokens(torch.tensor(pad_token_id)),
         )
         # Get user-specific rotary position embeddings
-        cos, sin = multimodal_rope_from_hf(inputs, input_embeds, reference_model, model_args, pad_token_id=pad_token_id)
-        model.rope_setup.set_cos_sin(cos, sin)
+        if batch_idx == 0:
+            cos, sin = multimodal_rope_from_hf(
+                inputs, input_embeds, reference_model, model_args, pad_token_id=pad_token_id
+            )
+            model.rope_setup.set_cos_sin(cos, sin)
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         logger.info("Starting prefill warmup...")
@@ -559,14 +563,19 @@ def test_demo(
                 k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                 v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
-        # release the trace to allow the next batch to capture a new trace
-        if hasattr(generator._ttt_generator, "trace_id_text"):
-            logger.info(f"trace_id_text={generator._ttt_generator.trace_id_text} released")
-            ttnn.release_trace(generator.mesh_device, generator._ttt_generator.trace_id_text)
-            del generator._ttt_generator.trace_id_text
+        text_outputs.append(text_after_prompt)
 
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
+
+    # compare the strings in text_outputs
+    all_match = True
+    for i in range(len(text_outputs)):
+        for j in range(i + 1, len(text_outputs)):
+            if text_outputs[i] != text_outputs[j]:
+                logger.info(f"text_outputs[{i}] != text_outputs[{j}]")
+                all_match = False
+    assert all_match, "text_outputs should be the same for all batches"
 
     # Prepare profile benchmark metrics for the first repeat batch only
     compile_prefill_time = profiler.get_duration("compile_prefill")
