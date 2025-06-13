@@ -21,7 +21,7 @@ PACKET_WORKER_CRS = ttnn.CoreRangeSet(
 )
 
 
-def gen_tokens(batch, hidden_size, devices, scheme="random"):
+def gen_tokens(batch, hidden_size, mesh_shape, devices, scheme="random"):
     per_batch_tokens = []
     factor = 0
     for _ in range(batch):
@@ -33,6 +33,7 @@ def gen_tokens(batch, hidden_size, devices, scheme="random"):
         else:
             raise ValueError(f"Invalid scheme: {scheme}")
     res = torch.cat(per_batch_tokens, dim=0)
+    res = res.repeat(mesh_shape[0], 1, 1, 1)  # each token is duplicated across devices
     return res
 
 
@@ -62,7 +63,7 @@ def get_metadata_tensor(expert_indices, expert_mapping):
     return torch.reshape(metadata_tensor, (devices, batch, 1, selected_experts_k))
 
 
-def get_expert_indices(batch, experts, selected_experts_k, scheme="random"):
+def get_expert_indices(batch, experts, selected_experts_k, mesh_shape, scheme="random"):
     expert_indices = torch.zeros(batch, 1, 1, selected_experts_k, dtype=torch.int16)
     current_expert = 0
     for b in range(batch):
@@ -74,46 +75,56 @@ def get_expert_indices(batch, experts, selected_experts_k, scheme="random"):
                 expert_indices[b, 0, 0, k] = torch.randint(0, experts, (1,))
             else:
                 raise ValueError(f"Invalid scheme: {scheme}")
+    expert_indices = expert_indices.repeat(mesh_shape[0], 1, 1, 1)
     return expert_indices
 
 
-def get_output_tensor(input_tokens, expert_indices, expert_mapping):
+def get_output_tensor(input_tokens, expert_indices, expert_mapping, mesh_shape):
     # output tensor is [devices, batch, 1, hidden_size]
     # depending on the expert indices, the input tokens are scattered to different experts
     # these experts are sent to one ore more device based on the expert mapping
-    batch = input_tokens.shape[0]
+    batch_times_mesh0 = input_tokens.shape[0]
+    batch = batch_times_mesh0 // mesh_shape[0]
     devices = expert_mapping.shape[3]
     experts = expert_mapping.shape[2]
+    experts_per_mesh0 = experts // mesh_shape[0]
     hidden_size = input_tokens.shape[3]
-    output_tensor = torch.randn(devices, batch, 1, hidden_size)
+    output_tensor = torch.randn(devices, batch_times_mesh0, 1, hidden_size)
     selected_experts_k = expert_indices.shape[3]
 
-    for b in range(batch):
-        for k in range(selected_experts_k):
-            expert_id = expert_indices[b, 0, 0, k]
-            # Get which devices should handle this expert (shape: devices,)
-            device_assignment = expert_mapping[0, 0, expert_id, :]
-            # Find device indices that have value 1
-            device_indices = torch.where(device_assignment == 1)[0]
-            # Assign input tokens to those devices
-            for device_idx in device_indices:
-                output_tensor[device_idx, b, 0, :] = input_tokens[b, 0, 0, :]
+    for m0 in range(mesh_shape[0]):
+        first_expert_in_m0 = m0 * experts_per_mesh0
+        last_expert_in_m0 = first_expert_in_m0 + experts_per_mesh0
+        for b in range(batch):
+            for k in range(selected_experts_k):
+                # if k selects an expert in our m0, then we add it to the output tensor
+                # if k is not in our m0, then we skip it
+                if k < first_expert_in_m0 or k >= last_expert_in_m0:
+                    continue
+                expert_id = expert_indices[m0 * batch + b, 0, 0, k]
+                # Get which devices should handle this expert (shape: devices,)
+                device_assignment = expert_mapping[0, 0, expert_id, :]
+                # Find device indices that have value 1
+                device_indices = torch.where(device_assignment == 1)[0]
+                # Assign input tokens to those devices
+                for device_idx in device_indices:
+                    output_tensor[device_idx, m0 * batch + b, 0, :] = input_tokens[m0 * batch + b, 0, 0, :]
 
     return output_tensor
 
 
-def gen_tensors(batch, experts, selected_experts_k, hidden_size, devices, scheme="random"):
+def gen_tensors(batch, experts, selected_experts_k, hidden_size, mesh_shape, devices, scheme="random"):
     torch.manual_seed(2005)
     # create input tokens
     assert batch % devices == 0
     assert experts % devices == 0
     assert selected_experts_k < experts
 
-    input_tokens = gen_tokens(batch, hidden_size, devices, scheme)
+    input_tokens = gen_tokens(batch, hidden_size, mesh_shape, devices, scheme)
     expert_mapping = gen_expert_mapping(experts, devices, scheme)
-    expert_indices = get_expert_indices(batch, experts, selected_experts_k, scheme)
+    expert_indices = get_expert_indices(batch, experts, selected_experts_k, mesh_shape, scheme)
 
-    output_tensor = get_output_tensor(input_tokens, expert_indices, expert_mapping)
+    output_tensor = get_output_tensor(input_tokens, expert_indices, expert_mapping, mesh_shape)
     metadata_tensor = get_metadata_tensor(expert_indices, expert_mapping)
 
     # create expert indices
@@ -430,9 +441,9 @@ def run_all_to_all_dispatch_test(
 def test_all_to_all_dispatch_no_trace(mesh_device, trace_mode, mesh_shape):
     devices = mesh_shape[0] * mesh_shape[1]
     batch = 2 * devices
-    experts = 4 * devices
+    experts = 8 * devices
     select_experts_k = 8
-    hidden_size = 2000
+    hidden_size = 7000
     num_iters = 1
     warmup_iters = 0
     trace_mode = trace_mode
@@ -466,16 +477,16 @@ def test_simple_tensor_gen(mesh_device, mesh_shape):
     torch.set_printoptions(threshold=10000)
     devices = mesh_shape[0] * mesh_shape[1]
     batch = 2 * devices
-    experts = 4 * devices
+    experts = 8 * devices
     select_experts_k = 8
-    hidden_size = 2000
+    hidden_size = 7000
     input_tokens, expert_indices, expert_mapping, sparse_output_token_tensor, metadata_tensor = gen_tensors(
-        batch, experts, select_experts_k, hidden_size, devices, scheme="sequential"
+        batch, experts, select_experts_k, hidden_size, mesh_shape, devices, scheme="sequential"
     )
-    assert input_tokens.shape == (batch, 1, 1, hidden_size)
-    assert expert_indices.shape == (batch, 1, 1, select_experts_k)
+    assert input_tokens.shape == (batch * mesh_shape[0], 1, 1, hidden_size)
+    assert expert_indices.shape == (batch * mesh_shape[0], 1, 1, select_experts_k)
     assert expert_mapping.shape == (devices, 1, experts, devices)
-    assert sparse_output_token_tensor.shape == (devices, batch, 1, hidden_size)
+    assert sparse_output_token_tensor.shape == (devices, batch * mesh_shape[0], 1, hidden_size)
     assert metadata_tensor.shape == (devices, batch, 1, select_experts_k)
 
     logger.info(f"Expert indices {expert_indices}")
