@@ -94,6 +94,8 @@ void kernel_main() {
     if constexpr (one_scalar_per_core) {
         fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16);
     }
+    DPRINT << "READER scalar" << ENDL();
+    tt::data_movement::common::print_bf16_pages(get_read_ptr(in_scalar_cb_id_0), 32, 1);
     if constexpr (is_avg_pool) {
         // for avgpool, we use a one's CB to avoid double division by kernel size for large kernel case.
         fill_with_val(get_write_ptr(in_one_cb_id), TILE_WIDTH, bf16_one_u16);

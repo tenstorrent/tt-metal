@@ -115,6 +115,8 @@ void MAIN {
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_rows_for_reduction + 1 : window_size_hw / max_rows_for_reduction;
 
+    DPRINT << "interm_reduction_chunks: " << interm_reduction_chunks << ENDL();
+
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++i) {
         // wait for initialization to complete
         cb_wait_front(sync_cb_id1, 2);
@@ -140,7 +142,7 @@ void MAIN {
                     zero_srca_avgpool>(
                     in_cb_id_0,
                     in_cb_id_1,
-                    (REDUCE_OP == PoolType::MAX || (REDUCE_OP == PoolType::AVG && h == interm_reduction_chunks - 1))
+                    (REDUCE_OP == PoolType::MAX || (REDUCE_OP == PoolType::SUM && h == interm_reduction_chunks - 1))
                         ? in_scalar_cb_id_0
                         : in_one_cb_id,
                     i,
