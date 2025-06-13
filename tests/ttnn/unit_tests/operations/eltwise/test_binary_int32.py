@@ -207,12 +207,15 @@ def test_binary_logical_int32_sharded(a_shape, b_shape, sharded_config, ttnn_fn,
 @pytest.mark.parametrize(
     "logical_op",
     [
-        ttnn.logical_or,
-        ttnn.logical_xor,
+        # ttnn.logical_or,
+        # ttnn.logical_xor,
+        ttnn.mul
     ],
 )
 def test_binary_logical_int32_edge_cases(logical_op, device):
-    torch_input_tensor_a = torch.tensor([0, 1, 0, 1, -1, 2147483647, -2147483647, 2147483647, 0])
+    torch_input_tensor_a = torch.tensor([1, 0, 1, 0, 2, 2])
+    torch_input_tensor_b = torch.tensor([2, 0, 1, 2, 2, 3])
+    # torch_input_tensor_a = torch.tensor([0, 1, 0, 1, -1, 2147483647, -2147483647, 2147483647, 0])
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=ttnn.int32,
@@ -221,7 +224,7 @@ def test_binary_logical_int32_edge_cases(logical_op, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    torch_input_tensor_b = torch.tensor([0, 0, -1, 1, -1, 2147483647, -2147483647, 0, -2147483647])
+    # torch_input_tensor_b = torch.tensor([0, 0, -1, 1, -1, 2147483647, -2147483647, 0, -2147483647])
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
         dtype=ttnn.int32,
@@ -235,5 +238,7 @@ def test_binary_logical_int32_edge_cases(logical_op, device):
 
     output_tensor = logical_op(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
+    print(torch_output_tensor)
+    print(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)

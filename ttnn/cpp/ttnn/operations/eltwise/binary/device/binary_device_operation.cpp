@@ -23,10 +23,9 @@ namespace utils {
             return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32)
                 || (a == DataType::UINT32 && b == DataType::UINT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::SUB:
+        case BinaryOpType::MUL:
             return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32)
                 || (a == DataType::UINT16 && b == DataType::UINT16));
-        case BinaryOpType::MUL:
-            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::DIV:
         case BinaryOpType::RSUB:
         case BinaryOpType::LOGADDEXP:
