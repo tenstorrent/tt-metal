@@ -72,8 +72,6 @@ ALWI void reduce_revert_delta() { PACK((llk_pack_reduce_mask_clear())); }
  * The templates take `reduce_type` which can be `ReduceFunc::Sum`, `ReduceFunc::Avg`, or `ReduceFunc::Max` and `reduce_dim` which can be `Reduce::R`, `Reduce::C`, or
  * `Reduce::RC`. They can also be specified by defines REDUCE_OP and REDUCE_DIM.
  *
- * This call is blocking and is only available on the compute engine.
- *
  * | Param Type | Name     | Description                                                     | Type     | Valid Range                                    | Required |
  * |------------|----------|-----------------------------------------------------------------|----------|------------------------------------------------|----------|
  * | Template   | reduce_type | The type of reduce op - sum, average or maximum              | PoolType | {SUM, AVG, MAX}                                | True     |
