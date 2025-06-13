@@ -106,7 +106,7 @@ HalCoreInfoType create_active_eth_mem_map() {
 
         switch (static_cast<EthProcessorTypes>(processor_class_idx)) {
             case EthProcessorTypes::DM0: {
-                fw_base = 0x36b8;  // MEM_AERISC_FIRMWARE_BASE;
+                fw_base = MEM_AERISC_FIRMWARE_BASE;
                 local_init = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH;
                 // This is not used for launching DM0. The ETH FW API will be used instead.
                 // Rather, it is used to signal that the active erisc firmware exited properly.

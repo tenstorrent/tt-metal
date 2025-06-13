@@ -42,14 +42,10 @@ struct profiler_msg_template_t {
 #endif
 // TODO: when device specific headers specify number of processors
 // (and hal abstracts them on host), get these from there (same as above for dprint)
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
 // TODO: Review if this should  be 2 for BH (the number of eth processors)
 // Hardcode to 1 to keep size as before
-#ifdef ARCH_BLACKHOLE
-static constexpr uint32_t PROFILER_RISC_COUNT = 1;
-#else
 static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
-#endif
 #else
 static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif

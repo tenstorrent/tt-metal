@@ -267,19 +267,24 @@ TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthProgra
     auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
     device->load_sub_device_manager(sub_device_manager);
 
-    auto [waiter_program, syncer_program, incrementer_program, global_sem] =
-        create_basic_eth_sync_program(device, sub_device_1, sub_device_2);
+    const auto erisc_count =
+        tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(HalProgrammableCoreType::ACTIVE_ETH);
+    for (int erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+        log_info(tt::LogTest, "Test active ethernet DM{}", erisc_idx);
+        auto [waiter_program, syncer_program, incrementer_program, global_sem] = create_basic_eth_sync_program(
+            device, sub_device_1, sub_device_2, static_cast<DataMovementProcessor>(erisc_idx));
 
-    for (uint32_t i = 0; i < num_iters; i++) {
-        EnqueueProgram(device->command_queue(), waiter_program, false);
-        device->set_sub_device_stall_group({SubDeviceId{0}});
-        // Test blocking on one sub-device
-        EnqueueProgram(device->command_queue(), syncer_program, true);
-        EnqueueProgram(device->command_queue(), incrementer_program, false);
-        device->reset_sub_device_stall_group();
+        for (uint32_t i = 0; i < num_iters; i++) {
+            EnqueueProgram(device->command_queue(), waiter_program, false);
+            device->set_sub_device_stall_group({SubDeviceId{0}});
+            // Test blocking on one sub-device
+            EnqueueProgram(device->command_queue(), syncer_program, true);
+            EnqueueProgram(device->command_queue(), incrementer_program, false);
+            device->reset_sub_device_stall_group();
+        }
+        Synchronize(device);
+        detail::DumpDeviceProfileResults(device);
     }
-    Synchronize(device);
-    detail::DumpDeviceProfileResults(device);
 }
 
 // Ensure each core in the sub device aware of their own logical coordinate. Same binary used in multiple sub devices.

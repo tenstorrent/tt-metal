@@ -47,6 +47,10 @@ static inline uint32_t get_dispatch_class() {
 #elif defined(COMPILE_FOR_IDLE_ERISC)
     return COMPILE_FOR_IDLE_ERISC == 0 ? DISPATCH_CLASS_ETH_DM0
         : DISPATCH_CLASS_ETH_DM1;
+#elif defined(COMPILE_FOR_AERISC)
+    return COMPILE_FOR_AERISC == 0 ? DISPATCH_CLASS_ETH_DM0 : DISPATCH_CLASS_ETH_DM1;
+#elif defined(COMPILE_FOR_ERISC)
+    return DISPATCH_CLASS_ETH_DM0;
 #elif defined(COMPILE_FOR_TRISC)
     return DISPATCH_CLASS_TENSIX_COMPUTE;
 #else
