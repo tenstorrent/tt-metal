@@ -49,7 +49,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
     const uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<uint32_t>& cluster_axis) {
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler> empty_fused_op_signaler;
     return reduce_scatter_minimal_async_helper(
@@ -114,13 +115,29 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     const auto [sender_worker_core_range, sender_worker_cores] =
         choose_worker_cores(num_links, num_senders_per_link, mesh_device, sub_device_id, core_grid_offset);
 
+    // Tensor Info
+    const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
+    const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
+    const auto input_tensor_shape = input_tensor.get_padded_shape();
+    const auto intermediate_tensor_buffer_type = intermediate_tensor.buffer()->buffer_type();
+    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const auto num_batches = input_tensor_shape[0];
+    const auto batch_slice_num_pages = input_tensor_num_pages / ring_size / num_batches;
+
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
-    uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
-
-    uint32_t tile_granularity = 2 * num_pages_per_packet;
-    uint32_t cb_num_pages = 2 * tile_granularity;  // double buffering
+    // Will be reworked
+    uint32_t num_pages_per_packet;
+    uint32_t tile_granularity;
+    if ((batch_slice_num_pages / num_links) % 4 != 0) {
+        num_pages_per_packet = 2;
+        tile_granularity = 2;
+    } else {
+        num_pages_per_packet = 4;
+        tile_granularity = 4;
+    }
+    uint32_t cb_num_pages = 3 * tile_granularity;  // double buffering
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     uint32_t input_cb_index = tt::CB::c_in0;
@@ -160,16 +177,11 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     auto reserved_packet_header_CB_handle =
         CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
-    // Tensor Info
-    const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
-    const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
-    const auto input_tensor_shape = input_tensor.get_padded_shape();
-    const auto intermediate_tensor_buffer_type = intermediate_tensor.buffer()->buffer_type();
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const auto num_batches = input_tensor_shape[0];
-    const auto batch_slice_num_pages = input_tensor_num_pages / ring_size / num_batches;
-
-    TT_ASSERT(!(input_tensor_shape[3] % tt::constants::TILE_WIDTH));
+    TT_FATAL(
+        !(input_tensor_shape[3] % tt::constants::TILE_WIDTH),
+        "Input tensor width ({}) must be divisible by tile width ({}).",
+        input_tensor_shape[3],
+        tt::constants::TILE_WIDTH);
     uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
 
     // KERNEL CREATION
@@ -189,6 +201,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
         ring_size,                                               // ring_size
         num_batches,                                             // num_batches
         fuse_op,                                                 // fused op
+        num_pages_per_packet                                     // contig_pages_advanced
     };
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -212,7 +225,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
         input_tensor_Wt,                                         // input_tensor_Wt
         batch_slice_num_pages,                                   // batch_slice_num_pages
         ring_size,                                               // ring_size
-        num_batches                                              // num_batches
+        num_batches,                                             // num_batches
+        num_pages_per_packet,                                    // contig_pages_advanced
     };
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -231,7 +245,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
         tile_granularity,
         ring_size,
         num_batches,
-    };
+        num_links};
 
     auto sender_reduce_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -245,10 +259,17 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
                                 // semaphore
     for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
-        if (link == 0) {
-            // drain sync core is the first worker core
-            drain_sync_core = mesh_device->worker_core_from_logical_core(core);
-        }
+        drain_sync_core = mesh_device->worker_core_from_logical_core(core);
+
+        uint32_t stride_Wt = input_tensor_Wt;
+        uint32_t slice_Wt = input_tensor_Wt / ring_size;
+        uint32_t pages_read_in_row = (link * batch_slice_num_pages / num_links) % slice_Wt;
+        uint32_t row_offset = (link * batch_slice_num_pages / num_links) / slice_Wt * stride_Wt;
+        uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
+        uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
+        uint32_t packet_id = ((tiles_to_read - tiles_read) + num_pages_per_packet - 1) / num_pages_per_packet * link;
+        uint32_t intermediate_packet_offset_x = (packet_id * ring_size) % 12;
+        uint32_t intermediate_packet_offset_y = (packet_id * ring_size) / 12;
 
         if (fuse_op) {
             auto sender_workers = corerange_to_cores(sender_worker_core_range, std::nullopt, true);
@@ -258,10 +279,17 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),         // input_tensor_address
             intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
-            semaphore.at(0).address(),                // out_ready_fwd_semaphore
-            semaphore.at(1).address(),                // out_ready_bwd_semaphore
-            semaphore.at(2).address(),                // batch_ready_semaphore
-        };
+            semaphore.at(0 + link * 3).address(),     // out_ready_fwd_semaphore
+            semaphore.at(1 + link * 3).address(),     // out_ready_bwd_semaphore
+            semaphore.at(2 + link * 3).address(),     // batch_ready_semaphore
+            link,
+            num_links,
+            pages_read_in_row,
+            row_offset,
+            tiles_read,
+            tiles_to_read,
+            intermediate_packet_offset_x,
+            intermediate_packet_offset_y};
         if (fuse_op) {
             fused_op_signaler->push_reduce_scatter_fused_op_rt_args(reader_rt_args);
         }
@@ -272,10 +300,17 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             output_tensor.buffer()->address(),        // output_tensor_address
             drain_sync_core.x,                        // out_ready_sem_noc0_x
             drain_sync_core.y,                        // out_ready_sem_noc0_y
-            semaphore.at(0).address(),                // out_ready_fwd_semaphore
-            semaphore.at(1).address(),                // out_ready_bwd_semaphore
-            semaphore.at(2).address(),                // batch_ready_semaphore
-        };
+            semaphore.at(0 + link * 3).address(),     // out_ready_fwd_semaphore
+            semaphore.at(1 + link * 3).address(),     // out_ready_bwd_semaphore
+            semaphore.at(2 + link * 3).address(),     // batch_ready_semaphore
+            link,
+            num_links,
+            pages_read_in_row,
+            row_offset,
+            tiles_read,
+            tiles_to_read,
+            intermediate_packet_offset_x,
+            intermediate_packet_offset_y};
         writer_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(

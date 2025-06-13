@@ -41,8 +41,15 @@ void kernel_main() {
     address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     uint32_t input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
     uint32_t output_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t slice_num_pages = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
+
+    uint32_t pages_in_row_offset = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t row_offset = get_arg_val<uint32_t>(arg_idx++);
+
+    uint32_t intermediate_packet_offset_x = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t intermediate_packet_offset_y = get_arg_val<uint32_t>(arg_idx++);
 
     OpSignaler op_signaler;
     if constexpr (fuse_op) {
@@ -84,44 +91,42 @@ void kernel_main() {
         }
     }
 
-    uint32_t actual_sender_chip_id = my_chip_id;
     while (slices_received < slices_expected) {
         slices_received++;
-        if (direction == 1) {
-            actual_sender_chip_id = (actual_sender_chip_id == ring_size - 1) ? 0 : actual_sender_chip_id + 1;
-        } else {
-            actual_sender_chip_id = (actual_sender_chip_id == 0) ? ring_size - 1 : actual_sender_chip_id - 1;
-        }
 
-        uint32_t pages_read_in_row = 0;
-        uint32_t row_offset = 0;
-        uint32_t tiles_read = 0;
+        int sender_chip_id;
+        uint32_t actual_sender_chip_id;
+        if (direction == 1) {
+            sender_chip_id = my_chip_id + slices_received;
+            actual_sender_chip_id = (sender_chip_id >= (int)ring_size) ? sender_chip_id - ring_size : sender_chip_id;
+        } else {
+            sender_chip_id = my_chip_id - slices_received;
+            actual_sender_chip_id = (sender_chip_id < 0) ? ring_size + sender_chip_id : sender_chip_id;
+        }
+        uint32_t pages_read_in_row = pages_in_row_offset;
+        uint32_t rows = row_offset;
+        uint32_t tiles_read = input_tile_id_start;
         uint32_t tile_id_start = actual_sender_chip_id * input_tensor_Wt;
-        uint32_t tiles_to_read = slice_num_pages;
+        uint32_t tiles_to_read = input_tile_id_end;
+
         while (tiles_read < tiles_to_read) {
             uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-            uint32_t payload_size_bytes = contig_pages_advanced * output_tensor_page_size;
             cb_wait_front(cb_intermediate_id, num_pages_to_read);
             size_t l1_read_addr = get_read_ptr(cb_intermediate_id);
             for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-                uint32_t first_tile_id = tile_id_start + row_offset + pages_read_in_row;
-                noc_async_write_tile(first_tile_id, output_tensor_addrgen, l1_read_addr);
-                pages_read_in_row += 1;
-                if (pages_read_in_row >= input_tensor_Wt) {
-                    row_offset += output_tensor_Wt;
-                    pages_read_in_row = 0;
+                uint32_t actual_num_pages = min(num_pages_to_read - j, contig_pages_advanced);
+                for (uint32_t i = 0; i < actual_num_pages; i++) {
+                    uint32_t tile_id = tile_id_start + rows + pages_read_in_row;
+                    noc_async_write_tile(tile_id, output_tensor_addrgen, l1_read_addr);
+                    pages_read_in_row += 1;
+                    if (pages_read_in_row >= input_tensor_Wt) {
+                        rows += output_tensor_Wt;
+                        pages_read_in_row = 0;
+                    }
+                    l1_read_addr += output_tensor_page_size;
                 }
 
-                uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
-                noc_async_write_tile(second_tile_id, output_tensor_addrgen, l1_read_addr + output_tensor_page_size);
-                pages_read_in_row += 1;
-                if (pages_read_in_row >= input_tensor_Wt) {
-                    row_offset += output_tensor_Wt;
-                    pages_read_in_row = 0;
-                }
-
-                l1_read_addr += payload_size_bytes;
-                tiles_read += contig_pages_advanced;
+                tiles_read += actual_num_pages;
             }
             cb_pop_front(cb_intermediate_id, num_pages_to_read);
         }
@@ -132,4 +137,5 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
+    DPRINT << "Done RECEIVER WRITER\n";
 }

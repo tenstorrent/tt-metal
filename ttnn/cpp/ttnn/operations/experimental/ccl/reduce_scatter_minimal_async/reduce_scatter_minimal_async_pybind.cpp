@@ -35,7 +35,8 @@ void bind_reduce_scatter_minimal_async(pybind11::module& module, const ccl_opera
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> ttnn::Tensor {
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+               std::optional<uint32_t> cluster_axis) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     persistent_intermediate_buffer,
@@ -45,7 +46,8 @@ void bind_reduce_scatter_minimal_async(pybind11::module& module, const ccl_opera
                     num_links,
                     memory_config,
                     topology,
-                    subdevice_id);
+                    subdevice_id,
+                    cluster_axis);
             },
             py::arg("input_tensor"),
             py::arg("persistent_intermediate_buffer"),
@@ -56,7 +58,8 @@ void bind_reduce_scatter_minimal_async(pybind11::module& module, const ccl_opera
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Ring,
-            py::arg("subdevice_id") = std::nullopt});
+            py::arg("subdevice_id") = std::nullopt,
+            py::arg("cluster_axis") = std::nullopt});
 }
 
 }  // namespace detail

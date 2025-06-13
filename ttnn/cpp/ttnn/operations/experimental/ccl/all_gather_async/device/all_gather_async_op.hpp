@@ -197,7 +197,8 @@ Tensor all_gather_async(
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    std::optional<uint32_t> cluster_axis = std::nullopt);
 
 std::vector<Tensor> all_gather_async(
     const std::vector<Tensor>& input_tensors,
