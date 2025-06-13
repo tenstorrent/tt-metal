@@ -81,6 +81,29 @@ inline std::string get_soc_description_file(
     path += file;
     return path;
 }
+
+// Constants for multi-mesh configuration
+constexpr uint32_t MULTI_MESH_CONFIG_ADDR = 0x104C;
+constexpr uint32_t MULTI_MESH_LINK_STATUS_ADDR = 0x1104;
+constexpr uint32_t MULTI_MESH_ENABLED_VALUE = 0x2;
+constexpr uint32_t LINK_CONNECTED_VALUE = 0x1;
+constexpr uint32_t MULTI_MESH_MODE_MASK = 0xFF;
+constexpr uint32_t INTERMESH_ETH_LINK_BITS_SHIFT = 8;
+constexpr uint32_t INTERMESH_ETH_LINK_BITS_MASK = 0xFFFF;
+constexpr uint32_t MAX_ETH_LINKS = 16;
+
+// Helper to extract intermesh ports from config value
+std::vector<uint32_t> extract_intermesh_eth_links(uint32_t config_value) {
+    std::vector<uint32_t> intermesh_eth_links;
+    uint32_t intermesh_eth_links_bits = (config_value >> INTERMESH_ETH_LINK_BITS_SHIFT) & INTERMESH_ETH_LINK_BITS_MASK;
+    for (uint32_t link = 0; link < MAX_ETH_LINKS; ++link) {
+        if (intermesh_eth_links_bits & (1 << link)) {
+            intermesh_eth_links.push_back(link);
+        }
+    }
+    return intermesh_eth_links;
+}
+
 }  // namespace
 namespace tt {
 
@@ -188,6 +211,8 @@ Cluster::Cluster(const llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal
     this->reserve_ethernet_cores_for_tunneling();
 
     this->initialize_ethernet_sockets();
+
+    this->initialize_intermesh_eth_links();
 
     this->set_tunnels_from_mmio_device();
 
@@ -968,6 +993,45 @@ void Cluster::initialize_ethernet_sockets() {
     }
 }
 
+void Cluster::initialize_intermesh_eth_links() {
+    // If intermesh is not enabled, set all intermesh_eth_links to empty
+    if (not this->is_intermesh_enabled()) {
+        for (const auto& chip_id : this->all_chip_ids()) {
+            this->intermesh_eth_links_[chip_id] = {};
+        }
+        return;
+    }
+
+    // Iterate over all chips in the cluster and populate the intermesh_eth_links
+    for (const auto& chip_id : this->all_chip_ids()) {
+        const auto& soc_desc = this->get_soc_desc(chip_id);
+        if (soc_desc.logical_eth_core_to_chan_map.empty()) {
+            this->intermesh_eth_links_[chip_id] = {};
+            continue;
+        }
+
+        // Read multi-mesh configuration from the first available eth core
+        auto first_eth_core = soc_desc.logical_eth_core_to_chan_map.begin()->first;
+        tt_cxy_pair virtual_eth_core(
+            chip_id, this->get_virtual_coordinate_from_logical_coordinates(chip_id, first_eth_core, CoreType::ETH));
+
+        std::vector<uint32_t> config_data(1, 0);
+        this->read_core(config_data, sizeof(uint32_t), virtual_eth_core, MULTI_MESH_CONFIG_ADDR);
+        std::vector<std::pair<CoreCoord, uint32_t>> intermesh_eth_links;
+        for (auto link : extract_intermesh_eth_links(config_data[0])) {
+            // Find the CoreCoord for this channel
+            for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
+                if (channel == link) {
+                    intermesh_eth_links.push_back({core_coord, link});
+                    break;
+                }
+            }
+        }
+
+        this->intermesh_eth_links_[chip_id] = intermesh_eth_links;
+    }
+}
+
 void Cluster::disable_ethernet_cores_with_retrain() {
     std::vector<uint32_t> read_vec;
     const auto& chips = this->driver_->get_target_device_ids();
@@ -1501,6 +1565,57 @@ bool Cluster::is_external_cable(chip_id_t physical_chip_id, CoreCoord eth_core) 
         }
     }
     return is_external_cable;
+}
+
+bool Cluster::is_intermesh_enabled() const {
+    std::vector<uint32_t> config_data(1, 0);
+    auto first_chip_id = *this->driver_->get_target_mmio_device_ids().begin();
+    auto first_eth_core = this->get_soc_desc(first_chip_id).logical_eth_core_to_chan_map.begin()->first;
+    tt_cxy_pair virtual_eth_core(
+        first_chip_id, this->get_virtual_coordinate_from_logical_coordinates(first_chip_id, first_eth_core, CoreType::ETH));
+    this->read_core(config_data, sizeof(uint32_t), virtual_eth_core, MULTI_MESH_CONFIG_ADDR);
+    bool intermesh_enabled = (config_data[0] & MULTI_MESH_MODE_MASK) == MULTI_MESH_ENABLED_VALUE;
+    return intermesh_enabled;
+}
+
+bool Cluster::contains_intermesh_links() const {
+    return !this->get_all_intermesh_eth_links().empty();
+}
+
+bool Cluster::has_intermesh_links(chip_id_t chip_id) const {
+    return !this->get_intermesh_eth_links(chip_id).empty();
+}
+
+const std::vector<std::pair<CoreCoord, uint32_t>>& Cluster::get_intermesh_eth_links(chip_id_t chip_id) const {
+    return this->intermesh_eth_links_.at(chip_id);
+}
+
+const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, uint32_t>>>& Cluster::get_all_intermesh_eth_links() const {
+    return this->intermesh_eth_links_;
+}
+
+bool Cluster::is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) const {
+    for (const auto& [link_eth_core, channel] : this->get_intermesh_eth_links(chip_id)) {
+        if (link_eth_core == eth_core) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Cluster::is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord eth_core) const {
+    if (!this->is_intermesh_eth_link(chip_id, eth_core)) {
+        return false;
+    }
+
+    // Read the link status from designated L1 address
+    tt_cxy_pair virtual_eth_core(
+        chip_id, this->get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
+    std::vector<uint32_t> status_data(1, 0);
+    this->read_core(status_data, sizeof(uint32_t), virtual_eth_core, MULTI_MESH_LINK_STATUS_ADDR);
+
+    // Check if the link is trained
+    return (status_data[0] & LINK_CONNECTED_VALUE) == LINK_CONNECTED_VALUE;
 }
 
 }  // namespace tt
