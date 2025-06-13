@@ -33,18 +33,17 @@ namespace NAMESPACE {
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);  // rows to process in this kernel
 constexpr uint32_t block_size = get_compile_time_arg_val(1);         // size of block
 constexpr uint32_t Wt = get_compile_time_arg_val(2);
-constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
 
 constexpr auto cb_input = tt::CBIndex::c_0;
-constexpr auto cb_mask = tt::CBIndex::c_2;
-constexpr auto cb_max_mask = tt::CBIndex::c_3;
-constexpr auto cb_reduction_scaler = tt::CBIndex::c_4;
+constexpr auto cb_mask = tt::CBIndex::c_1;
+constexpr auto cb_max_mask = tt::CBIndex::c_2;
+constexpr auto cb_reduction_scaler = tt::CBIndex::c_3;
+constexpr auto cb_mat_mul_reduce = tt::CBIndex::c_4;
 constexpr auto cb_max_value_before_reduction = tt::CBIndex::c_5;
 constexpr auto cb_max_value_after_reduction = tt::CBIndex::c_6;
 constexpr auto cb_exp_sum_before_reduction = tt::CBIndex::c_7;
 constexpr auto cb_exp_sum_after_reduction = tt::CBIndex::c_8;
-constexpr auto cb_mat_mul_reduce = tt::CBIndex::c_9;
-constexpr auto cb_output = tt::CBIndex::c_10;
+constexpr auto cb_output = tt::CBIndex::c_9;
 
 constexpr uint32_t onetile = 1U;
 
@@ -207,7 +206,7 @@ void calculate_sum_exp_x() {
     cb_reserve_back(cb_exp_sum_before_reduction, onetile);
     tile_regs_acquire();
 
-    const uint32_t max_value_register = 3U;
+    const uint32_t max_value_register = 2U;
     reconfig_data_format(cb_max_value_after_reduction, cb_input);
     unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction, cb_max_value_after_reduction);
     unary_bcast<BroadcastType::COL>(
@@ -265,7 +264,7 @@ void calculate_sum_exp_x() {
 
     tile_regs_acquire();
 
-    const uint32_t max_value_register = 3U;
+    const uint32_t max_value_register = 2U;
     reconfig_data_format(cb_max_value_after_reduction, cb_input);
     unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction, cb_max_value_after_reduction);
     unary_bcast<BroadcastType::COL>(
@@ -376,7 +375,7 @@ void MAIN {
         calculate_sum_exp_x();  // calculate sum of exp(x - max(x))
         reduce_sum_exp_x();     // reduce sum(exp(x - max(x))), take log and push to cb_exp_sum_after_reduction
 
-        cb_wait_front(cb_exp_sum_after_reduction, onetile);  //  wait log(sum(exp(x - max(x)))
+        cb_wait_front(cb_exp_sum_after_reduction, onetile);  //  wait sum(exp(x - max(x))
 
         const uint32_t working_register = 0;
         const uint32_t sum_exp_register = block_size;
@@ -414,9 +413,6 @@ void MAIN {
 
                 mul_binary_tile_init();
                 mul_binary_tile(block_idx, sum_exp_register);  // multiply by scaler
-
-                binop_with_scalar_tile_init();
-                mul_unary_tile(block_idx, scaler_bits);  // multiply by scaler
             }
             tile_regs_commit();
 
