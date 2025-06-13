@@ -167,6 +167,7 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
 @pytest.mark.parametrize(
     "sampling_params",
     (
+        # Test top-p settings
         # {"temperature": 1.0, "top_k": 32, "top_p": 0.00, "seed": 42}, # argmax
         # {"temperature": 1.0, "top_k": 32, "top_p": 1.00, "seed": 42}, # multinomial sampling from all tok-k tokens
         {"temperature": 1.0, "top_k": 32, "top_p": 0.95, "seed": 42},  # typical top-p parameter in LLMs
