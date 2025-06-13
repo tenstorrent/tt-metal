@@ -16,6 +16,14 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      run_cnn_models:
+        required: false
+        type: boolean
+        default: true
+      run_other_models:
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   device-perf:
@@ -24,11 +32,54 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-info: [
-          {name: "N300 WH B0 CNN Models", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal", timeout: 120, test-type: "cnn"},
-          {name: "N300 WH B0 Other Models", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal", timeout: 120, test-type: "other"},
-        ]
-    name: "${{ matrix.test-info.name }} device perf"
+        test-info: >-
+          ${{
+            fromJson(
+              (inputs.run_cnn_models && inputs.run_other_models) &&
+              '[
+                {
+                  "name": "N300 WH B0 CNN Models",
+                  "arch": "wormhole_b0",
+                  "runs-on": ["N300", "pipeline-perf", "bare-metal", "in-service"],
+                  "machine-type": "bare_metal",
+                  "timeout": 120,
+                  "test-type": "cnn"
+                },
+                {
+                  "name": "N300 WH B0 Other Models",
+                  "arch": "wormhole_b0",
+                  "runs-on": ["N300", "pipeline-perf", "bare-metal", "in-service"],
+                  "machine-type": "bare_metal",
+                  "timeout": 120,
+                  "test-type": "other"
+                }
+              ]' ||
+              (inputs.run_cnn_models && !inputs.run_other_models) &&
+              '[
+                {
+                  "name": "N300 WH B0 CNN Models",
+                  "arch": "wormhole_b0",
+                  "runs-on": ["N300", "pipeline-perf", "bare-metal", "in-service"],
+                  "machine-type": "bare_metal",
+                  "timeout": 120,
+                  "test-type": "cnn"
+                }
+              ]' ||
+              (!inputs.run_cnn_models && inputs.run_other_models) &&
+              '[
+                {
+                  "name": "N300 WH B0 Other Models",
+                  "arch": "wormhole_b0",
+                  "runs-on": ["N300", "pipeline-perf", "bare-metal", "in-service"],
+                  "machine-type": "bare_metal",
+                  "timeout": 120,
+                  "test-type": "other"
+                }
+              ]' ||
+              '[]'
+            )
+          }}
+    name: "${{ matrix.test-info.name }}"
     runs-on: ${{ matrix.test-info.runs-on }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
@@ -40,14 +91,16 @@ jobs:
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
+        # https://github.com/actions/runner/issues/878
+        working-directory: /work
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
@@ -64,7 +117,6 @@ jobs:
           fi
 
           if [[ "${{ matrix.test-info.test-type }}" == "cnn" ]]; then
-            # CNN and Computer Vision Models
             pytest models/demos/wormhole/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
             pytest models/demos/vgg/tests/ -m models_device_performance_bare_metal
             pytest models/demos/convnet_mnist/tests/ -m models_device_performance_bare_metal
@@ -85,7 +137,6 @@ jobs:
             WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
             echo "CNN_MODELS_COMPLETED=true" >> $GITHUB_ENV
           elif [[ "${{ matrix.test-info.test-type }}" == "other" ]]; then
-            # NLP and Other Models
             pytest models/demos/distilbert/tests -m models_device_performance_bare_metal
             pytest models/demos/bert_tiny/tests/ -m models_device_performance_bare_metal
             pytest models/demos/squeezebert/tests -m models_device_performance_bare_metal
