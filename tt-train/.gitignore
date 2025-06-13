@@ -47,3 +47,6 @@ venv/
 wandb/
 
 cluster_descriptor.yaml
+
+# VSCode
+.vscode/*
