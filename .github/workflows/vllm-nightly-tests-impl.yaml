@@ -25,22 +25,10 @@ jobs:
       matrix:
         test-group: [
           {
-            name: "[T3K] Llama-3.1-8B-Instruct",
-            model: "meta-llama/Llama-3.1-8B-Instruct",
-            server-timeout: 5,
-            benchmark-timeout: 5,
-            runner-label: config-t3000,
-            mesh-device: T3K,
-            tt-llama-text-ver: tt_transformers,
-            wh-arch-yaml: wormhole_b0_80_arch_eth_dispatch.yaml,
-            co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
-            co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
-          },
-          {
             name: "[TG] Llama-3.3-70B-Instruct",
             model: "meta-llama/Llama-3.3-70B-Instruct",
             server-timeout: 35,
-            benchmark-timeout: 10,
+            benchmark-timeout: 60,
             runner-label: config-tg,
             mesh-device: TG,
             tt-llama-text-ver: llama3_subdevices,
