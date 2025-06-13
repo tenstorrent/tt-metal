@@ -68,7 +68,10 @@ public:
         const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
     void set_default_control_plane_mesh_graph();
     void set_fabric_config(
-        tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
+        tt_metal::FabricConfig fabric_config,
+        tt_metal::FabricReliabilityMode reliability_mode =
+            tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        std::optional<uint8_t> num_routing_planes = std::nullopt);
     void initialize_fabric_config();
     tt_metal::FabricConfig get_fabric_config() const;
 
@@ -104,6 +107,12 @@ private:
     std::array<std::unique_ptr<DispatchMemMap>, magic_enum::enum_count<CoreType>()> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::GlobalControlPlane> global_control_plane_;
     tt_metal::FabricConfig fabric_config_ = tt_metal::FabricConfig::DISABLED;
+
+    // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
+    // is expected that any downed devices/links will result in some sort of error condition being
+    // reported. When set to false, the control plane is free to instantiate fewer routing planes
+    // according to which links are available.
+    tt_metal::FabricReliabilityMode fabric_reliability_mode_ = tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
     uint8_t num_fabric_active_routing_planes_ = 0;
 };
 

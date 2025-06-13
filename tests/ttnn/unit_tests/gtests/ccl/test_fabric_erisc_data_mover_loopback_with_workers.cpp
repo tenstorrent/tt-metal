@@ -1297,15 +1297,15 @@ TEST(EdmFabric, RingDeadlockStabilityTest) {
     constexpr size_t num_op_invocations = 5;
     constexpr bool line_sync = true;
     size_t num_links = 1;
-    std::vector<size_t> num_devices;
+    std::vector<size_t> num_devices_vec;
     auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
     if (cluster_type == tt::ClusterType::GALAXY) {
-        num_devices = {4, 8};
+        num_devices_vec = {4, 8};
         num_links = 4;
     } else {
-        num_devices = {8};
+        num_devices_vec = {8};
     }
-    for (const auto& num_devices : num_devices) {
+    for (const auto& num_devices : num_devices_vec) {
         log_trace(
             tt::LogTest, "Running RingDeadlockStabilityTest with forward mcast only with {} devices", num_devices);
         RunRingDeadlockStabilityTestWithPersistentFabric(
@@ -1320,5 +1320,42 @@ TEST(EdmFabric, RingDeadlockStabilityTest) {
             num_devices);
         RunRingDeadlockStabilityTestWithPersistentFabric(
             num_mcasts, num_links, num_devices, num_op_invocations, true, true);
+    }
+}
+
+TEST(EdmFabric, RingDeadlockStabilityTest_RelaxedFabricStrictness) {
+    constexpr size_t num_mcasts = 200000;
+    constexpr size_t num_op_invocations = 5;
+    constexpr bool line_sync = true;
+    // Set to however many links are available
+    std::optional<size_t> num_links = std::nullopt;
+    std::vector<size_t> num_devices;
+    auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+
+    if (cluster_type != tt::ClusterType::GALAXY) {
+        return;
+    }
+    num_devices = {4, 8};
+    for (size_t offset = 0; offset < num_devices[1]; offset++) {
+        RunRingDeadlockStabilityTestWithPersistentFabric<Fabric1DRingRelaxedDeviceInitFixture>(
+            num_mcasts,
+            num_links,
+            num_devices[0],
+            num_op_invocations,
+            true,
+            false,
+            tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes,
+            offset);
+    }
+    for (size_t offset = 0; offset < num_devices[0]; offset++) {
+        RunRingDeadlockStabilityTestWithPersistentFabric<Fabric1DRingRelaxedDeviceInitFixture>(
+            num_mcasts,
+            num_links,
+            num_devices[1],
+            num_op_invocations,
+            true,
+            false,
+            tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes,
+            offset);
     }
 }
