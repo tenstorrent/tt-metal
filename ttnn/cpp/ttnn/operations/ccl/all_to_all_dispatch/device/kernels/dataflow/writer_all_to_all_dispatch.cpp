@@ -32,7 +32,7 @@ enum eth_chan_directions {
     COUNT = 4,
 };*/
 
-inline uint32_t get_direction(uint32_t src_chip_id, uint32_t dest_chip_id, uint32_t mesh_cols) {
+inline uint32_t get_direction(uint32_t src_chip_id, uint32_t dest_chip_id, uint32_t mesh_cols, uint32_t mesh_rows) {
     // row 0 to row 1
     if (src_chip_id <= 3 && dest_chip_id > 3) {
         return 3;
