@@ -14,7 +14,13 @@
 static constexpr size_t VIRTUAL_COORDS_START_X = 16;
 static constexpr size_t VIRTUAL_COORDS_START_Y = 16;
 FORCE_INLINE bool is_using_noc_coords(uint16_t noc_x, uint16_t noc_y) {
-    return !(bool)COORDINATE_VIRTUALIZATION_ENABLED;
+#ifdef ARCH_WORMHOLE
+    return noc_x < VIRTUAL_COORDS_START_X && noc_y < VIRTUAL_COORDS_START_Y;
+#elif defined(COORDINATE_VIRTUALIZATION_ENABLED) && COORDINATE_VIRTUALIZATION_ENABLED == 1
+    return false;
+#else
+    return true;
+#endif
 }
 
 FORCE_INLINE uint64_t
