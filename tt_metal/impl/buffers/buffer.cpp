@@ -242,12 +242,15 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     auto shape_in_pages = shard_spec.shape_in_pages();
     for (uint32_t core_index = 0; core_index < core_host_page_indices.size(); core_index++) {
         uint32_t valid_shard_page = 0;
-        buffer_page_mapping.core_host_page_indices[core_index].reserve(shard_spec.num_pages());
+        buffer_page_mapping.core_host_page_indices[core_index].resize(
+            shard_spec.num_pages(), BufferPageMapping::PADDING);
         for (uint32_t shard_page_x = 0; shard_page_x < shape_in_pages[0]; shard_page_x++) {
             for (uint32_t shard_page_y = 0; shard_page_y < shape_in_pages[1]; shard_page_y++) {
                 if (shard_page_x < shard_shape[core_index][0] && shard_page_y < shard_shape[core_index][1]) {
                     uint32_t host_page = core_host_page_indices[core_index][valid_shard_page];
-                    buffer_page_mapping.core_host_page_indices[core_index].push_back(host_page);
+                    buffer_page_mapping
+                        .core_host_page_indices[core_index][shard_page_x * shape_in_pages[1] + shard_page_y] =
+                        host_page;
                     valid_shard_page++;
                 }
             }
