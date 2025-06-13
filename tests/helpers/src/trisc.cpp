@@ -12,17 +12,16 @@
 #include "ckernel_pcbuf.h"
 // Necessary for ckernel variables
 #include "ckernel_helper.h"
-#include "params.h"
 #include "profiler.h"
 
 #ifdef LLK_PROFILER
 
 namespace llk_profiler
 {
-
-buffer_ptr_t buffer    = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
-uint32_t write_idx     = 0;
-uint32_t open_zone_cnt = 0;
+barrier_ptr_t barrier_ptr = reinterpret_cast<barrier_ptr_t>(BARRIER_START);
+buffer_ptr_t buffer       = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
+uint32_t write_idx        = 0;
+uint32_t open_zone_cnt    = 0;
 
 } // namespace llk_profiler
 
@@ -52,6 +51,7 @@ int main()
 
 #if defined(LLK_PROFILER)
     llk_profiler::reset();
+    llk_profiler::sync_threads();
 #endif
 
     {

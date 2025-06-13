@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "build.h"
 #include "ckernel.h"
 
 #define DO_PRAGMA(x) _Pragma(#x)
@@ -72,14 +73,49 @@ constexpr uint32_t NUM_CORES     = 3;     // TRISC cores: unpack, math, pack
 constexpr uint32_t BUFFERS_END   = 0x16E000;
 constexpr uint32_t BUFFERS_START = BUFFERS_END - (NUM_CORES * BUFFER_LENGTH * sizeof(uint32_t));
 
-using buffer_ptr_t = tt_l1_ptr uint32_t (*)[BUFFER_LENGTH];
+constexpr uint32_t BARRIER_END   = BUFFERS_START;
+constexpr uint32_t BARRIER_START = BARRIER_END - (NUM_CORES * sizeof(uint32_t));
 
+using barrier_ptr_t = volatile uint32_t (*)[NUM_CORES];
+using buffer_ptr_t  = uint32_t (*)[BUFFER_LENGTH];
+
+extern barrier_ptr_t barrier_ptr;
 extern buffer_ptr_t buffer;
 extern uint32_t write_idx;
 extern uint32_t open_zone_cnt;
 
+__attribute__((always_inline)) inline void sync_threads()
+{
+    auto& barrier = *barrier_ptr;
+
+    // wait for all the threads to reset the barrier
+    barrier[TRISC_ID] = 0;
+    for (uint32_t i = 0; i < NUM_CORES; ++i)
+    {
+        if (i == TRISC_ID)
+        {
+            continue;
+        }
+        while (barrier[i] != 0)
+            ;
+    }
+
+    // wait for all the threads to set the barrier
+    barrier[TRISC_ID] = 1;
+    for (uint32_t i = 0; i < NUM_CORES; ++i)
+    {
+        if (i == TRISC_ID)
+        {
+            continue;
+        }
+        while (barrier[i] == 0)
+            ;
+    }
+}
+
 __attribute__((always_inline)) inline void reset()
 {
+    barrier_ptr   = reinterpret_cast<barrier_ptr_t>(BARRIER_START);
     buffer        = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
     write_idx     = 0;
     open_zone_cnt = 0;

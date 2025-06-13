@@ -124,6 +124,12 @@ def generate_build_header(
                 f"#define POOL_TYPE {test_config.get('pool_type', ReducePool.No).value}"
             )
 
+    header_content.append("")
+    # Multi-tile test configuration
+    header_content.append("// Multi-tile test configuration")
+    header_content.append(f"#define TILE_CNT {test_config.get('tile_cnt', 1)}")
+
+    # todo: refactor multiple tiles test to remove this
     # Multiple tiles test specific configuration
     if test_config.get("testname") == "multiple_tiles_eltwise_test":
         header_content.extend(
