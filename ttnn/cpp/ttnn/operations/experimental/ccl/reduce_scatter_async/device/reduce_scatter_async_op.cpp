@@ -159,7 +159,7 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
     if (!num_links.has_value()) {
         if (this->cluster_axis.has_value()) {
             auto row_or_col = this->cluster_axis.value() == 0 ? coord[1] : coord[0];
-            num_links = tt::tt_fabric::get_number_of_available_routing_planes(
+            num_links = tt::tt_fabric::experimental::get_number_of_available_routing_planes(
                 *mesh_device, this->cluster_axis.value(), row_or_col);
         } else {
             TT_FATAL(

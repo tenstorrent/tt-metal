@@ -3677,19 +3677,21 @@ size_t get_number_of_links_for_ring_deadlock_stability_test(
         if (cluster_type == ClusterType::GALAXY) {
             for (size_t i = 0; i < 8; i++) {
                 size_t cluster_axis = 1;
-                auto nl = tt::tt_fabric::get_number_of_available_routing_planes(mesh_device, cluster_axis, i);
+                auto nl =
+                    tt::tt_fabric::experimental::get_number_of_available_routing_planes(mesh_device, cluster_axis, i);
                 log_info(tt::LogTest, "Number of links for Galaxy cluster_axis 0, row {}: {}", i, nl);
             }
             for (size_t i = 0; i < 4; i++) {
                 size_t cluster_axis = 0;
-                auto nl = tt::tt_fabric::get_number_of_available_routing_planes(mesh_device, cluster_axis, i);
+                auto nl =
+                    tt::tt_fabric::experimental::get_number_of_available_routing_planes(mesh_device, cluster_axis, i);
                 log_info(tt::LogTest, "Number of links for Galaxy cluster_axis 1, row {}: {}", i, nl);
             }
 
             bool is_long_edge = num_devices == 8;
             size_t cluster_axis = !is_long_edge ? 1 : 0;
-            num_links =
-                tt::tt_fabric::get_number_of_available_routing_planes(mesh_device, cluster_axis, row_or_col.value());
+            num_links = tt::tt_fabric::experimental::get_number_of_available_routing_planes(
+                mesh_device, cluster_axis, row_or_col.value());
         } else {
             TT_THROW("This test can only be run on 4 or 8 chips on Galaxy devices");
         }

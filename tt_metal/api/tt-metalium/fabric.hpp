@@ -26,9 +26,6 @@ namespace tt::tt_fabric {
 
 size_t get_tt_fabric_channel_buffer_size_bytes();
 
-size_t get_number_of_available_routing_planes(
-    const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t cluster_axis, size_t row_or_col);
-
 // Used to get the run-time args for estabilishing connection with the fabric router.
 // The API appends the connection specific run-time args to the set of exisiting
 // run-time args for the worker programs, which allows the workers to conveniently
@@ -60,5 +57,10 @@ void append_fabric_connection_rt_args(
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type = CoreType::WORKER);
+
+namespace experimental {
+size_t get_number_of_available_routing_planes(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t cluster_axis, size_t row_or_col);
+}
 
 }  // namespace tt::tt_fabric
