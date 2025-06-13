@@ -141,20 +141,6 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     auto topology = get_topology(fabric_config);
     size_t min_routing_planes = std::numeric_limits<size_t>::max();
 
-    auto print_golden_link_counts =
-        [](const std::unordered_map<
-            MeshId,
-            std::unordered_map<chip_id_t, std::unordered_map<RoutingDirection, size_t>>>& golden_link_counts) {
-            for (const auto& [mesh_id, chip_id_to_link_counts] : golden_link_counts) {
-                for (const auto& [chip_id, link_counts] : chip_id_to_link_counts) {
-                    for (const auto& [direction, count] : link_counts) {
-                        log_info(
-                            tt::LogFabric, "Mesh {} chip {} direction {} count {}", mesh_id, chip_id, direction, count);
-                    }
-                }
-            }
-        };
-
     auto apply_min =
         [this, reliability_mode](
             const std::unordered_map<tt::tt_fabric::RoutingDirection, std::vector<tt::tt_fabric::chan_id_t>>&
@@ -200,7 +186,6 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
         this->routing_table_generator_->mesh_graph->get_intra_mesh_connectivity(), golden_link_counts);
     build_golden_link_counts(
         this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity(), golden_link_counts);
-    print_golden_link_counts(golden_link_counts);
 
     // For each mesh in the system
     for (std::uint32_t mesh_id = 0; mesh_id < intra_mesh_connectivity.size(); mesh_id++) {
@@ -209,8 +194,6 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
         TT_FATAL(mesh_shape[0] > 0, "ControlPlane: Mesh width must be greater than 0");
         TT_FATAL(mesh_shape[1] > 0, "ControlPlane: Mesh height must be greater than 0");
 
-        std::uint32_t num_ports_per_direction =
-            this->routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
         std::vector<size_t> row_min_planes(mesh_shape[0], std::numeric_limits<size_t>::max());
         std::vector<size_t> col_min_planes(mesh_shape[1], std::numeric_limits<size_t>::max());
 
@@ -292,7 +275,6 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
 ControlPlane::ControlPlane(
     const std::string& mesh_graph_desc_file,
     const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    // this->fabric_config_ = fabric_config;
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
     // Printing, only enabled with log_debug
     this->routing_table_generator_->mesh_graph->print_connectivity();
@@ -935,22 +917,6 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(tt_meta
     this->initialize_dynamic_routing_plane_counts(
         intra_mesh_connectivity, this->fabric_context_.get()->get_fabric_config(), reliability_mode);
 
-    auto print_router_port_directions_to_physical_eth_chan_map =
-        [](const auto& router_port_directions_to_physical_eth_chan_map) {
-            for (const auto& [fabric_node_id, directional_eth_chans] :
-                 router_port_directions_to_physical_eth_chan_map) {
-                for (const auto& [direction, eth_chans] : directional_eth_chans) {
-                    log_info(
-                        tt::LogFabric,
-                        "M{}D{} direction {} has {} eth channels",
-                        fabric_node_id.mesh_id.get(),
-                        fabric_node_id.chip_id,
-                        direction,
-                        eth_chans.size());
-                }
-            }
-        };
-
     // Order the ethernet channels so that when we use them for deciding connections, indexing into ports per direction
     // is consistent for each each neighbouring chip.
     this->order_ethernet_channels();
@@ -987,47 +953,13 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(tt_meta
                         direction,
                         directional_eth_chans.at(direction).size(),
                         num_available_routing_planes);
-                    for (auto chan : directional_eth_chans.at(direction)) {
-                        log_warning(
-                            tt::LogFabric,
-                            "\tBEFORE M{}D{} in direction {} eth channel {}",
-                            fabric_node_id.mesh_id,
-                            fabric_node_id.chip_id,
-                            direction,
-                            chan);
-                    }
                 }
                 directional_eth_chans.at(direction).resize(num_available_routing_planes);
-                if (trim) {
-                    for (auto chan : directional_eth_chans.at(direction)) {
-                        log_warning(
-                            tt::LogFabric,
-                            "\tAFTER log {} M{}D{} in direction {} eth channel {}",
-                            fabric_node_id.chip_id,
-                            fabric_node_id.mesh_id,
-                            fabric_node_id.chip_id,
-                            direction,
-                            chan);
-                    }
-                }
             }
         }
     }
-    // Validate  connections
-    for (auto& [fabric_node_id, directional_eth_chans] : this->router_port_directions_to_physical_eth_chan_map_) {
-        for (auto direction : {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W}) {
-            if (directional_eth_chans.find(direction) != directional_eth_chans.end()) {
-            }
-        }
-    }
-
-    print_router_port_directions_to_physical_eth_chan_map(this->router_port_directions_to_physical_eth_chan_map_);
 
     this->convert_fabric_routing_table_to_chip_routing_table();
-
-    // Print ethernet channel connection information at the end of control plane init
-    this->print_active_ethernet_connections();
-    this->print_all_ethernet_connections();
 }
 
 void ControlPlane::write_routing_tables_to_chip(MeshId mesh_id, chip_id_t chip_id) const {
@@ -1513,123 +1445,5 @@ void GlobalControlPlane::initialize_host_mapping() {
 }
 
 GlobalControlPlane::~GlobalControlPlane() = default;
-
-void ControlPlane::print_active_ethernet_connections() const {
-    std::stringstream ss;
-    ss << "Control Plane: Active ethernet channel connections" << std::endl;
-
-    // Helper to get mesh coordinates
-    auto get_mesh_coord = [this](FabricNodeId fabric_node_id) -> std::pair<uint32_t, uint32_t> {
-        auto mesh_id = fabric_node_id.mesh_id;
-        auto chip_id = fabric_node_id.chip_id;  // logical chip ID
-        auto mesh_ew_size = this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id)[1];
-        auto coord_y = chip_id / mesh_ew_size;
-        auto coord_x = chip_id % mesh_ew_size;
-        return {coord_x, coord_y};
-    };
-
-    for (const auto& [fabric_node_id, fabric_eth_channels] : this->router_port_directions_to_physical_eth_chan_map_) {
-        auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
-        auto [mesh_x, mesh_y] = get_mesh_coord(fabric_node_id);
-        ss << "Chip " << physical_chip_id << " (M" << fabric_node_id.mesh_id.get() << "D" << fabric_node_id.chip_id
-           << " @(" << mesh_x << "," << mesh_y << ")):" << std::endl;
-
-        for (const auto& [direction, eth_chans] : fabric_eth_channels) {
-            ss << "  " << magic_enum::enum_name(direction) << " direction:" << std::endl;
-
-            for (const auto& eth_chan : eth_chans) {
-                try {
-                    auto [connected_fabric_node_id, connected_chan_id] =
-                        this->get_connected_mesh_chip_chan_ids(fabric_node_id, eth_chan);
-                    auto connected_physical_chip_id =
-                        this->get_physical_chip_id_from_fabric_node_id(connected_fabric_node_id);
-                    auto [connected_mesh_x, connected_mesh_y] = get_mesh_coord(connected_fabric_node_id);
-
-                    ss << "    Channel " << (std::uint16_t)eth_chan << " -> Chip " << connected_physical_chip_id
-                       << " (M" << connected_fabric_node_id.mesh_id.get() << "D" << connected_fabric_node_id.chip_id
-                       << " @(" << connected_mesh_x << "," << connected_mesh_y << ")) Channel "
-                       << (std::uint16_t)connected_chan_id << std::endl;
-                } catch (...) {
-                    ss << "    Channel " << (std::uint16_t)eth_chan << " -> No connection" << std::endl;
-                }
-            }
-        }
-        ss << std::endl;
-    }
-
-    log_debug(tt::LogFabric, "{}", ss.str());
-}
-
-void ControlPlane::print_all_ethernet_connections() const {
-    std::stringstream ss;
-    ss << "Control Plane: All ethernet channel connections (active and inactive)" << std::endl;
-
-    // Helper to get mesh coordinates
-    auto get_mesh_coord = [this](FabricNodeId fabric_node_id) -> std::pair<uint32_t, uint32_t> {
-        auto mesh_id = fabric_node_id.mesh_id;
-        auto chip_id = fabric_node_id.chip_id;
-        auto mesh_ew_size = this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id)[1];
-        auto coord_y = chip_id / mesh_ew_size;
-        auto coord_x = chip_id % mesh_ew_size;
-        return {coord_x, coord_y};
-    };
-
-    // Iterate through all chips in the logical mapping
-    for (const auto& [fabric_node_id, physical_chip_id] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
-        const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
-        auto [mesh_x, mesh_y] = get_mesh_coord(fabric_node_id);
-
-        ss << "Chip " << physical_chip_id << " (M" << fabric_node_id.mesh_id.get() << "D" << fabric_node_id.chip_id
-           << " @(" << mesh_x << "," << mesh_y << ")):" << std::endl;
-
-        // Get all ethernet channels from the SOC descriptor
-        for (const auto& [eth_core, eth_chan] : soc_desc.logical_eth_core_to_chan_map) {
-            bool is_active = false;
-            std::string direction_str = "UNKNOWN";
-
-            // Check if this channel is active and get its direction
-            if (this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id)) {
-                for (const auto& [direction, active_eth_chans] :
-                     this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)) {
-                    if (std::find(active_eth_chans.begin(), active_eth_chans.end(), eth_chan) !=
-                        active_eth_chans.end()) {
-                        is_active = true;
-                        direction_str = std::string(magic_enum::enum_name(direction));
-                        break;
-                    }
-                }
-            }
-
-            // Try to get connection information
-            try {
-                auto [connected_physical_chip_id, connected_eth_core] =
-                    tt::tt_metal::MetalContext::instance().get_cluster().get_connected_ethernet_core(
-                        std::make_tuple(physical_chip_id, eth_core));
-
-                auto connected_fabric_node_id =
-                    this->get_fabric_node_id_from_physical_chip_id(connected_physical_chip_id);
-                auto connected_chan_id = tt::tt_metal::MetalContext::instance()
-                                             .get_cluster()
-                                             .get_soc_desc(connected_physical_chip_id)
-                                             .logical_eth_core_to_chan_map.at(connected_eth_core);
-                auto [connected_mesh_x, connected_mesh_y] = get_mesh_coord(connected_fabric_node_id);
-
-                ss << "  Channel " << (std::uint16_t)eth_chan << " [" << (is_active ? "ACTIVE" : "INACTIVE")
-                   << (is_active ? ", " + direction_str : "") << "] "
-                   << " -> Chip (phys)" << connected_physical_chip_id << "(logical)" << connected_fabric_node_id.chip_id
-                   << " (M" << connected_fabric_node_id.mesh_id.get() << "D" << connected_fabric_node_id.chip_id
-                   << " @(" << connected_mesh_x << "," << connected_mesh_y << ")) Channel "
-                   << (std::uint16_t)connected_chan_id << std::endl;
-            } catch (...) {
-                ss << "  Channel " << (std::uint16_t)eth_chan << " [" << (is_active ? "ACTIVE" : "INACTIVE")
-                   << (is_active ? ", " + direction_str : "") << "] "
-                   << " -> No connection" << std::endl;
-            }
-        }
-        ss << std::endl;
-    }
-
-    log_debug(tt::LogFabric, "{}", ss.str());
-}
 
 }  // namespace tt::tt_fabric
