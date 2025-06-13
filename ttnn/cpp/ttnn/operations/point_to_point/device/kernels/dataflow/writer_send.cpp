@@ -88,7 +88,7 @@ void kernel_main() {
 
             ++packet_page_idx;
             if (packet_page_idx == curr_pages_per_packet) {
-                const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer_addrgen);
 
                 packet_header_ptr->to_noc_unicast_write(
                     tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, payload_size_bytes);
