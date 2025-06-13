@@ -15,7 +15,8 @@
 
 #define TracyTTMetalReplayTrace(device_id, trace_id)                                                 \
     std::string trace_message = fmt::format("`TT_METAL_TRACE_REPLAY: {}, {}`", device_id, trace_id); \
-    TracyMessage(trace_message.c_str(), trace_message.size());
+    TracyMessage(trace_message.c_str(), trace_message.size());                                       \
+    tt::tt_metal::detail::ShareTraceIDwithProfiler(device_id, trace_id);
 
 #define TracyTTMetalReleaseTrace(device_id, trace_id)                                                 \
     std::string trace_message = fmt::format("`TT_METAL_TRACE_RELEASE: {}, {}`", device_id, trace_id); \
@@ -37,6 +38,7 @@
     for (auto device_id : device_ids) {                                                                  \
         std::string trace_message = fmt::format("`TT_METAL_TRACE_REPLAY: {}, {}`", device_id, trace_id); \
         TracyMessage(trace_message.c_str(), trace_message.size());                                       \
+        tt::tt_metal::detail::ShareTraceIDwithProfiler(device_id, trace_id);                             \
     }
 
 #define TracyTTMetalReleaseMeshTrace(device_ids, trace_id)                                                \

@@ -252,7 +252,7 @@ __attribute__((noinline)) void finish_profiler() {
     if (profiler_control_buffer[PROFILER_DONE] == 1) {
         return;
     }
-    bool do_noc = true;
+    bool do_noc = false;
     if (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
         do_noc = false;
     }
@@ -428,13 +428,17 @@ struct profileScopeGuaranteed {
     static constexpr uint32_t start_index = (2 * index * PROFILER_L1_MARKER_UINT32_SIZE) + GUARANTEED_MARKER_1_H;
     static constexpr uint32_t end_index = (2 * index * PROFILER_L1_MARKER_UINT32_SIZE) + GUARANTEED_MARKER_2_H;
 
+    static constexpr uint32_t TRACE_ID_SET_BIT = (1 << 31);
     static_assert(start_index < CUSTOM_MARKERS);
     static_assert(end_index < CUSTOM_MARKERS);
     inline __attribute__((always_inline)) profileScopeGuaranteed() {
         if constexpr (index == 0) {
             init_profiler();
         }
-        mark_time_at_index_inlined(start_index, timer_id);
+        if (profiler_control_buffer[CURRENT_TRACE_ID] & TRACE_ID_SET_BIT) {
+            profiler_control_buffer[CURRENT_TRACE_ID] = 0;
+            mark_time_at_index_inlined(start_index, timer_id);
+        }
     }
     inline __attribute__((always_inline)) ~profileScopeGuaranteed() {
         mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
@@ -540,20 +544,11 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     kernel_profiler::profileScopeGuaranteed<hash, 0> zone = kernel_profiler::profileScopeGuaranteed<hash, 0>();
 
-#define DeviceZoneScopedMainChildN(name)                                       \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    kernel_profiler::profileScopeGuaranteed<hash, 1> zone = kernel_profiler::profileScopeGuaranteed<hash, 1>();
+#define DeviceZoneScopedMainChildN(name)
 
-#define DeviceZoneScopedSumN1(name)                                            \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    kernel_profiler::profileScopeAccumulate<hash, 0> zone = kernel_profiler::profileScopeAccumulate<hash, 0>();
+#define DeviceZoneScopedSumN1(name)
 
-#define DeviceZoneScopedSumN2(name)                                            \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    kernel_profiler::profileScopeAccumulate<hash, 1> zone = kernel_profiler::profileScopeAccumulate<hash, 1>();
+#define DeviceZoneScopedSumN2(name)
 
 #define DeviceZoneSetCounter(counter) kernel_profiler::set_host_counter(counter);
 
