@@ -9,8 +9,8 @@ namespace ttnn::operations::rand {
 struct Rand {
     static Tensor invoke(
         const std::vector<uint32_t>& size,
-        std::optional<DataType> dtype,
-        std::optional<Layout> layout,
+        const std::optional<DataType> dtype,
+        const std::optional<Layout> layout,
         std::optional<std::reference_wrapper<MeshDevice>> device,
         const std::optional<MemoryConfig>& memory_config);
 };

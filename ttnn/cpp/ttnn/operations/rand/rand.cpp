@@ -13,16 +13,19 @@
 namespace ttnn::operations::rand {
 Tensor Rand::invoke(
     const std::vector<uint32_t>& size,
-    std::optional<DataType> dtype,
-    std::optional<Layout> layout,
+    const std::optional<DataType> dtype,
+    const std::optional<Layout> layout,
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<MemoryConfig>& memory_config) {
-    TT_FATAL(dtype.has_value(), "Expected 'dtype' to be set but found no value");
-    TT_FATAL(layout.has_value(), "Expected 'layout' to be set but found no value");
+    TT_FATAL(dtype.has_value(), "Missing 'dtype': argument not set and no default value available.");
+    TT_FATAL(layout.has_value(), "Missing 'layout': argument not set and no default value available.");
 
     auto output = ttnn::random::random(ttnn::Shape{size}, *dtype, *layout);
     if (device.has_value()) {
-        TT_FATAL(memory_config.has_value(), "Expected 'memory_config' to be set but found no value");
+        TT_FATAL(
+            memory_config.has_value(),
+            "Missing 'memory_config': argument not set and no default value available. This is required when used with "
+            "the 'device' argument.");
         return output.to_device(std::addressof(device->get()), *memory_config);
     }
     return output;
