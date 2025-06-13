@@ -71,6 +71,7 @@ class AccessorBenchmarks : public GenericMeshDeviceFixture, public ::testing::Wi
 void benchmark_all_args_combinations_single_core(
     const InputBufferParams& params,
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_,
+    const std::string& res_path,
     const std::string& kernel_path) {
     using tt::tt_metal::sharded_accessor_utils::ArgConfig;
     using tt::tt_metal::sharded_accessor_utils::ArgsConfig;
@@ -85,7 +86,7 @@ void benchmark_all_args_combinations_single_core(
 
     const auto input_bank_base_address = input_mesh_buffer->address();
 
-    tt::tt_metal::detail::SetDeviceProfilerDir("accessor_consructor_benchmarks/" + params.test_name);
+    tt::tt_metal::detail::SetDeviceProfilerDir(res_path + "/" + params.test_name);
     tt::tt_metal::detail::FreshProfilerDeviceLog();
     for (uint8_t i = 0; i < 1 << 5; ++i) {
         ArgsConfig args_loc_cnf(i);
@@ -148,12 +149,16 @@ TEST_P(AccessorBenchmarks, GetNocAddr) {
     benchmark_all_args_combinations_single_core(
         GetParam(),
         mesh_device_,
+        "accessor_get_noc_addr_benchmarks",
         "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_get_noc_addr_page_id_benchmark.cpp");
 }
 
 TEST_P(AccessorBenchmarks, Constructor) {
     benchmark_all_args_combinations_single_core(
-        GetParam(), mesh_device_, "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_constructor_benchmark.cpp");
+        GetParam(),
+        mesh_device_,
+        "accessor_consructor_benchmarks",
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_constructor_benchmark.cpp");
 }
 
 INSTANTIATE_TEST_SUITE_P(

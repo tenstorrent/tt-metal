@@ -45,7 +45,7 @@ ARGS_CONFIGS = [
 ]
 
 
-def impl_test(gtest_filter):
+def impl_test(gtest_filter, res_dir):
     ENV = os.environ.copy()
     ENV["TT_METAL_DEVICE_PROFILER"] = "1"
     BASE = Path(ENV["TT_METAL_HOME"])
@@ -67,7 +67,7 @@ def impl_test(gtest_filter):
         zone_names.append(zone_name)
     setup.timerAnalysis = timerAnalysis
 
-    results_dir = Path(BASE / "accessor_consructor_benchmarks")
+    results_dir = Path(BASE / res_dir)
     profile_log_file = Path(".logs/profile_log_device.csv")
     for test_dir in sorted(results_dir.iterdir(), key=natural_key_from_path):
         if not test_dir.is_dir():
@@ -84,8 +84,8 @@ def impl_test(gtest_filter):
 
 
 def test_get_noc_addr_page_id():
-    impl_test("AccessorTests/AccessorBenchmarks.GetNocAddr/*")
+    impl_test("AccessorTests/AccessorBenchmarks.GetNocAddr/0", res_dir="accessor_get_noc_addr_benchmarks")
 
 
 def test_constructor():
-    impl_test("AccessorTests/AccessorBenchmarks.Constructor/*")
+    impl_test("AccessorTests/AccessorBenchmarks.Constructor/*", res_dir="accessor_consructor_benchmarks")
