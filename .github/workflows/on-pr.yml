@@ -148,8 +148,8 @@ jobs:
             needs.detect-changes.outputs.github == 'true' }}
     with:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
-      runs_on: p150
-      test_group: "[1]"
+      runs_on: tt-beta-ubuntu-2204-p150b-large-stable
+      test_group: "[1, 2, 3]"
 
   check-all-green:
     name: "✅ Check all green"
