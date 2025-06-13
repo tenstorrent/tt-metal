@@ -206,7 +206,7 @@ void DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(IDevice* device, cons
         device_id,
         worker_core,
         reinterpret_cast<uint64_t>(profiler_msg->buffer),
-        kernel_profiler::PROFILER_L1_VECTOR_SIZE * PROFILER_RISC_COUNT);
+        kernel_profiler::PROFILER_L1_BUFFER_SIZE * PROFILER_RISC_COUNT);
 }
 
 void DeviceProfiler::readControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state) {
@@ -240,12 +240,14 @@ void DeviceProfiler::readRiscProfilerResults(
     IDevice* device,
     const CoreCoord& worker_core,
     const ProfilerDumpState state,
-    const std::vector<uint32_t>& data_buffer,
     const ProfilerDataBufferSource data_source,
     const std::optional<ProfilerOptionalMetadata>& metadata,
     std::ofstream& log_file_ofs,
     nlohmann::ordered_json& noc_trace_json_log) {
     ZoneScoped;
+
+    const std::vector<uint32_t>& data_buffer =
+        (data_source == ProfilerDataBufferSource::L1) ? core_l1_data_buffers.at(worker_core) : profile_buffer;
 
     std::vector<uint32_t> control_buffer = core_control_buffers.at(worker_core);
 
@@ -1184,15 +1186,6 @@ void DeviceProfiler::dumpResults(
                 ZoneScopedN("Reading L1 profiler Data buffer");
                 readControlBuffers(device, worker_core, state);
                 resetControlBuffers(device, worker_core, state);
-                HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);
-
-                profiler_msg_t* profiler_msg =
-                    MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-                std::vector<uint32_t> L1_data_buffer = tt::llrt::read_hex_vec_from_core(
-                    device_id,
-                    worker_core,
-                    reinterpret_cast<uint64_t>(profiler_msg->buffer),
-                    kernel_profiler::PROFILER_L1_VECTOR_SIZE * PROFILER_RISC_COUNT);
 
                 if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
                     if (rtoptions.get_profiler_do_dispatch_cores() || state == ProfilerDumpState::FORCE_UMD_READ) {
@@ -1208,7 +1201,6 @@ void DeviceProfiler::dumpResults(
                     device,
                     worker_core,
                     state,
-                    L1_data_buffer,
                     ProfilerDataBufferSource::L1,
                     metadata,
                     log_file_ofs,
@@ -1218,7 +1210,6 @@ void DeviceProfiler::dumpResults(
                     device,
                     worker_core,
                     state,
-                    profile_buffer,
                     ProfilerDataBufferSource::DRAM,
                     metadata,
                     log_file_ofs,
