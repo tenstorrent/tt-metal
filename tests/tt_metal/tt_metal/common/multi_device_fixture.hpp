@@ -42,6 +42,7 @@ protected:
         const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
         if (num_devices == 2) {
             std::vector<chip_id_t> ids;
+            ids.reserve(num_devices);
             for (chip_id_t id = 0; id < num_devices; id++) {
                 ids.push_back(id);
             }
@@ -73,6 +74,7 @@ protected:
         const size_t num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
         if (this->arch_ == tt::ARCH::WORMHOLE_B0 && num_devices == 2 && num_pci_devices == 1) {
             std::vector<chip_id_t> ids;
+            ids.reserve(num_devices);
             for (chip_id_t id = 0; id < num_devices; id++) {
                 ids.push_back(id);
             }

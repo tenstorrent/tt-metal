@@ -87,6 +87,7 @@ Tensor ArgmaxOperation::invoke(
             Tensor max_val = ttnn::max(input_a, (int)dim, true, output_memory_config);
             int repeat = input.logical_shape()[dim];
             std::vector<Tensor> combined_tensors;
+            combined_tensors.reserve(repeat);
             for (int cid = 0; cid < repeat; cid++) {
                 combined_tensors.emplace_back(max_val);
             }

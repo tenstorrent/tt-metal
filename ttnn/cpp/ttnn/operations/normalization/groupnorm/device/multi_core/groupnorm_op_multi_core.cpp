@@ -496,6 +496,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         for (int i = 0; i < num_cores_c / num_cores_per_group; ++i) {
             for (int j = 0; j < num_cores_r; ++j) {
                 std::vector<CoreCoord> temp;
+                temp.reserve(num_cores_per_group);
                 for (int k = 0; k < num_cores_per_group; ++k) {
                     temp.push_back(CoreCoord{(std::size_t)(k + i * num_cores_per_group), (std::size_t)j});
                 }
@@ -506,6 +507,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         for (int i = 0; i < num_cores_r / num_cores_per_group; ++i) {
             for (int j = 0; j < num_cores_c; ++j) {
                 std::vector<CoreCoord> temp;
+                temp.reserve(num_cores_per_group);
                 for (int k = 0; k < num_cores_per_group; ++k) {
                     temp.push_back(CoreCoord{(std::size_t)j, (std::size_t)(k + i * num_cores_per_group)});
                 }
@@ -1548,6 +1550,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     for (int j = 0; j < num_cores_c; ++j) {
         for (int i = 0; i < num_cores_r / num_cores_per_group; ++i) {
             std::vector<CoreCoord> temp;
+            temp.reserve(num_cores_per_group);
             for (int k = 0; k < num_cores_per_group; ++k) {
                 temp.push_back(CoreCoord{(std::size_t)(k + i * num_cores_per_group), (std::size_t)j});
             }

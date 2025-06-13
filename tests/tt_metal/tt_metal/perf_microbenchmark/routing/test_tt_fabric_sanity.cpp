@@ -764,10 +764,12 @@ struct test_device_t {
         uint32_t grid_size_x = grid_size.x;
         uint32_t grid_size_y = grid_size.y;
 
+        router_phys_cores.reserve(router_logical_cores.size());
         for (auto& core : router_logical_cores) {
             router_phys_cores.push_back(soc_desc.get_physical_core_from_logical_core(core, CoreType::ETH));
         }
 
+        worker_phys_cores.reserve(worker_logical_cores.size());
         for (auto& core : worker_logical_cores) {
             worker_phys_cores.push_back(soc_desc.get_physical_core_from_logical_core(core, CoreType::WORKER));
         }
