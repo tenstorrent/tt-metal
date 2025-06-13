@@ -54,6 +54,13 @@ def test_rand_shapes(shapes):
     assert tuple(tensor.shape) == tuple(shapes)
 
 
+@pytest.mark.parametrize("dim", [i for i in range(32)])
+def test_rand_dims(dim, device):
+    shape = (dim, dim)
+    tensor = ttnn.rand(shape, device=device)
+    assert tuple(tensor.shape) == tuple(shape)
+
+
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_rand_with_layout(layout):
     size = DEFAULT_SHAPE
