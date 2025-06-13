@@ -32,7 +32,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     reverse_permute,
     standardize_hf_keys,
 )
-from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
+from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32, wormhole_dict_device_names
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -436,13 +436,7 @@ class ModelArgs:
                     4: "P150x4",
                 }
             elif is_wormhole_b0():
-                dict_device_names = {
-                    1: "N150",
-                    2: "N300",
-                    4: "N150x4",
-                    8: "T3K",
-                    32: "TG",
-                }
+                dict_device_names = wormhole_dict_device_names
             else:
                 raise ValueError(f"Unsupported architecture: {self.arch_name}")
 
