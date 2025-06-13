@@ -80,7 +80,16 @@ def test_permute_on_4D_tensor_with_smaller_tuple_size(device, h, w, dtype):
 @pytest.mark.parametrize(
     "perm", [(0,), (0, 1), (1, 0), (0, 1, 2), (0, 2, 1), (1, 2, 0), (1, 0, 2), (2, 0, 1), (2, 1, 0)]
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        ttnn.bfloat16,
+        pytest.param(
+            ttnn.int32,
+            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
+        ),
+    ],
+)
 def test_permute_on_less_than_4D(device, perm, dtype):
     torch.manual_seed(2005)
     shape = tuple([32 * (value + 1) for value in perm])
@@ -372,7 +381,16 @@ def test_permute_4d_wh(device, shape, dtype):
 @pytest.mark.parametrize(
     "shape", [[1, 1, 32, 32], [2, 2, 32, 32], [32, 32, 32, 32], [1, 1, 64, 64], [2, 2, 64, 64], [32, 32, 64, 64]]
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        ttnn.bfloat16,
+        pytest.param(
+            ttnn.int32,
+            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
+        ),
+    ],
+)
 def test_permute_4d_cnwh(device, shape, dtype):
     torch.manual_seed(2005)
     torch_tensor = random_torch_tensor(dtype, shape)
