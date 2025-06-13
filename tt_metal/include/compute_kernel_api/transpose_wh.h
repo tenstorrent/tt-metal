@@ -38,7 +38,7 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
         MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(true, false, icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
     } else {
-        UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, false>(icb, true)));
+        UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb, true)));
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true)));
         MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(true, true, icb)));
     }
