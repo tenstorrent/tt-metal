@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ckernel_ops.h"
+#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel
@@ -31,7 +32,7 @@ inline void _calculate_cumsum_(const bool first)
     TTI_SFPLOAD(3, 0, ADDR_MOD_3, 2 + 16);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_REPLAY(0, 8, 0, 0);
+    lltt::replay(0, 8);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(0, 0, ADDR_MOD_3, 0);
@@ -46,7 +47,7 @@ inline void _calculate_cumsum_(const bool first)
     TTI_SFPLOAD(7, 0, ADDR_MOD_3, 6 + 16);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_REPLAY(8, 8, 0, 0);
+    lltt::replay(8, 8);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(4, 0, ADDR_MOD_3, 4);
@@ -61,7 +62,7 @@ inline void _calculate_cumsum_(const bool first)
     TTI_SFPLOAD(3, 0, ADDR_MOD_3, 10 + 16);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_REPLAY(0, 8, 0, 0);
+    lltt::replay(0, 8);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(0, 0, ADDR_MOD_3, 8);
@@ -76,7 +77,7 @@ inline void _calculate_cumsum_(const bool first)
     TTI_SFPLOAD(7, 0, ADDR_MOD_3, 14 + 16);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_REPLAY(8, 8, 0, 0);
+    lltt::replay(8, 8);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(4, 0, ADDR_MOD_3, 12);
@@ -91,7 +92,7 @@ inline void _calculate_cumsum_(const bool first)
     TTI_SFPLOAD(3, 0, ADDR_MOD_3, 2 + 16 + 32);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_REPLAY(0, 8, 0, 0);
+    lltt::replay(0, 8);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(0, 0, ADDR_MOD_3, 0 + 32);
@@ -106,7 +107,7 @@ inline void _calculate_cumsum_(const bool first)
     TTI_SFPLOAD(7, 0, ADDR_MOD_3, 6 + 16 + 32);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_REPLAY(8, 8, 0, 0);
+    lltt::replay(8, 8);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(4, 0, ADDR_MOD_3, 4 + 32);
@@ -121,7 +122,7 @@ inline void _calculate_cumsum_(const bool first)
     TTI_SFPLOAD(3, 0, ADDR_MOD_3, 10 + 16 + 32);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_REPLAY(0, 8, 0, 0);
+    lltt::replay(0, 8);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(0, 0, ADDR_MOD_3, 8 + 32);
@@ -136,7 +137,7 @@ inline void _calculate_cumsum_(const bool first)
     TTI_SFPLOAD(7, 0, ADDR_MOD_3, 14 + 16 + 32);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_REPLAY(8, 8, 0, 0);
+    lltt::replay(8, 8);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(4, 0, ADDR_MOD_3, 12 + 32);
@@ -148,7 +149,8 @@ inline void _calculate_cumsum_(const bool first)
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void _cumsum_init_()
 {
-    TTI_REPLAY(0, 16, 0, 1);
+    lltt::record(0, 16);
+    // FIXME: These should all be TT_SFP...
     TTI_SFPADD(10, 7, 0, 0, 0);
     TTI_SFPNOP;
     TTI_SFPADD(10, 0, 1, 1, 0);

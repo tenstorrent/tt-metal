@@ -26,7 +26,6 @@ inline void _llk_unpack_untilize_mop_config_()
     load_replay_buf(
         0,
         replay_buf_len,
-        false,
         // Lambda function to set up replay buffer
         []
         {
@@ -55,11 +54,11 @@ inline void _llk_unpack_untilize_mop_config_()
     ckernel_unpack_template tmp = ckernel_unpack_template(
         true,  // src B
         false, // halo - just used for 4 unpacks
-        TT_OP_REPLAY(0, replay_buf_len, 0, 0),
+        lltt::replay_insn(0, replay_buf_len),
         0,
         0,
         0,
-        TT_OP_REPLAY(0, replay_buf_len, 0, 0),
+        lltt::replay_insn(0, replay_buf_len),
         load_offset_addr_cntx0,
         load_offset_addr_cntx1);
     tmp.program(instrn_buffer);

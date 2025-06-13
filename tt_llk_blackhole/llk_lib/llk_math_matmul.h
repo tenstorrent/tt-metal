@@ -314,7 +314,6 @@ inline void matmul_configure_mop(
     load_replay_buf(
         ckernel::math::replay_buf_offset,
         replay_buf_len,
-        false,
         // Lambda function to load reply buffer
         [high_fidelity, reuse_a, partial_face, is_in1_32x16, is_in0_16x32, is_in0_32x16, is_in1_16x32, t_dim]
         {
@@ -405,7 +404,7 @@ inline void matmul_configure_mop(
 
     // TODO: can we commonize this?
     constexpr uint inner_loops = high_fidelity ? NUM_FIDELITY_PHASES : 1;
-    ckernel_template tmp(1 /* outer loop */, inner_loops, TT_OP_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0));
+    ckernel_template tmp(1 /* outer loop */, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len));
 
     if constexpr (high_fidelity)
     {
@@ -556,7 +555,6 @@ inline void matmul_configure_mop_throttled(
     load_replay_buf(
         ckernel::math::replay_buf_offset,
         replay_buf_len,
-        false,
         // Lambda function to load reply buffer
         [is_in1_32x16, is_in1_16x32, is_in0_32x16, is_in0_16x32]
         {
@@ -572,7 +570,7 @@ inline void matmul_configure_mop_throttled(
     ckernel_template tmp(
         outer_loops,
         inner_loops,
-        TT_OP_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0),
+        lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len),
         TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, addr_mod_inner_loop, 0));
 
     if (!is_in1_32x16 && !is_in1_16x32 && !is_in0_32x16 && !is_in0_16x32)

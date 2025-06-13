@@ -224,7 +224,6 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const bool narrow_tile = false, co
     load_replay_buf(
         0,
         replay_buf_run_len,
-        false,
         []
         {
             // Unpacks 1x16 row of datums to SrcA
@@ -243,13 +242,13 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const bool narrow_tile = false, co
         });
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
-        false,                                      // src B
-        false,                                      // halo - just used for 4 unpacks
-        TT_OP_REPLAY(0, replay_buf_half_len, 0, 0), // runs when context is 0
+        false,                                     // src B
+        false,                                     // halo - just used for 4 unpacks
+        lltt::replay_insn(0, replay_buf_half_len), // runs when context is 0
         0,
         0,
         0,
-        TT_OP_REPLAY(replay_buf_half_len, replay_buf_half_len, 0, 0), // runs when context is 1
+        lltt::replay_insn(replay_buf_half_len, replay_buf_half_len), // runs when context is 1
         0,
         0);
 

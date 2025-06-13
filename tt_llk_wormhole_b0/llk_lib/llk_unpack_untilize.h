@@ -12,6 +12,8 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "lltt.h"
+#include "sfpi.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -23,7 +25,7 @@ using namespace ckernel::unpacker;
 inline void _llk_unpack_untilize_mop_config_()
 {
     constexpr uint replay_buf_len = (SKIP_UNP == 1) ? 1 : 5;
-    TTI_REPLAY(0, replay_buf_len, 0, 1);
+    lltt::record(0, replay_buf_len);
 #if SKIP_UNP == 1
     TTI_NOP;
     static constexpr uint load_offset_addr_cntx0 = TT_OP_NOP;
@@ -44,11 +46,11 @@ inline void _llk_unpack_untilize_mop_config_()
     ckernel_unpack_template tmp = ckernel_unpack_template(
         true,  // src B
         false, // halo - just used for 4 unpacks
-        TT_OP_REPLAY(0, replay_buf_len, 0, 0),
+        lltt::replay_insn(0, replay_buf_len),
         0,
         0,
         0,
-        TT_OP_REPLAY(0, replay_buf_len, 0, 0),
+        lltt::replay_insn(0, replay_buf_len),
         load_offset_addr_cntx0,
         load_offset_addr_cntx1);
     tmp.program(instrn_buffer);

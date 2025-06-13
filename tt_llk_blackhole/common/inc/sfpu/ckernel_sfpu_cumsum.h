@@ -32,7 +32,7 @@ inline void _calculate_cumsum_(const bool first)
     TTI_SFPLOAD(3, 0, ADDR_MOD_7, 2 + 16);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_REPLAY(0, 8, 0, 0);
+    lltt::replay(0, 8);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(0, 0, ADDR_MOD_7, 0);
@@ -47,7 +47,7 @@ inline void _calculate_cumsum_(const bool first)
     TTI_SFPLOAD(7, 0, ADDR_MOD_7, 6 + 16);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_REPLAY(8, 8, 0, 0);
+    lltt::replay(8, 8);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(4, 0, ADDR_MOD_7, 4);
@@ -62,7 +62,7 @@ inline void _calculate_cumsum_(const bool first)
     TTI_SFPLOAD(3, 0, ADDR_MOD_7, 10 + 16);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_REPLAY(0, 8, 0, 0);
+    lltt::replay(0, 8);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(0, 0, ADDR_MOD_7, 8);
@@ -77,7 +77,7 @@ inline void _calculate_cumsum_(const bool first)
     TTI_SFPLOAD(7, 0, ADDR_MOD_7, 14 + 16);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_REPLAY(8, 8, 0, 0);
+    lltt::replay(8, 8);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(4, 0, ADDR_MOD_7, 12);
@@ -92,7 +92,7 @@ inline void _calculate_cumsum_(const bool first)
     TTI_SFPLOAD(3, 0, ADDR_MOD_7, 2 + 16 + 32);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_REPLAY(0, 8, 0, 0);
+    lltt::replay(0, 8);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(0, 0, ADDR_MOD_7, 0 + 32);
@@ -107,7 +107,7 @@ inline void _calculate_cumsum_(const bool first)
     TTI_SFPLOAD(7, 0, ADDR_MOD_7, 6 + 16 + 32);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_REPLAY(8, 8, 0, 0);
+    lltt::replay(8, 8);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(4, 0, ADDR_MOD_7, 4 + 32);
@@ -122,7 +122,7 @@ inline void _calculate_cumsum_(const bool first)
     TTI_SFPLOAD(3, 0, ADDR_MOD_7, 10 + 16 + 32);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_REPLAY(0, 8, 0, 0);
+    lltt::replay(0, 8);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(0, 0, ADDR_MOD_7, 8 + 32);
@@ -137,7 +137,7 @@ inline void _calculate_cumsum_(const bool first)
     TTI_SFPLOAD(7, 0, ADDR_MOD_7, 14 + 16 + 32);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
-    TTI_REPLAY(8, 8, 0, 0);
+    lltt::replay(8, 8);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     TTI_SFPSTORE(4, 0, ADDR_MOD_7, 12 + 32);
@@ -149,7 +149,9 @@ inline void _calculate_cumsum_(const bool first)
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void _cumsum_init_()
 {
-    load_replay_buf<0, 16, 0>(
+    load_replay_buf(
+        0,
+        16,
         []
         {
             TTI_SFPADD(10, 7, 0, 0, 0);
