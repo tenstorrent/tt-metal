@@ -140,7 +140,7 @@ jobs:
   build-artifact:
     name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.distro }} ${{ inputs.version }}"
     needs: build-docker-image
-    timeout-minutes: 30
+    timeout-minutes: 45
     runs-on: tt-beta-ubuntu-2204-large
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
