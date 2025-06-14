@@ -140,6 +140,7 @@ target_sources(
             fabric/hw/inc/fabric_routing_mode.h
             impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
+            impl/dispatch/kernels/cq_relay.hpp
             impl/dispatch/kernels/cq_helpers.hpp
             impl/dispatch/kernels/packet_queue.hpp
             impl/dispatch/kernels/packet_queue_ctrl.hpp
