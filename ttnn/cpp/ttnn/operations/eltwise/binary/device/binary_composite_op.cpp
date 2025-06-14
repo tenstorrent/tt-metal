@@ -19,6 +19,7 @@
 #include "ttnn/operations/creation.hpp"
 #include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include <variant>
 
 namespace ttnn::operations::binary {
 
@@ -134,7 +135,7 @@ Tensor ExecuteMinimum::invoke(
 Tensor ExecuteMinimum::invoke(
     QueueId queue_id,
     const Tensor& input_a,
-    const float value,
+    const std::variant<int, float> value,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
@@ -142,8 +143,17 @@ Tensor ExecuteMinimum::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::MINIMUM>::
-        invoke(ttnn::DefaultQueueId, input_a, value, memory_config, optional_output_tensor);
+    return std::visit(
+        [&](auto input_b) -> Tensor {
+            if constexpr (std::is_same_v<decltype(input_b), float>) {
+                return ttnn::operations::unary::
+                    ExecuteUnaryWithVariantFloatIntParameter<ttnn::operations::unary::UnaryOpType::MINIMUM>::invoke(
+                        queue_id, input_a, input_b, memory_config, optional_output_tensor);
+            } else {
+                TT_FATAL(false, "int32 minimum not yet supported");
+            }
+        },
+        value);
 }
 
 Tensor ExecuteMaximum::invoke(
@@ -173,7 +183,7 @@ Tensor ExecuteMaximum::invoke(
 Tensor ExecuteMaximum::invoke(
     QueueId queue_id,
     const Tensor& input_a,
-    const float value,
+    const std::variant<int, float> value,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
@@ -181,8 +191,13 @@ Tensor ExecuteMaximum::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::MAXIMUM>::
-        invoke(queue_id, input_a, value, memory_config, optional_output_tensor);
+    return std::visit(
+        [&](auto input_b) {
+            return ttnn::operations::unary::
+                ExecuteUnaryWithVariantFloatIntParameter<ttnn::operations::unary::UnaryOpType::MAXIMUM>::invoke(
+                    queue_id, input_a, input_b, memory_config, optional_output_tensor);
+        },
+        value);
 }
 
 Tensor _atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
