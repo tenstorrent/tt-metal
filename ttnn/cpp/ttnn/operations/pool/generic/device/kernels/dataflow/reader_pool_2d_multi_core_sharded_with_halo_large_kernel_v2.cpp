@@ -107,7 +107,6 @@ void kernel_main() {
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
 
-    uint32_t counter = reader_id;
     constexpr uint32_t total_elems_to_reduce = window_h * window_w;
     constexpr bool wide_reduction = in_nblocks_c > 1;
     constexpr uint32_t in_write_inc =
@@ -122,11 +121,14 @@ void kernel_main() {
         scalar_index++;
     }
 
+    // DPRINT << "reader_nindices: " << reader_nindices << ENDL();
+
+    uint32_t out_l1_write_addr = get_write_ptr(out_cb_id);
     for (uint32_t n = 0; n < reader_nindices; ++n) {
         if constexpr (!one_scalar_per_core) {
             // DPRINT << "HIT" << ENDL();
             cb_reserve_back(in_scalar_cb_id, 1);
-            while ((counter >= scalar_end) && scalar_end != reader_nindices) {
+            while ((n >= scalar_end) && scalar_end != reader_nindices) {
                 scalar_start = scalar_end;
                 scalar_value = config_ptr[3 * scalar_index + 1];
                 scalar_end = config_ptr[3 * scalar_index + 2];
@@ -134,18 +136,17 @@ void kernel_main() {
             }
             // We want to fill the scalar CB at most only the fisrt 2 times since the number of pages is 2, only for the
             // intervals [x, y) where y >= x + 3 exactly 2 times and when y < x + 3 only once. When split reader is
-            // enabled counter takes even or odd values only depennding on the reader id so if the scalar start is even
-            // and counter is even it will fullfill the first half of the condition counter == scalar_start || counter
+            // enabled n takes even or odd values only depennding on the reader id so if the scalar start is even
+            // and n is even it will fullfill the first half of the condition n == scalar_start || n
             // == scalar_start + 2. When reader is even and scalar_start is odd or vice versa we will fullfill the
-            // second half of the condition counter == scalar_start + 1 || counter == scalar_start + 3.
-            if (counter < scalar_end && (counter == scalar_start || counter == scalar_start + 1)) {
+            // second half of the condition n == scalar_start + 1 || n == scalar_start + 3.
+            if (n < scalar_end && (n == scalar_start || n == scalar_start + 1)) {
                 fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_value, false);
             }
             cb_push_back(in_scalar_cb_id, 1);
         }
 
-        uint32_t out_l1_write_addr = get_write_ptr(out_cb_id);
-        const uint16_t top_left_local_index = reader_indices_ptr[counter];
+        const uint16_t top_left_local_index = reader_indices_ptr[n];
         const uint64_t in_l1_write_addr_base = get_write_ptr(in_cb_id);
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             const uint32_t read_bytes = !wide_reduction ? in_nbytes_c
@@ -153,7 +154,7 @@ void kernel_main() {
                                             ? MAX_ELE_PER_REDUCTION
                                             : (in_c - c_i * TILE_WIDTH * MAX_TILES_PER_REDUCTION) * BYTES_PER_ELEM;
             uint32_t processed_rows = 0;
-            fill_with_val(in_l1_write_addr_base, read_bytes / BYTES_PER_ELEM, bf16_init_value);
+            fill_with_val(in_l1_write_addr_base, read_bytes / BYTES_PER_ELEM, bf16_init_value);  // reset first row
             for (uint32_t i = 0; i < interm_reduction_chunks; i++) {
                 cb_reserve_back(sync_cb_id1, 2);
                 for (uint32_t r = 1; r < max_rows_for_reduction; ++r) {

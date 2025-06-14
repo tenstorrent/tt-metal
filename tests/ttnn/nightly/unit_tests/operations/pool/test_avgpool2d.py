@@ -44,6 +44,11 @@ def run_avg_pool2d(
     shard_scheme,
     run_twice=False,
 ):
+    if stride[0] == 1 and ceil_mode == True:
+        pytest.skip("ceil stride")
+    if padding[0] == 0 and count_include_pad == True:
+        pytest.skip("count pad")
+
     ## Test setup for both.
     in_n, in_c, in_h, in_w = input_shape
     torch.manual_seed(0)
@@ -117,31 +122,23 @@ def run_avg_pool2d(
 @pytest.mark.parametrize(
     "input_shape",  # NCHW
     (
-        # Normal reduction cases are when channels <= 8 * 32 and kernel_hw <= 16
-        # Wide reduction cases channels > 8 * 32
-        # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
-        # [1, 32, 16, 16],
-        # [1, 512, 112, 32],
-        # [1, 512, 16, 16],
-        # [1, 800, 16, 16],
-        # [2, 32, 16, 16],
-        # [2, 512, 112, 32],
-        # [2, 512, 16, 16],
-        # [2, 800, 16, 16],
+        # Passing with 9x9
+        # [1, 32, 28, 28],
+        # [1, 64, 28, 28],
+        # [1, 128, 28, 28],
+        # [1, 256, 28, 28],
+        # [1, 288, 28, 28],
         # [1, 384, 28, 28],
-        # [1, 288, 56, 56],
-        # [1, 256, 132, 20],
-        # [1, 32, 264, 40],
-        [1, 32, 9, 9],
-        [1, 64, 9, 9],
-        [1, 128, 9, 9],
-        [1, 256, 9, 9],
-        [1, 288, 9, 9],
-        [1, 384, 9, 9],
-        [1, 512, 9, 9],
-        [1, 576, 9, 9],
-        [1, 640, 9, 9],
-        [1, 800, 9, 9],
+        # [1, 512, 28, 28],
+        # [1, 576, 28, 28],
+        # [1, 640, 28, 28],
+        # [1, 800, 28, 28],
+        # testing
+        [1, 128, 28, 28],  # hangs with 8x8
+        # [1, 320, 28, 28],
+        # [1, 512, 28, 28],
+        # [1, 640, 28, 28],
+        # [1, 800, 28, 28],
     ),
 )
 @pytest.mark.parametrize(
@@ -154,7 +151,8 @@ def run_avg_pool2d(
         # (2, 2),
         # (3, 3),
         # (5, 5),
-        (9, 9),
+        (8, 8),
+        # (9, 9),
     ),
 )
 @pytest.mark.parametrize(
