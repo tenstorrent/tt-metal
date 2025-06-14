@@ -94,13 +94,20 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
             log_info(LogTest, "Skipping this test on device {} because it has no active ethernet cores.", device_id);
             continue;
         }
-        Program program = CreateProgram();
-        tt_metal::CreateKernelFromString(
-            program,
-            kernel_src_code,
-            *active_ethernet_cores.begin(),
-            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
-        this->RunProgram(device, program);
+        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+        for (int erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
+            log_info(tt::LogTest, "Test active ethernet DM{}", erisc_idx);
+            DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
+
+            Program program = CreateProgram();
+            tt_metal::CreateKernelFromString(
+                program,
+                kernel_src_code,
+                *active_ethernet_cores.begin(),
+                tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .processor = dm_processor});
+            this->RunProgram(device, program);
+        }
     };
 }
 
