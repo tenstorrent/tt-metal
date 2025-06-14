@@ -134,12 +134,11 @@ def run_avg_pool2d(
         # [1, 640, 28, 28],
         # [1, 800, 28, 28],
         # testing
-        # [1, 128, 28, 28],  # hangs with 8x8
-        # [1, 320, 28, 28],
-        # [1, 512, 28, 28],
-        # [1, 640, 28, 28],
-        # [1, 800, 28, 28],
-        [1, 32, 8, 8],
+        [1, 128, 28, 28],
+        [1, 320, 28, 28],
+        [1, 512, 28, 28],
+        [1, 640, 28, 28],
+        [1, 800, 28, 28],
     ),
 )
 @pytest.mark.parametrize(
@@ -153,14 +152,14 @@ def run_avg_pool2d(
         # (3, 3),
         # (5, 5),
         (8, 8),
-        # (9, 9),
+        (9, 9),
     ),
 )
 @pytest.mark.parametrize(
     "stride",
     (
         (1, 1),
-        # (2, 2),
+        (2, 2),
     ),
 )
 @pytest.mark.parametrize(
@@ -169,28 +168,28 @@ def run_avg_pool2d(
         (0, 0),
         # (1, 1),
         # (2, 2),
-        # (4, 4),
+        (4, 4),
     ),
 )
 @pytest.mark.parametrize(
     "ceil_mode",
     [
         False,
-        # True,
+        True,
     ],
 )
 @pytest.mark.parametrize(
     "count_include_pad",
     [
         False,
-        # True,
+        True,
     ],
 )
 @pytest.mark.parametrize(
     "divisor_override",
     [
         None,
-        # 5,
+        5,
     ],
 )
 @pytest.mark.parametrize(
