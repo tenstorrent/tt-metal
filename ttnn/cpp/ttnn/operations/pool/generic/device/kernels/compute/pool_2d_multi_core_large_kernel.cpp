@@ -64,6 +64,7 @@ template <
     uint32_t num_output_tiles,
     bool is_partial_tile,
     uint32_t max_rows_for_reduction,
+    uint32_t unpA_face_r_dim,
     bool neginf_srca_maxpool,
     bool zero_srca_avgpool>
 inline void reduce_h_fused(const uint32_t interm_cb_id, const uint32_t in_scalar_cb_id, const uint32_t out_cb_id) {
@@ -80,7 +81,7 @@ inline void reduce_h_fused(const uint32_t interm_cb_id, const uint32_t in_scalar
         num_output_tiles,
         0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
         num_faces_in_input_tile /* unpack 1 or 2 faces ) */,
-        max_rows_for_reduction);
+        unpA_face_r_dim);
     for (uint32_t c_i = 0; c_i < num_output_tiles; ++c_i) {
         reduce_tile_math(c_i, num_faces_in_input_tile /* reduce 1 or 2 faces */);
     }
@@ -140,12 +141,7 @@ void MAIN {
 
     constexpr uint32_t face_r_dim = 16;
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-        in_cb_id_0,
-        in_scalar_cb_id_0,
-        max_tiles_per_iter,
-        interm_cb_id,
-        num_faces_in_input_tile,
-        max_rows_for_reduction);
+        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, interm_cb_id, num_faces_in_input_tile, face_r_dim);
 
     constexpr uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
@@ -177,7 +173,7 @@ void MAIN {
                     is_partial_tile,
                     max_rows_for_reduction,
                     split_reader,
-                    max_rows_for_reduction,
+                    face_r_dim,
                     neginf_srca_maxpool,
                     zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, h, interm_cb_id);
             }
@@ -190,6 +186,7 @@ void MAIN {
                 max_tiles_per_iter,
                 is_partial_tile,
                 max_rows_for_reduction,
+                face_r_dim,
                 neginf_srca_maxpool,
                 zero_srca_avgpool>(
                 interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id_0 : in_one_cb_id, out_cb_id);
@@ -206,7 +203,7 @@ void MAIN {
                 is_partial_tile,
                 max_rows_for_reduction,
                 split_reader,
-                max_rows_for_reduction,
+                face_r_dim,
                 neginf_srca_maxpool,
                 zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, h, interm_cb_id);
         }
@@ -219,6 +216,7 @@ void MAIN {
             partial_iter_output_tiles,
             is_partial_tile,
             max_rows_for_reduction,
+            face_r_dim,
             neginf_srca_maxpool,
             zero_srca_avgpool>(interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id_0 : in_one_cb_id, out_cb_id);
         if constexpr (!one_scalar_per_core) {
