@@ -95,9 +95,9 @@ void MAIN {
         in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, in_cb_id_0, num_faces_in_tile, face_r_dim);
     pack_untilize_dst_init_short<max_tiles_per_iter>(in_cb_id_0, num_out_rows, num_faces_in_tile);
 
-    constexpr uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;
-    constexpr uint32_t interm_reduction_chunks =
-        remaining_elems ? window_size_hw / max_rows_for_reduction + 1 : window_size_hw / max_rows_for_reduction;
+    constexpr uint32_t remaining_elems = window_size_hw % (max_rows_for_reduction - 1);
+    constexpr uint32_t interm_reduction_chunks = remaining_elems ? window_size_hw / (max_rows_for_reduction - 1) + 1
+                                                                 : window_size_hw / (max_rows_for_reduction - 1);
 
     // DPRINT << "interm_reduction_chunks: " << interm_reduction_chunks << ENDL();
 
