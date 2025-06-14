@@ -66,7 +66,8 @@ Tensor ArgmaxOperation::invoke(
             Tensor cmp_results = ttnn::eq(input_a, max_tensor, std::nullopt, output_memory_config);
             Tensor max_indices = ttnn::multiply(cmp_results, tindex, std::nullopt, output_memory_config);
             cmp_results.deallocate();
-            Tensor result = ttnn::where(ttnn::eqz(max_indices), size, max_indices, output_memory_config);
+            Tensor result =
+                ttnn::where(ttnn::eqz(max_indices), static_cast<float>(size), max_indices, output_memory_config);
             max_indices.deallocate();
             result = ttnn::min(result, (int)dim, true, output_memory_config);
             Tensor res_index = ttnn::zeros_like(result);
@@ -145,7 +146,7 @@ Tensor ArgmaxOperation::invoke(
     Tensor cmp_results = ttnn::eq(input_a, max_tensor, std::nullopt, output_memory_config);
     Tensor max_indices = ttnn::multiply(cmp_results, tindex, std::nullopt, output_memory_config);
     cmp_results.deallocate();
-    Tensor result = ttnn::where(ttnn::eqz(max_indices), size, max_indices, output_memory_config);
+    Tensor result = ttnn::where(ttnn::eqz(max_indices), static_cast<float>(size), max_indices, output_memory_config);
     max_indices.deallocate();
     result = ttnn::min(result, std::nullopt, true, output_memory_config);
     return result;
