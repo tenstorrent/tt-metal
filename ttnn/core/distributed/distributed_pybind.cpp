@@ -60,7 +60,7 @@ void py_module(py::module& module) {
             "Constructor with the specified 3D shape.",
             py::arg("s0"),
             py::arg("s1"),
-            py::arg("n3"))
+            py::arg("s2"))
         .def(
             py::init([](const std::vector<uint32_t>& shape) { return MeshShape(shape); }),
             "Constructor with the specified ND shape.",
