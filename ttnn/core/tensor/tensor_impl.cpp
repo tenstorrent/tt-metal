@@ -8,6 +8,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include "tt-metalium/distributed_host_buffer.hpp"
 #include "tt-metalium/memory_pin.hpp"
 #include "tt-metalium/mesh_buffer.hpp"
 #include "tt-metalium/mesh_device.hpp"
@@ -33,7 +34,7 @@ namespace {
 
 // Threshold for switch for mmap-based allocations to regular allocations.
 // Determined empirically using a microbenchmark; see https://github.com/tenstorrent/tt-metal/pull/22959 for details.
-constexpr size_t kMmapThresholdBytes = 1 << 20;  // 1MB
+constexpr size_t kMmapThresholdBytes = 1 << 20;
 
 // Allocates memory on the host in batch; using either mmap for large allocations or std::vector for small allocations.
 using SharedMemoryPtr = std::shared_ptr<void>;
@@ -42,7 +43,7 @@ SharedMemoryPtr allocate_host_data(size_t size_bytes) {
         ZoneScopedN("AllocateBufferMmap");
         void* ptr = mmap(nullptr, size_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         TT_FATAL(ptr != MAP_FAILED, "Failed to allocate {} bytes of memory", size_bytes);
-        return SharedMemoryPtr(ptr, [size_bytes](void* p) { munmap(p, size_bytes); });
+        return SharedMemoryPtr(ptr, [size_bytes](void* p) { madvise(p, size_bytes, MADV_FREE); });
     } else {
         auto vec = std::make_shared<std::vector<std::byte>>(size_bytes);
         return SharedMemoryPtr(vec, vec->data());
@@ -577,41 +578,24 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     const auto& mesh_buffer = storage.mesh_buffer;
     ttnn::MeshDevice* device = mesh_buffer->device();
     distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue(*cq_id);
-    const auto num_buffers = storage.coords.size();
 
-    // Initialize vector of host buffers that data will be read into
-    std::vector<HostBuffer> buffers(num_buffers);
-    std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers;
-    std::vector<TensorSpec> specs;
-    specs.reserve(num_buffers);
-    shard_data_transfers.reserve(num_buffers);
-
-    // For performance, batch host-side allocations, then split the memory chunk across shards using host buffer
-    // borrowing.
-    {
-        ZoneScopedN("AllocateBuffer");
-        const size_t shard_size = tensor.get_tensor_spec().compute_packed_buffer_size_bytes() / sizeof(T);
-        SharedMemoryPtr batch_memory = allocate_host_data(num_buffers * shard_size * sizeof(T));
-        MemoryPin allocation_pin(batch_memory);
-
-        for (std::size_t shard_idx = 0; shard_idx < num_buffers; shard_idx++) {
-            buffers[shard_idx] = HostBuffer(
-                tt::stl::Span<T>(static_cast<T*>(batch_memory.get()) + shard_idx * shard_size, shard_size),
-                allocation_pin);
-        }
+    // For performance, perform all allocations via DistributedHostBuffer::transform, run from multiple threads.
+    auto distributed_host_buffer = DistributedHostBuffer::create(device->shape());
+    for (const auto& coord : storage.coords) {
+        distributed_host_buffer.emplace_shard(coord, []() { return HostBuffer(); });
     }
 
-    for (std::size_t shard_idx = 0; shard_idx < num_buffers; shard_idx++) {
-        shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
-            .shard_coord = storage.coords[shard_idx],
-            .host_data = buffers[shard_idx].view_bytes().data(),
-            .region = BufferRegion(0, buffers[shard_idx].view_bytes().size()),
-        });
-    }
+    distributed_host_buffer = distributed_host_buffer.transform(
+        [&](const HostBuffer&) {
+            ZoneScopedN("AllocateBuffer");
+            std::vector<T> data_vec(tensor.get_tensor_spec().compute_packed_buffer_size_bytes() / sizeof(T));
+            return HostBuffer(std::move(data_vec));
+        },
+        DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-    mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
+    mesh_cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
-    MultiDeviceHostStorage host_storage(std::move(buffers));
+    MultiDeviceHostStorage host_storage(std::move(distributed_host_buffer));
     return Tensor(std::move(host_storage), tensor.tensor_spec(), tensor.distributed_tensor_config());
 }
 
@@ -740,16 +724,17 @@ Tensor to_device<bfloat8_b>(
     return to_device<uint32_t>(tensor, target_device, memory_config, cq_id);
 }
 
-template <typename T>
+namespace {
+
 DeviceStorage replicate_to_mesh_buffer(
     const HostStorage& storage,
     distributed::MeshDevice* mesh_device,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     const TensorSpec& tensor_spec,
     ttnn::QueueId cq_id) {
-    auto data_to_write = host_buffer::get_as<T>(storage.buffer);
+    auto data_to_write = storage.buffer.view_bytes();
     const auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
-    const auto input_size_bytes = data_to_write.size() * sizeof(T);
+    const auto input_size_bytes = data_to_write.size();
     TT_FATAL(
         input_size_bytes == expected_packed_buffer_size_bytes,
         "Host data with total size {}B does not match expected size {}B of device buffer!",
@@ -767,45 +752,22 @@ DeviceStorage replicate_to_mesh_buffer(
     return DeviceStorage(mesh_buffer, std::move(coords));
 }
 
-template <typename T>
 DeviceStorage shard_to_mesh_buffer(
-    const MultiDeviceHostStorage& storage,
-    distributed::MeshDevice* mesh_device,
+    const DistributedHostBuffer& distributed_host_buffer,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
-    const TensorSpec& tensor_spec,
-    const std::vector<distributed::MeshCoordinate>& coords,
     ttnn::QueueId cq_id) {
-    const auto& mesh_shape = mesh_device->shape();
-    TT_FATAL(
-        coords.size() == storage.num_buffers(),
-        "Number of shards {} does not match number of buffers {}",
-        coords.size(),
-        storage.num_buffers());
-
-    std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers;
-    shard_data_transfers.reserve(storage.num_buffers());
-
-    const auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
-    for (int i = 0; i < storage.num_buffers(); ++i) {
-        const auto& shard_host_buffer = storage.get_buffer(i);
-
-        auto data_to_write = host_buffer::get_as<T>(shard_host_buffer);
-        const auto input_size_bytes = data_to_write.size() * sizeof(T);
-        TT_FATAL(
-            input_size_bytes == expected_packed_buffer_size_bytes,
-            "Host data with total size {}B does not match expected size {}B of device buffer!",
-            input_size_bytes,
-            expected_packed_buffer_size_bytes);
-        shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
-            .shard_coord = coords[i],
-            .host_data = const_cast<void*>(reinterpret_cast<const void*>(data_to_write.data())),
-            .region = BufferRegion(0, input_size_bytes)});
-    }
-
-    mesh_device->mesh_command_queue(*cq_id).enqueue_write_shards(mesh_buffer, shard_data_transfers, /*blocking=*/false);
-
-    return DeviceStorage(std::move(mesh_buffer), coords);
+    mesh_buffer->device()->mesh_command_queue(*cq_id).enqueue_write(
+        mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+    std::vector<distributed::MeshCoordinate> coords;
+    coords.reserve(distributed_host_buffer.shard_coords().size());
+    std::copy(
+        distributed_host_buffer.shard_coords().begin(),
+        distributed_host_buffer.shard_coords().end(),
+        std::back_inserter(coords));
+    return DeviceStorage(mesh_buffer, std::move(coords));
 }
+
+}  // namespace
 
 template <typename T>
 DeviceStorage to_device_mesh_buffer(
@@ -818,13 +780,46 @@ DeviceStorage to_device_mesh_buffer(
         tt::stl::overloaded{
             [&mesh_buffer, &tensor_spec, cq_id](const HostStorage& storage) {
                 // Replicate data across devices in a mesh.
-                return replicate_to_mesh_buffer<T>(storage, mesh_buffer->device(), mesh_buffer, tensor_spec, cq_id);
+                return replicate_to_mesh_buffer(storage, mesh_buffer->device(), mesh_buffer, tensor_spec, cq_id);
             },
             [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes](const MultiDeviceHostStorage& storage) {
                 // Shard multi device host shards across devices in a mesh.
-                auto* mesh_device = mesh_buffer->device();
-                auto coords = host_tensor_attributes.determine_distribution(mesh_device->shape());
-                return shard_to_mesh_buffer<T>(storage, mesh_device, mesh_buffer, tensor_spec, coords, cq_id);
+                if (storage.distributed_buffer().shape() == mesh_buffer->device()->shape()) {
+                    return shard_to_mesh_buffer(storage.distributed_buffer(), mesh_buffer, cq_id);
+                } else {
+                    // Reshape distributed host buffer.
+                    // TODO: #22169 - there are 2 reasons for this code path - legacy serialization path that stored
+                    // multi device host tensors without the necessary metadata, and `aggregate_as_tensor` calls that
+                    // similarly lack the metadata to properly distribute the shards across the mesh.
+                    auto* mesh_device = mesh_buffer->device();
+
+                    TT_FATAL(
+                        storage.distributed_buffer().shape().mesh_size() <= mesh_device->shape().mesh_size(),
+                        "Distributed host buffer has more shards than the mesh device");
+
+                    auto dst_distributed_host_buffer = DistributedHostBuffer::create(mesh_device->shape());
+
+                    const auto dst_range = [mesh_device, &host_tensor_attributes]() {
+                        if (auto* shard2d_strategy =
+                                std::get_if<ShardTensor2D>(&host_tensor_attributes.get_distributed_tensor_config())) {
+                            distributed::MeshShape distribution_shape(
+                                shard2d_strategy->shard_mesh.y, shard2d_strategy->shard_mesh.x);
+                            return distributed::MeshCoordinateRange(distribution_shape);
+                        } else {
+                            return distributed::MeshCoordinateRange(mesh_device->shape());
+                        }
+                    }();
+
+                    std::vector<HostBuffer> shards;
+                    storage.distributed_buffer().apply([&](const HostBuffer& shard) { shards.push_back(shard); });
+
+                    auto dst_coord_it = dst_range.begin();
+                    for (int i = 0; i < shards.size(); ++i, ++dst_coord_it) {
+                        dst_distributed_host_buffer.emplace_shard(
+                            *dst_coord_it, [&shards, i]() { return std::move(shards[i]); });
+                    }
+                    return shard_to_mesh_buffer(dst_distributed_host_buffer, mesh_buffer, cq_id);
+                }
             },
             [](const auto& s) -> DeviceStorage { TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s)); }},
         host_storage);

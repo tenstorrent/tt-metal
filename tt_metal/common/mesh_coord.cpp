@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "shape_base.hpp"
-#include "small_vector.hpp"
+#include <tt_stl/small_vector.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -230,6 +230,12 @@ std::optional<MeshCoordinateRange> MeshCoordinateRange::intersection(const MeshC
 MeshCoordinateRange::Iterator::Iterator(
     const MeshCoordinateRange* range, const MeshCoordinate& current, size_t linear_index) :
     range_(range), current_coord_(current), linear_index_(linear_index) {}
+
+MeshCoordinateRange::Iterator MeshCoordinateRange::Iterator::operator++(int) {
+    Iterator tmp = *this;
+    ++(*this);
+    return tmp;
+}
 
 MeshCoordinateRange::Iterator& MeshCoordinateRange::Iterator::operator++() {
     ++linear_index_;

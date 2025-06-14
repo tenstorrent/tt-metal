@@ -63,6 +63,7 @@
 #include "dispatch/worker_config_buffer.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
 #include "kernels/kernel_impl.hpp"
+#include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -1087,7 +1088,8 @@ public:
         const ProgramTransferInfo& program_transfer_info,
         const std::shared_ptr<Buffer>& kernels_buffer,
         const CommandConstants& constants,
-        DeviceCommandCalculator& calculator) {
+        DeviceCommandCalculator& calculator,
+        bool using_prefetcher_cache) {
         const auto& hal = MetalContext::instance().hal();
         const uint32_t max_length_per_sub_cmd =
             MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).scratch_db_size() / 2;
@@ -1124,31 +1126,43 @@ public:
                         kg_transfer_info.lengths[kernel_idx],
                         kg_transfer_info.riscvs[kernel_idx]);
                     // Difference between prefetch total relayed pages and dispatch write linear
-                    uint32_t relayed_bytes =
-                        tt::align(kg_transfer_info.lengths[kernel_idx], HostMemDeviceCommand::PROGRAM_PAGE_SIZE);
-                    uint16_t length_adjust = uint16_t(relayed_bytes - kg_transfer_info.lengths[kernel_idx]);
+                    if (not using_prefetcher_cache) {
+                        uint32_t relayed_bytes =
+                            tt::align(kg_transfer_info.lengths[kernel_idx], HostMemDeviceCommand::PROGRAM_PAGE_SIZE);
+                        uint16_t length_adjust = uint16_t(relayed_bytes - kg_transfer_info.lengths[kernel_idx]);
+                        uint32_t base_address, page_offset;
+                        if (kg_transfer_info.page_offsets[kernel_idx] > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
+                            const uint32_t num_banks =
+                                device->allocator()->get_num_banks(kernels_buffer->buffer_type());
+                            page_offset = kg_transfer_info.page_offsets[kernel_idx] % num_banks;
+                            uint32_t num_full_pages_written_per_bank =
+                                kg_transfer_info.page_offsets[kernel_idx] / num_banks;
+                            base_address = kernels_buffer->address() +
+                                           num_full_pages_written_per_bank * kernels_buffer->page_size();
+                        } else {
+                            base_address = kernels_buffer->address();
+                            page_offset = kg_transfer_info.page_offsets[kernel_idx];
+                        }
 
-                    uint32_t base_address, page_offset;
-                    if (kg_transfer_info.page_offsets[kernel_idx] > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
-                        const uint32_t num_banks = device->allocator()->get_num_banks(kernels_buffer->buffer_type());
-                        page_offset = kg_transfer_info.page_offsets[kernel_idx] % num_banks;
-                        uint32_t num_full_pages_written_per_bank =
-                            kg_transfer_info.page_offsets[kernel_idx] / num_banks;
-                        base_address =
-                            kernels_buffer->address() + num_full_pages_written_per_bank * kernels_buffer->page_size();
+                        calculator.add_prefetch_relay_paged();
+                        kernel_bins_unicast_cmds.back().add_prefetch_relay_paged(
+                            true,  // is_dram
+                            page_offset,
+                            base_address,
+                            kernels_buffer->page_size(),
+                            relayed_bytes / kernels_buffer->page_size(),
+                            length_adjust);
                     } else {
-                        base_address = kernels_buffer->address();
-                        page_offset = kg_transfer_info.page_offsets[kernel_idx];
+                        calculator.add_prefetch_relay_ringbuffer(1);
+                        kernel_bins_unicast_cmds.back().add_prefetch_relay_ringbuffer(
+                            1,
+                            std::vector<CQPrefetchRelayRingbufferSubCmd>(
+                                1,
+                                CQPrefetchRelayRingbufferSubCmd(
+                                    {.start = kg_transfer_info.page_offsets[kernel_idx] *
+                                              HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
+                                     .length = kg_transfer_info.lengths[kernel_idx]})));
                     }
-
-                    calculator.add_prefetch_relay_paged();
-                    kernel_bins_unicast_cmds.back().add_prefetch_relay_paged(
-                        true,  // is_dram
-                        page_offset,
-                        base_address,
-                        kernels_buffer->page_size(),
-                        relayed_bytes / kernels_buffer->page_size(),
-                        length_adjust);
                 } else {
                     uint32_t base_address = kernels_buffer->address();
                     uint32_t page_offset = kg_transfer_info.page_offsets[kernel_idx];
@@ -1188,11 +1202,22 @@ public:
                             program.get_id(), DISPATCH_DATA_BINARY, write_length, kg_transfer_info.riscvs[kernel_idx]);
                         kernel_config_buffer_offset += write_length;
 
-                        kernel_bins_cmd.prefetch_subcmds.emplace_back(CQPrefetchRelayPagedPackedSubCmd{
-                            .start_page = (uint16_t)page_offset,
-                            .log_page_size = (uint16_t)HostMemDeviceCommand::LOG2_PROGRAM_PAGE_SIZE,
-                            .base_addr = base_address,
-                            .length = read_length});
+                        if (not using_prefetcher_cache) {
+                            auto& prefetch_subcmds =
+                                kernel_bins_cmd.get_prefetch_subcmds<CQPrefetchRelayPagedPackedSubCmd>();
+                            prefetch_subcmds.emplace_back(CQPrefetchRelayPagedPackedSubCmd{
+                                .start_page = (uint16_t)page_offset,
+                                .log_page_size = (uint16_t)HostMemDeviceCommand::LOG2_PROGRAM_PAGE_SIZE,
+                                .base_addr = base_address,
+                                .length = read_length});
+                        } else {
+                            auto& prefetch_subcmds =
+                                kernel_bins_cmd.get_prefetch_subcmds<CQPrefetchRelayRingbufferSubCmd>();
+                            // start address for kernel bin is aligned with page boundary, consistent with the
+                            // non-cached case
+                            prefetch_subcmds.emplace_back(CQPrefetchRelayRingbufferSubCmd{
+                                .start = page_offset * HostMemDeviceCommand::PROGRAM_PAGE_SIZE, .length = read_length});
+                        }
                         page_offset += read_length / HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
                         aligned_length -= read_length;
                         kernel_bins_cmd.data_aligned_sizeB += read_length;
@@ -1200,14 +1225,24 @@ public:
                 }
             }
         }
-        for (auto& kernel_bins_cmd : kernel_bins_cmds) {
-            calculator.add_dispatch_write_packed_large(kernel_bins_cmd.dispatch_subcmds.size());
-            calculator.add_prefetch_relay_paged_packed(kernel_bins_cmd.prefetch_subcmds.size());
+
+        if (using_prefetcher_cache) {
+            for (auto& kernel_bins_cmd : kernel_bins_cmds) {
+                calculator.add_dispatch_write_packed_large(kernel_bins_cmd.dispatch_subcmds.size());
+                auto& prefetch_subcmds = kernel_bins_cmd.get_prefetch_subcmds<CQPrefetchRelayRingbufferSubCmd>();
+                calculator.add_prefetch_relay_ringbuffer(prefetch_subcmds.size());
+            }
+        } else {
+            for (auto& kernel_bins_cmd : kernel_bins_cmds) {
+                calculator.add_dispatch_write_packed_large(kernel_bins_cmd.dispatch_subcmds.size());
+                auto& prefetch_subcmds = kernel_bins_cmd.get_prefetch_subcmds<CQPrefetchRelayPagedPackedSubCmd>();
+                calculator.add_prefetch_relay_paged_packed(prefetch_subcmds.size());
+            }
         }
     }
 
     // Assemble the program binary commands into the device command sequence.
-    void assemble_commands(HostMemDeviceCommand& device_command_sequence) const {
+    void assemble_commands(HostMemDeviceCommand& device_command_sequence, bool using_prefetcher_cache) const {
         const auto& hal = MetalContext::instance().hal();
         for (const auto& kernel_bins_unicast_cmd : kernel_bins_unicast_cmds) {
             device_command_sequence.add_data(
@@ -1224,19 +1259,34 @@ public:
                 kernel_bins_cmd.dispatch_subcmds,
                 0,
                 DISPATCH_WRITE_OFFSET_TENSIX_BINARY_L1_CONFIG_BASE);
-            device_command_sequence.add_prefetch_relay_paged_packed(
-                kernel_bins_cmd.data_aligned_sizeB,
-                kernel_bins_cmd.prefetch_subcmds,
-                kernel_bins_cmd.prefetch_subcmds.size());
+            if (using_prefetcher_cache) {
+                auto& prefetch_subcmds = kernel_bins_cmd.get_prefetch_subcmds<CQPrefetchRelayRingbufferSubCmd>();
+                device_command_sequence.add_prefetch_relay_ringbuffer(prefetch_subcmds.size(), prefetch_subcmds);
+            } else {
+                auto& prefetch_subcmds = kernel_bins_cmd.get_prefetch_subcmds<CQPrefetchRelayPagedPackedSubCmd>();
+                device_command_sequence.add_prefetch_relay_paged_packed(
+                    kernel_bins_cmd.data_aligned_sizeB, prefetch_subcmds, prefetch_subcmds.size());
+            }
         }
     }
 
 private:
     struct KernelBinsCmds {
-        std::vector<CQPrefetchRelayPagedPackedSubCmd> prefetch_subcmds;
+        std::pair<std::vector<CQPrefetchRelayPagedPackedSubCmd>, std::vector<CQPrefetchRelayRingbufferSubCmd>>
+            prefetch_subcmds;
         std::vector<CQDispatchWritePackedLargeSubCmd> dispatch_subcmds;
         uint32_t data_aligned_sizeB{0};
+
+        template <class T>
+        std::vector<T>& get_prefetch_subcmds() {
+            return std::get<std::vector<T>>(prefetch_subcmds);
+        }
+        template <class T>
+        const std::vector<T>& get_prefetch_subcmds() const {
+            return std::get<std::vector<T>>(prefetch_subcmds);
+        }
     };
+
     std::vector<KernelBinsCmds> kernel_bins_cmds;
     std::vector<HostMemDeviceCommand> kernel_bins_unicast_cmds;
 };
@@ -1639,7 +1689,8 @@ void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence,
     ProgramImpl& program,
     IDevice* device,
-    SubDeviceId sub_device_id) {
+    SubDeviceId sub_device_id,
+    bool use_prefetcher_cache) {
     CommandConstants constants;
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     constants.dispatch_core_type = dispatch_core_config.get_core_type();
@@ -1688,13 +1739,18 @@ void assemble_device_commands(
         program_transfer_info,
         program.get_kernels_buffer(device),
         constants,
-        program_binary_calculator);
+        program_binary_calculator,
+        use_prefetcher_cache);
     program_command_sequence.program_binary_command_sequence =
         HostMemDeviceCommand(program_binary_calculator.write_offset_bytes());
-    program_binary_command_generator.assemble_commands(program_command_sequence.program_binary_command_sequence);
+    program_binary_command_generator.assemble_commands(
+        program_command_sequence.program_binary_command_sequence, use_prefetcher_cache);
     TT_ASSERT(
         program_command_sequence.program_binary_command_sequence.size_bytes() ==
         program_command_sequence.program_binary_command_sequence.write_offset_bytes());
+    if (use_prefetcher_cache) {
+        program_command_sequence.kernel_bins_base_addr = program.get_kernels_buffer(device)->address();
+    }
 
     // Assemble launch message
     LaunchMessageGenerator launch_message_generator;
@@ -1908,6 +1964,42 @@ void update_program_dispatch_commands(
         memcpy(rta_update.dst, rta_update.src, rta_update.size);
     }
 
+    // Update prefetcher cache initialization
+    if (cached_program_command_sequence.prefetcher_cache_used) {
+        // reserve space for cache command
+        uint32_t pcie_alignment =
+            tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
+        cached_program_command_sequence.program_binary_setup_prefetcher_cache_command =
+            HostMemDeviceCommand(tt::align(sizeof(CQPrefetchCmd), pcie_alignment));
+
+        auto is_cached = dispatch_md.prefetcher_cache_info.is_cached;
+        auto cache_offset = dispatch_md.prefetcher_cache_info.offset;
+        auto program_sizeB = cached_program_command_sequence.kernel_bins_sizeB;
+        auto max_program_sizeB = dispatch_md.prefetcher_cache_info.mesh_max_program_kernels_sizeB;
+        if (is_cached) {
+            cached_program_command_sequence.program_binary_setup_prefetcher_cache_command
+                .add_prefetch_set_ringbuffer_offset(cache_offset);
+        } else {
+            TT_FATAL(
+                program_sizeB <= max_program_sizeB,
+                "Kernel binary size exceeds prefetcher cache size ({}, {})",
+                program_sizeB,
+                max_program_sizeB);
+            bool wraparound_flag = cache_offset != 0 ? 0 : CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START;
+            cached_program_command_sequence.program_binary_setup_prefetcher_cache_command
+                .add_prefetch_paged_to_ringbuffer(CQPrefetchPagedToRingbufferCmd{
+                    .flags = uint8_t(wraparound_flag),
+                    .log2_page_size = uint16_t(HostMemDeviceCommand::LOG2_PROGRAM_PAGE_SIZE),
+                    .start_page = 0,
+                    .wp_offset_update = max_program_sizeB,
+                    .base_addr = cached_program_command_sequence.kernel_bins_base_addr,
+                    .length = program_sizeB});
+        }
+        TT_ASSERT(
+            cached_program_command_sequence.program_binary_setup_prefetcher_cache_command.size_bytes() ==
+            cached_program_command_sequence.program_binary_setup_prefetcher_cache_command.write_offset_bytes());
+    }
+
     // Update launch messages
     for (auto& [is_multicast, original_launch_msg, launch_msg] : cached_program_command_sequence.launch_messages) {
         for (uint32_t i = 0; i < dispatch_md.kernel_config_addrs.size(); i++) {
@@ -2042,6 +2134,42 @@ void update_traced_program_dispatch_commands(
         std::memcpy(rta_update.dst, trace_node.rta_data[i].data(), rta_update.size);
     }
 
+    // Update prefetcher cache initialization
+    if (dispatch_md.send_binary && cached_program_command_sequence.prefetcher_cache_used) {
+        // reserve space for cache command
+        uint32_t pcie_alignment =
+            tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
+        cached_program_command_sequence.program_binary_setup_prefetcher_cache_command =
+            HostMemDeviceCommand(tt::align(sizeof(CQPrefetchCmd), pcie_alignment));
+
+        auto is_cached = dispatch_md.prefetcher_cache_info.is_cached;
+        auto cache_offset = dispatch_md.prefetcher_cache_info.offset;
+        auto program_sizeB = cached_program_command_sequence.kernel_bins_sizeB;
+        auto max_program_sizeB = dispatch_md.prefetcher_cache_info.mesh_max_program_kernels_sizeB;
+        if (is_cached) {
+            cached_program_command_sequence.program_binary_setup_prefetcher_cache_command
+                .add_prefetch_set_ringbuffer_offset(cache_offset);
+        } else {
+            TT_FATAL(
+                program_sizeB <= max_program_sizeB,
+                "Kernel binary size exceeds prefetcher cache size ({}, {})",
+                program_sizeB,
+                max_program_sizeB);
+            bool wraparound_flag = cache_offset != 0 ? 0 : CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START;
+            cached_program_command_sequence.program_binary_setup_prefetcher_cache_command
+                .add_prefetch_paged_to_ringbuffer(CQPrefetchPagedToRingbufferCmd{
+                    .flags = uint8_t(wraparound_flag),
+                    .log2_page_size = uint16_t(HostMemDeviceCommand::LOG2_PROGRAM_PAGE_SIZE),
+                    .start_page = 0,
+                    .wp_offset_update = max_program_sizeB,
+                    .base_addr = cached_program_command_sequence.kernel_bins_base_addr,
+                    .length = program_sizeB});
+        }
+        TT_ASSERT(
+            cached_program_command_sequence.program_binary_setup_prefetcher_cache_command.size_bytes() ==
+            cached_program_command_sequence.program_binary_setup_prefetcher_cache_command.write_offset_bytes());
+    }
+
     // Update launch messages
     for (auto& [is_multicast, original_launch_msg, launch_msg] : cached_program_command_sequence.launch_messages) {
         for (uint32_t i = 0; i < dispatch_md.nonbinary_kernel_config_addrs.size(); i++) {
@@ -2165,6 +2293,11 @@ void write_program_command_sequence(
 
     if (send_binary) {
         // Write the program binary
+        if (program_command_sequence.prefetcher_cache_used) {
+            write_data_to_cq(
+                program_command_sequence.program_binary_setup_prefetcher_cache_command.data(),
+                program_command_sequence.program_binary_setup_prefetcher_cache_command.size_bytes());
+        }
         write_data_to_cq(
             program_command_sequence.program_binary_command_sequence.data(),
             program_command_sequence.program_binary_command_sequence.size_bytes());
@@ -2187,9 +2320,9 @@ void write_program_command_sequence(
     }
 }
 
-TraceNode create_trace_node(ProgramImpl& program, IDevice* device) {
+TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_prefetcher_cache) {
     std::vector<SubDeviceId> sub_device_ids{program.determine_sub_device_ids(device)};
-    program.generate_trace_dispatch_commands(device);
+    program.generate_trace_dispatch_commands(device, use_prefetcher_cache);
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
     // By using the traced command sequence, we know the RTA data source-of-truth isn't this command sequence (it's in a

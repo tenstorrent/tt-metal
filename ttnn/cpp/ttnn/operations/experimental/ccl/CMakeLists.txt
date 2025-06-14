@@ -1,5 +1,5 @@
 add_library(ttnn_op_experimental_ccl ${LIB_TYPE})
-add_library(TT::NN::Ops::Experimental::CCL ALIAS ttnn_op_experimental_ccl)
+add_library(TTNN::Ops::Experimental::CCL ALIAS ttnn_op_experimental_ccl)
 
 target_precompile_headers(ttnn_op_experimental_ccl REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_ccl)
@@ -20,6 +20,9 @@ target_sources(
         llama_reduce_scatter/llama_reduce_scatter.cpp
         llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp
         llama_reduce_scatter/device/llama_reduce_scatter_program_factory.cpp
+        llama_reduce_scatter_matmul/rs_matmul.cpp
+        llama_reduce_scatter_matmul/device/rs_matmul_op.cpp
+        llama_reduce_scatter_matmul/device/rs_matmul_program_factory.cpp
         llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads.cpp
         llama_reduce_scatter_create_heads/device/llama_reduce_scatter_create_heads_device_op.cpp
         llama_reduce_scatter_create_heads/device/llama_reduce_scatter_create_heads_program_factory.cpp
@@ -53,7 +56,7 @@ target_link_libraries(
     ttnn_op_experimental_ccl
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
 install(TARGETS ttnn_op_experimental_ccl LIBRARY COMPONENT tar)

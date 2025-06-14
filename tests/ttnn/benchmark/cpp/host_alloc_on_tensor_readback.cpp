@@ -37,28 +37,8 @@ void BM_host_alloc_on_tensor_readback(benchmark::State& state) {
 
 BENCHMARK(BM_host_alloc_on_tensor_readback)
     ->Unit(benchmark::kMicrosecond)
-    ->Iterations(5)
-    ->Arg(1 << 10)    // 1KB
-    ->Arg(2 << 10)    // 2KB
-    ->Arg(4 << 10)    // 4KB
-    ->Arg(8 << 10)    // 8KB
-    ->Arg(16 << 10)   // 16KB
-    ->Arg(32 << 10)   // 32KB
-    ->Arg(64 << 10)   // 64KB
-    ->Arg(128 << 10)  // 128KB
-    ->Arg(256 << 10)  // 256KB
-    ->Arg(512 << 10)  // 512KB
-    ->Arg(1 << 20)    // 1MB
-    ->Arg(2 << 20)    // 2MB
-    ->Arg(4 << 20)    // 4MB
-    ->Arg(8 << 20)    // 8MB
-    ->Arg(16 << 20)   // 16MB
-    ->Arg(32 << 20)   // 32MB
-    ->Arg(64 << 20)   // 64MB
-    ->Arg(128 << 20)  // 128MB
-    ->Arg(256 << 20)  // 256MB
-    ->Arg(512 << 20)  // 512MB
-    ->Arg(1 << 30);   // 1GB
+    ->RangeMultiplier(2)
+    ->Range(1 << 10, 1 << 30);  // 1KB to 1GB, powers of 2
 
 }  // namespace
 

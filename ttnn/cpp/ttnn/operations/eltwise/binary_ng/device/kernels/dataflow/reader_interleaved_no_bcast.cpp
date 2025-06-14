@@ -60,7 +60,7 @@ void kernel_main() {
     for (uint32_t nd = start_d; nd < cND && num_tiles_read < dst_num_tiles; ++nd, start_n = 0) {
         for (uint32_t n = start_n; n < N && num_tiles_read < dst_num_tiles; ++n, start_c = 0) {
             for (uint32_t c = start_c; c < C && num_tiles_read < dst_num_tiles; ++c, start_th = 0) {
-                for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th, tile_offset += Wt) {
+                for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
                     for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                          ++tw, ++num_tiles_read) {
                         cb_reserve_back(cb_id_src, onetile);
@@ -73,6 +73,7 @@ void kernel_main() {
                         // next row of tiles should start at the first column
                         start_tw = 0;
                     }
+                    tile_offset += Wt;
                 }
                 tile_offset += next_channel_shift;
             }
