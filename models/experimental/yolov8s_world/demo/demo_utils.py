@@ -13,12 +13,37 @@ import numpy as np
 from pathlib import Path
 from loguru import logger
 
+from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
+    attempt_load,
+)
+from models.experimental.yolov8s_world.reference import yolov8s_world
+
 
 def imread(filename: str, flags: int = cv2.IMREAD_COLOR):
     return cv2.imdecode(np.fromfile(filename, np.uint8), flags)
 
 
 IMG_FORMATS = {"bmp", "dng", "jpeg", "jpg", "mpo", "png", "tif", "tiff", "webp", "pfm", "heic"}
+
+
+def load_torch_model(use_pretrained_weight=True):
+    if use_pretrained_weight:
+        weights_torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        torch_model = yolov8s_world.YOLOWorld(model_torch=weights_torch_model)
+
+        state_dict = weights_torch_model.state_dict()
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            new_state_dict[name1] = parameter2
+
+        torch_model.load_state_dict(new_state_dict)
+    else:
+        torch_model = yolov8s_world.YOLOWorld()
+
+    torch_model = torch_model.model
+
+    return torch_model
 
 
 class LoadImages:
