@@ -2,9 +2,31 @@ name: "(Single-card) Device perf regressions"
 
 on:
   workflow_dispatch:
+    inputs:
+      run_cnn_models:
+        description: 'Run all CNN performance tests'
+        required: false
+        default: true
+        type: boolean
+      run_other_models:
+        description: 'Run all other model performance tests'
+        required: false
+        default: true
+        type: boolean
   schedule:
     - cron: "0 2,7,10,14,17,20,23 * * *"
   workflow_call:
+    inputs:
+      run_cnn_models:
+        description: 'Run CNN models'
+        required: false
+        default: true
+        type: boolean
+      run_other_models:
+        description: 'Run other models'
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   build-artifact-profiler:
@@ -24,3 +46,5 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      run_cnn_models: ${{ inputs.run_cnn_models || true }}
+      run_other_models: ${{ inputs.run_other_models || true }}
