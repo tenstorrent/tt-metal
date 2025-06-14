@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/work_split.hpp>
-#include "cpp/ttnn/operations/moreh/moreh_norm/device/moreh_norm_device_operation.hpp"
+#include "ttnn/operations/moreh/moreh_norm/device/moreh_norm_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_norm {

@@ -12,7 +12,7 @@
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include <tt-metalium/constants.hpp>
-#include "cpp/ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/types.hpp"
 

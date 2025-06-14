@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/operations/ccl/ccl_pybind.hpp"
+#include "ttnn/operations/ccl/ccl_pybind.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -12,7 +12,7 @@
 #include "ttnn/operations/ccl/barrier/barrier_pybind.hpp"
 
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "cpp/ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
+#include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
 
 namespace ttnn::operations::ccl {
 

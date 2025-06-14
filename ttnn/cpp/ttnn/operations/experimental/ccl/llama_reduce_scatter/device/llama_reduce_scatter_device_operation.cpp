@@ -7,7 +7,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "llama_reduce_scatter_device_operation.hpp"
-#include "cpp/ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ccl {
