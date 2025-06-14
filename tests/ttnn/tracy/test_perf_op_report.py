@@ -4,7 +4,7 @@
 
 import pytest
 
-from tt_metal.tools.profiler.process_model_log import post_process_ops_log, run_device_profiler
+from tracy.process_model_log import post_process_ops_log, run_device_profiler
 from models.utility_functions import skip_for_blackhole
 
 

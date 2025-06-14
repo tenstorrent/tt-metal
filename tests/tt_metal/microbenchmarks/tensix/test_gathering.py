@@ -4,8 +4,8 @@
 
 import os
 
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
+from tracy.process_device_log import import_log_run_stats
+import tracy.device_post_proc_config as device_post_proc_config
 
 
 def test_ttnop_time():

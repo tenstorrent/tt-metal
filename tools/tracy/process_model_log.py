@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 import pandas as pd
 
-from tt_metal.tools.profiler.common import PROFILER_ARTIFACTS_DIR, PROFILER_SCRIPTS_ROOT, generate_reports_folder
+from tracy.common import PROFILER_ARTIFACTS_DIR, PROFILER_SCRIPTS_ROOT, generate_reports_folder
 
 
 def get_profiler_folder(output_logs_subdir):
