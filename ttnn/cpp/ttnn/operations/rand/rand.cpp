@@ -13,9 +13,9 @@
 namespace ttnn::operations::rand {
 Tensor Rand::invoke(
     const std::vector<uint32_t>& size,
+    std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<DataType> dtype,
     const std::optional<Layout> layout,
-    std::optional<std::reference_wrapper<MeshDevice>> device,
     const std::optional<MemoryConfig>& memory_config) {
     TT_FATAL(dtype.has_value(), "Missing 'dtype': argument not set and no default value available.");
     TT_FATAL(layout.has_value(), "Missing 'layout': argument not set and no default value available.");
