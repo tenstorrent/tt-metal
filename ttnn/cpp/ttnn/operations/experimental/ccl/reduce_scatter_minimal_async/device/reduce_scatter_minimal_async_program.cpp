@@ -163,7 +163,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     // Tensor Info
     const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
     const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
-    const auto input_tensor_shape = input_tensor.get_padded_shape();
+    const auto& input_tensor_shape = input_tensor.get_padded_shape();
     const auto intermediate_tensor_buffer_type = intermediate_tensor.buffer()->buffer_type();
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto num_batches = input_tensor_shape[0];

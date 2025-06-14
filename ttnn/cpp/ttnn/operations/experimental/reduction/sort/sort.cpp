@@ -88,7 +88,7 @@ std::vector<Tensor> post_sort_transform_tensor(
     const bool is_dim_last_idx,
     const Shape& original_lshape,
     const MemoryConfig& input_memory_config) {
-    auto input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     const auto orig_rank = input_shape.rank();
 
     // Check if manual padding was applied for the last dimension
@@ -160,7 +160,7 @@ std::vector<Tensor> ExecuteSort::invoke(
     const bool stable,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<std::tuple<Tensor&, Tensor&>> optional_output_tensors) {
-    ttnn::Shape original_lshape = input_tensor.logical_shape();
+    const ttnn::Shape& original_lshape = input_tensor.logical_shape();
     auto rank = input_tensor.padded_shape().rank();
 
     // Check for early exit for scalar or empty tensors tensors

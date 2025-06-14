@@ -153,7 +153,7 @@ std::vector<Shape> extract_padded_shapes(
         const auto& tensor_spec = tensor_specs[idx];
         TensorLayout tensor_layout =
             use_tensor_layout_from_tensor_spec ? tensor_spec.tensor_layout() : layout_provider(idx);
-        auto logical_shape = tensor_spec.logical_shape();
+        const auto& logical_shape = tensor_spec.logical_shape();
         padded_shapes.push_back(tensor_layout.compute_padded_shape(logical_shape));
     }
     return padded_shapes;

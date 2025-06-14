@@ -71,6 +71,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
         -100.0f, 100.0f, total_size_bytes / bfloat16::SIZEOF, chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
     vector<uint32_t> packed_golden = packed_input;
 
     uint8_t l1_cb_index = CBIndex::c_0;

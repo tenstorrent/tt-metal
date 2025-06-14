@@ -212,7 +212,7 @@ void verify_results(
 
         // Verify Unique RT Args (per core)
         for (const auto& logical_core : kernel->cores_with_runtime_args()) {
-            auto expected_rt_args = core_to_rt_args.at(logical_core);
+            const auto& expected_rt_args = core_to_rt_args.at(logical_core);
             auto rt_args = kernel->runtime_args(logical_core);
             EXPECT_EQ(rt_args, expected_rt_args) << "(unique rta)";
 
