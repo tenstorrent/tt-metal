@@ -11,8 +11,20 @@
 namespace tt::tt_metal::inspector {
 
 Logger::Logger(const std::filesystem::path& logging_path)
-    : programs_ostream(logging_path / "programs_log.yaml", std::ios::trunc)
-    , kernels_ostream(logging_path / "kernels.yaml", std::ios::trunc) {
+    : initialized(false)
+{
+#define ADDITIONAL_ERROR_TEXT "\nYou can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment variables. Note that this will not throw an exception, but will log a warning instead. Running without Inspector logger will impact tt-triage functionality."
+
+    try {
+        // Recreate the logging directory if it doesn't exist or clear it if it does.
+        std::filesystem::remove_all(logging_path);
+        std::filesystem::create_directories(logging_path);
+    }
+    catch (const std::exception& e) {
+        TT_INSPECTOR_THROW("Failed to create logging directory: {}. Error: {}" ADDITIONAL_ERROR_TEXT, logging_path.string(), e.what());
+    }
+
+    // Write startup information to the inspector files.
     {
         std::ofstream inspector_startup_ostream(logging_path / "startup.yaml", std::ios::trunc);
 
@@ -34,15 +46,25 @@ Logger::Logger(const std::filesystem::path& logging_path)
             inspector_startup_ostream << "  high_resolution_clock_ns: " << now_highres_ns << "\n";
         }
     }
+
+    programs_ostream.open(logging_path / "programs_log.yaml", std::ios::trunc);
     if (!programs_ostream.is_open()) {
-        TT_INSPECTOR_THROW("Failed to create inspector file: {}", (logging_path / "programs_log.yaml").string());
+        TT_INSPECTOR_THROW("Failed to create inspector file: {}" ADDITIONAL_ERROR_TEXT, (logging_path / "programs_log.yaml").string());
     }
+    kernels_ostream.open(logging_path / "kernels.yaml", std::ios::trunc);
     if (!kernels_ostream.is_open()) {
-        TT_INSPECTOR_THROW("Failed to create inspector file: {}", (logging_path / "kernels.yaml").string());
+        TT_INSPECTOR_THROW("Failed to create inspector file: {}" ADDITIONAL_ERROR_TEXT, (logging_path / "kernels.yaml").string());
     }
+
+    initialized = true;
+
+#undef ADDITIONAL_ERROR_TEXT
 }
 
 void Logger::log_program_created(const ProgramData& program_data) noexcept {
+    if (!initialized) {
+        return;
+    }
     try {
         programs_ostream << "- program_created:\n";
         programs_ostream << "    id: " << program_data.program_id << "\n";
@@ -54,6 +76,9 @@ void Logger::log_program_created(const ProgramData& program_data) noexcept {
 }
 
 void Logger::log_program_destroyed(const ProgramData& program_data) noexcept {
+    if (!initialized) {
+        return;
+    }
     try {
         programs_ostream << "- program_destroyed:\n";
         programs_ostream << "    id: " << program_data.program_id << "\n";
@@ -65,6 +90,9 @@ void Logger::log_program_destroyed(const ProgramData& program_data) noexcept {
 }
 
 void Logger::log_program_compile_started(const ProgramData& program_data) noexcept {
+    if (!initialized) {
+        return;
+    }
     try {
         programs_ostream << "- program_compile_started:\n";
         programs_ostream << "    id: " << program_data.program_id << "\n";
@@ -80,6 +108,9 @@ void Logger::log_program_compile_already_exists(const ProgramData& program_data)
 }
 
 void Logger::log_program_kernel_compile_finished(const ProgramData& program_data, const KernelData& kernel_data) noexcept {
+    if (!initialized) {
+        return;
+    }
     try {
         auto timestamp = std::chrono::high_resolution_clock::now();
         programs_ostream << "- program_kernel_compile_finished:\n";
@@ -104,6 +135,9 @@ void Logger::log_program_kernel_compile_finished(const ProgramData& program_data
 }
 
 void Logger::log_program_compile_finished(const ProgramData& program_data) noexcept {
+    if (!initialized) {
+        return;
+    }
     try {
         programs_ostream << "- program_compile_finished:\n";
         programs_ostream << "    id: " << program_data.program_id << "\n";
@@ -116,6 +150,9 @@ void Logger::log_program_compile_finished(const ProgramData& program_data) noexc
 }
 
 void Logger::log_program_binary_status_change(const ProgramData& program_data, std::size_t device_id, ProgramBinaryStatus status) noexcept {
+    if (!initialized) {
+        return;
+    }
     try {
         programs_ostream << "- program_binary_status_change:\n";
         programs_ostream << "    id: " << program_data.program_id << "\n";
