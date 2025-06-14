@@ -57,6 +57,7 @@ Compute APIs
   asin_tile
   atan_tile
   acos_tile
+  selu_tile
 
   quant_tile
   requant_tile
