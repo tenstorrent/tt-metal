@@ -96,6 +96,18 @@ def test_llama_model_inference(
     mode_accuracy = optimizations == LlamaOptimizations.accuracy
     instruct = True
     dummy_weights = True
+
+    top_k = sampling_params["top_k"]
+    if isinstance(top_k, int):
+        top_k = [top_k] * batch_size
+    top_p = sampling_params["top_p"]
+    if isinstance(top_p, float):
+        top_p = [top_p] * batch_size
+    temperature = sampling_params["temperature"]
+    if isinstance(temperature, float):
+        temperature = [temperature] * batch_size
+    seed = sampling_params["seed"]
+
     model_args = TtModelArgs(
         mesh_device,
         instruct=instruct,
@@ -160,7 +172,7 @@ def test_llama_model_inference(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        sampling_params=sampling_params,
+        temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
     )
     logger.info("Model and caches loaded.")
@@ -208,7 +220,7 @@ def test_llama_model_inference(
                 page_table=page_table_tt,
             )
             # Sampling
-            tt_out_tok = tt_sampling(tt_out[0])
+            tt_out_tok = tt_sampling(tt_out[0], top_k, top_p, seed)
 
             tt_out_tok_device0 = ttnn.get_device_tensors(tt_out_tok)[0]
             tt_out_tok_cpu = tt_out_tok_device0.cpu(blocking=True, cq_id=0)

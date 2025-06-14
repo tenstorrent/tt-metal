@@ -30,6 +30,9 @@ class TT_CCL:
         self.from_remote_semaphore_handles = []
         self.to_remote_semaphore_handles = []
         self.all_gather_concat_inter_tensor = self.get_all_gather_concat_inter_buffer()
+        self.max_top_k = model_args.max_top_k
+        self.max_batch_size = model_args.max_batch_size
+        self.cluster_shape = model_args.cluster_shape
 
         # Double buffered on each axis
         self.gather_semaphore_handles = [[], []]
@@ -171,7 +174,7 @@ class TT_CCL:
 
         # Sampling values
         tt_buffer = ttnn.from_torch(
-            torch.zeros((1, 1, 32, 256)),  # TODO: fix for k > 32, see issue #22925
+            torch.zeros((1, 1, self.max_batch_size, self.max_top_k * self.cluster_shape[0])),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
@@ -182,7 +185,7 @@ class TT_CCL:
 
         # Sampling indices
         tt_buffer = ttnn.from_torch(
-            torch.zeros((1, 1, 32, 256)),  # TODO: fix for k > 32!
+            torch.zeros((1, 1, self.max_batch_size, self.max_top_k * self.cluster_shape[0])),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.uint16,
@@ -193,7 +196,7 @@ class TT_CCL:
 
         # Binary Mult + Silu
         tt_buffer = ttnn.from_torch(
-            torch.zeros((1, 1, 32, 3584)),
+            torch.zeros((1, 1, self.max_batch_size, 3584)),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
