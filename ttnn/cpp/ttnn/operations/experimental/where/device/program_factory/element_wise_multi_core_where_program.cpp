@@ -45,17 +45,16 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
 
     Program program{};
     const auto& all_device_cores = operation_attributes.worker_grid;
+    auto dtype = tt_metal::datatype_to_dataformat_converter(args.condition_tensor.get_dtype());
 
-    auto createCircularBuffer = [&program, &all_device_cores](
+    auto createCircularBuffer = [&program, &all_device_cores, dtype = dtype](
                                     tt::CBIndex cb_idx, uint32_t tile_size, uint32_t num_input_tiles = 1) {
-        auto cb_config =
-            tt::tt_metal::CircularBufferConfig(num_input_tiles * tile_size, {{cb_idx, tt::DataFormat::Float16_b}})
-                .set_page_size(cb_idx, tile_size);
+        auto cb_config = tt::tt_metal::CircularBufferConfig(num_input_tiles * tile_size, {{cb_idx, dtype}})
+                             .set_page_size(cb_idx, tile_size);
         return tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_config);
     };
 
-    uint32_t single_tile_size =
-        tt_metal::detail::TileSize(tt_metal::datatype_to_dataformat_converter(args.condition_tensor.get_dtype()));
+    uint32_t single_tile_size = tt_metal::detail::TileSize(dtype);
     /* Use L1 circular buffers to set input and output buffers that the compute engine will use */
     auto condition_cb = tt::CBIndex::c_0;
     auto true_values_cb = tt::CBIndex::c_1;
