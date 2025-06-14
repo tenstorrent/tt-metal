@@ -134,8 +134,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             sender_backward_core_ranges.insert(CoreRange(core));
         }
     }
-    CoreRangeSet sender_forward_core_range_set = CoreRangeSet(sender_forward_core_ranges);
-    CoreRangeSet sender_backward_core_range_set = CoreRangeSet(sender_backward_core_ranges);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
@@ -193,7 +191,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     const uint32_t num_inputs = input_tensor.size();
 
     uint32_t tiles_to_write_per_packet = 1;
-
     // KERNEL CREATION
     // Forward Direction
     // Reader
@@ -515,7 +512,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
                 }
             }
         };
-
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 

@@ -157,14 +157,17 @@ def run_ring_attention_all_gather_impl(
 
     if enable_trace:
         # Compile the op
-        tt_all_gather_out_tensors = run_op(0)
+        for i in range(num_iters):
+            tt_all_gather_out_tensors = run_op(i)
         logger.info(f"Done compiling Op")
 
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
         # Capture the trace
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        tt_all_gather_out_tensors = run_op(0)
+        for i in range(num_iters):
+            tt_all_gather_out_tensors = run_op(i)
+            tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensors)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         logger.info(f"Done capturing trace")
 
@@ -177,7 +180,6 @@ def run_ring_attention_all_gather_impl(
         # Synchronize the devices
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
-        tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensors)
     else:
         for i in range(num_iters):
             tt_all_gather_out_tensors = run_op(i)
@@ -233,7 +235,7 @@ def run_ring_attention_all_gather_impl(
         #   (8, 1, [1, 5, 4096, 2560], 1, 3, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (8, 1, [1, 5, 4096, 64], 1, 2, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (8, 1, [1, 5, 4096, 64], 2, 2, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, 1, [1, 5, 4096, 64], 2, 2, 0, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 3, [1, 5, 4096, 64], 2, 2, 0, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "dim3_1input",

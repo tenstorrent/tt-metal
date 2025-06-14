@@ -40,7 +40,6 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
-
     uint32_t arg_idx = 0;
     uint32_t input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
     uint32_t input_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
@@ -114,8 +113,9 @@ void kernel_main() {
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-                cb_wait_front(cb_output_id, num_pages_to_read);
-                size_t l1_read_addr = get_read_ptr(cb_output_id);
+                cb_wait_front(cb_output_id, packet_size_in_pages);
+                const size_t l1_read_addr_base = get_read_ptr(cb_output_id);
+                size_t l1_read_addr = l1_read_addr_base;
 
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
@@ -152,7 +152,7 @@ void kernel_main() {
                     }
                     tiles_read += contig_pages_advanced;
                 }
-                cb_pop_front(cb_output_id, num_pages_to_read);
+                cb_pop_front(cb_output_id, packet_size_in_pages);
             }
             tile_id_start += output_tensor_Wt * output_tensor_Ht;
             tiles_read = input_tile_id_start;
@@ -230,7 +230,6 @@ void kernel_main() {
             slice_chip_id = my_chip_id - slice_writes - 1;
             actual_slice_chip_id = (slice_chip_id < 0) ? ring_size + slice_chip_id : slice_chip_id;
         }
-
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             uint32_t tiles_read = input_tile_id_start;
             uint32_t tiles_to_read = input_tile_id_end;
@@ -248,7 +247,7 @@ void kernel_main() {
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
                 while (tiles_read < tiles_to_read) {
                     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-                    cb_wait_front(cb_output_id, num_pages_to_read);
+                    cb_wait_front(cb_output_id, packet_size_in_pages);
                     size_t l1_read_addr = get_read_ptr(cb_output_id);
                     for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                         uint64_t noc0_dest_noc_addr = get_noc_addr(
@@ -279,7 +278,7 @@ void kernel_main() {
                         }
                         tiles_read += contig_pages_advanced;
                     }
-                    cb_pop_front(cb_output_id, num_pages_to_read);
+                    cb_pop_front(cb_output_id, packet_size_in_pages);
                 }
                 tile_id_start += output_tensor_Wt * output_tensor_Ht;
                 tiles_read = input_tile_id_start;
@@ -304,7 +303,6 @@ void kernel_main() {
 
         slice_writes++;
     }
-
     fabric_connection.close();
 
     noc_async_atomic_barrier();

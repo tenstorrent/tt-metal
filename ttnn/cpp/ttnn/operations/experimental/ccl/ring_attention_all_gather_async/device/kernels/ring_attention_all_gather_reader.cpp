@@ -16,7 +16,6 @@ using ttnn::ccl::Topology;
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
-
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr BufferType input_buffer_type = static_cast<BufferType>(get_compile_time_arg_val(1));
 constexpr BufferType output_buffer_type = static_cast<BufferType>(get_compile_time_arg_val(2));
@@ -35,7 +34,6 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
-
     uint32_t arg_idx = 0;
     // Load the input tensor spec
     uint32_t input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
@@ -62,32 +60,36 @@ void kernel_main() {
         op_signaler = OpSignaler(arg_idx);
     }
 
+    const uint32_t payload_size_bytes = input_tensor_page_size * contig_pages_advanced;
     // Push out our local slice
     constexpr bool input_tensor_is_dram = input_buffer_type == tt::tt_metal::BufferType::DRAM;
+    InterleavedAddrGenFast<input_tensor_is_dram> input_tensor_addrgens[num_inputs];
+    for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+        auto input_tensor_addrgen = InterleavedAddrGenFast<input_tensor_is_dram>{
+            .bank_base_address = input_tensor_addresses[input_idx],
+            .page_size = input_tensor_page_size,
+            .data_format = get_dataformat(cb_output_id)};
+        input_tensor_addrgens[input_idx] = input_tensor_addrgen;
+    }
+
     uint32_t tiles_read = input_tile_id_start;
-    ;
     uint32_t tiles_to_read = input_tile_id_end;
     uint32_t output_tile_id_start = 0;
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
-            auto input_tensor_addrgen = InterleavedAddrGenFast<input_tensor_is_dram>{
-                .bank_base_address = input_tensor_addresses[input_idx],
-                .page_size = input_tensor_page_size,
-                .data_format = get_dataformat(cb_output_id)};
-
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-                cb_reserve_back(cb_output_id, num_pages_to_read);
+                cb_reserve_back(cb_output_id, packet_size_in_pages);
                 const uint32_t l1_write_addr_base = get_write_ptr(cb_output_id);
                 uint32_t l1_write_addr = l1_write_addr_base;
-                for (uint32_t j = 0; j < num_pages_to_read; j++) {
-                    noc_async_read_tile(output_tile_id_start + tiles_read, input_tensor_addrgen, l1_write_addr);
-                    l1_write_addr += input_tensor_page_size;
-                    tiles_read++;
+                for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
+                    noc_async_read_tile(
+                        output_tile_id_start + tiles_read, input_tensor_addrgens[input_idx], l1_write_addr);
+                    l1_write_addr += payload_size_bytes;
+                    tiles_read += contig_pages_advanced;
                 }
-
                 noc_async_read_barrier();
-                cb_push_back(cb_output_id, num_pages_to_read);
+                cb_push_back(cb_output_id, packet_size_in_pages);
             }
             tiles_read = input_tile_id_start;
             tiles_to_read = input_tile_id_end;
@@ -127,7 +129,6 @@ void kernel_main() {
         }
     }
 
-    const uint32_t payload_size_bytes = input_tensor_page_size * contig_pages_advanced;
     while (slices_received < slices_expected) {
         // Do i expect more from the backward direction?
         // In the linear case, I expect num_targets_backward_direction slices from the left
@@ -155,7 +156,6 @@ void kernel_main() {
             // Signal matmul to go
             op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
         }
-
         // Direction == backward: Should I forward what I got from the left to my right?
         // In the linear case, if I have any targets to my right, always forward
         // In the ring case, if I have received on the left less than my targets on the right, forward
@@ -182,7 +182,7 @@ void kernel_main() {
                 for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
                     while (tiles_read < tiles_to_read) {
                         uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);  // 2
-                        cb_reserve_back(cb_output_id, num_pages_to_read);
+                        cb_reserve_back(cb_output_id, packet_size_in_pages);
                         size_t l1_write_addr = get_write_ptr(cb_output_id);
                         for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                             noc_async_read_tile(
@@ -199,7 +199,7 @@ void kernel_main() {
                             }
                         }
                         noc_async_read_barrier();
-                        cb_push_back(cb_output_id, num_pages_to_read);
+                        cb_push_back(cb_output_id, packet_size_in_pages);
                     }
                     pages_read_in_row = input_tile_id_start % input_tensor_Wt;
                     row_offset = (input_tile_id_start / input_tensor_Wt) * output_tensor_Wt;
