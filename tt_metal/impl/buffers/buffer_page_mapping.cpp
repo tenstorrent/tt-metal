@@ -87,7 +87,7 @@ CompressedBufferPageMapping CompressedBufferPageMapping::filter_by_host_range(
 
     BufferCorePageMapping result_core_mapping;
 
-    auto add_core_mapping = [&](size_t core_id) {
+    auto add_core_mapping = [&](size_t core_id, uint32_t original_start_page) {
         if (result_core_mapping.host_ranges.empty()) {
             return;
         }
@@ -99,11 +99,10 @@ CompressedBufferPageMapping CompressedBufferPageMapping::filter_by_host_range(
             max_device_page_offset =
                 std::max(max_device_page_offset, host_range.device_page_offset + host_range.num_pages);
         }
-        result_core_mapping.start_page = min_device_page_offset;
+        result_core_mapping.start_page = original_start_page + min_device_page_offset;
         result_core_mapping.num_pages = max_device_page_offset - min_device_page_offset;
         for (auto& host_range : result_core_mapping.host_ranges) {
             host_range.device_page_offset -= min_device_page_offset;
-            host_range.host_page_start -= start_host_page;
         }
 
         result.core_page_mappings[core_id].push_back(result_core_mapping);
@@ -112,9 +111,6 @@ CompressedBufferPageMapping CompressedBufferPageMapping::filter_by_host_range(
 
     for (size_t core_id = 0; core_id < all_cores.size(); core_id++) {
         for (const auto& core_page_mapping : core_page_mappings[core_id]) {
-            result_core_mapping.start_page = core_page_mapping.start_page;
-            result_core_mapping.num_pages = core_page_mapping.num_pages;
-
             for (const auto& host_range : core_page_mapping.host_ranges) {
                 auto host_range_start = std::max(start_host_page, host_range.host_page_start);
                 auto host_range_end = std::min(end_host_page, host_range.host_page_start + host_range.num_pages);
@@ -122,16 +118,16 @@ CompressedBufferPageMapping CompressedBufferPageMapping::filter_by_host_range(
                     result_core_mapping.host_ranges.push_back({
                         .device_page_offset =
                             host_range.device_page_offset + host_range_start - host_range.host_page_start,
-                        .host_page_start = host_range_start,
+                        .host_page_start = host_range_start - start_host_page,
                         .num_pages = host_range_end - host_range_start,
                     });
                 }
                 if (host_range_start != host_range.host_page_start ||
                     host_range_end != host_range.host_page_start + host_range.num_pages) {
-                    add_core_mapping(core_id);
+                    add_core_mapping(core_id, core_page_mapping.start_page);
                 }
             }
-            add_core_mapping(core_id);
+            add_core_mapping(core_id, core_page_mapping.start_page);
         }
     }
 

@@ -397,6 +397,13 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
         return shared_from_this();
     }
 
+    std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>> shard_parameters;
+    if (shard_parameters_.has_value()) {
+        shard_parameters = shard_parameters_.value();
+    } else if (buffer_distribution_spec_.has_value()) {
+        shard_parameters = buffer_distribution_spec_.value();
+    }
+
     auto buffer = Buffer::create(
         device_,
         address_,
@@ -404,7 +411,7 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
         page_size_,
         buffer_type_,
         buffer_layout_,
-        shard_parameters_,
+        shard_parameters,
         bottom_up_,
         sub_device_id_);
 
