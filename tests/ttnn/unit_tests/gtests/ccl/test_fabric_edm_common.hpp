@@ -1121,7 +1121,7 @@ void persistent_fabric_teardown_sequence(
     const std::vector<IDevice*>& devices,
     std::optional<SubdeviceInfo>& subdevice_managers,
     ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
-    tt::tt_fabric::TerminationSignal termination_mode = tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE) {
+    tt::tt_fabric::TerminationSignal termination_mode = tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE) {
     log_info(tt::LogTest, "Tearing down fabric");
 
     // Wait for workers to finish
@@ -2940,7 +2940,10 @@ void Run1DFabricPacketSendTest(
         TT_FATAL(fabric_programs->size() == devices.size(), "Expected fabric programs size to be same as devices size");
         log_info(tt::LogTest, "Fabric teardown");
         persistent_fabric_teardown_sequence(
-            devices, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+            devices,
+            subdevice_managers,
+            fabric_handle.value(),
+            tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
         for (auto& device : devices) {
             device->clear_loaded_sub_device_manager();
         }
