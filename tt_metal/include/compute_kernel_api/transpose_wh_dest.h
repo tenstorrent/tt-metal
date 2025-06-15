@@ -39,7 +39,7 @@ ALWI void transpose_wh_dest_init_short() {
  // clang-format on
 template <bool is_32bit = false>
 ALWI void transpose_wh_dest(uint32_t idst) {
-    UNPACK((llk_unpack_set_srcab_dummy_valid()));
+    UNPACK((llk_unpack_set_srcb_dummy_valid()));
     MATH((llk_math_transpose_dest<true, is_32bit>(idst)));
 }
 
