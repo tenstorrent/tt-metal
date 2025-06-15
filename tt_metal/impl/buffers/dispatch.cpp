@@ -830,17 +830,14 @@ std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_sharded_buffer_r
     void* dst, ShardedBufferReadDispatchParams& dispatch_params, Buffer& buffer) {
     // Increment the src_page_index after the Read Buffer Descriptor has been populated
     // for the current core/txn
-    auto initial_src_page_index = dispatch_params.src_page_index;
     dispatch_params.src_page_index += dispatch_params.pages_per_txn;
     return std::make_shared<tt::tt_metal::CompletionReaderVariant>(
         std::in_place_type<tt::tt_metal::ReadBufferDescriptor>,
-        buffer.buffer_layout(),
         buffer.page_size(),
         dispatch_params.padded_page_size,
         dst,
         dispatch_params.unpadded_dst_offset,
         dispatch_params.pages_per_txn,
-        initial_src_page_index,
         dispatch_params.buffer_page_mapping,
         dispatch_params.core_page_mapping);
 }
@@ -849,13 +846,11 @@ std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_interleaved_buff
     void* dst, BufferReadDispatchParams* dispatch_params, Buffer& buffer) {
     return std::make_shared<tt::tt_metal::CompletionReaderVariant>(
         std::in_place_type<tt::tt_metal::ReadBufferDescriptor>,
-        buffer.buffer_layout(),
         buffer.page_size(),
         dispatch_params->padded_page_size,
         dst,
         dispatch_params->unpadded_dst_offset,
-        dispatch_params->total_pages_read,
-        dispatch_params->src_page_index);
+        dispatch_params->total_pages_read);
 }
 
 void copy_completion_queue_data_into_user_space(
@@ -865,12 +860,11 @@ void copy_completion_queue_data_into_user_space(
     uint32_t cq_id,
     SystemMemoryManager& sysmem_manager,
     std::atomic<bool>& exit_condition) {
-    const auto& [buffer_layout, page_size, padded_page_size, buffer_page_mapping, core_page_mapping, dst, dst_offset, num_pages_read, cur_dev_page_id] =
+    const auto& [page_size, padded_page_size, buffer_page_mapping, core_page_mapping, dst, dst_offset, num_pages_read] =
         read_buffer_descriptor;
     const uint32_t padded_num_bytes = (num_pages_read * padded_page_size) + sizeof(CQDispatchCmd);
     uint32_t contig_dst_offset = dst_offset;
     uint32_t remaining_bytes_to_read = padded_num_bytes;
-    // uint32_t dev_page_id = cur_dev_page_id;
 
     // track the amount of bytes read in the last non-aligned page
     uint32_t remaining_bytes_of_nonaligned_page = 0;

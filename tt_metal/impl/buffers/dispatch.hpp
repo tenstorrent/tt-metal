@@ -30,7 +30,6 @@ namespace tt::tt_metal {
 
 // Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
 struct ReadBufferDescriptor {
-    TensorMemoryLayout buffer_layout;
     uint32_t page_size;
     uint32_t padded_page_size;
     std::shared_ptr<const CompressedBufferPageMapping> buffer_page_mapping;
@@ -38,27 +37,22 @@ struct ReadBufferDescriptor {
     void* dst;
     uint32_t dst_offset;
     uint32_t num_pages_read;
-    uint32_t cur_dev_page_id;
 
     ReadBufferDescriptor(
-        TensorMemoryLayout buffer_layout,
         uint32_t page_size,
         uint32_t padded_page_size,
         void* dst,
         uint32_t dst_offset,
         uint32_t num_pages_read,
-        uint32_t cur_dev_page_id,
         const std::shared_ptr<const CompressedBufferPageMapping>& buffer_page_mapping = nullptr,
         const BufferCorePageMapping* core_page_mapping = nullptr) :
-        buffer_layout(buffer_layout),
         page_size(page_size),
         padded_page_size(padded_page_size),
         buffer_page_mapping(buffer_page_mapping),
         core_page_mapping(core_page_mapping),
         dst(dst),
         dst_offset(dst_offset),
-        num_pages_read(num_pages_read),
-        cur_dev_page_id(cur_dev_page_id) {}
+        num_pages_read(num_pages_read) {}
 };
 
 using CompletionReaderVariant =
