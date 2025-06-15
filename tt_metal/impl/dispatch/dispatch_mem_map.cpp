@@ -205,4 +205,9 @@ std::pair<uint32_t, uint32_t> DispatchMemMap::get_device_l1_info(const CoreType&
     return {l1_base, l1_size};
 }
 
+uint32_t DispatchMemMap::get_prefetcher_l1_size() const {
+    auto [l1_base, l1_size] = this->get_device_l1_info(this->settings.core_type_);
+    return l1_size;
+}
+
 }  // namespace tt::tt_metal

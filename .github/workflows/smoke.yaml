@@ -15,7 +15,7 @@ on:
       per-test-timeout:
         required: false
         type: string
-        default: 3.5
+        default: 4.0 # TODO: Drop back to 3.5 when https://github.com/tenstorrent/github-ci-infra/issues/876 is resolved.
       product:
         required: true
         type: string # tt-metalium or tt-nn

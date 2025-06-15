@@ -186,7 +186,7 @@ def merge_device_rows(df):
         if not blocks:
             break
 
-        if "AllGather" in op_name or "ReduceScatter" in op_name or "AllReduce" in op_name:
+        if "AllGather" in op_name or "ReduceScatter" in op_name or "AllReduce" or "Matmul_RS" in op_name:
             # For collective ops, take the average duration over all rows within a block
             device_kernel_durations = [
                 d["DEVICE KERNEL DURATION [ns]"]
@@ -274,7 +274,7 @@ def print_dict(input_dict, dict_name):
 
 
 def is_collective_op(op_code):
-    return any(x in op_code for x in ("AllGather", "ReduceScatter", "AllReduce"))
+    return any(x in op_code for x in ("AllGather", "ReduceScatter", "AllReduce", "Matmul_RS"))
 
 
 def process_measurements(df, num_layers):

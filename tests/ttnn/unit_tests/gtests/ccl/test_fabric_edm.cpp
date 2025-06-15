@@ -155,7 +155,8 @@ static int run_single_test(
             auto& params = std::get<WriteThroughputStabilityTestWithPersistentFabricParams>(test_params.params);
             if (params.fabric_mode == FabricTestMode::Linear) {
                 Run1DFabricPacketSendTest<Fabric1DLineDeviceInitFixture>(test_fixture, test_specs, params);
-            } else if (params.fabric_mode == FabricTestMode::FullRing) {
+            } else if (
+                params.fabric_mode == FabricTestMode::HalfRing || params.fabric_mode == FabricTestMode::FullRing) {
                 Run1DFabricPacketSendTest<Fabric1DRingDeviceInitFixture>(test_fixture, test_specs, params);
             } else {
                 TT_THROW(

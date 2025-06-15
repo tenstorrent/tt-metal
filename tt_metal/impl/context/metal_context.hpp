@@ -67,7 +67,9 @@ public:
         const std::string& mesh_graph_desc_file,
         const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
     void set_default_control_plane_mesh_graph();
-    void initialize_fabric_config(tt_metal::FabricConfig fabric_config);
+    void set_fabric_config(
+        tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
+    void initialize_fabric_config();
     tt_metal::FabricConfig get_fabric_config() const;
 
 private:
@@ -80,6 +82,7 @@ private:
     void clear_dram_state(chip_id_t device_id);
     void clear_launch_messages_on_eth_cores(chip_id_t device_id);
     void initialize_control_plane();
+    void teardown_fabric_config();
 
     bool initialized_ = false;
     bool teardown_registered_ = false;
@@ -101,6 +104,7 @@ private:
     std::array<std::unique_ptr<DispatchMemMap>, magic_enum::enum_count<CoreType>()> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::GlobalControlPlane> global_control_plane_;
     tt_metal::FabricConfig fabric_config_ = tt_metal::FabricConfig::DISABLED;
+    uint8_t num_fabric_active_routing_planes_ = 0;
 };
 
 }  // namespace tt::tt_metal
