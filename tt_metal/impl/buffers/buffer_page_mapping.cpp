@@ -138,35 +138,4 @@ CompressedBufferPageMapping CompressedBufferPageMapping::filter_by_host_range(
     return result;
 }
 
-BufferCorePageMappingIterator BufferCorePageMapping::begin() const { return BufferCorePageMappingIterator(this, 0, 0); }
-
-BufferCorePageMappingIterator BufferCorePageMapping::end() const {
-    if (host_ranges.empty()) {
-        return BufferCorePageMappingIterator(this, 0, 0);
-    }
-    return BufferCorePageMappingIterator(this, host_ranges.size(), 0);
-}
-
-void BufferCorePageMappingIterator::next() {
-    device_offset++;
-    if (range_index >= mapping->host_ranges.size()) {
-        return;
-    }
-    const auto& host_range = mapping->host_ranges[range_index];
-    if (device_offset == host_range.device_page_offset + host_range.num_pages) {
-        range_index++;
-    }
-}
-
-std::optional<uint32_t> BufferCorePageMappingIterator::operator*() const {
-    if (range_index >= mapping->host_ranges.size()) {
-        return std::nullopt;
-    }
-    const auto& host_range = mapping->host_ranges[range_index];
-    if (device_offset < host_range.device_page_offset) {
-        return std::nullopt;
-    }
-    return host_range.host_page_start + device_offset - host_range.device_page_offset;
-}
-
 }  // namespace tt::tt_metal

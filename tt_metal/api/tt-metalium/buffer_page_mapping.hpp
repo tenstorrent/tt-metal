@@ -20,26 +20,6 @@ struct BufferPageMapping {
     std::vector<std::vector<uint32_t>> core_host_page_indices;
 };
 
-struct BufferCorePageMapping;
-
-class BufferCorePageMappingIterator {
-public:
-    BufferCorePageMappingIterator() = default;
-    BufferCorePageMappingIterator(const BufferCorePageMapping* mapping, uint32_t device_offset, uint32_t range_index) :
-        mapping(mapping), device_offset(device_offset), range_index(range_index) {}
-
-    bool operator==(const BufferCorePageMappingIterator& other) const = default;
-    bool operator!=(const BufferCorePageMappingIterator& other) const = default;
-
-    void next();
-    std::optional<uint32_t> operator*() const;
-
-private:
-    const BufferCorePageMapping* mapping = nullptr;
-    uint32_t device_offset = 0;
-    uint32_t range_index = 0;
-};
-
 struct BufferCorePageMapping {
     struct ContiguousHostPages {
         uint32_t device_page_offset = 0;
@@ -50,9 +30,6 @@ struct BufferCorePageMapping {
     uint32_t start_page = 0;
     uint32_t num_pages = 0;
     std::vector<ContiguousHostPages> host_ranges;
-
-    BufferCorePageMappingIterator begin() const;
-    BufferCorePageMappingIterator end() const;
 };
 
 struct CompressedBufferPageMapping {
@@ -64,6 +41,68 @@ struct CompressedBufferPageMapping {
     std::vector<CoreCoord> all_cores;
     std::unordered_map<CoreCoord, uint32_t> core_to_core_id;
     std::vector<std::vector<BufferCorePageMapping>> core_page_mappings;
+};
+
+class BufferCorePageMappingIterator {
+public:
+    BufferCorePageMappingIterator() = default;
+    BufferCorePageMappingIterator(const BufferCorePageMapping* mapping) : mapping_(mapping) {}
+
+    uint32_t device_page() const { return device_page_; }
+
+    BufferCorePageMappingIterator& operator++() {
+        device_page_++;
+        if (range_index_ >= mapping_->host_ranges.size()) {
+            return *this;
+        }
+        const auto& host_range = mapping_->host_ranges[range_index_];
+        if (device_page_ == host_range.device_page_offset + host_range.num_pages) {
+            range_index_++;
+        }
+        return *this;
+    }
+
+    std::optional<uint32_t> operator*() const {
+        if (range_index_ >= mapping_->host_ranges.size()) {
+            return std::nullopt;
+        }
+        const auto& host_range = mapping_->host_ranges[range_index_];
+        if (device_page_ < host_range.device_page_offset) {
+            return std::nullopt;
+        }
+        return host_range.host_page_start + device_page_ - host_range.device_page_offset;
+    }
+
+    struct Range {
+        uint32_t device_page_start = 0;
+        uint32_t host_page_start = 0;
+        uint32_t num_pages = 0;
+    };
+    Range next_range(uint32_t end_device_page) {
+        Range result;
+        if (range_index_ >= mapping_->host_ranges.size() || device_page_ >= end_device_page) {
+            return result;
+        }
+        const auto& host_range = mapping_->host_ranges[range_index_];
+        uint32_t num_pages_left = host_range.num_pages - (device_page_ - host_range.device_page_offset);
+        uint32_t num_pages = std::min(num_pages_left, end_device_page - device_page_);
+        result = Range{
+            .device_page_start = device_page_,
+            .host_page_start = host_range.host_page_start + device_page_ - host_range.device_page_offset,
+            .num_pages = num_pages,
+        };
+        device_page_ += num_pages;
+        if (device_page_ == host_range.device_page_offset + host_range.num_pages) {
+            range_index_++;
+        }
+
+        return result;
+    }
+
+private:
+    const BufferCorePageMapping* mapping_ = nullptr;
+    uint32_t device_page_ = 0;
+    uint32_t range_index_ = 0;
 };
 
 }  // namespace tt::tt_metal

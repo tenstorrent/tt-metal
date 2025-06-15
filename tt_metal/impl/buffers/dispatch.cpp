@@ -437,16 +437,30 @@ void populate_sharded_buffer_write_dispatch_cmds(
     uint8_t* dst = command_sequence.reserve_space<uint8_t*, true>(data_size_bytes);
     // TODO: Expose getter for cmd_write_offsetB?
     uint32_t dst_offset = dst - (uint8_t*)command_sequence.data();
-    for (size_t i = 0; i < dispatch_params.pages_per_txn; i++) {
-        auto cur_host_page = *dispatch_params.core_page_mapping_it;
-        dispatch_params.core_page_mapping_it.next();
-        if (!cur_host_page) {
-            dst_offset += dispatch_params.page_size_to_write;
-            continue;
+    if (buffer.page_size() == buffer.aligned_page_size()) {
+        uint32_t end_device_page = dispatch_params.core_page_mapping_it.device_page() + dispatch_params.pages_per_txn;
+        while (true) {
+            auto range = dispatch_params.core_page_mapping_it.next_range(end_device_page);
+            if (range.num_pages == 0) {
+                break;
+            }
+            command_sequence.update_cmd_sequence(
+                dst_offset + range.device_page_start * buffer.page_size(),
+                (char*)(src) + range.host_page_start * buffer.page_size(),
+                range.num_pages * buffer.page_size());
         }
-        const uint32_t src_offset = *cur_host_page * buffer.page_size();
-        command_sequence.update_cmd_sequence(dst_offset, (char*)(src) + src_offset, buffer.page_size());
-        dst_offset += dispatch_params.page_size_to_write;
+    } else {
+        for (size_t i = 0; i < dispatch_params.pages_per_txn; i++) {
+            auto cur_host_page = *dispatch_params.core_page_mapping_it;
+            ++dispatch_params.core_page_mapping_it;
+            if (!cur_host_page) {
+                dst_offset += dispatch_params.page_size_to_write;
+                continue;
+            }
+            const uint32_t src_offset = *cur_host_page * buffer.page_size();
+            command_sequence.update_cmd_sequence(dst_offset, (char*)(src) + src_offset, buffer.page_size());
+            dst_offset += dispatch_params.page_size_to_write;
+        }
     }
 }
 
@@ -553,7 +567,7 @@ void write_sharded_buffer_to_core(
             BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
     }
 
-    dispatch_params.core_page_mapping_it = core_page_mapping.begin();
+    dispatch_params.core_page_mapping_it = BufferCorePageMappingIterator(&core_page_mapping);
 
     while (num_pages != 0) {
         // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
@@ -865,10 +879,7 @@ void copy_completion_queue_data_into_user_space(
 
     uint32_t pad_size_bytes = padded_page_size - page_size;
 
-    BufferCorePageMappingIterator core_page_mapping_it;
-    if (core_page_mapping) {
-        core_page_mapping_it = core_page_mapping->begin();
-    }
+    BufferCorePageMappingIterator core_page_mapping_it(core_page_mapping);
 
     while (remaining_bytes_to_read != 0) {
         uint32_t completion_queue_write_ptr_and_toggle =
@@ -979,7 +990,7 @@ void copy_completion_queue_data_into_user_space(
                     src_offset_increment = num_bytes_to_copy;
                     // We finished copying the page
                     if (remaining_bytes_of_nonaligned_page == 0) {
-                        core_page_mapping_it.next();
+                        ++core_page_mapping_it;
                         uint32_t rem_bytes_in_cq = num_bytes_remaining - num_bytes_to_copy;
                         // There is more data after padding
                         if (rem_bytes_in_cq >= pad_size_bytes) {
@@ -1004,7 +1015,7 @@ void copy_completion_queue_data_into_user_space(
                     // We've copied needed data, start of next read is offset due to remaining pad bytes
                     if (remaining_bytes_of_nonaligned_page == 0) {
                         offset_in_completion_q_data = padded_page_size - num_bytes_remaining;
-                        core_page_mapping_it.next();
+                        ++core_page_mapping_it;
                     }
                     if (host_page_id.has_value()) {
                         dst_offset_bytes = *host_page_id * page_size;
@@ -1015,7 +1026,7 @@ void copy_completion_queue_data_into_user_space(
                 } else {
                     num_bytes_to_copy = page_size;
                     host_page_id = *core_page_mapping_it;
-                    core_page_mapping_it.next();
+                    ++core_page_mapping_it;
                     if (host_page_id.has_value()) {
                         dst_offset_bytes = *host_page_id * page_size;
                     } else {
