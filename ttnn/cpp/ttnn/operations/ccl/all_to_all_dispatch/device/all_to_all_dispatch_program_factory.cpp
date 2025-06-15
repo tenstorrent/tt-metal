@@ -19,6 +19,13 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
+namespace tt::tt_fabric {
+class FabricContext {
+public:
+    size_t get_fabric_max_payload_size_bytes() const;
+};
+}  // namespace tt::tt_fabric
+#include <limits>
 
 namespace ttnn::operations::ccl {
 
@@ -56,6 +63,8 @@ tt::tt_metal::Shape2D get_physical_size(const ttnn::Tensor& tensor) {
         }
     } else {
         TT_FATAL(false, "Invalid layout: neither tile nor row major");
+        // Fallback return to satisfy compiler; execution never reaches here due to TT_FATAL abort.
+        return {0, 0};
     }
 }
 
@@ -87,8 +96,21 @@ uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) {
     return tt::round_up(get_page_size(tensor), BUFFER_ALIGNMENT);
 }
 
+uint32_t device_index(const std::vector<tt::tt_metal::IDevice*>& devices, const tt::tt_metal::IDevice* device) {
+    for (uint32_t i = 0; i < devices.size(); i++) {
+        if (devices[i] == device) {
+            return i;
+        }
+    }
+    TT_FATAL(false, "Device not found in device_index");
+    return std::numeric_limits<uint32_t>::max();
+}
+
 std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbors(
-    const MeshDeviceView& mesh_view, const MeshCoordinate& mesh_coordinate, tt::tt_fabric::Topology& topology) {
+    const MeshDeviceView& mesh_view,
+    const MeshCoordinate& mesh_coordinate,
+    tt::tt_fabric::Topology& topology,
+    const std::optional<uint32_t> axis) {
     std::vector<tt::tt_metal::IDevice*> neighbors;
     std::array<bool, 4> directions;  // east, west, north, south
     if (topology == tt::tt_fabric::Topology::Ring) {
@@ -98,139 +120,114 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
     }
     auto control_plane = tt::tt_fabric::get_control_plane();
     auto src_device = mesh_view.get_device(mesh_coordinate);
-
-    for (uint8_t axis = 0; axis < 2; axis++) {
-        std::vector<tt::tt_metal::IDevice*> axis_neighbors;
-        if (axis == 0) {
-            axis_neighbors = mesh_view.get_devices_on_row(mesh_coordinate[0]);
-        } else {
-            axis_neighbors = mesh_view.get_devices_on_column(mesh_coordinate[1]);
-        }
-        auto src_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(src_device->id());
-
-        for (uint32_t i = 0; i < axis_neighbors.size(); i++) {
-            if (axis_neighbors.at(i) == src_device) {
-                if (axis == 0) {
-                    // east
-                    if (i != axis_neighbors.size() - 1) {
-                        auto neighbor = axis_neighbors.at(i + 1);
-                        auto dest_fabric_node_id =
-                            control_plane->get_fabric_node_id_from_physical_chip_id(neighbor->id());
-                        auto src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
-                        auto dest_chip_id = (uint32_t)dest_fabric_node_id.chip_id;
-
-                        // row 0 to row 1
-                        if (src_chip_id <= 3 && dest_chip_id > 3) {
-                            directions[3] = true;
-                        }
-                        // row 1 to row 0
-                        else if (src_chip_id > 3 && dest_chip_id <= 3) {
-                            directions[2] = true;
-                        }
-                        // go east
-                        else if (dest_chip_id > src_chip_id) {
-                            directions[0] = true;
-                        }
-                        // go west
-                        else if (dest_chip_id < src_chip_id) {
-                            directions[1] = true;
-                        }
-                        neighbors.push_back(neighbor);
-                    }
-                    // west
-                    if (i != 0) {
-                        auto neighbor = axis_neighbors.at(i - 1);
-                        auto dest_fabric_node_id =
-                            control_plane->get_fabric_node_id_from_physical_chip_id(neighbor->id());
-                        auto src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
-                        auto dest_chip_id = (uint32_t)dest_fabric_node_id.chip_id;
-
-                        // row 0 to row 1
-                        if (src_chip_id <= 3 && dest_chip_id > 3) {
-                            directions[3] = true;
-                        }
-                        // row 1 to row 0
-                        else if (src_chip_id > 3 && dest_chip_id <= 3) {
-                            directions[2] = true;
-                        }
-                        // go east
-                        else if (dest_chip_id > src_chip_id) {
-                            directions[0] = true;
-                        }
-                        // go west
-                        else if (dest_chip_id < src_chip_id) {
-                            directions[1] = true;
-                        }
-                        neighbors.push_back(neighbor);
-                    }
-
-                } else if (axis == 1) {
-                    // north
-                    if (i != 0) {
-                        auto neighbor = axis_neighbors.at(i - 1);
-                        auto dest_fabric_node_id =
-                            control_plane->get_fabric_node_id_from_physical_chip_id(neighbor->id());
-                        auto src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
-                        auto dest_chip_id = (uint32_t)dest_fabric_node_id.chip_id;
-
-                        // row 0 to row 1
-                        if (src_chip_id <= 3 && dest_chip_id > 3) {
-                            directions[3] = true;
-                        }
-                        // row 1 to row 0
-                        else if (src_chip_id > 3 && dest_chip_id <= 3) {
-                            directions[2] = true;
-                        }
-                        // go east
-                        else if (dest_chip_id > src_chip_id) {
-                            directions[0] = true;
-                        }
-                        // go west
-                        else if (dest_chip_id < src_chip_id) {
-                            directions[1] = true;
-                        }
-                        neighbors.push_back(neighbor);
-                    }
-                    // south
-                    if (i != axis_neighbors.size() - 1) {
-                        auto neighbor = axis_neighbors.at(i + 1);
-                        auto dest_fabric_node_id =
-                            control_plane->get_fabric_node_id_from_physical_chip_id(neighbor->id());
-                        auto src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
-                        auto dest_chip_id = (uint32_t)dest_fabric_node_id.chip_id;
-
-                        // row 0 to row 1
-                        if (src_chip_id <= 3 && dest_chip_id > 3) {
-                            directions[3] = true;
-                        }
-                        // row 1 to row 0
-                        else if (src_chip_id > 3 && dest_chip_id <= 3) {
-                            directions[2] = true;
-                        }
-                        // go east
-                        else if (dest_chip_id > src_chip_id) {
-                            directions[0] = true;
-                        }
-                        // go west
-                        else if (dest_chip_id < src_chip_id) {
-                            directions[1] = true;
-                        }
-                        neighbors.push_back(neighbor);
-                    }
+    if (axis.has_value()) {
+        if (axis.value() == 1) {
+            auto axis_neighbors = mesh_view.get_devices_on_row(mesh_coordinate[0]);
+            auto index = device_index(axis_neighbors, src_device);
+            if (index == 0) {
+                // if Line, no neighbor, so don't push back, but for Ring, we need to push back the last device
+                neighbors.push_back(axis_neighbors[index + 1]);
+                directions[0] = true;  // east
+                // if Line, no neighbor, so don't push back, but for Ring, we need to push back the last device
+                if (topology == tt::tt_fabric::Topology::Ring) {
+                    neighbors.push_back(axis_neighbors[axis_neighbors.size() - 1]);
+                    directions[1] = true;
                 }
+            } else if (index == axis_neighbors.size() - 1) {
+                // if Line, no neighbor, so don't push back, but for Ring, we need to push back the first device
+                neighbors.push_back(axis_neighbors[0]);
+                directions[1] = true;
+                if (topology == tt::tt_fabric::Topology::Ring) {
+                    neighbors.push_back(axis_neighbors[0]);
+                    directions[1] = true;
+                }
+            } else {
+                neighbors.push_back(axis_neighbors[index + 1]);
+                directions[0] = true;
+                neighbors.push_back(axis_neighbors[index - 1]);
+                directions[1] = true;
+            }
+        } else if (axis.value() == 0) {
+            auto axis_neighbors = mesh_view.get_devices_on_column(mesh_coordinate[1]);
+            auto index = device_index(axis_neighbors, src_device);
+            if (index == 0) {                                    // northmost device
+                neighbors.push_back(axis_neighbors[index + 1]);  // south exists
+                directions[3] = true;
+                if (topology == tt::tt_fabric::Topology::Ring) {
+                    neighbors.push_back(axis_neighbors[axis_neighbors.size() - 1]);
+                    directions[2] = true;
+                }
+            } else if (index == axis_neighbors.size() - 1) {
+                neighbors.push_back(axis_neighbors[index - 1]);
+                directions[2] = true;
+                if (topology == tt::tt_fabric::Topology::Ring) {
+                    neighbors.push_back(axis_neighbors[0]);
+                    directions[3] = true;
+                }
+            } else {
+                neighbors.push_back(axis_neighbors[index + 1]);
+                directions[2] = true;
+                neighbors.push_back(axis_neighbors[index - 1]);
+                directions[3] = true;
+            }
+        }
+    } else {
+        {
+            auto axis_neighbors = mesh_view.get_devices_on_row(mesh_coordinate[0]);
+            auto index = device_index(axis_neighbors, src_device);
+            if (index == 0) {
+                // if Line, no neighbor, so don't push back, but for Ring, we need to push back the last device
+                neighbors.push_back(axis_neighbors[index + 1]);
+                directions[0] = true;  // east
+                // if Line, no neighbor, so don't push back, but for Ring, we need to push back the last device
+                if (topology == tt::tt_fabric::Topology::Ring) {
+                    neighbors.push_back(axis_neighbors[axis_neighbors.size() - 1]);
+                    directions[1] = true;
+                }
+            } else if (index == axis_neighbors.size() - 1) {
+                // if Line, no neighbor, so don't push back, but for Ring, we need to push back the first device
+                neighbors.push_back(axis_neighbors[0]);
+                directions[1] = true;
+                if (topology == tt::tt_fabric::Topology::Ring) {
+                    neighbors.push_back(axis_neighbors[0]);
+                    directions[1] = true;
+                }
+            } else {
+                neighbors.push_back(axis_neighbors[index + 1]);
+                directions[0] = true;
+                neighbors.push_back(axis_neighbors[index - 1]);
+                directions[1] = true;
+            }
+        }
+        {
+            auto axis_neighbors = mesh_view.get_devices_on_column(mesh_coordinate[1]);
+            auto index = device_index(axis_neighbors, src_device);
+            if (index == 0) {                                    // northmost device
+                neighbors.push_back(axis_neighbors[index + 1]);  // south exists
+                directions[3] = true;
+                if (topology == tt::tt_fabric::Topology::Ring) {
+                    neighbors.push_back(axis_neighbors[axis_neighbors.size() - 1]);
+                    directions[2] = true;
+                }
+            } else if (index == axis_neighbors.size() - 1) {
+                neighbors.push_back(axis_neighbors[index - 1]);
+                directions[2] = true;
+                if (topology == tt::tt_fabric::Topology::Ring) {
+                    neighbors.push_back(axis_neighbors[0]);
+                    directions[3] = true;
+                }
+            } else {
+                neighbors.push_back(axis_neighbors[index + 1]);
+                directions[2] = true;
+                neighbors.push_back(axis_neighbors[index - 1]);
+                directions[3] = true;
             }
         }
     }
-    std::vector<uint32_t> neighbor_ids;
-    for (const auto& neighbor : neighbors) {
-        auto fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(neighbor->id());
-        neighbor_ids.push_back((uint32_t)fabric_node_id.chip_id);
-    }
-    tt::log_info(
-        tt::LogAlways,
-        "directions: {}",
-        detail::stringify_vector(std::vector<uint32_t>(directions.begin(), directions.end())));
-    tt::log_info(tt::LogAlways, "neighbor_ids: {}", detail::stringify_vector(neighbor_ids));
+    TT_FATAL(neighbors.size() > 0, "No neighbors found");
+    TT_FATAL(!(axis.has_value() && neighbors.size() > 2), "Along a single axis, there can only be 2 neighbors");
+    TT_FATAL(
+        !(topology == tt::tt_fabric::Topology::Ring && neighbors.size() != 4), "Ring topology must have 4 neighbors");
     return {neighbors, directions};
 }
 
@@ -265,83 +262,19 @@ uint32_t select_link(
     }
 }
 
-uint32_t get_route(
-    const MeshDeviceView& mesh_view,
-    const MeshCoordinate& src,
-    const MeshCoordinate& dst,
-    tt::tt_fabric::Topology topology) {
-    // return 0 if North, 1 if East, 2 if South, 3 if West
-    uint32_t rows = mesh_view.num_rows();
-    uint32_t cols = mesh_view.num_cols();
-
-    uint32_t src_row = src[0];
-    uint32_t src_col = src[1];
-    uint32_t dst_row = dst[0];
-    uint32_t dst_col = dst[1];
-
-    enum Route {
-        North = 0,
-        East = 1,
-        South = 2,
-        West = 3,
-    };
-
-    auto is_even_parity = [](uint32_t r, uint32_t c) { return ((r + c) % 2) == 0; };
-
-    if (topology == tt::tt_fabric::Topology::Ring) {
-        // ── Horizontal (E/W) ───────────────────────────────────────
-        uint32_t dcol_fwd = (dst_col + cols - src_col) % cols;  // steps going East
-        uint32_t dcol_back = (cols - dcol_fwd) % cols;          // steps going West
-        uint32_t h_steps = std::min(dcol_fwd, dcol_back);
-        uint32_t h_dir = (dcol_fwd <= dcol_back) ? Route::East : Route::West;
-
-        // ── Vertical (N/S) ─────────────────────────────────────────
-        uint32_t drow_fwd = (dst_row + rows - src_row) % rows;  // steps going South
-        uint32_t drow_back = (rows - drow_fwd) % rows;          // steps going North
-        uint32_t v_steps = std::min(drow_fwd, drow_back);
-        uint32_t v_dir = (drow_fwd <= drow_back) ? Route::South : Route::North;
-
-        // ── Decide first hop ───────────────────────────────────────
-        if (v_steps == 0 && h_steps == 0) {
-            return Route::North;  // src == dst (shouldn’t happen)
-        }
-
-        if (v_steps == 0) {
-            return h_dir;  // same wrapped row
-        }
-        if (h_steps == 0) {
-            return v_dir;  // same wrapped column
-        }
-
-        // Both axes viable: choose the strictly shorter one;
-        // if equal, split traffic by source-tile parity.
-        if (v_steps < h_steps) {
-            return v_dir;
-        }
-        if (h_steps < v_steps) {
-            return h_dir;
-        }
-
-        // Tie → load-balance 50-50 on checkerboard parity
-        bool vertical_first = is_even_parity(src_row, src_col);
-        return vertical_first ? v_dir : h_dir;
-
-    } else {  // Linear
-        if (src_row == dst_row) {
-            return src_col < dst_col ? Route::East : Route::West;
+std::vector<tt::tt_metal::IDevice*> get_token_parallel_devices(
+    const MeshDeviceView& mesh_view, const MeshCoordinate& mesh_coordinate, const std::optional<uint32_t> axis) {
+    std::vector<tt::tt_metal::IDevice*> devices;
+    if (axis.has_value()) {
+        if (axis.value() == 0) {
+            devices = mesh_view.get_devices_on_row(mesh_coordinate[0]);
         } else {
-            return src_row < dst_row ? Route::South : Route::North;
+            devices = mesh_view.get_devices_on_column(mesh_coordinate[1]);
         }
-        // ── Diagonal case ──────────────────────────────────────────────
-        // Use a checkerboard parity of the *source* coordinate to decide
-        // whether we step vertically first (true) or horizontally first (false).
-        bool vertical_first = is_even_parity(src_row, src_col);
-        if (vertical_first) {
-            return src_row < dst_row ? Route::South : Route::North;
-        } else {
-            return src_col < dst_col ? Route::East : Route::West;
-        }
+    } else {
+        devices = mesh_view.get_devices();
     }
+    return devices;
 }
 
 }  // namespace detail
@@ -381,8 +314,8 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.expert_indices_tensor;
     auto mapping_tensor = tensor_args.expert_mapping_tensor;
-    auto output_tensor = tensor_return_value[0];
-    auto metadata_tensor = tensor_return_value[1];
+    auto output_tensor = tensor_return_value.at(0);
+    auto metadata_tensor = tensor_return_value.at(1);
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
 
@@ -406,15 +339,22 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         src_mesh_id,
         src_chip_id);
 
-    const auto [neighbors, directions] = detail::get_neighbors(mesh_view, mesh_coordinate, topology);
+    const auto [neighbors, directions] =
+        detail::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
 
     auto input_shape = input_tensor.get_tensor_spec().logical_shape();
     auto indices_shape = indices_tensor.get_tensor_spec().logical_shape();
     auto mapping_shape = mapping_tensor.get_tensor_spec().logical_shape();
 
     uint32_t num_devices = mesh_view.num_devices();
+    uint32_t dispatch_devices =
+        operation_attributes.axis.has_value()
+            ? operation_attributes.axis.value() == 0 ? mesh_view.num_rows() : mesh_view.num_cols()
+            : mesh_view.num_devices();
+
     uint32_t hidden_size = input_shape[-1];
-    uint32_t batch_size = input_shape[0] * num_devices;
+    uint32_t batch_size = input_shape[0] * dispatch_devices;
+
     uint32_t batches_per_device = input_shape[0];
     uint32_t selected_experts_k = indices_shape[-1];
     uint32_t experts = mapping_shape[-2];
@@ -508,7 +448,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             mapping_pages * aligned_mapping_page_size, {{mapping_tensor_cb_id, mapping_data_format}})
             .set_page_size(mapping_tensor_cb_id, aligned_mapping_page_size);
 
-    // Allocate space for the client interface
     static constexpr auto num_packet_headers_storable = 8;
     static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     tt::tt_metal::CircularBufferConfig packet_header_cb_config =
@@ -551,13 +490,12 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto send_preparation_buffer =
         tt::tt_metal::CreateCircularBuffer(program, sender_core, send_preparation_buffer_config);
 
-    std::vector<uint32_t> dest_mesh_id, dest_chip_id, route;
+    std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord : tensor_coords.coords()) {
         auto device = mesh_device->get_device(coord);
         auto fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(device->id());
         dest_mesh_id.push_back(*fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)fabric_node_id.chip_id);
-        route.push_back(detail::get_route(mesh_view, mesh_coordinate, coord, topology));
     }
     tt::log_info(tt::LogAlways, "dest_chip_id: {}", detail::stringify_vector(dest_chip_id));
     tt::log_info(tt::LogAlways, "dest_mesh_id: {}", detail::stringify_vector(dest_mesh_id));
@@ -565,6 +503,10 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     // TODO: add fabric node and mesh id to the compile time args
     // TODO: add an array mapping logical device id to physical device id
+
+    const auto& fabric_context = control_plane->get_fabric_context();
+    auto fabric_max_packet_size = fabric_context.get_fabric_max_payload_size_bytes();
+
     std::vector<uint32_t> reader_compile_time_args = {
         input_tensor.buffer()->is_dram(),
         indices_tensor.buffer()->is_dram(),
@@ -610,6 +552,8 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         aligned_mapping_page_size,
         aligned_output_page_size,
         aligned_metadata_page_size,
+
+        fabric_max_packet_size,
     };
 
     auto writer_compile_time_args = reader_compile_time_args;
@@ -629,8 +573,11 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     std::map<std::string, std::string> writer_defines = {
         {"DEST_CHIP_ID", detail::stringify_vector(dest_chip_id)},
         {"DEST_MESH_ID", detail::stringify_vector(dest_mesh_id)},
-        {"ROUTE", detail::stringify_vector(route)},
         {"DIRECTIONS", detail::stringify_array(directions)}};
+
+    if (operation_attributes.axis.has_value()) {
+        writer_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
+    }
 
     tt::tt_metal::KernelHandle binary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,

@@ -33,7 +33,6 @@ def gen_tokens(batch, hidden_size, mesh_shape, devices, scheme="random"):
         else:
             raise ValueError(f"Invalid scheme: {scheme}")
     res = torch.cat(per_batch_tokens, dim=0)
-    res = res.repeat(mesh_shape[0], 1, 1, 1)  # each token is duplicated across devices
     return res
 
 
@@ -49,15 +48,15 @@ def gen_expert_mapping(experts, devices, scheme="random"):
         else:
             raise ValueError(f"Invalid scheme: {scheme}")
 
-    res = expert_mapping.repeat(devices, 1, 1, 1)
-    return res
+    # identical across all devices
+    return expert_mapping
 
 
-def get_metadata_tensor(expert_indices, expert_mapping):
+def get_metadata_tensor(expert_indices, expert_mapping, mesh_shape):
     # metadata tensor is expert_indices duplicated for each device
     # [D, B, 1, K]
     batch = expert_indices.shape[0]
-    devices = expert_mapping.shape[0]
+    devices = mesh_shape[0] * mesh_shape[1]
     selected_experts_k = expert_indices.shape[3]
     metadata_tensor = expert_indices.repeat(devices, 1, 1, 1)
     return torch.reshape(metadata_tensor, (devices, batch, 1, selected_experts_k))
@@ -65,17 +64,16 @@ def get_metadata_tensor(expert_indices, expert_mapping):
 
 def get_expert_indices(batch, experts, selected_experts_k, mesh_shape, scheme="random"):
     expert_indices = torch.zeros(batch, 1, 1, selected_experts_k, dtype=torch.int16)
-    current_expert = 0
+    current_expert = max(0, experts - 1)
     for b in range(batch):
         for k in range(selected_experts_k):
             if scheme == "sequential":
                 expert_indices[b, 0, 0, k] = current_expert % experts
-                current_expert += 1
+                current_expert += 1 + (k % 2)
             elif scheme == "random":
                 expert_indices[b, 0, 0, k] = torch.randint(0, experts, (1,))
             else:
                 raise ValueError(f"Invalid scheme: {scheme}")
-    expert_indices = expert_indices.repeat(mesh_shape[0], 1, 1, 1)
     return expert_indices
 
 
@@ -83,32 +81,22 @@ def get_output_tensor(input_tokens, expert_indices, expert_mapping, mesh_shape):
     # output tensor is [devices, batch, 1, hidden_size]
     # depending on the expert indices, the input tokens are scattered to different experts
     # these experts are sent to one ore more device based on the expert mapping
-    batch_times_mesh0 = input_tokens.shape[0]
-    batch = batch_times_mesh0 // mesh_shape[0]
-    devices = expert_mapping.shape[3]
-    experts = expert_mapping.shape[2]
-    experts_per_mesh0 = experts // mesh_shape[0]
+    batch = input_tokens.shape[0]
+    mesh_columns = mesh_shape[1]
+    mesh_rows = mesh_shape[0]
+    devices = mesh_columns * mesh_rows
     hidden_size = input_tokens.shape[3]
-    output_tensor = torch.randn(devices, batch_times_mesh0, 1, hidden_size)
     selected_experts_k = expert_indices.shape[3]
 
-    for m0 in range(mesh_shape[0]):
-        first_expert_in_m0 = m0 * experts_per_mesh0
-        last_expert_in_m0 = first_expert_in_m0 + experts_per_mesh0
-        for b in range(batch):
-            for k in range(selected_experts_k):
-                # if k selects an expert in our m0, then we add it to the output tensor
-                # if k is not in our m0, then we skip it
-                if k < first_expert_in_m0 or k >= last_expert_in_m0:
-                    continue
-                expert_id = expert_indices[m0 * batch + b, 0, 0, k]
-                # Get which devices should handle this expert (shape: devices,)
-                device_assignment = expert_mapping[0, 0, expert_id, :]
-                # Find device indices that have value 1
-                device_indices = torch.where(device_assignment == 1)[0]
-                # Assign input tokens to those devices
-                for device_idx in device_indices:
-                    output_tensor[device_idx, m0 * batch + b, 0, :] = input_tokens[m0 * batch + b, 0, 0, :]
+    output_tensor = torch.zeros(devices, batch, 1, hidden_size)
+
+    for b in range(batch):
+        for k in range(selected_experts_k):
+            expert_id = expert_indices[b, 0, 0, k]
+            device_assignment = expert_mapping[0, 0, expert_id, :]
+            device_indices = torch.where(device_assignment == 1)[0]
+            for device_idx in device_indices:
+                output_tensor[device_idx, b, 0, :] = input_tokens[b, 0, 0, :]
 
     return output_tensor
 
@@ -125,7 +113,7 @@ def gen_tensors(batch, experts, selected_experts_k, hidden_size, mesh_shape, dev
     expert_indices = get_expert_indices(batch, experts, selected_experts_k, mesh_shape, scheme)
 
     output_tensor = get_output_tensor(input_tokens, expert_indices, expert_mapping, mesh_shape)
-    metadata_tensor = get_metadata_tensor(expert_indices, expert_mapping)
+    metadata_tensor = get_metadata_tensor(expert_indices, expert_mapping, mesh_shape)
 
     # create expert indices
     return input_tokens, expert_indices, expert_mapping, output_tensor, metadata_tensor
@@ -137,6 +125,7 @@ def compare_results(
     torch_sparse_output_token_tensor,
     torch_metadata_tensor,
     expert_mapping,
+    mesh_shape,
     expected_pcc=0.99999,
 ):
     # compare the output tensor from the tt_sparse_output_token_tensor and the output_tensor_golden
@@ -148,15 +137,16 @@ def compare_results(
     # since it's sparsely populated into a buffer full of garbage, we should only make sure each input token is present in the correct place in the output tensor
     # and that the metadata tensor is correct
 
-    batch = tt_sparse_output_token_tensor.shape[1]
+    batch = tt_metadata_tensor.shape[2]
     devices = tt_metadata_tensor.shape[0]
     selected_experts_k = tt_metadata_tensor.shape[3]
+    hidden_size = tt_sparse_output_token_tensor.shape[3]
 
     for b in range(batch):
         for k in range(selected_experts_k):
             expert_id = tt_metadata_tensor[0, b, 0, k]
             for d in range(devices):
-                if expert_mapping[d, 0, expert_id, d] == 1:
+                if expert_mapping[0, 0, expert_id, d] == 1:
                     comp_pcc(
                         tt_sparse_output_token_tensor[d, b, 0, :],
                         torch_sparse_output_token_tensor[d, b, 0, :],
@@ -210,7 +200,7 @@ def run_all_to_all_dispatch_test(
 
     for iter in range(num_iters):
         input_tokens, expert_indices, expert_mapping, sparse_output_token_tensor, metadata_tensor = gen_tensors(
-            batch, experts, select_experts_k, hidden_size, devices, scheme=scheme
+            batch, experts, select_experts_k, hidden_size, mesh_shape, devices, scheme=scheme
         )
         if iter == 0:
             logger.info(f"input_tokens shape: {input_tokens.shape}")
@@ -228,7 +218,7 @@ def run_all_to_all_dispatch_test(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=dtype,
             memory_config=input_memory_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=mesh_shape),
         )
 
         tt_expert_indices = ttnn.from_torch(
@@ -237,7 +227,7 @@ def run_all_to_all_dispatch_test(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint16,
             memory_config=input_memory_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
         )
 
         tt_expert_mapping = ttnn.from_torch(
@@ -246,7 +236,7 @@ def run_all_to_all_dispatch_test(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint16,
             memory_config=input_memory_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
         )
 
         if iter == 0:
@@ -285,6 +275,7 @@ def run_all_to_all_dispatch_test(
                 input_tensors[buffer_index],
                 expert_indices_tensors[buffer_index],
                 expert_mapping_tensors[buffer_index],
+                axis=1,
                 num_links=num_links,
                 topology=topology,
                 memory_config=output_memory_config,
@@ -362,16 +353,20 @@ def run_all_to_all_dispatch_test(
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
         )
 
+        logger.info(f"golden_output_tensor shape: {output_tensor_goldens_list[tensor_index].shape}")
+        logger.info(f"golden_output_tensor {output_tensor_goldens_list[tensor_index]}")
+        logger.info(f"tt_torch_tensor shape: {tt_torch_tensor.shape}")
+        logger.info(f"tt_torch_tensor {tt_torch_tensor}")
+
         tt_metadata_tensor = ttnn.to_torch(
             tt_metadata_list[tensor_index],
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
         )
 
-        logger.info(f"tt_output_tensor shape: {tt_torch_tensor.shape}")
-        logger.info(f"tt_metadata_tensor shape: {tt_metadata_tensor.shape}")
-
-        logger.info(f"golden_output_tensor shape: {output_tensor_goldens_list[tensor_index].shape}")
         logger.info(f"golden_metadata_tensor shape: {output_metadata_goldens_list[tensor_index].shape}")
+        logger.info(f"golden_metadata_tensor {output_metadata_goldens_list[tensor_index]}")
+        logger.info(f"tt_metadata_tensor shape: {tt_metadata_tensor.shape}")
+        logger.info(f"tt_metadata_tensor {tt_metadata_tensor}")
 
         batch = tt_torch_tensor.shape[1]
         devices = tt_metadata_tensor.shape[0]
@@ -440,7 +435,7 @@ def run_all_to_all_dispatch_test(
 )
 def test_all_to_all_dispatch_no_trace(mesh_device, trace_mode, mesh_shape):
     devices = mesh_shape[0] * mesh_shape[1]
-    batch = 2 * devices
+    batch = 8 * mesh_shape[1]
     experts = 8 * devices
     select_experts_k = 8
     hidden_size = 7000
@@ -448,7 +443,7 @@ def test_all_to_all_dispatch_no_trace(mesh_device, trace_mode, mesh_shape):
     warmup_iters = 0
     trace_mode = trace_mode
     input_memory_config = ttnn.DRAM_MEMORY_CONFIG
-    output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    output_memory_config = ttnn.L1_MEMORY_CONFIG
     num_links = 1
     topology = ttnn.Topology.Linear
 
@@ -476,24 +471,31 @@ def test_all_to_all_dispatch_no_trace(mesh_device, trace_mode, mesh_shape):
 def test_simple_tensor_gen(mesh_device, mesh_shape):
     torch.set_printoptions(threshold=10000)
     devices = mesh_shape[0] * mesh_shape[1]
-    batch = 2 * devices
+    sequence_length = 1
+    batch = 8 * mesh_shape[1]
     experts = 8 * devices
     select_experts_k = 8
     hidden_size = 7000
     input_tokens, expert_indices, expert_mapping, sparse_output_token_tensor, metadata_tensor = gen_tensors(
         batch, experts, select_experts_k, hidden_size, mesh_shape, devices, scheme="sequential"
     )
-    assert input_tokens.shape == (batch * mesh_shape[0], 1, 1, hidden_size)
-    assert expert_indices.shape == (batch * mesh_shape[0], 1, 1, select_experts_k)
-    assert expert_mapping.shape == (devices, 1, experts, devices)
-    assert sparse_output_token_tensor.shape == (devices, batch * mesh_shape[0], 1, hidden_size)
-    assert metadata_tensor.shape == (devices, batch * mesh_shape[0], 1, select_experts_k)
-    logger.info(f"Input tokens {input_tokens}")
+
+    assert input_tokens.shape == (batch, 1, 1, hidden_size)
+    assert expert_indices.shape == (batch, 1, 1, select_experts_k)
+    assert expert_mapping.shape == (1, 1, experts, devices)
+    assert sparse_output_token_tensor.shape == (devices, batch, 1, hidden_size)
+    assert metadata_tensor.shape == (devices, batch, 1, select_experts_k)
+    # logger.info(f"Input tokens {input_tokens}")
     logger.info(f"Expert indices {expert_indices}")
     logger.info(f"Expert mapping {expert_mapping}")
-    logger.info(f"Sparse output token tensor {sparse_output_token_tensor}")
-    logger.info(f"Metadata tensor {metadata_tensor}")
+    # logger.info(f"Sparse output token tensor {sparse_output_token_tensor}")
+    logger.info(f"Metadata tensor {metadata_tensor[0, :, :, :]}")
 
     compare_results(
-        sparse_output_token_tensor, metadata_tensor, sparse_output_token_tensor, metadata_tensor, expert_mapping
+        sparse_output_token_tensor,
+        metadata_tensor,
+        sparse_output_token_tensor,
+        metadata_tensor,
+        expert_mapping,
+        mesh_shape,
     )

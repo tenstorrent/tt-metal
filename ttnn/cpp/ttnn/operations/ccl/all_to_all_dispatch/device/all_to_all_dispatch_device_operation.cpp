@@ -34,24 +34,40 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
 
     auto mesh_device = input_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();
-    auto num_devices = mesh_view.num_devices();
 
-    uint32_t devices = num_devices;
+    // experts are expert parallel across devices
+    // tokens are data parallel across devices
+    // when axis is specified, we assume that tokens are only data parallel across the specified axis, and duplicated
+    // along the other axis the indices match the token tensor the mapping tensor maps the experts to where they are on
+    // the device mesh the mapping tensor is generally the same for all devices, except for the case where we have a
+    // shared expert in that case, we can hide the fact that the expert is also on the other devices by setting the
+    // mapping tensor to 0 for all other devices if axis is specified, we only route the tokens along the specified
+    // axis, and skip any experts that are not on the specified axis
+
+    uint32_t dispatch_devices = mesh_view.num_devices();
+    uint32_t tokens_per_device = input_shape[0];
     uint32_t hidden_size = input_shape[-1];
-    uint32_t batch_size = input_shape[0] * num_devices;
+    if (operation_attributes.axis.has_value()) {
+        uint32_t axis = operation_attributes.axis.value();
+        tt::log_info("axis: {}", axis);
+        dispatch_devices = axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
+    }
+
+    // final batch in the metadata tensor
+    uint32_t dispatched_tokens = tokens_per_device * dispatch_devices;
     uint32_t selected_experts_k = indices_shape[-1];
 
-    auto output_shape = ttnn::Shape({1, batch_size, 1, hidden_size});
-    auto metadata_shape = ttnn::Shape({1, batch_size, 1, selected_experts_k});
+    auto output_shape = ttnn::Shape({1, dispatched_tokens, 1, hidden_size});
+    auto metadata_shape = ttnn::Shape({1, dispatched_tokens, 1, selected_experts_k});
 
     tt::log_info("output_shape: {}", output_shape);
     tt::log_info("metadata_shape: {}", metadata_shape);
     tt::log_info("input_tensor_shape: {}", input_shape);
     tt::log_info("indices_shape: {}", indices_shape);
     tt::log_info("mapping_shape: {}", mapping_shape);
-    tt::log_info("devices: {}", devices);
+    tt::log_info("dispatch_devices: {}", dispatch_devices);
     tt::log_info("hidden_size: {}", hidden_size);
-    tt::log_info("batch_size: {}", batch_size);
+    tt::log_info("dispatched_tokens: {}", dispatched_tokens);
     tt::log_info("selected_experts_k: {}", selected_experts_k);
 
     auto mem_config = operation_attributes.output_mem_config;
@@ -81,6 +97,7 @@ AllToAllDispatchDeviceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
+    const std::optional<uint32_t> axis,
     const uint32_t num_links,
     const tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
@@ -90,6 +107,7 @@ AllToAllDispatchDeviceOperation::invoke(
         operation_attributes_t{
             .subdevice_id = std::move(subdevice_id),
             .output_mem_config = memory_config,
+            .axis = axis,
             .num_links = num_links,
             .topology = topology,
             .cross_device_semaphore = std::make_optional(global_semaphore)},

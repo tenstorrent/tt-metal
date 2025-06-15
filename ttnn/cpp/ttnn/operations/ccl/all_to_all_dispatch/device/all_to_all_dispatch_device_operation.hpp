@@ -23,6 +23,7 @@ struct AllToAllDispatchDeviceOperation {
     struct operation_attributes_t {
         const tt::tt_metal::SubDeviceId subdevice_id;
         const MemoryConfig output_mem_config;
+        const std::optional<uint32_t> axis;
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
         const std::optional<GlobalSemaphore> cross_device_semaphore;
@@ -89,6 +90,7 @@ struct AllToAllDispatchDeviceOperation {
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& expert_indices_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
+        const std::optional<uint32_t> axis,
         const uint32_t num_links,
         const tt::tt_fabric::Topology topology,
         const ttnn::MemoryConfig& memory_config,
