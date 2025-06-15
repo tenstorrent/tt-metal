@@ -1,7 +1,20 @@
 # Ultra-Fast-Lane-Detection-v2
 
 ### Platforms:
-    WH N300,N150
+
+Wormhole N150, N300
+
+**Note:** On N300, make sure to use `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` with the pytest.
+
+Or, make sure to set the following environment variable in the terminal:
+```
+export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+```
+
+To obtain the perf reports through profiler, please build with following command:
+```
+./build_metal.sh -p
+```
 
 ### Introduction
 
@@ -9,7 +22,7 @@ The Ultra-Fast-Lane-Detection-v2 is a PyTorch-based implementation designed for 
 
 Resource link - [source](https://github.com/cfzd/Ultra-Fast-Lane-Detection-v2)
 
-### Model Details
+### Details
 
 - The entry point to the UFLD_v2 is located at:`models/demos/ufld_v2/ttnn/ttnn_ufld_v2.py`
 - The model picks up trained weights from the **tusimple_res34.pth** file located at:`models/demos/ufld_v2/reference/tusimple_res34.pth`
@@ -17,16 +30,6 @@ Resource link - [source](https://github.com/cfzd/Ultra-Fast-Lane-Detection-v2)
 - Supported Input Resolution - (320,800) (Height,Width)
 
 ### How to Run:
-If running on Wormhole N300 (not required for N150 or Blackhole), the following environment variable needs to be set as the model requires at least 8x8 core grid size:
-```sh
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
-
-### Build Command to Use:
-To obtain the perf reports through profiler, please build with following command:
-```
-./build_metal.sh -p
-```
 
 Use the following command to run the model :
 
