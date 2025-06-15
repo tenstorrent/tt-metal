@@ -114,16 +114,23 @@ CompressedBufferPageMapping CompressedBufferPageMapping::filter_by_host_range(
             for (const auto& host_range : core_page_mapping.host_ranges) {
                 auto host_range_start = std::max(start_host_page, host_range.host_page_start);
                 auto host_range_end = std::min(end_host_page, host_range.host_page_start + host_range.num_pages);
-                if (host_range_start < host_range_end) {
-                    result_core_mapping.host_ranges.push_back({
-                        .device_page_offset =
-                            host_range.device_page_offset + host_range_start - host_range.host_page_start,
-                        .host_page_start = host_range_start - start_host_page,
-                        .num_pages = host_range_end - host_range_start,
-                    });
+
+                if (host_range_start != host_range.host_page_start) {
+                    add_core_mapping(core_id, core_page_mapping.start_page);
                 }
-                if (host_range_start != host_range.host_page_start ||
-                    host_range_end != host_range.host_page_start + host_range.num_pages) {
+
+                if (host_range_start >= host_range_end) {
+                    add_core_mapping(core_id, core_page_mapping.start_page);
+                    continue;
+                }
+
+                result_core_mapping.host_ranges.push_back({
+                    .device_page_offset = host_range.device_page_offset + host_range_start - host_range.host_page_start,
+                    .host_page_start = host_range_start - start_host_page,
+                    .num_pages = host_range_end - host_range_start,
+                });
+
+                if (host_range_end != host_range.host_page_start + host_range.num_pages) {
                     add_core_mapping(core_id, core_page_mapping.start_page);
                 }
             }
