@@ -13,32 +13,6 @@
 #include "debug/dprint_pages.h"
 #endif
 
-template <uint32_t cb_id, uint32_t clear_value_cb_id>
-FORCE_INLINE void clear_out_tiles() {
-    constexpr uint32_t tile_size = get_tile_size(cb_id);
-    const uint32_t num_pages = get_local_cb_interface(cb_id).fifo_num_pages;
-    const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_page_size / tile_size;
-    const uint64_t clear_value_addr = get_noc_addr(get_read_ptr(clear_value_cb_id));
-    uint64_t write_addr = get_noc_addr(get_write_ptr(cb_id));
-
-    for (uint32_t i = 0; i < num_tiles * num_pages; ++i) {
-        noc_async_read(clear_value_addr, write_addr, tile_size);
-        write_addr += tile_size;
-    }
-    noc_async_read_barrier();
-}
-
-template <uint32_t clear_value_cb_id, uint32_t num_tiles>
-FORCE_INLINE void clear_out_tiles(uint64_t write_addr, uint64_t clear_value_addr) {
-    constexpr uint32_t tile_size = get_tile_size(clear_value_cb_id);
-
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        noc_async_read(clear_value_addr, write_addr, tile_size);
-        write_addr += tile_size;
-    }
-    noc_async_write_barrier();
-}
-
 /**
  * Pool 2D (Max pool 2D and Avg pool 2D)
  */
