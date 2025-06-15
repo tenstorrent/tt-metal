@@ -31,4 +31,4 @@ jobs:
     secrets: inherit
     with:
       branch_name: ${{ github.head_ref }}
-      runs_on: p150
+      runs_on: tt-beta-ubuntu-2204-p150b-large-stable
