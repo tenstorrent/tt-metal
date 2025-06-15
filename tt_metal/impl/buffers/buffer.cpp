@@ -397,17 +397,16 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
         return shared_from_this();
     }
 
-    auto buffer = std::make_shared<Buffer>(
+    auto buffer = Buffer::create(
         device_,
+        address_,
         region.size,
         page_size_,
         buffer_type_,
         buffer_layout_,
         shard_parameters_,
         bottom_up_,
-        sub_device_id_,
-        false /* owns data */,
-        Private());
+        sub_device_id_);
 
     std::shared_ptr<const CompressedBufferPageMapping> new_page_mapping;
     if (is_sharded(buffer_layout_)) {
@@ -426,8 +425,6 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
         new_root_buffer_offset = region.offset;
     }
 
-    buffer->address_ = address_;
-    buffer->allocation_status_ = AllocationStatus::ALLOCATED;
     buffer->root_buffer_ = new_root_buffer;
     buffer->root_buffer_offset_ = new_root_buffer_offset;
     buffer->buffer_page_mapping_ = new_page_mapping;
