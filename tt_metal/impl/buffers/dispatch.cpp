@@ -437,17 +437,18 @@ void populate_sharded_buffer_write_dispatch_cmds(
     uint8_t* dst = command_sequence.reserve_space<uint8_t*, true>(data_size_bytes);
     // TODO: Expose getter for cmd_write_offsetB?
     uint32_t dst_offset = dst - (uint8_t*)command_sequence.data();
-    if (buffer.page_size() == buffer.aligned_page_size()) {
-        uint32_t end_device_page = dispatch_params.core_page_mapping_it.device_page() + dispatch_params.pages_per_txn;
+    if (buffer.page_size() == dispatch_params.page_size_to_write) {
+        uint32_t start_device_page = dispatch_params.core_page_mapping_it.device_page();
+        uint32_t end_device_page = start_device_page + dispatch_params.pages_per_txn;
         while (true) {
             auto range = dispatch_params.core_page_mapping_it.next_range(end_device_page);
             if (range.num_pages == 0) {
                 break;
             }
             command_sequence.update_cmd_sequence(
-                dst_offset + range.device_page_start * buffer.page_size(),
-                (char*)(src) + range.host_page_start * buffer.page_size(),
-                range.num_pages * buffer.page_size());
+                dst_offset + (range.device_page_start - start_device_page) * dispatch_params.page_size_to_write,
+                (char*)(src) + range.host_page_start * dispatch_params.page_size_to_write,
+                range.num_pages * dispatch_params.page_size_to_write);
         }
     } else {
         for (size_t i = 0; i < dispatch_params.pages_per_txn; i++) {
