@@ -1878,7 +1878,7 @@ void py_module(nb::module_& mod) {
         ttnn::logical_not,
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{!input\_tensor_i}})doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
     bind_unary_operation(
         mod,
         ttnn::ltz,
@@ -2198,7 +2198,7 @@ void py_module(nb::module_& mod) {
         ttnn::logical_not_,
         R"doc(Performs logical_not inplace function on :attr:`input_tensor`.)doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
     bind_unary_composite(
         mod,
         ttnn::normalize_global,
