@@ -56,9 +56,7 @@ def select_torch_dtype(ttnn_dtype):
         ##################
         # these cases fail due to the int32 transpose issue
         # ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
-        # ([10, 50, 10, 50, 100], 0, [10, 50, 10, 50, 100], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
         # ([10, 50, 10, 50, 100], 0, [10, 50, 10, 50, 100], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
-        # ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
         # ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
         ##################
         # these cases fail due to the to_layout precision issue (fp32 tiled <-> row-major) : #23405
