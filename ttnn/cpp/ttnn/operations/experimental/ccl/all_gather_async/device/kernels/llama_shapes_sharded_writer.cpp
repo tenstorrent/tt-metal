@@ -112,7 +112,7 @@ void kernel_main() {
                     get_noc_addr(core_noc_x[core_id + 1], core_noc_y[core_id + 1], tensor_address0, 0 /*noc_id*/);
             }
 
-            if (num_tiles_to_read_this_core > 0) {  // call the packet scatter writer function
+            if (num_tiles_to_read_next_core > 0) {  // call the packet scatter writer function
                 scatter_write_and_advance_local_read_address_for_fabric_write(
                     noc0_dest_noc_addr,
                     noc0_dest_noc_addr_next_core,
