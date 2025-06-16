@@ -165,6 +165,7 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
             latents = ttnn.to_torch(output).to(torch.float32)
             image = vae.decode(latents).sample
         ttnn.synchronize_device(device)
+        ttnn.release_trace(device, tid)
 
         image = (image / 2 + 0.5).clamp(0, 1)
         image = image.detach().cpu().float().permute(0, 2, 3, 1).numpy()

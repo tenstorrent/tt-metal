@@ -360,6 +360,7 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
             latents = ttnn.to_torch(output).to(torch.float32)
             image = vae.decode(latents).sample
         ttnn.synchronize_device(device)
+        ttnn.release_trace(device, tid)
 
         # Image post-processing
         image = (image / 2 + 0.5).clamp(0, 1)
@@ -509,6 +510,7 @@ def run_demo_inference_diffusiondb(
             latents = ttnn.to_torch(output).to(torch.float32)
             image = vae.decode(latents).sample
         ttnn.synchronize_device(device)
+        ttnn.release_trace(device, tid)
 
         # Image post-processing
         image = (image / 2 + 0.5).clamp(0, 1)

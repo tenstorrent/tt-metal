@@ -226,6 +226,7 @@ def test_stable_diffusion_vae_trace(device, use_program_cache):
     ttnn_out = ttnn.to_torch(ttnn_output)
     ttnn.synchronize_device(device)
     profiler.end(f"vae_run_for_inference_{0}")
+    ttnn.release_trace(device, tid)
 
     pcc = 0.985
     if is_blackhole():
@@ -379,6 +380,7 @@ def test_stable_diffusion_perf(
     image = ttnn.to_torch(output.cpu(blocking=True))
     ttnn.synchronize_device(device)
     profiler.end(f"trace_model_run_for_inference_{0}")
+    ttnn.release_trace(device, tid)
 
     profiler.start(f"postprocess_for_inference_{0}")
     # Image post-processing
