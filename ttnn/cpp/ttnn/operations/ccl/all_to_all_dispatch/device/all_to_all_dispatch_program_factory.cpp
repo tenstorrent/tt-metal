@@ -568,7 +568,10 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         program,
         "ttnn/cpp/ttnn/operations/ccl/all_to_all_dispatch/device/kernels/dataflow/reader_all_to_all_dispatch.cpp",
         sender_core,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::NOC_1,
+            .compile_args = reader_compile_time_args});
 
     std::map<std::string, std::string> writer_defines = {
         {"DEST_CHIP_ID", detail::stringify_vector(dest_chip_id)},
@@ -583,7 +586,11 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         program,
         "ttnn/cpp/ttnn/operations/ccl/all_to_all_dispatch/device/kernels/dataflow/writer_all_to_all_dispatch.cpp",
         sender_core,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::NOC_0,
+            .compile_args = writer_compile_time_args,
+            .defines = writer_defines});
 
     tt::log_info(tt::LogAlways, "metadata tensor address: {}", metadata_tensor.buffer()->address());
     std::vector<uint32_t> reader_runtime_args = {
@@ -607,21 +614,20 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     for (auto& neighbor : neighbors) {
         auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
         uint32_t link_id = detail::select_link(mesh_view, mesh_coordinate, neighbor_coordinate, num_links, topology);
-        // tt::log_info(
-        //     tt::LogAlways,
-        //     "Connection between ({}, {}) and ({}, {}) will choose link_id: {}",
-        //     mesh_coordinate[0],
-        //     mesh_coordinate[1],
-        //     neighbor_coordinate[0],
-        //     neighbor_coordinate[1],
-        //     link_id);
+        tt::log_info(
+            tt::LogAlways,
+            "Connection between ({}, {}) and ({}, {}) will choose link_id: {}",
+            mesh_coordinate[0],
+            mesh_coordinate[1],
+            neighbor_coordinate[0],
+            neighbor_coordinate[1],
+            link_id);
         tt::tt_fabric::append_fabric_connection_rt_args(
             src_physical_device_id, neighbor->id(), link_id, program, sender_core, writer_runtime_args);
     }
 
     tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, sender_cores.at(0), reader_runtime_args);
     tt::tt_metal::SetRuntimeArgs(program, binary_writer_kernel_id, sender_cores.at(0), writer_runtime_args);
-    std::cout << std::endl;
     return {
         std::move(program),
         {.ternary_reader_kernel_id = ternary_reader_kernel_id,
@@ -640,21 +646,24 @@ void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_a
         auto& binary_writer_kernel_id = shared_variables.binary_writer_kernel_id;
         auto& core = shared_variables.core;
 
+        auto output_tensor = tensor_return_value.at(0);
+        auto metadata_tensor = tensor_return_value.at(1);
+
         auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);
         auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, binary_writer_kernel_id, core);
-        reader_runtime_args[0] = tensor_args.input_tensor.buffer()->address();
-        reader_runtime_args[1] = tensor_args.expert_indices_tensor.buffer()->address();
-        reader_runtime_args[2] = tensor_args.expert_mapping_tensor.buffer()->address();
-        reader_runtime_args[3] = tensor_return_value[0].buffer()->address();
-        reader_runtime_args[4] = tensor_return_value[1].buffer()->address();
-        reader_runtime_args[5] = (uint32_t)operation_attributes.cross_device_semaphore->address();
+        reader_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
+        reader_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
+        reader_runtime_args.at(2) = tensor_args.expert_mapping_tensor.buffer()->address();
+        reader_runtime_args.at(3) = output_tensor.buffer()->address();
+        reader_runtime_args.at(4) = metadata_tensor.buffer()->address();
+        reader_runtime_args.at(5) = (uint32_t)operation_attributes.cross_device_semaphore->address();
 
-        writer_runtime_args[0] = tensor_args.input_tensor.buffer()->address();
-        writer_runtime_args[1] = tensor_args.expert_indices_tensor.buffer()->address();
-        writer_runtime_args[2] = tensor_args.expert_mapping_tensor.buffer()->address();
-        writer_runtime_args[3] = tensor_return_value[0].buffer()->address();
-        writer_runtime_args[4] = tensor_return_value[1].buffer()->address();
-        writer_runtime_args[5] = (uint32_t)operation_attributes.cross_device_semaphore->address();
+        writer_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
+        writer_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
+        writer_runtime_args.at(2) = tensor_args.expert_mapping_tensor.buffer()->address();
+        writer_runtime_args.at(3) = output_tensor.buffer()->address();
+        writer_runtime_args.at(4) = metadata_tensor.buffer()->address();
+        writer_runtime_args.at(5) = (uint32_t)operation_attributes.cross_device_semaphore->address();
     }
 }
 

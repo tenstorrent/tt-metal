@@ -4,11 +4,9 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
-    DPRINT << "KERNEL START" << ENDL();
+    DPRINT << "Kernel started" << ENDL();
     constexpr bool input_is_dram = (bool)get_compile_time_arg_val(0);
     constexpr bool indices_is_dram = (bool)get_compile_time_arg_val(1);
     constexpr bool mapping_is_dram = (bool)get_compile_time_arg_val(2);
@@ -67,6 +65,7 @@ void kernel_main() {
         cb_reserve_back(indices_tensor_cb_id, 1);
         uint32_t l1_write_addr = get_write_ptr(indices_tensor_cb_id);
         noc_async_read_page(i, indices_addr_gen, l1_write_addr);
+        noc_async_read_barrier();
         cb_push_back(indices_tensor_cb_id, 1);
     }
 
@@ -74,6 +73,7 @@ void kernel_main() {
         cb_reserve_back(mapping_tensor_cb_id, 1);
         uint32_t l1_write_addr = get_write_ptr(mapping_tensor_cb_id);
         noc_async_read_page(i, mapping_addr_gen, l1_write_addr);
+        noc_async_read_barrier();
         cb_push_back(mapping_tensor_cb_id, 1);
     }
 
@@ -81,15 +81,13 @@ void kernel_main() {
         cb_reserve_back(input_tensor_cb_id, 1);
         uint32_t l1_write_addr = get_write_ptr(input_tensor_cb_id);
         noc_async_read_page(i, input_addr_gen, l1_write_addr);
+        noc_async_read_barrier();
         cb_push_back(input_tensor_cb_id, 1);
     }
 
-    noc_async_read_barrier();
-    DPRINT << "SUCCESSFULLY READ IN ALL TENSORS" << ENDL();
-
-    DPRINT << "WAITING FOR SEMAPHORE" << ENDL();
     noc_semaphore_wait((uint32_t*)global_semaphore_address, batch_size);
-    DPRINT << "SEMAPHORE WAIT COMPLETE" << ENDL();
     noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
-    DPRINT << "KERNEL END" << ENDL();
+    // wait(30000000000);
+
+    DPRINT << "Kernel finished" << ENDL();
 }

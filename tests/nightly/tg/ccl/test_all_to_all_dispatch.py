@@ -32,6 +32,17 @@ def tt_to_torch_dtype(tt_dtype):
         raise ValueError(f"Invalid dtype: {tt_dtype}")
 
 
+def get_pcc_threshold(dtype):
+    if dtype == ttnn.bfloat16:
+        return 1.0
+    elif dtype == ttnn.bfloat8_b:
+        return 0.9999
+    elif dtype == ttnn.float32:
+        return 1.0
+    else:
+        raise ValueError(f"Invalid dtype: {dtype}")
+
+
 def gen_tokens(batch, hidden_size, mesh_shape, devices, scheme="random", dtype=torch.bfloat16):
     per_batch_tokens = []
     factor = 0
@@ -363,10 +374,14 @@ def run_all_to_all_dispatch_test(
     passed = True
     metadata_passed = True
     first_failed_tensor_index = None
+    first_failed_batch_index = None
+    first_failed_expert_index = None
+    first_failed_device_index = None
+
     first_failed_metadata_index = None
     failed_indices = []
     failed_metadata_indices = []
-    expected_pcc = 0.9999 if dtype == ttnn.bfloat8_b else 0.999990
+    expected_pcc = get_pcc_threshold(dtype)
 
     for tensor_index in range(len(tt_out_tensor_list)):
         tt_torch_tensor = ttnn.to_torch(
@@ -374,10 +389,10 @@ def run_all_to_all_dispatch_test(
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
         )
 
-        # logger.info(f"golden_output_tensor shape: {output_tensor_goldens_list[tensor_index].shape}")
-        # logger.info(f"golden_output_tensor {output_tensor_goldens_list[tensor_index]}")
-        # logger.info(f"tt_torch_tensor shape: {tt_torch_tensor.shape}")
-        # logger.info(f"tt_torch_tensor {tt_torch_tensor}")
+        logger.info(f"golden_output_tensor shape: {output_tensor_goldens_list[tensor_index].shape}")
+        logger.info(f"golden_output_tensor {output_tensor_goldens_list[tensor_index]}")
+        logger.info(f"tt_torch_tensor shape: {tt_torch_tensor.shape}")
+        logger.info(f"tt_torch_tensor {tt_torch_tensor}")
 
         tt_metadata_tensor = ttnn.to_torch(
             tt_metadata_list[tensor_index],
@@ -404,7 +419,7 @@ def run_all_to_all_dispatch_test(
             for k in range(selected_experts_k):
                 expert_id = tt_metadata_tensor[0, b, 0, k]
                 for d in range(devices):
-                    if expert_mapping[d, 0, expert_id, d] == 1:
+                    if expert_mapping[0, 0, expert_id, d] == 1:
                         eq, output_results = comp_pcc(
                             tt_torch_tensor[d, b, 0, :],
                             output_tensor_goldens_list[tensor_index][d, b, 0, :],
@@ -422,9 +437,13 @@ def run_all_to_all_dispatch_test(
                         if not eq or not is_all_close:
                             passed = False
                             first_failed_tensor_index = tensor_index
+                            first_failed_batch_index = b
                             failed_indices = torch.where(
-                                tt_torch_tensor[d, b, 0, :] != output_tensor_goldens_list[tensor_index][d, b, 0, :]
+                                tt_torch_tensor[d, b, 0, :] - output_tensor_goldens_list[tensor_index][d, b, 0, :]
+                                > 1e-2
                             )
+                            first_failed_expert_index = expert_id
+                            first_failed_device_index = d
                             break
                 if not passed:
                     break
@@ -442,7 +461,9 @@ def run_all_to_all_dispatch_test(
 
     if not passed:
         logger.info(f"Failed data indices: {failed_indices}")
-        assert passed, f"{first_failed_tensor_index} FAILED data indices: {output_results}"
+        assert (
+            passed
+        ), f"First failing index: {first_failed_tensor_index} batch {first_failed_batch_index} expert {first_failed_expert_index} device {first_failed_device_index} FAILED data indices: {failed_indices}"
 
 
 @pytest.mark.parametrize(
@@ -464,7 +485,7 @@ def test_all_to_all_dispatch_no_trace(mesh_device, trace_mode, mesh_shape):
     warmup_iters = 0
     trace_mode = trace_mode
     input_memory_config = ttnn.DRAM_MEMORY_CONFIG
-    output_memory_config = ttnn.L1_MEMORY_CONFIG
+    output_memory_config = ttnn.DRAM_MEMORY_CONFIG
     num_links = 1
     topology = ttnn.Topology.Linear
     dtype = ttnn.bfloat16
@@ -480,7 +501,7 @@ def test_all_to_all_dispatch_no_trace(mesh_device, trace_mode, mesh_shape):
         warmup_iters,
         trace_mode,
         num_links=num_links,
-        scheme="sequential",
+        scheme="random",
         topology=topology,
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
@@ -501,7 +522,14 @@ def test_simple_tensor_gen(mesh_device, mesh_shape):
     hidden_size = 7000
     dtype = ttnn.bfloat16
     input_tokens, expert_indices, expert_mapping, sparse_output_token_tensor, metadata_tensor = gen_tensors(
-        batch, experts, select_experts_k, hidden_size, mesh_shape, devices, scheme="sequential", dtype=dtype
+        batch,
+        experts,
+        select_experts_k,
+        hidden_size,
+        mesh_shape,
+        devices,
+        scheme="sequential",
+        dtype=tt_to_torch_dtype(dtype),
     )
 
     assert input_tokens.shape == (batch, 1, 1, hidden_size)
