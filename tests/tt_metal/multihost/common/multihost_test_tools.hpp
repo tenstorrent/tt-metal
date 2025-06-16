@@ -96,8 +96,6 @@ inline void barrier(const ContextPtr& ctx) { ctx->barrier(); }
 // ----------------------------------------------------------------------
 inline int multihost_main(int argc, char** argv) {
     tt::tt_metal::distributed::multihost::DistributedContext::create(argc, argv);
-    using Rank = tt::tt_metal::distributed::multihost::Rank;
-    using Tag = tt::tt_metal::distributed::multihost::Tag;
 
     ::testing::InitGoogleTest(&argc, argv);
 
