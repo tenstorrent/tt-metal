@@ -9,6 +9,7 @@
 // Because we are a Friend of Program, accessing Program::get_program_transfer_info() and Program::get_kernels_buffer()
 // MUST REMOVE
 #include <tt-metalium/program.hpp>
+#include "sub_device_types.hpp"
 #include "trace/trace_buffer.hpp"
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -463,12 +464,10 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     // Snapshot of expected workers from previous programs, used for dispatch_wait cmd generation.
     uint32_t expected_workers_completed = this->expected_num_workers_completed_[sub_device_index];
     if (program.runs_on_noc_multicast_only_cores()) {
-        this->expected_num_workers_completed_[sub_device_index] +=
-            device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+        this->expected_num_workers_completed_[sub_device_index] += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
     }
     if (program.runs_on_noc_unicast_only_cores()) {
-        this->expected_num_workers_completed_[sub_device_index] +=
-            device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+        this->expected_num_workers_completed_[sub_device_index] += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
     }
 
     auto& worker_launch_message_buffer_state =
@@ -762,10 +761,10 @@ void HWCommandQueue::allocate_trace_programs() {
         auto sub_device_index = *sub_device_id;
         uint32_t num_workers = 0;
         if (program.runs_on_noc_multicast_only_cores()) {
-            num_workers += device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+            num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
         }
         if (program.runs_on_noc_unicast_only_cores()) {
-            num_workers += device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+            num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
         }
         program_dispatch::ProgramDispatchMetadata dispatch_metadata;
         // Reserve space for this program in the kernel config ring buffer
@@ -805,11 +804,12 @@ void HWCommandQueue::record_end() {
         uint32_t num_workers = 0;
         if (program.runs_on_noc_multicast_only_cores()) {
             this->trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_multicast++;
-            num_workers += device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+            num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
+
         }
         if (program.runs_on_noc_unicast_only_cores()) {
             this->trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_unicast++;
-            num_workers += device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+            num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
         }
         this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores += num_workers;
 
