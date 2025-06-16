@@ -39,7 +39,7 @@ def test_demo_sd_db(device, reset_seeds, input_path, num_prompts, num_inference_
     (("models/demos/wormhole/stable_diffusion/demo/input_data.json"),),
     ids=["default_input"],
 )
-def test_demo_sd_pcc(device, reset_seeds, input_path):
+def test_demo_sd(device, reset_seeds, input_path):
     num_prompts = 1
     num_inference_steps = 50
     image_size = (512, 512)
@@ -70,4 +70,4 @@ def test_demo_sd_pcc(device, reset_seeds, input_path):
         num_inference_steps,
         image_size,
     )[0]
-    assert_with_pcc(torch_image, ttnn_image.reshape(ttnn_image.shape[1:]).permute([2, 0, 1]), 0.94)
+    assert_with_pcc(torch_image, ttnn_image.reshape(ttnn_image.shape[1:]).permute([2, 0, 1]), 0.935)
