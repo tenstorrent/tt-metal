@@ -438,15 +438,15 @@ void populate_sharded_buffer_write_dispatch_cmds(
     // TODO: Expose getter for cmd_write_offsetB?
     uint32_t dst_offset = dst - (uint8_t*)command_sequence.data();
     if (buffer.page_size() == dispatch_params.page_size_to_write) {
-        uint32_t start_device_page = dispatch_params.core_page_mapping_it.device_page();
-        uint32_t end_device_page = start_device_page + dispatch_params.pages_per_txn;
+        uint32_t start_device_page_offset = dispatch_params.core_page_mapping_it.device_page_offset();
+        uint32_t end_device_page_offset = start_device_page_offset + dispatch_params.pages_per_txn;
         while (true) {
-            auto range = dispatch_params.core_page_mapping_it.next_range(end_device_page);
+            auto range = dispatch_params.core_page_mapping_it.next_range(end_device_page_offset);
             if (range.num_pages == 0) {
                 break;
             }
             command_sequence.update_cmd_sequence(
-                dst_offset + (range.device_page_start - start_device_page) * dispatch_params.page_size_to_write,
+                dst_offset + (range.device_page_offset - start_device_page_offset) * dispatch_params.page_size_to_write,
                 (char*)(src) + range.host_page_start * dispatch_params.page_size_to_write,
                 range.num_pages * dispatch_params.page_size_to_write);
         }
@@ -562,7 +562,7 @@ void write_sharded_buffer_to_core(
     uint32_t num_pages = core_page_mapping.num_pages;
 
     uint32_t bank_base_address = buffer.address();
-    bank_base_address += core_page_mapping.start_page * buffer.aligned_page_size();
+    bank_base_address += core_page_mapping.device_start_page * buffer.aligned_page_size();
     if (buffer.is_dram()) {
         bank_base_address += buffer.device()->allocator()->get_bank_offset(
             BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
@@ -793,7 +793,7 @@ void copy_sharded_buffer_from_core_to_completion_queue(
         address += buffer.device()->allocator()->get_bank_offset(
             BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
     }
-    address += core_page_mapping.start_page * buffer.aligned_page_size();
+    address += core_page_mapping.device_start_page * buffer.aligned_page_size();
 
     dispatch_params.pages_per_txn = core_page_mapping.num_pages;
     dispatch_params.total_pages_to_read -= dispatch_params.pages_per_txn;

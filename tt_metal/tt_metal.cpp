@@ -475,7 +475,7 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
             for (const auto& host_range : core_mapping.host_ranges) {
                 for (uint32_t page_idx = 0; page_idx < host_range.num_pages; page_idx++) {
                     auto host_page_id = host_range.host_page_start + page_idx;
-                    auto core_page_id = core_mapping.start_page + host_range.device_page_offset + page_idx;
+                    auto core_page_id = core_mapping.device_start_page + host_range.device_page_offset + page_idx;
                     auto data_index = host_page_id * page_size;
                     std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
                     if (buffer.is_l1()) {
@@ -645,7 +645,7 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer) {
             for (const auto& host_range : core_mapping.host_ranges) {
                 for (uint32_t page_idx = 0; page_idx < host_range.num_pages; page_idx++) {
                     auto host_page_id = host_range.host_page_start + page_idx;
-                    auto core_page_id = core_mapping.start_page + host_range.device_page_offset + page_idx;
+                    auto core_page_id = core_mapping.device_start_page + host_range.device_page_offset + page_idx;
                     read_pages_to_host_helper(
                         device, buffer, host_buffer, page_size, host_page_id, core_page_id, bank_id);
                 }
@@ -711,7 +711,7 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
         for (const auto& host_range : core_mapping.host_ranges) {
             for (uint32_t page_idx = 0; page_idx < host_range.num_pages; page_idx++) {
                 auto host_page_id = host_range.host_page_start - shard_offset + page_idx;
-                auto core_page_id = core_mapping.start_page + host_range.device_page_offset + page_idx;
+                auto core_page_id = core_mapping.device_start_page + host_range.device_page_offset + page_idx;
                 read_pages_to_host_helper(
                     device, buffer, host_buffer, buffer.page_size(), host_page_id, core_page_id, bank_id);
             }

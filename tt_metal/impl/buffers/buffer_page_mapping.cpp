@@ -71,7 +71,7 @@ CompressedBufferPageMapping::CompressedBufferPageMapping(const BufferPageMapping
             continue;
         }
         core_page_mapping.push_back(BufferCorePageMapping{
-            .start_page = 0,
+            .device_start_page = 0,
             .num_pages = static_cast<uint32_t>(core_host_page_indices.size()),
             .host_ranges = std::move(host_ranges),
         });
@@ -87,7 +87,7 @@ CompressedBufferPageMapping CompressedBufferPageMapping::filter_by_host_range(
 
     BufferCorePageMapping result_core_mapping;
 
-    auto add_core_mapping = [&](size_t core_id, uint32_t original_start_page) {
+    auto add_core_mapping = [&](size_t core_id, uint32_t original_device_start_page) {
         if (result_core_mapping.host_ranges.empty()) {
             return;
         }
@@ -99,7 +99,7 @@ CompressedBufferPageMapping CompressedBufferPageMapping::filter_by_host_range(
             max_device_page_offset =
                 std::max(max_device_page_offset, host_range.device_page_offset + host_range.num_pages);
         }
-        result_core_mapping.start_page = original_start_page + min_device_page_offset;
+        result_core_mapping.device_start_page = original_device_start_page + min_device_page_offset;
         result_core_mapping.num_pages = max_device_page_offset - min_device_page_offset;
         for (auto& host_range : result_core_mapping.host_ranges) {
             host_range.device_page_offset -= min_device_page_offset;
@@ -116,11 +116,11 @@ CompressedBufferPageMapping CompressedBufferPageMapping::filter_by_host_range(
                 auto host_range_end = std::min(end_host_page, host_range.host_page_start + host_range.num_pages);
 
                 if (host_range_start != host_range.host_page_start) {
-                    add_core_mapping(core_id, core_page_mapping.start_page);
+                    add_core_mapping(core_id, core_page_mapping.device_start_page);
                 }
 
                 if (host_range_start >= host_range_end) {
-                    add_core_mapping(core_id, core_page_mapping.start_page);
+                    add_core_mapping(core_id, core_page_mapping.device_start_page);
                     continue;
                 }
 
@@ -131,10 +131,10 @@ CompressedBufferPageMapping CompressedBufferPageMapping::filter_by_host_range(
                 });
 
                 if (host_range_end != host_range.host_page_start + host_range.num_pages) {
-                    add_core_mapping(core_id, core_page_mapping.start_page);
+                    add_core_mapping(core_id, core_page_mapping.device_start_page);
                 }
             }
-            add_core_mapping(core_id, core_page_mapping.start_page);
+            add_core_mapping(core_id, core_page_mapping.device_start_page);
         }
     }
 

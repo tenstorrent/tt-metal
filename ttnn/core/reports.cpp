@@ -75,7 +75,7 @@ std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed:
                     uint32_t bank_num_pages = 0;
                     for (const auto& core_page_mapping : buffer_page_mapping.core_page_mappings[core_index]) {
                         bank_num_pages =
-                            std::max(bank_num_pages, core_page_mapping.start_page + core_page_mapping.num_pages);
+                            std::max(bank_num_pages, core_page_mapping.device_start_page + core_page_mapping.num_pages);
                     }
                     bank_to_num_pages[bank_id] = bank_num_pages;
                 }
@@ -142,7 +142,7 @@ std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::dis
                             for (uint32_t page_idx = 0; page_idx < host_range.num_pages; page_idx++) {
                                 uint32_t host_page = host_range.host_page_start + page_idx;
                                 uint32_t device_page =
-                                    core_page_mapping.start_page + host_range.device_page_offset + page_idx;
+                                    core_page_mapping.device_start_page + host_range.device_page_offset + page_idx;
                                 auto page_address = buffer->address() + device_page * buffer->aligned_page_size();
                                 buffer_page_infos.push_back(BufferPageInfo{
                                     .device_id = device_id,
