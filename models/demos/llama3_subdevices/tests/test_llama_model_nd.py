@@ -40,7 +40,9 @@ is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 )
 @pytest.mark.parametrize(
     "sampling_params",
-    [{"top_k": 1, "top_p": 0.00, "seed": 42}],
+    [
+        {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},
+    ],
 )
 @pytest.mark.parametrize(
     "page_params",
