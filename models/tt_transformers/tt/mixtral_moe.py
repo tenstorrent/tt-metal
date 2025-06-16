@@ -150,14 +150,17 @@ class TtMoeLayer(LightweightModule):
             )
 
         def replicate_to_shard(tensor):
-            dt = ttnn.get_device_tensors(tensor)
-            num_devices = len(dt)
-            size_per_device = dt[0].shape[-1] // num_devices
-            for i in range(num_devices):
-                dt[i] = dt[i][:, :, :, i * size_per_device : (i + 1) * size_per_device]
-            dt3 = ttnn.aggregate_as_tensor(dt)
-            return dt3
+            # dt = ttnn.get_device_tensors(tensor)
+            # dt = [tensor.cpu() for tensor in dt]
+            # num_devices = len(dt)
+            # size_per_device = dt[0].shape[-1] // num_devices
+            # for i in range(num_devices):
+            #     dt[i] = dt[i][:, :, :, i * size_per_device : (i + 1) * size_per_device]
+            # dt3 = ttnn.aggregate_as_tensor(dt)
+            # return dt3
+            return ttnn.aggregate_as_tensor(ttnn.get_device_tensors(tensor))
 
         output_11BH_sharded = replicate_to_shard(output_11BH_reduced)
+        # output_11BH_sharded = ttnn.ReplicateTensorToMesh(output_11BH_reduced)
 
         return output_11BH_sharded
