@@ -1030,23 +1030,6 @@ def test_demo_text(
             "TG_Llama3.1-70B": 19,  # FIXME: not in Github Action results
             "TG_Mistral-7B": 45,  # FIXME: not in Github Action results
         }
-        ci_target_decode_tok_s = {
-            # N150 targets
-            "N150_Llama3.2-1B": 1728,
-            "N150_Llama3.2-3B": 1060,
-            "N150_Llama3.1-8B": 670,
-            "N150_Mistral-7B": 770,
-            "N150_Falcon7B": 581,
-            "N150_Mamba-2.8B": 354,
-            # N300 targets
-            "N300_Qwen2.5-7B": 657,
-            # T3K targets
-            "T3K_Llama3.1-70B": 485,
-            "T3K_Falcon7B": 3891,
-            "T3K_Mixtral7Bx8": 418,
-            "T3K_Qwen2.5-72B": 443,
-            "T3K_Qwen3-32B": 653,
-        }
 
         # Only call verify_perf if the model_device_key exists in the targets
         ci_targets = {}
@@ -1054,11 +1037,8 @@ def test_demo_text(
             ci_targets["prefill_time_to_token"] = ci_target_ttft[model_device_key]
         if model_device_key in ci_target_decode_tok_s_u:
             ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
-            # Use real measured data when available, otherwise calculate from per-user rate
-            if model_device_key in ci_target_decode_tok_s:
-                ci_targets["decode_t/s"] = ci_target_decode_tok_s[model_device_key]
-            else:
-                ci_targets["decode_t/s"] = ci_target_decode_tok_s_u[model_device_key] * global_batch_size
+            # calculate from per-user rate
+            ci_targets["decode_t/s"] = ci_target_decode_tok_s_u[model_device_key] * global_batch_size
 
         if ci_targets:  # Only verify performance if we have targets for this model/device combination
             verify_perf(
