@@ -56,11 +56,19 @@ void kernel_main() {
     size_t batch_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     uint32_t link = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
-    size_t fwd_bwd_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t fwd_bwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     uint32_t opposite_core_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t opposite_core_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
+
+    DPRINT << (is_forward ? "FWD" : "BWD") << " WRITER: Starting\n";
+    DPRINT << "out_ready_sem: " << (uint32_t)out_ready_sem
+           << ", final_reduction_slot_sem: " << (uint32_t)final_reduction_slot_sem
+           << ", batch_ready_sem: " << (uint32_t)batch_ready_sem << "\n";
+    DPRINT << "fwd_bwd_sem_addr: " << (uint32_t)fwd_bwd_sem_addr
+           << ", opposite_core_sem_noc0_x: " << opposite_core_sem_noc0_x
+           << ", opposite_core_sem_noc0_y: " << opposite_core_sem_noc0_y << "\n";
 
     // DPRINT << "my_chip_id: " << my_chip_id << "\n";
     // DPRINT << "tile_granularity: " << tile_granularity << "\n";
@@ -105,15 +113,17 @@ void kernel_main() {
         fabric_connection.open();
     }
 
-    auto& dir_fabric_connection =
-        is_forward ? fabric_connection.get_forward_connection() : fabric_connection.get_backward_connection();
+    auto* dir_fabric_connection =
+        fabric_connection.is_logically_connected()
+            ? (is_forward ? &fabric_connection.get_forward_connection() : &fabric_connection.get_backward_connection())
+            : nullptr;  // Null connection if not connected
 
     for (uint32_t b = 0; b < num_batches; b++) {
         int slice_idx = is_forward ? ring_size - 1 : 0;
 
         uint32_t batch_slice_offset = batch_slice_num_pages * b;
         for (uint32_t iter = 0; iter < num_targets_in_direction; ++iter) {
-            DPRINT << (is_forward ? "FWD" : "BWD") << " WRITER: iter: " << iter << "\n";
+            // DPRINT << (is_forward ? "FWD" : "BWD") << " WRITER: iter: " << iter << "\n";
             // Last send is special for backwards - send to different slice idx to avoid overlap
             if constexpr (!is_forward) {
                 if (iter == num_targets_in_direction - 1) {
@@ -128,6 +138,8 @@ void kernel_main() {
                     } else {
                         slice_idx = 0;
                     }
+                    DPRINT << (is_forward ? "FWD" : "BWD")
+                           << " WRITER: got final_reduction_slot_sem signal, slice_idx: " << slice_idx << "\n";
                 }
             }
 
@@ -144,7 +156,9 @@ void kernel_main() {
             // Write to remote intermediate buffer
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
-                cb_wait_front(cb_output_id, num_pages_to_read);  // Footgun: num_pages_to_read must divide CB num_pages
+                // DPRINT << (is_forward ? "FWD" : "BWD") << " WRITER: num_pages_to_read: " << num_pages_to_read <<
+                // "\n";
+                cb_wait_front(cb_output_id, tile_granularity);  // Footgun: num_pages_to_read must divide CB num_pages
                 size_t l1_read_addr = get_read_ptr(cb_output_id);
 
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
@@ -158,10 +172,10 @@ void kernel_main() {
                         0 /*noc_id*/);
                     pkt_hdr->to_noc_unicast_write(
                         tt::tt_fabric::NocUnicastCommandHeader{remote_noc0_dest_noc_addr}, payload_size_bytes);
-                    dir_fabric_connection.wait_for_empty_write_slot();
-                    dir_fabric_connection.send_payload_without_header_non_blocking_from_address(
+                    dir_fabric_connection->wait_for_empty_write_slot();
+                    dir_fabric_connection->send_payload_without_header_non_blocking_from_address(
                         l1_read_addr, payload_size_bytes);
-                    dir_fabric_connection.send_payload_flush_non_blocking_from_address(
+                    dir_fabric_connection->send_payload_flush_non_blocking_from_address(
                         (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
 
                     // Note: Must flush write for correctness
@@ -176,7 +190,7 @@ void kernel_main() {
                     }
                 }
 
-                cb_pop_front(cb_output_id, num_pages_to_read);
+                cb_pop_front(cb_output_id, tile_granularity);
             }
 
             // 2. unicast output ready semaphore
@@ -188,8 +202,8 @@ void kernel_main() {
                 32});
             pkt_hdr_seminc->to_chip_unicast(1);
 
-            dir_fabric_connection.wait_for_empty_write_slot();
-            dir_fabric_connection.send_payload_flush_blocking_from_address(
+            dir_fabric_connection->wait_for_empty_write_slot();
+            dir_fabric_connection->send_payload_flush_blocking_from_address(
                 packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
             noc_async_writes_flushed();
 
@@ -205,11 +219,18 @@ void kernel_main() {
                         static_cast<uint16_t>(1),  // increment 1
                         32});
 
-                    dir_fabric_connection.wait_for_empty_write_slot();
-                    dir_fabric_connection.send_payload_flush_blocking_from_address(
+                    dir_fabric_connection->wait_for_empty_write_slot();
+                    dir_fabric_connection->send_payload_flush_blocking_from_address(
                         packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
                     noc_async_writes_flushed();
                 }
+            }
+
+            // Next slice idx
+            if constexpr (is_forward) {
+                slice_idx--;
+            } else {
+                slice_idx++;
             }
         }
 
@@ -223,23 +244,26 @@ void kernel_main() {
 
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
-                cb_wait_front(cb_compute_output_id, num_pages_to_read);
+                cb_wait_front(cb_compute_output_id, tile_granularity);
                 size_t l1_read_addr = get_read_ptr(cb_compute_output_id);
 
                 for (uint32_t j = 0; j < num_pages_to_read; j++) {
+                    // if constexpr (!is_forward) { // DEBUG: only write to output if BWD
                     noc_async_write_tile(tile_id_start + tiles_read, output_addrgen, l1_read_addr);
+                    // }
                     l1_read_addr += intermediate_page_size;
                     tiles_read++;
                 }
 
                 noc_async_writes_flushed();
-                cb_pop_front(cb_compute_output_id, num_pages_to_read);
+                cb_pop_front(cb_compute_output_id, tile_granularity);
             }
 
             noc_async_write_barrier();
             if constexpr (sync_with_other_direction && is_forward) {
                 // Tell local backwards reader that it can proceed
                 // TODO: This must be noc transaction since FWD/BWD are separate cores
+                DPRINT << (is_forward ? "FWD" : "BWD") << " WRITER: send signal to local BWD\n";
                 uint64_t fwd_bwd_sem_noc_addr =
                     safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, fwd_bwd_sem_addr, 0);
                 noc_semaphore_inc(fwd_bwd_sem_noc_addr, 1);
@@ -264,20 +288,22 @@ void kernel_main() {
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem) = 0;
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(final_reduction_slot_sem) = 0;
 
-        // mcast batch_ready_sem to opposite core in my direction
-        uint64_t batch_ready_sem_noc_addr_in_pkt =
-            safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, batch_ready_sem, 0);
-        pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            batch_ready_sem_noc_addr_in_pkt,
-            static_cast<uint16_t>(1),  // increment 1
-            32});
-        pkt_hdr_seminc->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_in_direction)});
+        if (fabric_connection.is_logically_connected()) {
+            // mcast batch_ready_sem to opposite core in my direction
+            uint64_t batch_ready_sem_noc_addr_in_pkt =
+                safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, batch_ready_sem, 0);
+            pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                batch_ready_sem_noc_addr_in_pkt,
+                static_cast<uint16_t>(1),  // increment 1
+                32});
+            pkt_hdr_seminc->to_chip_multicast(
+                tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_in_direction)});
 
-        dir_fabric_connection.wait_for_empty_write_slot();
-        dir_fabric_connection.send_payload_flush_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
-        noc_async_writes_flushed();
+            dir_fabric_connection->wait_for_empty_write_slot();
+            dir_fabric_connection->send_payload_flush_blocking_from_address(
+                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+            noc_async_writes_flushed();
+        }
 
         // Reset the global semaphore before the next batch
         // We're going to get hit by however many cores we're targeting, since the opposite core sends back toward us.
