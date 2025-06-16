@@ -88,7 +88,7 @@ void kernel_main() {
     DPRINT << "SUCCESSFULLY READ IN ALL TENSORS" << ENDL();
 
     DPRINT << "WAITING FOR SEMAPHORE" << ENDL();
-    noc_semaphore_wait((uint32_t*)global_semaphore_address, 2);
+    noc_semaphore_wait((uint32_t*)global_semaphore_address, batch_size);
     DPRINT << "SEMAPHORE WAIT COMPLETE" << ENDL();
     noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
     DPRINT << "KERNEL END" << ENDL();

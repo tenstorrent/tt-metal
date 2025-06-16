@@ -186,9 +186,9 @@ void kernel_main() {
 
     constexpr uint32_t src_mesh_id = get_compile_time_arg_val(28);
     constexpr uint32_t src_chip_id = get_compile_time_arg_val(29);
-    if (!(src_chip_id == 1 || src_chip_id == 5)) {
-        return;
-    }
+    // if (!(src_chip_id == 1 || src_chip_id == 5)) {
+    //     return;
+    // }
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(30);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(31);  // ew_dim
     constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(32);
@@ -214,9 +214,11 @@ void kernel_main() {
 #ifdef AXIS
     constexpr int axis = AXIS;
     constexpr uint32_t dispatch_devices = axis == 0 ? mesh_rows : mesh_cols;
+    constexpr uint32_t ring_index = axis == 0 ? src_chip_id % mesh_rows : src_chip_id % mesh_cols;
 #else
     constexpr int axis = -1;
     constexpr uint32_t dispatch_devices = num_devices;
+    constexpr uint32_t ring_index = src_chip_id;
 #endif
 
     for (uint32_t i = 0; i < 4; i++) {
@@ -320,9 +322,18 @@ void kernel_main() {
 
     // send semaphore increment to all other devices
 
-    uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
     for (uint32_t local_token = 0; local_token < batches_per_device; local_token++) {
         uint32_t b = local_token + (batches_per_device * src_chip_id);
+        uint32_t token_indices_address = get_read_ptr(indices_tensor_cb_id) + (local_token * aligned_indices_page_size);
+        uint16_t* indices = reinterpret_cast<uint16_t*>(token_indices_address);
+        for (uint32_t k = 0; k < selected_experts_k; k++) {
+            DPRINT << "Batch " << b << " Expert " << k << " is " << indices[k] << ENDL();
+        }
+    }
+
+    uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
+    for (uint32_t local_token = 0; local_token < batches_per_device; local_token++) {
+        uint32_t b = (local_token + (batches_per_device * ring_index)) % batch_size;
         uint64_t metadata_write_addr = get_noc_addr(b, metadata_addr_gen);
         uint32_t token_indices_address = get_read_ptr(indices_tensor_cb_id) + (local_token * aligned_indices_page_size);
         uint16_t* indices = reinterpret_cast<uint16_t*>(token_indices_address);
