@@ -57,8 +57,8 @@ void kernel_main() {
     uint32_t link = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
     size_t fwd_bwd_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t fwd_bwd_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t fwd_bwd_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t opposite_core_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t opposite_core_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
@@ -113,15 +113,21 @@ void kernel_main() {
 
         uint32_t batch_slice_offset = batch_slice_num_pages * b;
         for (uint32_t iter = 0; iter < num_targets_in_direction; ++iter) {
-            // TODO: First send is special for forwards (tell backwards direction that slot is free)
-            // TODO: Last send is special for backwards - send to different slice idx to avoid overlap
-
+            DPRINT << (is_forward ? "FWD" : "BWD") << " WRITER: iter: " << iter << "\n";
+            // Last send is special for backwards - send to different slice idx to avoid overlap
             if constexpr (!is_forward) {
                 if (iter == num_targets_in_direction - 1) {
                     // Wait for final_reduction_slot_sem to be signaled
                     // Send to different slice idx to avoid overlap
                     while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(final_reduction_slot_sem) < 1);
                     constexpr bool their_first_write_was_fwd = (my_chip_id - 1) < ring_size / 2;
+                    // If their first write was forward, they freed up the last slot first. Otherwise, the freed
+                    // up the first slot first. That's where I can write to.
+                    if constexpr (their_first_write_was_fwd) {
+                        slice_idx = ring_size - 1;
+                    } else {
+                        slice_idx = 0;
+                    }
                 }
             }
 
@@ -135,7 +141,7 @@ void kernel_main() {
 
             uint32_t input_tile_id_start = slice_idx * slice_Wt;
 
-            // TODO: Write to remote intermediate buffer
+            // Write to remote intermediate buffer
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
                 cb_wait_front(cb_output_id, num_pages_to_read);  // Footgun: num_pages_to_read must divide CB num_pages
@@ -180,6 +186,7 @@ void kernel_main() {
                 out_ready_sem_noc_addr_in_pkt,
                 static_cast<uint16_t>(1),  // increment 1
                 32});
+            pkt_hdr_seminc->to_chip_unicast(1);
 
             dir_fabric_connection.wait_for_empty_write_slot();
             dir_fabric_connection.send_payload_flush_blocking_from_address(
@@ -188,9 +195,11 @@ void kernel_main() {
 
             if constexpr (is_forward) {
                 if (iter == 0) {
+                    // First send is special for forwards (tell backwards direction that slot is free)
+
                     // Signal final_reduction_slot_sem on remote BWD core
-                    uint64_t final_slot_sem_noc_addr_in_pkt =
-                        safe_get_noc_addr(fwd_bwd_sem_noc0_x, fwd_bwd_sem_noc0_y, final_reduction_slot_sem, 0);
+                    uint64_t final_slot_sem_noc_addr_in_pkt = safe_get_noc_addr(
+                        opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, final_reduction_slot_sem, 0);
                     pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                         final_slot_sem_noc_addr_in_pkt,
                         static_cast<uint16_t>(1),  // increment 1
@@ -204,8 +213,82 @@ void kernel_main() {
             }
         }
 
-        // TODO: Do write of final reduction - synchronize local FWD/BWD cores
+        // Do write of final reduction and sync local FWD/BWD cores
+        if constexpr (do_final_reduction) {
+            DPRINT << (is_forward ? "FWD" : "BWD") << " WRITER: final reduction\n";
+            // Write output
+            uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
+            uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
+            uint32_t tile_id_start = batch_slice_offset;
 
-        // TODO: batch_ready_sem sync and reset all semaphores
+            while (tiles_read < tiles_to_read) {
+                uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
+                cb_wait_front(cb_compute_output_id, num_pages_to_read);
+                size_t l1_read_addr = get_read_ptr(cb_compute_output_id);
+
+                for (uint32_t j = 0; j < num_pages_to_read; j++) {
+                    noc_async_write_tile(tile_id_start + tiles_read, output_addrgen, l1_read_addr);
+                    l1_read_addr += intermediate_page_size;
+                    tiles_read++;
+                }
+
+                noc_async_writes_flushed();
+                cb_pop_front(cb_compute_output_id, num_pages_to_read);
+            }
+
+            noc_async_write_barrier();
+            if constexpr (sync_with_other_direction && is_forward) {
+                // Tell local backwards reader that it can proceed
+                // TODO: This must be noc transaction since FWD/BWD are separate cores
+                uint64_t fwd_bwd_sem_noc_addr =
+                    safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, fwd_bwd_sem_addr, 0);
+                noc_semaphore_inc(fwd_bwd_sem_noc_addr, 1);
+            }
+        }
+
+        DPRINT << (is_forward ? "FWD" : "BWD") << " WRITER: Done with final reduction, start sync\n";
+
+        // Have local FWD wait on local BWD reaching here
+        if constexpr (!is_forward) {
+            // Have local BWD tell local FWD that it's done
+            uint64_t fwd_bwd_sem_noc_addr =
+                safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, fwd_bwd_sem_addr, 0);
+            noc_semaphore_inc(fwd_bwd_sem_noc_addr, 1);
+        } else {
+            // Local FWD waits here until BWD has completed writes
+            while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr) < 1);
+        }
+
+        // Reset all local semaphores
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr) = 0;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem) = 0;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(final_reduction_slot_sem) = 0;
+
+        // mcast batch_ready_sem to opposite core in my direction
+        uint64_t batch_ready_sem_noc_addr_in_pkt =
+            safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, batch_ready_sem, 0);
+        pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            batch_ready_sem_noc_addr_in_pkt,
+            static_cast<uint16_t>(1),  // increment 1
+            32});
+        pkt_hdr_seminc->to_chip_multicast(
+            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_in_direction)});
+
+        dir_fabric_connection.wait_for_empty_write_slot();
+        dir_fabric_connection.send_payload_flush_blocking_from_address(
+            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        noc_async_writes_flushed();
+
+        // Reset the global semaphore before the next batch
+        // We're going to get hit by however many cores we're targeting, since the opposite core sends back toward us.
+        while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem) < num_targets_in_direction);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem) = 0;
+        DPRINT << (is_forward ? "FWD" : "BWD") << " WRITER: Done with sync\n";
     }
+
+    if (fabric_connection.is_logically_connected()) {
+        fabric_connection.close();
+    }
+
+    noc_async_write_barrier();
 }

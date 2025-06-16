@@ -19,24 +19,25 @@ using tt::tt_metal::BufferType;
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr BufferType input_buffer_type = static_cast<BufferType>(get_compile_time_arg_val(1));
 constexpr BufferType intermediate_buffer_type = static_cast<BufferType>(get_compile_time_arg_val(2));
-constexpr uint32_t cb_input_id = get_compile_time_arg_val(3);
-constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(4);
-constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(5);
-constexpr uint32_t tile_granularity = get_compile_time_arg_val(6);
-constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(7);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(8);
-constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(9);
-constexpr uint32_t ring_size = get_compile_time_arg_val(10);
-constexpr uint32_t num_batches = get_compile_time_arg_val(11);
-constexpr uint32_t fuse_op = get_compile_time_arg_val(12);
-constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(13);
-constexpr bool is_forward = get_compile_time_arg_val(14);
-constexpr bool is_first_device_in_direction = get_compile_time_arg_val(15);
-constexpr uint32_t num_targets_in_direction = get_compile_time_arg_val(16);
-constexpr uint32_t num_intermediate_reduction_steps = get_compile_time_arg_val(17);
-constexpr bool do_final_reduction = get_compile_time_arg_val(18);
-constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(19);
-constexpr bool sync_with_other_direction = get_compile_time_arg_val(20);
+constexpr BufferType output_buffer_type = static_cast<BufferType>(get_compile_time_arg_val(3));
+constexpr uint32_t cb_input_id = get_compile_time_arg_val(4);
+constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(5);
+constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(6);
+constexpr uint32_t tile_granularity = get_compile_time_arg_val(7);
+constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(8);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(9);
+constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(10);
+constexpr uint32_t ring_size = get_compile_time_arg_val(11);
+constexpr uint32_t num_batches = get_compile_time_arg_val(12);
+constexpr uint32_t fuse_op = get_compile_time_arg_val(13);
+constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(14);
+constexpr bool is_forward = get_compile_time_arg_val(15);
+constexpr bool is_first_device_in_direction = get_compile_time_arg_val(16);
+constexpr uint32_t num_targets_in_direction = get_compile_time_arg_val(17);
+constexpr uint32_t num_intermediate_reduction_steps = get_compile_time_arg_val(18);
+constexpr bool do_final_reduction = get_compile_time_arg_val(19);
+constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(20);
+constexpr bool sync_with_other_direction = get_compile_time_arg_val(21);
 
 template <bool is_dram>
 inline void read_tiles(
@@ -70,6 +71,7 @@ void kernel_main() {
     // Load the input tensor spec
     address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
     address_t intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
+    address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     uint32_t link = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
@@ -105,6 +107,11 @@ void kernel_main() {
         .bank_base_address = intermediate_tensor_address,
         .page_size = input_tensor_page_size,
         .data_format = get_dataformat(cb_input_id)};
+    constexpr bool output_tensor_is_dram = output_buffer_type == tt::tt_metal::BufferType::DRAM;
+    auto output_tensor_addrgen = InterleavedAddrGenFast<output_tensor_is_dram>{
+        .bank_base_address = output_tensor_address,
+        .page_size = input_tensor_page_size,
+        .data_format = get_dataformat(cb_input_id)};
 
     for (uint32_t b = 0; b < num_batches; b++) {
         if (fuse_op) {
@@ -121,6 +128,7 @@ void kernel_main() {
         // If this device has both FWD and BWD neighbors, the FWD reader will do final reduction first
         // and then signal the BWD reader to do its final reduction.
         for (uint32_t iter = 0; iter < num_targets_in_direction; ++iter) {
+            DPRINT << (is_forward ? "FWD" : "BWD") << " READER: iter: " << iter << "\n";
             // const bool do_reduce = !is_first_device_in_direction;
             // uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
 
@@ -214,13 +222,22 @@ void kernel_main() {
 
         // Do the final reduction. Synchronize with other direction.
         if constexpr (do_final_reduction) {
-            if constexpr (sync_with_other_direction) {
-                if constexpr (!is_forward) {
-                    // Wait for FWD writer to signal that it has done its final reduction
-                    while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr) < 1);
-                    // Reset the semaphore to 0
-                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr) = 0;
-                }
+            DPRINT << (is_forward ? "FWD" : "BWD") << " READER: final reduction\n";
+
+            uint32_t slice_idx = my_chip_id;
+            auto reduction_input_addrgen = input_tensor_addrgen;
+            if constexpr (sync_with_other_direction && !is_forward) {
+                /**
+                 * If two cores are doing final reduction, BWD core will accumulate output with
+                 * incoming BWD intermediate. Use slice_idx=0 to index into output buffer, and
+                 * use output address generator.
+                 */
+                uint32_t slice_idx = 0;
+                reduction_input_addrgen = output_tensor_addrgen;
+                // Wait for FWD writer to signal that it has done its final reduction
+                while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr) < 1);
+                // // Reset the semaphore to 0
+                // *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr) = 0;
             }
 
             /**
@@ -233,7 +250,6 @@ void kernel_main() {
              * My first write was FWD if I'm on the left half of the ring, and BWD if I'm on the right half.
              */
 
-            uint32_t slice_idx = my_chip_id;
             uint32_t intermediate_slice_idx = my_chip_id;
 
             if constexpr (!is_forward) {
@@ -267,7 +283,7 @@ void kernel_main() {
                     cb_in0,
                     num_pages_to_read,
                     input_tile_id_start,
-                    input_tensor_addrgen,
+                    reduction_input_addrgen,
                     input_tensor_page_size,
                     pages_read_in_row,
                     row_offset,
@@ -295,5 +311,5 @@ void kernel_main() {
             }
         }
     }
-    DPRINT << "Done Reader\n";
+    DPRINT << (is_forward ? "FWD" : "BWD") << " READER: Done\n";
 }
