@@ -123,7 +123,7 @@ DistributedHostBuffer DistributedHostBuffer::transform(
         detail::GetExecutor().run(taskflow).wait();
     }
 
-    DistributedHostBuffer transformed_buffer(
+    return DistributedHostBuffer transformed_buffer(
         global_shape_,
         local_offset_,
         distributed::MeshContainer<Shard>(local_shards_.shape(), std::move(transformed_shards)),
