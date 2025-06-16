@@ -30,9 +30,14 @@ void MetalContext::initialize(
     auto fw_compile_hash = std::hash<std::string>{}(rtoptions_.get_compile_hash_string());
     if (initialized_) {
         if (this->dispatch_core_config_ != dispatch_core_config or num_hw_cqs != this->num_hw_cqs_ or
-            l1_bank_remap != this->l1_bank_remap_ or fw_compile_hash != this->fw_compile_hash_) {
+            l1_bank_remap != this->l1_bank_remap_ or fw_compile_hash != this->fw_compile_hash_ or
+            rtoptions_.get_fd_fabric() != this->fd_fabric_) {
             log_warning(tt::LogAlways, "Closing and re-initializing MetalContext with new parameters.");
             teardown();
+            if (rtoptions_.get_fd_fabric() != this->fd_fabric_) {
+                // Ethernet sockets API data changed
+                cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
+            }
         } else {
             // Re-init request with the same parameters, do nothing
             return;
@@ -44,6 +49,7 @@ void MetalContext::initialize(
     num_hw_cqs_ = num_hw_cqs;
     l1_bank_remap_ = l1_bank_remap;
     fw_compile_hash_ = fw_compile_hash;
+    fd_fabric_ = rtoptions_.get_fd_fabric();
 
     // Initialize inspector
     inspector_data_ = Inspector::initialize();

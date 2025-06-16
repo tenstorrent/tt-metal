@@ -88,6 +88,8 @@ private:
     bool teardown_registered_ = false;
 
     uint8_t num_hw_cqs_ = 0;
+    // To support falling back to tunneling in the case not all devices are passed into DevicePool
+    bool fd_fabric_ = false;
     BankMapping l1_bank_remap_;
     DispatchCoreConfig dispatch_core_config_;
     size_t fw_compile_hash_ = 0;  // To check if FW recompilation is needed

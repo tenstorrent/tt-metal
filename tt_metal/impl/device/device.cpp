@@ -184,9 +184,9 @@ std::tuple<chip_id_t, CoreCoord> Device::get_connected_ethernet_core(CoreCoord e
         std::make_tuple(this->id_, eth_core));
 }
 
-std::vector<CoreCoord> Device::get_ethernet_sockets(chip_id_t connected_chip_id) const {
+std::vector<CoreCoord> Device::get_ethernet_sockets(chip_id_t connected_chip_id, bool skip_reserved_fabric_cores) const {
     if (tt::tt_metal::MetalContext::instance().get_fabric_config() !=
-        tt::tt_metal::FabricConfig::DISABLED) {
+        tt::tt_metal::FabricConfig::DISABLED && !skip_reserved_fabric_cores) {
         return tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_routers_between_src_and_dest(
             this->id_, connected_chip_id);
     } else {
