@@ -212,6 +212,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     Tensor& output,
     Pool2DType pool_type,
     uint32_t in_n,
+    uint32_t in_c,
     uint32_t in_h,
     uint32_t in_w,
     uint32_t out_h,
@@ -595,6 +596,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
 
     bool is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     auto in_n = sliding_window_config.batch_size;
+    auto in_c = sliding_window_config.channels;
     auto in_h = sliding_window_config.input_hw.first;
     auto in_w = sliding_window_config.input_hw.second;
     auto kernel_h = sliding_window_config.window_hw.first;
@@ -631,6 +633,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         output_tensor,
         pool_type,
         in_n,
+        in_c,
         in_h,
         in_w,
         out_h,

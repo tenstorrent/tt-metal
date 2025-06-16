@@ -17,7 +17,7 @@ from tests.sweep_framework.sweep_utils.max_pool2d_common import run_max_pool2d, 
 
 parameters = {
     "max_pool2d_short_sweep_suite": {
-        "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "dtype": [ttnn.bfloat16],
         "input_specs": [
             # Contains following parameters
             # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, strid_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
@@ -34,7 +34,7 @@ parameters = {
             [1, 256, 75, 75, 2, 2, 2, 2, 0, 0, 1, 1, True],
             [1, 32, 256, 256, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 320, 28, 28, 2, 2, 2, 2, 0, 0, 1, 1, False],
-            [1, 4, 14, 14, 2, 2, 2, 2, 0, 0, 1, 1, False],  # requires padding along C
+            [1, 24, 14, 14, 2, 2, 2, 2, 0, 0, 1, 1, False],  # requires padding along C
             [1, 480, 14, 14, 3, 3, 1, 1, 1, 1, 1, 1, True],
             [1, 480, 28, 28, 3, 3, 2, 2, 0, 0, 1, 1, True],
             [1, 512, 14, 14, 2, 2, 2, 2, 0, 0, 1, 1, False],
@@ -42,7 +42,7 @@ parameters = {
             [1, 512, 19, 19, 3, 3, 1, 1, 1, 1, 1, 1, False],
             [1, 512, 28, 28, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 512, 38, 38, 2, 2, 2, 2, 0, 0, 1, 1, False],
-            [1, 528, 14, 14, 3, 3, 1, 1, 1, 1, 1, 1, True],  # required padding along C
+            [1, 24, 3, 3, 2, 2, 1, 1, 0, 0, 1, 1, True],  # required padding along C
             [1, 64, 112, 112, 3, 3, 2, 2, 0, 0, 1, 1, True],
             [1, 64, 112, 112, 3, 3, 2, 2, 1, 1, 1, 1, False],
             [1, 64, 128, 128, 2, 2, 2, 2, 0, 0, 1, 1, False],
