@@ -118,6 +118,10 @@ void write_control_buffer_to_core(
     }
 }
 
+bool useSlowDispatchForReading(ProfilerDumpState state) {
+    return state == ProfilerDumpState::FORCE_UMD_READ || onlyProfileDispatchCores(state);
+}
+
 void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
     ZoneScoped;
     TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
@@ -1138,7 +1142,7 @@ void DeviceProfiler::dumpResults(
         }
 
         if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
-            if (state == ProfilerDumpState::FORCE_UMD_READ || onlyProfileDispatchCores(state)) {
+            if (useSlowDispatchForReading(state)) {
                 issueSlowDispatchReadFromProfilerBuffer(device);
             } else {
                 issueFastDispatchReadFromProfilerBuffer(device);
@@ -1185,7 +1189,7 @@ void DeviceProfiler::dumpResults(
 
                 std::vector<uint32_t> core_l1_data_buffer;
                 if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
-                    if (rtoptions.get_profiler_do_dispatch_cores() || state == ProfilerDumpState::FORCE_UMD_READ) {
+                    if (useSlowDispatchForReading(state)) {
                         core_l1_data_buffer = issueSlowDispatchReadFromL1DataBuffer(device, worker_core);
                     } else {
                         core_l1_data_buffer = issueFastDispatchReadFromL1DataBuffer(device, worker_core);
