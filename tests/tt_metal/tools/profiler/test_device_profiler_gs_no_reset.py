@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tests.tt_metal.tools.profiler import test_device_profiler
+from tests.tools.profiler import test_device_profiler
 
 
 def test_multi_op_gs_no_reset():
