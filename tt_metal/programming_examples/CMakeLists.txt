@@ -35,7 +35,6 @@ add_custom_target(
         profiler_examples
         ${PROGRAMMING_EXAMPLES_TEST_TARGETS}
 )
-# cmake-format: sortable
 install(
     DIRECTORY
         add_2_integers_in_compute
@@ -48,16 +47,15 @@ install(
         loopback
         shard_data_rm
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
-    # FIXME(afuller): Something funky is happening when installing files into
-    # /usr/share/doc on a default Docker image. Speculation: some dependency for
-    # magic doc handling is missing. For now keep it out of 'doc'.
+    # FIXME(afuller): Something funky is happening when installing files into /usr/share/doc on a default Docker image.
+    #                 Speculation: some dependency for magic doc handling is missing.
+    #                 For now keep it out of 'doc'.
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tt-metalium/examples"
     COMPONENT metalium-examples
     REGEX
     "/kernels/"
         EXCLUDE
 )
-# cmake-format: sortable
 install(
     DIRECTORY
         add_2_integers_in_compute
