@@ -62,7 +62,19 @@ class RotarySetup(LightweightModule):
         return self.__tt_transformer_rotary_setup.sin_matrix
 
     def set_cos_sin(self, cos_matrix, sin_matrix):
-        self.__tt_transformer_rotary_setup.set_cos_sin(cos_matrix, sin_matrix)
+        # [INFO] we avoid re-allocating the cos_matrix and sin_matrix tensors to allow for correct processing of captured trace
+        assert cos_matrix.shape == self.cos_matrix.shape, "cos_matrix must be the same size as the existing cos_matrix"
+        assert sin_matrix.shape == self.sin_matrix.shape, "sin_matrix must be the same size as the existing sin_matrix"
+        for mat, mat_tt in zip((cos_matrix, sin_matrix), (self.cos_matrix, self.sin_matrix)):
+            mat = ttnn.from_torch(
+                mat,
+                device=None,
+                dtype=self.datatype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
+            mat = ttnn.unsqueeze_to_4D(mat)
+            ttnn.copy_host_to_device_tensor(mat, mat_tt)
 
     def get_both_trans_mats(self):
         return self.__tt_transformer_rotary_setup.get_both_trans_mats()

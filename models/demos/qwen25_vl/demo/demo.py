@@ -390,11 +390,8 @@ def test_demo(
             pad_embedding=reference_model.model.language_model.embed_tokens(torch.tensor(pad_token_id)),
         )
         # Get user-specific rotary position embeddings
-        if batch_idx == 0:
-            cos, sin = multimodal_rope_from_hf(
-                inputs, input_embeds, reference_model, model_args, pad_token_id=pad_token_id
-            )
-            model.rope_setup.set_cos_sin(cos, sin)
+        cos, sin = multimodal_rope_from_hf(inputs, input_embeds, reference_model, model_args, pad_token_id=pad_token_id)
+        model.rope_setup.set_cos_sin(cos, sin)
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         logger.info("Starting prefill warmup...")
@@ -565,14 +562,15 @@ def test_demo(
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
 
-    # compare the strings in text_outputs
-    all_match = True
-    for i in range(len(text_outputs)):
-        for j in range(i + 1, len(text_outputs)):
-            if text_outputs[i] != text_outputs[j]:
-                logger.info(f"text_outputs[{i}] != text_outputs[{j}]")
-                all_match = False
-    assert all_match, "text_outputs should be the same for all batches"
+    # compare the strings in text_outputs in repeat_batches model
+    if is_ci_env and repeat_batches > 1:
+        all_match = True
+        for i in range(len(text_outputs)):
+            for j in range(i + 1, len(text_outputs)):
+                if text_outputs[i] != text_outputs[j]:
+                    logger.info(f"text_outputs[{i}] != text_outputs[{j}]")
+                    all_match = False
+        assert all_match, "text_outputs should be the same for all batches"
 
     # Prepare profile benchmark metrics for the first repeat batch only
     compile_prefill_time = profiler.get_duration("compile_prefill")
