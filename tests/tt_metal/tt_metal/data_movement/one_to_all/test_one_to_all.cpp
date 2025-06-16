@@ -21,14 +21,19 @@ constexpr uint32_t START_ID = 6;
 // Test config, i.e. test parameters
 struct OneToAllConfig {
     uint32_t test_id = 0;
-    CoreCoord master_core_coord = CoreCoord();
-    CoreCoord grid_size = CoreCoord();
+
+    CoreCoord mst_core_coord = CoreCoord();
+    CoreCoord sub_start_core_coord = CoreCoord();
+    CoreCoord sub_grid_size = CoreCoord();
+
     uint32_t num_of_transactions = 0;
     uint32_t pages_per_transaction = 0;
     uint32_t bytes_per_page = 0;
+
     DataFormat l1_data_format = DataFormat::Invalid;
-    bool loopback = false;
     NOC noc_id = NOC::NOC_0;
+
+    bool loopback = false;
     bool is_multicast = false;
     bool is_linked = false;
 
@@ -43,151 +48,202 @@ struct OneToAllConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
+    /* ================ SETUP ================ */
+
     // Program
     Program program = CreateProgram();
 
-    if (test_config.is_multicast) {
-        assert(test_config.loopback);
-    }
-    if (!test_config.is_multicast) {
-        assert(!test_config.is_linked);
-    }
+    assert((test_config.is_multicast && test_config.loopback) || (!test_config.is_multicast && !test_config.is_linked));
 
-    // Sharded L1 buffers
-    const uint32_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;
+    // Initialize core sets
 
-    CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
-    CoreRangeSet subordinate_core_set(
-        {CoreRange(CoreCoord(0, 0), CoreCoord(test_config.grid_size.x - 1, test_config.grid_size.y - 1))});
-    CoreCoord start_coord = device->worker_core_from_logical_core(CoreCoord(0, 0));
-    CoreCoord end_coord =
-        device->worker_core_from_logical_core(CoreCoord(test_config.grid_size.x - 1, test_config.grid_size.y - 1));
+    // Master Logical
+    CoreRangeSet mst_logical_core_set({CoreRange(test_config.mst_core_coord)});
+
+    // Subordinate Logical
+    CoreCoord sub_logical_start_coord = test_config.sub_start_core_coord;
+    CoreCoord sub_logical_end_coord = CoreCoord(
+        sub_logical_start_coord.x + test_config.sub_grid_size.x - 1,
+        sub_logical_start_coord.y + test_config.sub_grid_size.y - 1);
+    // POSSIBLE TO-DO: Add a check to ensure that the sub_logical_end_coord is within the device's logical core range
+    CoreRangeSet sub_logical_core_set({CoreRange(sub_logical_start_coord, sub_logical_end_coord)});
     if (!test_config.loopback) {
-        subordinate_core_set = subordinate_core_set.subtract(master_core_set);
+        sub_logical_core_set = sub_logical_core_set.subtract(mst_logical_core_set);
     }
-    uint32_t num_subordinates = subordinate_core_set.num_cores();
-    uint32_t total_sender_size_bytes =
-        test_config.pages_per_transaction * test_config.bytes_per_page * num_subordinates;
-    uint32_t total_sender_size_pages = test_config.pages_per_transaction * num_subordinates;
+    uint32_t num_subordinates = sub_logical_core_set.num_cores();
 
-    auto master_shard_parameters = ShardSpecBuffer(
-        master_core_set,
-        {1, bytes_per_transaction / 2},
-        ShardOrientation::ROW_MAJOR,
-        {1, test_config.bytes_per_page / 2},
-        {1, test_config.pages_per_transaction});
-    auto master_l1_buffer = CreateBuffer(ShardedBufferConfig{
-        .device = device,
-        .size = bytes_per_transaction,
-        .page_size = test_config.bytes_per_page,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-        .shard_parameters = std::move(master_shard_parameters),
-    });
-    uint32_t master_l1_byte_address = master_l1_buffer->address();
+    // Subordinate Physical
+    CoreCoord sub_worker_start_coord = device->worker_core_from_logical_core(sub_logical_start_coord);
+    CoreCoord sub_worker_end_coord = device->worker_core_from_logical_core(sub_logical_end_coord);
+    std::vector<uint32_t> sub_worker_coordinates = {};
+    for (auto& sub_logical_core : corerange_to_cores(sub_logical_core_set)) {
+        CoreCoord sub_worker_core = device->worker_core_from_logical_core(sub_logical_core);
+        uint32_t sub_worker_core_packed =
+            (sub_worker_core.x << 16) | (sub_worker_core.y & 0xFFFF);  // Pack coordinates into a single uint32_t
+        sub_worker_coordinates.push_back(sub_worker_core_packed);
+    }
 
-    auto subordinate_shard_parameters = ShardSpecBuffer(
-        subordinate_core_set,
-        {1, bytes_per_transaction / 2},
-        ShardOrientation::ROW_MAJOR,
-        {1, test_config.bytes_per_page / 2},
-        {1, total_sender_size_pages});
-    auto subordinate_l1_buffer = CreateBuffer(ShardedBufferConfig{
-        .device = device,
-        .size = total_sender_size_bytes,
-        .page_size = test_config.bytes_per_page,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-        .shard_parameters = std::move(subordinate_shard_parameters),
-    });
-    uint32_t subordinate_l1_byte_address = subordinate_l1_buffer->address();
+    // L1 Space Allocation
 
-    // Compile-time arguments for kernels
-    vector<uint32_t> sender_compile_args = {
-        (uint32_t)master_l1_byte_address,
-        (uint32_t)subordinate_l1_byte_address,
-        (uint32_t)test_config.num_of_transactions,
-        (uint32_t)test_config.pages_per_transaction,
-        (uint32_t)test_config.bytes_per_page,
-        (uint32_t)test_config.test_id,
-        (uint32_t)num_subordinates,
-        (uint32_t)total_sender_size_bytes,
-        (uint32_t)test_config.is_linked};
+    // Parameters
+    const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;
+    const size_t total_size_bytes = bytes_per_transaction * test_config.num_of_transactions;
 
-    vector<uint32_t> receiver_compile_args = {
-        (uint32_t)master_l1_byte_address,
-        (uint32_t)subordinate_l1_byte_address,
-        (uint32_t)test_config.num_of_transactions,
-        (uint32_t)test_config.pages_per_transaction,
-        (uint32_t)test_config.bytes_per_page,
-        (uint32_t)test_config.test_id};
+    // Obtain L1 Address for Storing Data
+    L1AddressInfo mst_l1_info =
+        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.mst_core_coord);
+    if (mst_l1_info.size < total_size_bytes) {
+        log_error(tt::LogTest, "Insufficient L1 size for the test configuration");
+        return false;
+    }
+    uint32_t l1_base_address = mst_l1_info.base_address;
 
-    // Kernels
+    // Semaphores
+    const uint32_t sem_id = CreateSemaphore(program, sub_logical_core_set, 0);
+
+    // Initialize Kernels
+
+    // Sender Kernel
+
+    vector<uint32_t> sender_compile_args = {// 0 - 6
+                                            (uint32_t)l1_base_address,
+                                            (uint32_t)test_config.num_of_transactions,
+                                            (uint32_t)test_config.pages_per_transaction,
+                                            (uint32_t)test_config.bytes_per_page,
+                                            (uint32_t)test_config.test_id,
+                                            (uint32_t)num_subordinates,
+                                            (uint32_t)sem_id};
+    std::string sender_kernel_path;
+
+    if (test_config.is_multicast) {  // Multicast Sender Kernel
+        sender_compile_args.insert(
+            sender_compile_args.end(),
+            {// 7 - 11
+             (uint32_t)test_config.is_linked,
+             (uint32_t)sub_worker_start_coord.x,
+             (uint32_t)sub_worker_start_coord.y,
+             (uint32_t)sub_worker_end_coord.x,
+             (uint32_t)sub_worker_end_coord.y});
+        sender_kernel_path = "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/sender_multicast.cpp";
+    } else {  // Unicast Sender Kernel
+        sender_kernel_path = "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/sender.cpp";
+    }
+
     auto sender_kernel = CreateKernel(
         program,
-        test_config.is_multicast ? "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/sender_multicast.cpp"
-                                 : "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/sender.cpp",
-        master_core_set,
+        sender_kernel_path,
+        mst_logical_core_set,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = test_config.noc_id,
             .compile_args = sender_compile_args});
 
-    // Semaphores
-    CoreRangeSet sem_core_set = subordinate_core_set.merge<CoreRangeSet>(master_core_set);
-    const uint32_t sem_id = CreateSemaphore(program, sem_core_set, 0);
+    // Receiver Kernel (currently deprecated)
+    /*vector<uint32_t> receiver_compile_args = {
+        (uint32_t)l1_base_address,
+        (uint32_t)l1_base_address,
+        (uint32_t)test_config.num_of_transactions,
+        (uint32_t)test_config.pages_per_transaction,
+        (uint32_t)test_config.bytes_per_page,
+        (uint32_t)test_config.test_id,
+        (uint32_t)sem_id};*/
 
     // Runtime Arguments
-    std::vector<uint32_t> master_run_args = {sem_id, start_coord.x, start_coord.y, end_coord.x, end_coord.y};
-    for (auto& core : corerange_to_cores(subordinate_core_set)) {
-        if (!test_config.loopback &&
-            (core.x == test_config.master_core_coord.x && core.y == test_config.master_core_coord.y)) {
-            continue;
-        }
-        CoreCoord worker = device->worker_core_from_logical_core(core);
-        master_run_args.push_back(worker.x);
-        master_run_args.push_back(worker.y);
-    }
-    SetRuntimeArgs(program, sender_kernel, master_core_set, master_run_args);
+
+    std::vector<uint32_t> sender_runtime_args = {};
+    sender_runtime_args.insert(sender_runtime_args.end(), sub_worker_coordinates.begin(), sub_worker_coordinates.end());
+
+    SetRuntimeArgs(program, sender_kernel, mst_logical_core_set, sender_runtime_args);
 
     // Assign unique id
+
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
-    // Input
+    /* ================ EXECUTION ================ */
+
+    // Setup Input and Golden Output
+    size_t element_size_bytes = bfloat16::SIZEOF;
+    uint32_t num_elements = total_size_bytes / element_size_bytes;
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -100.0f,
-        100.0f,
-        bytes_per_transaction / bfloat16::SIZEOF,
-        chrono::system_clock::now().time_since_epoch().count());
-
-    // Golden output
+        -100.0f, 100.0f, num_elements, chrono::system_clock::now().time_since_epoch().count());
     vector<uint32_t> packed_golden = packed_input;
-    for (uint32_t i = 1; i < num_subordinates; i++) {
-        packed_golden.insert(packed_golden.end(), packed_input.begin(), packed_input.end());
-    }
 
-    // Launch program and record outputs
-    detail::WriteToBuffer(master_l1_buffer, packed_input);
+    // Write input to master L1 buffer
+    tt_metal::detail::WriteToDeviceL1(device, test_config.mst_core_coord, l1_base_address, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
+
+    // LAUNCH THE PROGRAM
     detail::LaunchProgram(device, program);
 
-    vector<uint32_t> packed_output;
-    detail::ReadFromBuffer(subordinate_l1_buffer, packed_output);
-    // Results comparison
-    bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
-        packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
-    if (!pcc) {
-        log_error(tt::LogTest, "PCC Check failed");
-        log_info(tt::LogTest, "Golden vector");
-        print_vector<uint32_t>(packed_golden);
-        log_info(tt::LogTest, "Output vector");
-        print_vector<uint32_t>(packed_output);
+    // Read output from subordinate L1 buffers (implement a loop)
+    std::vector<uint32_t> packed_output;
+    bool pcc = true;
+
+    for (auto& sub_logical_core : corerange_to_cores(sub_logical_core_set)) {
+        tt_metal::detail::ReadFromDeviceL1(device, sub_logical_core, l1_base_address, total_size_bytes, packed_output);
+
+        // Results comparison
+        bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
+            packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+
+        if (!pcc) {
+            log_error(tt::LogTest, "PCC Check failed");
+            log_info(tt::LogTest, "Golden vector");
+            print_vector<uint32_t>(packed_golden);
+            log_info(tt::LogTest, "Output vector");
+            print_vector<uint32_t>(packed_output);
+            return pcc;
+        }
     }
+
     return pcc;
 }
 
 /* TEST TYPES */
+
+void directed_ideal_test(
+    tt::ARCH arch_,
+    std::vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_case_id,
+    bool is_multicast,
+    bool is_linked,
+    CoreCoord mst_core_coord,
+    CoreCoord sub_start_core_coord,
+    CoreCoord sub_grid_size) {
+    // Parameters
+    NOC noc_id = NOC::NOC_0;
+    bool loopback = true;
+
+    // Physical Constraints
+    auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+
+    // Adjustable Parameters (Ideal: Less transactions, more data per transaction)
+    uint32_t num_of_transactions = 64;
+    uint32_t pages_per_transaction = max_pages_reservable / num_of_transactions;
+
+    unit_tests::dm::core_to_all::OneToAllConfig test_config = {
+        .test_id = test_case_id,
+        .mst_core_coord = mst_core_coord,
+        .sub_start_core_coord = sub_start_core_coord,
+        .sub_grid_size = sub_grid_size,
+        .num_of_transactions = num_of_transactions,
+        .pages_per_transaction = pages_per_transaction,
+        .bytes_per_page = bytes_per_page,
+        .l1_data_format = DataFormat::Float16_b,
+        .noc_id = noc_id,
+        .loopback = loopback,
+        .is_multicast = is_multicast,
+        .is_linked = is_linked,
+    };
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
 
 void packet_sizes_test(
     tt::ARCH arch_,
@@ -196,8 +252,9 @@ void packet_sizes_test(
     uint32_t test_case_id,
     bool is_multicast,
     bool is_linked,
-    CoreCoord master_core_coord,
-    CoreCoord subordinate_grid_size) {
+    CoreCoord mst_core_coord,
+    CoreCoord sub_start_core_coord,
+    CoreCoord sub_grid_size) {
     // Parameters
     NOC noc_id = NOC::NOC_0;
     bool loopback = true;
@@ -222,14 +279,15 @@ void packet_sizes_test(
             // Test config
             unit_tests::dm::core_to_all::OneToAllConfig test_config = {
                 .test_id = test_case_id,
-                .master_core_coord = master_core_coord,
-                .grid_size = subordinate_grid_size,
+                .mst_core_coord = mst_core_coord,
+                .sub_start_core_coord = sub_start_core_coord,
+                .sub_grid_size = sub_grid_size,
                 .num_of_transactions = num_of_transactions,
                 .pages_per_transaction = pages_reservable_per_transaction,
                 .bytes_per_page = bytes_per_page,
                 .l1_data_format = DataFormat::Float16_b,
-                .loopback = loopback,
                 .noc_id = noc_id,
+                .loopback = loopback,
                 .is_multicast = is_multicast,
                 .is_linked = is_linked,
             };
@@ -239,64 +297,6 @@ void packet_sizes_test(
                 EXPECT_TRUE(run_dm(devices_.at(id), test_config));
             }
         }
-    }
-}
-
-void directed_ideal_test(
-    tt::ARCH arch_,
-    std::vector<IDevice*>& devices_,
-    uint32_t num_devices_,
-    uint32_t test_case_id,
-    bool is_multicast,
-    bool is_linked) {
-    // Parameters
-    NOC noc_id = NOC::NOC_0;
-    bool loopback = true;
-
-    uint32_t bytes_per_page, num_of_transactions;
-    uint32_t pages_per_transaction = 4 * 32;
-    if (arch_ == tt::ARCH::BLACKHOLE) {
-        bytes_per_page = 64;  // (=flit size): 64 bytes for BH
-        num_of_transactions = 64;
-    } else {
-        bytes_per_page = 32;  // (=flit size): 32 bytes for WH
-        num_of_transactions = 128;
-    }
-
-    // Should be using these
-    // auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
-    //    tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
-    // Adjustable Parameters
-    // Ideal: Less transactions, more data per transaction
-    // uint32_t num_of_transactions = 1;
-    // uint32_t pages_per_transaction = max_pages_reservable / num_of_transactions;
-
-    CoreCoord master_core_coord = {0, 0};
-    CoreCoord grid_size = {
-        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
-    // Limit the grid size to 100 cores because the max allowed kernel args is 256
-    if (grid_size.x * grid_size.y > 100) {
-        uint32_t smaller_dim = grid_size.x > grid_size.y ? grid_size.y : grid_size.x;
-        grid_size = {smaller_dim, smaller_dim};
-    }
-
-    unit_tests::dm::core_to_all::OneToAllConfig test_config = {
-        .test_id = test_case_id,
-        .master_core_coord = master_core_coord,
-        .grid_size = grid_size,
-        .num_of_transactions = num_of_transactions,
-        .pages_per_transaction = pages_per_transaction,
-        .bytes_per_page = bytes_per_page,
-        .l1_data_format = DataFormat::Float16_b,
-        .loopback = loopback,
-        .noc_id = noc_id,
-        .is_multicast = is_multicast,
-        .is_linked = is_linked,
-    };
-
-    // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
     }
 }
 
@@ -318,14 +318,23 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicast2x2PacketSizes) {
     bool is_multicast = false;
     bool is_linked = false;
 
-    CoreCoord master_core_coord = {0, 0};
-    CoreCoord grid_size = {2, 2};
+    CoreCoord mst_core_coord = {0, 0};
+    CoreCoord sub_start_core_coord = {0, 0};
+    CoreCoord sub_grid_size = {2, 2};
 
     tt::tt_metal::unit_tests::dm::core_to_all::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, is_multicast, is_linked, master_core_coord, grid_size);
+        arch_,
+        devices_,
+        num_devices_,
+        test_case_id,
+        is_multicast,
+        is_linked,
+        mst_core_coord,
+        sub_start_core_coord,
+        sub_grid_size);
 }
 
-/* ========== 4x4 ========== */
+/* ========== 5x5 ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicast4x4PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 1;
@@ -333,34 +342,45 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicast4x4PacketSizes) {
     bool is_multicast = false;
     bool is_linked = false;
 
-    CoreCoord master_core_coord = {0, 0};
-    CoreCoord grid_size = {4, 4};
+    CoreCoord mst_core_coord = {0, 0};
+    CoreCoord sub_start_core_coord = {0, 0};
+    CoreCoord sub_grid_size = {5, 5};
 
     tt::tt_metal::unit_tests::dm::core_to_all::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, is_multicast, is_linked, master_core_coord, grid_size);
+        arch_,
+        devices_,
+        num_devices_,
+        test_case_id,
+        is_multicast,
+        is_linked,
+        mst_core_coord,
+        sub_start_core_coord,
+        sub_grid_size);
 }
 
-/* ========== 10x10 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicast10x10PacketSizes) {
+/* ========== All ========== */
+TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastPacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 2;
 
     bool is_multicast = false;
     bool is_linked = false;
 
-    CoreCoord master_core_coord = {0, 0};
-    CoreCoord cs_grid_size = {
+    CoreCoord mst_core_coord = {0, 0};
+    CoreCoord sub_start_core_coord = {0, 0};
+    CoreCoord sub_grid_size = {
         devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
-    uint32_t same_grid_size = cs_grid_size.x > cs_grid_size.y ? cs_grid_size.y : cs_grid_size.x;
-    CoreCoord grid_size = {same_grid_size, same_grid_size};
-    // Limit the grid size to 100 cores because the max allowed kernel args is 256
-    if (grid_size.x * grid_size.y > 100) {
-        uint32_t smaller_dim = grid_size.x > grid_size.y ? grid_size.y : grid_size.x;
-        grid_size = {smaller_dim, smaller_dim};
-    }
 
     tt::tt_metal::unit_tests::dm::core_to_all::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, is_multicast, is_linked, master_core_coord, grid_size);
+        arch_,
+        devices_,
+        num_devices_,
+        test_case_id,
+        is_multicast,
+        is_linked,
+        mst_core_coord,
+        sub_start_core_coord,
+        sub_grid_size);
 }
 
 /* ========== MULTICAST ========== */
@@ -373,11 +393,20 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticast2x2PacketSizes) {
     bool is_multicast = true;
     bool is_linked = false;
 
-    CoreCoord master_core_coord = {0, 0};
-    CoreCoord grid_size = {2, 2};
+    CoreCoord mst_core_coord = {0, 0};
+    CoreCoord sub_start_core_coord = {0, 0};
+    CoreCoord sub_grid_size = {2, 2};
 
     tt::tt_metal::unit_tests::dm::core_to_all::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, is_multicast, is_linked, master_core_coord, grid_size);
+        arch_,
+        devices_,
+        num_devices_,
+        test_case_id,
+        is_multicast,
+        is_linked,
+        mst_core_coord,
+        sub_start_core_coord,
+        sub_grid_size);
 }
 
 /* ========== 5x5 ========== */
@@ -388,32 +417,45 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticast5x5PacketSizes) {
     bool is_multicast = true;
     bool is_linked = false;
 
-    CoreCoord master_core_coord = {0, 0};
-    CoreCoord grid_size = {5, 5};
+    CoreCoord mst_core_coord = {0, 0};
+    CoreCoord sub_start_core_coord = {0, 0};
+    CoreCoord sub_grid_size = {5, 5};
 
     tt::tt_metal::unit_tests::dm::core_to_all::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, is_multicast, is_linked, master_core_coord, grid_size);
+        arch_,
+        devices_,
+        num_devices_,
+        test_case_id,
+        is_multicast,
+        is_linked,
+        mst_core_coord,
+        sub_start_core_coord,
+        sub_grid_size);
 }
 
-/* ========== 11x10 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticast11x10PacketSizes) {
+/* ========== All ========== */
+TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastPacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 5;
 
     bool is_multicast = true;
     bool is_linked = false;
 
-    CoreCoord master_core_coord = {0, 0};
-    CoreCoord grid_size = {
+    CoreCoord mst_core_coord = {0, 0};
+    CoreCoord sub_start_core_coord = {0, 0};
+    CoreCoord sub_grid_size = {
         devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
-    // Limit the grid size to 100 cores because the max allowed kernel args is 256
-    if (grid_size.x * grid_size.y > 100) {
-        uint32_t smaller_dim = grid_size.x > grid_size.y ? grid_size.y : grid_size.x;
-        grid_size = {smaller_dim, smaller_dim};
-    }
 
     tt::tt_metal::unit_tests::dm::core_to_all::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, is_multicast, is_linked, master_core_coord, grid_size);
+        arch_,
+        devices_,
+        num_devices_,
+        test_case_id,
+        is_multicast,
+        is_linked,
+        mst_core_coord,
+        sub_start_core_coord,
+        sub_grid_size);
 }
 
 /* ========== MULTICAST LINKED ========== */
@@ -426,11 +468,20 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinked2x2PacketSizes) {
     bool is_multicast = true;
     bool is_linked = true;
 
-    CoreCoord master_core_coord = {0, 0};
-    CoreCoord grid_size = {2, 2};
+    CoreCoord mst_core_coord = {0, 0};
+    CoreCoord sub_start_core_coord = {0, 0};
+    CoreCoord sub_grid_size = {2, 2};
 
     tt::tt_metal::unit_tests::dm::core_to_all::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, is_multicast, is_linked, master_core_coord, grid_size);
+        arch_,
+        devices_,
+        num_devices_,
+        test_case_id,
+        is_multicast,
+        is_linked,
+        mst_core_coord,
+        sub_start_core_coord,
+        sub_grid_size);
 }
 
 /* ========== 5x5 ========== */
@@ -441,32 +492,45 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinked5x5PacketSizes) {
     bool is_multicast = true;
     bool is_linked = true;
 
-    CoreCoord master_core_coord = {0, 0};
-    CoreCoord grid_size = {5, 5};
+    CoreCoord mst_core_coord = {0, 0};
+    CoreCoord sub_start_core_coord = {0, 0};
+    CoreCoord sub_grid_size = {5, 5};
 
     tt::tt_metal::unit_tests::dm::core_to_all::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, is_multicast, is_linked, master_core_coord, grid_size);
+        arch_,
+        devices_,
+        num_devices_,
+        test_case_id,
+        is_multicast,
+        is_linked,
+        mst_core_coord,
+        sub_start_core_coord,
+        sub_grid_size);
 }
 
 /* ========== 11x10 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinked11x10PacketSizes) {
+TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinkedPacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 8;
 
     bool is_multicast = true;
     bool is_linked = true;
 
-    CoreCoord master_core_coord = {0, 0};
-    CoreCoord grid_size = {
+    CoreCoord mst_core_coord = {0, 0};
+    CoreCoord sub_start_core_coord = {0, 0};
+    CoreCoord sub_grid_size = {
         devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
-    // Limit the grid size to 100 cores because the max allowed kernel args is 256
-    if (grid_size.x * grid_size.y > 100) {
-        uint32_t smaller_dim = grid_size.x > grid_size.y ? grid_size.y : grid_size.x;
-        grid_size = {smaller_dim, smaller_dim};
-    }
 
     tt::tt_metal::unit_tests::dm::core_to_all::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, is_multicast, is_linked, master_core_coord, grid_size);
+        arch_,
+        devices_,
+        num_devices_,
+        test_case_id,
+        is_multicast,
+        is_linked,
+        mst_core_coord,
+        sub_start_core_coord,
+        sub_grid_size);
 }
 
 /* ========== DIRECTED IDEAL ========== */
@@ -474,37 +538,76 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinked11x10PacketSizes)
 /* ========== UNICAST ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal) {
     // Parameters
-    uint32_t test_id = 52;  // Arbitrary test id
+    uint32_t test_case_id = 52;  // Arbitrary test id
 
     bool is_multicast = false;
     bool is_linked = false;
 
+    CoreCoord mst_core_coord = {0, 0};
+    CoreCoord sub_start_core_coord = {0, 0};
+    CoreCoord sub_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+
     tt::tt_metal::unit_tests::dm::core_to_all::directed_ideal_test(
-        arch_, devices_, num_devices_, test_id, is_multicast, is_linked);
+        arch_,
+        devices_,
+        num_devices_,
+        test_case_id,
+        is_multicast,
+        is_linked,
+        mst_core_coord,
+        sub_start_core_coord,
+        sub_grid_size);
 }
 
 /* ========== MULTICAST ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
     // Parameters
-    uint32_t test_id = 53;  // Arbitrary test id
+    uint32_t test_case_id = 53;  // Arbitrary test id
 
     bool is_multicast = true;
     bool is_linked = false;
 
+    CoreCoord mst_core_coord = {0, 0};
+    CoreCoord sub_start_core_coord = {0, 0};
+    CoreCoord sub_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+
     tt::tt_metal::unit_tests::dm::core_to_all::directed_ideal_test(
-        arch_, devices_, num_devices_, test_id, is_multicast, is_linked);
+        arch_,
+        devices_,
+        num_devices_,
+        test_case_id,
+        is_multicast,
+        is_linked,
+        mst_core_coord,
+        sub_start_core_coord,
+        sub_grid_size);
 }
 
 /* ========== MULTICAST LINKED ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal) {
     // Parameters
-    uint32_t test_id = 54;  // Arbitrary test id
+    uint32_t test_case_id = 54;  // Arbitrary test id
 
     bool is_multicast = true;
     bool is_linked = true;
 
+    CoreCoord mst_core_coord = {0, 0};
+    CoreCoord sub_start_core_coord = {0, 0};
+    CoreCoord sub_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+
     tt::tt_metal::unit_tests::dm::core_to_all::directed_ideal_test(
-        arch_, devices_, num_devices_, test_id, is_multicast, is_linked);
+        arch_,
+        devices_,
+        num_devices_,
+        test_case_id,
+        is_multicast,
+        is_linked,
+        mst_core_coord,
+        sub_start_core_coord,
+        sub_grid_size);
 }
 
 }  // namespace tt::tt_metal
