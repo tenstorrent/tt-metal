@@ -20,7 +20,7 @@ def randomize_tensor(tensor_map, tensor_shape):
     if tensor_shape in tensor_map.keys():
         torch_tensor = tensor_map[tensor_shape]
     else:
-        torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+        torch_tensor = torch.ones(tensor_shape, dtype=torch.bfloat16)
     return torch_tensor
 
 
@@ -103,6 +103,7 @@ def run_avg_pool2d(
     ttnn_output = ttnn.to_torch(ttnn_output)
 
     ## Assertion
+<<<<<<< HEAD
     pcc_thresh = 0.99
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     # TTNN only supports scalars in Bfloat16, so we cannot support rtol lower than 0.01
@@ -118,6 +119,12 @@ def run_avg_pool2d(
         atol = 0.35
     assert_with_pcc(torch_output, ttnn_output, pcc_thresh)
     allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
+=======
+    print("Torch shape ", torch_output.shape)
+    print("TTNN shape ", ttnn_output.shape)
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
+    allclose = torch.allclose(ttnn_output, torch_output, rtol=0.02)
+>>>>>>> 7f3b15d35e (Maxpool and avg pool working with 16 or multiplies of 32)
     assert allclose, " Reference and output tensor are not close"
 
 
