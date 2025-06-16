@@ -335,7 +335,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicast2x2PacketSizes) {
 }
 
 /* ========== 5x5 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicast4x4PacketSizes) {
+TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicast5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 1;
 
