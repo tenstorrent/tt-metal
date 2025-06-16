@@ -8,7 +8,7 @@
 #include <tuple>
 #include <utility>
 
-namespace tt::stl {
+namespace ttsl {
 
 // `StrongType` provides a strongly-typed wrapper around a value to prevent accidental type conversions.
 //
@@ -102,14 +102,20 @@ private:
     T value_;
 };
 
-}  // namespace tt::stl
+}  // namespace ttsl
 
 template <typename T, typename Tag>
-std::ostream& operator<<(std::ostream& os, const tt::stl::StrongType<T, Tag>& h) {
+std::ostream& operator<<(std::ostream& os, const ttsl::StrongType<T, Tag>& h) {
     return os << *h;
 }
 
 template <typename T, typename Tag>
-struct std::hash<tt::stl::StrongType<T, Tag>> {
-    std::size_t operator()(const tt::stl::StrongType<T, Tag>& h) const noexcept { return std::hash<T>{}(*h); }
+struct std::hash<ttsl::StrongType<T, Tag>> {
+    std::size_t operator()(const ttsl::StrongType<T, Tag>& h) const noexcept { return std::hash<T>{}(*h); }
 };
+
+namespace tt {
+namespace [[deprecated("Use ttsl namespace instead")]] stl {
+using namespace ::ttsl;
+}  // namespace stl
+}  // namespace tt
