@@ -966,9 +966,6 @@ def test_demo_text(
         )
 
         # check measurements against CI performance targets
-        # Real measured decode_t/s values from benchmark data
-        # GitHub Actions run: https://github.com/tenstorrent/tt-metal/actions/runs/15598339287
-        # [INFO] filtered by `batch_size=32`
         ci_target_ttft = {
             # N150 targets (milliseconds)
             "N150_Llama3.2-1B": 25,
