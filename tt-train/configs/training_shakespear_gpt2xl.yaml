@@ -23,3 +23,7 @@ training_config:
     max_sequence_length: 1024
     experimental:
       use_composite_layernorm: false
+
+device_config:
+  enable_tp: true
+  mesh_shape: [1,2]

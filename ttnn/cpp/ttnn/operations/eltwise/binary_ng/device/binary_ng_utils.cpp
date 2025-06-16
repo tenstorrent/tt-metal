@@ -107,14 +107,19 @@ std::string BinaryNgKernelConfig::bcast_input_str() const {
 
 std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
     constexpr std::string_view root = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels";
+    constexpr std::string_view root_ng = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng";
     constexpr std::string_view dataflow = "{}/dataflow/{}";
     constexpr std::string_view compute = "{}/compute/{}";
 
     switch (kernel_name) {
-        case KernelName::ReaderNoBcastSplit:
-            return fmt::format(dataflow, root, "reader_interleaved_no_bcast_split.cpp");
-        case KernelName::WriterNoBcastSplit:
-            return fmt::format(dataflow, root, "writer_interleaved_no_bcast_split.cpp");
+        case KernelName::ReaderNoBcastNg: return fmt::format(dataflow, root_ng, "reader_interleaved_no_bcast.cpp");
+        case KernelName::ReaderRowBcastNg: return fmt::format(dataflow, root_ng, "reader_interleaved_row_bcast.cpp");
+        case KernelName::ReaderColBcastNg: return fmt::format(dataflow, root_ng, "reader_interleaved_col_bcast.cpp");
+        case KernelName::ReaderRowBColABcastNg:
+            return fmt::format(dataflow, root_ng, "reader_interleaved_row_col_mixed_bcast.cpp");
+        case KernelName::ReaderScalarBcastNg:
+            return fmt::format(dataflow, root_ng, "reader_interleaved_scalar_bcast.cpp");
+        case KernelName::WriterNoBcastNg: return fmt::format(dataflow, root_ng, "writer_interleaved_no_bcast.cpp");
         case KernelName::ReaderNoBcast: return fmt::format(dataflow, root, "reader_interleaved_no_bcast.cpp");
         case KernelName::ReaderRowBcast: return fmt::format(dataflow, root, "reader_interleaved_row_bcast.cpp");
         case KernelName::ReaderColBcast: return fmt::format(dataflow, root, "reader_interleaved_col_bcast.cpp");
@@ -409,8 +414,9 @@ void add_activation_defines(
         });
 }
 
-std::map<std::string, std::string> make_dataflow_defines(const DataType dtype) {
+std::map<std::string, std::string> make_dataflow_defines(const DataType dtype, const DataType b_dtype) {
     std::map<std::string, std::string> defines;
+    // to maintain backward compatibility, we need to support both dtype and b_dtype
     if (dtype == DataType::FLOAT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
@@ -431,6 +437,28 @@ std::map<std::string, std::string> make_dataflow_defines(const DataType dtype) {
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";
         defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
+    }
+
+    if (b_dtype == DataType::FLOAT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<float>";
+        defines["FILL_WITH_VALUE_FLOAT_B"] = "fill_with_val<1024, float>";
+    } else if (b_dtype == DataType::INT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<int32_t>";
+        defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, int32_t>";
+    } else if (b_dtype == DataType::UINT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<uint32_t>";
+        defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, uint32_t>";
+    } else {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfloat16";
+        defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
     }
     return defines;
 }
