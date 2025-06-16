@@ -7,6 +7,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include <fabric_host_interface.h>
 
 #include <cstdint>
 #include <cstddef>
@@ -287,6 +288,9 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
 
 void kernel_main() {
     using namespace tt::tt_fabric;
+    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
+        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+
     size_t arg_idx = 0;
 
     const size_t dest_bank_addr = get_arg_val<uint32_t>(arg_idx++);
