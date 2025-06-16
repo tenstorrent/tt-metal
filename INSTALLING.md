@@ -162,7 +162,30 @@ source python_env/bin/activate
 - (optional) Software dependencies for profiling use:
   - Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
 
-- Continue to [You Are All Set!](#you-are-all-set)
+#### To verify your installation (for source or wheel installation only), try executing a programming example:
+
+- First, set the following environment variables:
+
+  - Run the appropriate command for the Tenstorrent card you have installed:
+
+  | Card             | Command                              |
+  |------------------|--------------------------------------|
+  | Grayskull        | ```export ARCH_NAME=grayskull```     |
+  | Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
+  | Blackhole        | ```export ARCH_NAME=blackhole```     |
+
+  - Run:
+  ```
+  export TT_METAL_HOME=$(pwd)
+  export PYTHONPATH=$(pwd)
+  ```
+
+- Then, try running a programming example:
+  ```
+  python3 -m ttnn.examples.usage.run_op_on_device
+  ```
+
+- For more programming examples to try, visit Tenstorrent's [TT-NN Basic Examples Page](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [Simple Kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/examples/index.html)
 
 ---
 
@@ -210,36 +233,7 @@ To try our pre-built models in `models/`, you must:
   sudo apt-get install cpufrequtils
   sudo cpupower frequency-set -g performance
   ```
-
----
-
-### You are All Set!
-
-#### To verify your installation (for source or wheel installation only), try executing a programming example:
-
-- First, set the following environment variables:
-
-  - Run the appropriate command for the Tenstorrent card you have installed:
-
-  | Card             | Command                              |
-  |------------------|--------------------------------------|
-  | Grayskull        | ```export ARCH_NAME=grayskull```     |
-  | Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
-  | Blackhole        | ```export ARCH_NAME=blackhole```     |
-
-  - Run:
-  ```
-  export TT_METAL_HOME=$(pwd)
-  export PYTHONPATH=$(pwd)
-  ```
-
-- Then, try running a programming example:
-  ```
-  python3 -m ttnn.examples.usage.run_op_on_device
-  ```
-
-- For more programming examples to try, visit Tenstorrent's [TT-NN Basic Examples Page](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [Simple Kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/examples/index.html)
-
+  
 ---
 
 ### Interested in Contributing?
