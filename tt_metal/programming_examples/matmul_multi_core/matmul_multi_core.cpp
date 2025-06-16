@@ -17,6 +17,9 @@ using namespace std;
 using namespace tt;
 using namespace tt::tt_metal;
 
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
 void golden_matmul(
     std::vector<bfloat16>& a,
     std::vector<bfloat16>& b,
@@ -179,7 +182,7 @@ void matmul_multi_core(
      */
     auto reader_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
+        OVERRIDE_KERNEL_PREFIX "matmul_common/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -188,7 +191,7 @@ void matmul_multi_core(
 
     auto writer_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_common/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        OVERRIDE_KERNEL_PREFIX "matmul_common/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -205,7 +208,7 @@ void matmul_multi_core(
 
     auto matmul_multi_core_kernel_group_1_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_common/kernels/compute/bmm.cpp",
+        OVERRIDE_KERNEL_PREFIX "matmul_common/kernels/compute/bmm.cpp",
         core_group_1,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_1});
 
@@ -220,7 +223,7 @@ void matmul_multi_core(
 
         auto matmul_multi_core_kernel_group_2_id = tt_metal::CreateKernel(
             program,
-            "tt_metal/programming_examples/matmul_common/kernels/compute/bmm.cpp",
+            OVERRIDE_KERNEL_PREFIX "matmul_common/kernels/compute/bmm.cpp",
             core_group_2,
             tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_2});
     }
