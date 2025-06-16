@@ -4,41 +4,14 @@
 
 #pragma once
 
+#include <memory>
+
 #include <tt_stl/small_vector.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::distributed {
-
-// Mapper interface that distributes a host tensor onto a multi-device configuration.
-// TODO: #22258 - Make this class concrete.
-class TensorToMesh {
-public:
-    virtual ~TensorToMesh() = default;
-    virtual Tensor operator()(const Tensor& tensor) const = 0;
-    virtual tt::tt_metal::DistributedTensorConfig config() const = 0;
-};
-
-// Composer interface that aggregates a multi-device tensor into a host tensor.
-class MeshToTensor {
-public:
-    virtual ~MeshToTensor() = default;
-    virtual Tensor compose(const std::vector<Tensor>& tensors) const = 0;
-};
-
-// Creates a mapper that replicates a tensor across all devices.
-// Shorthand for specifying a MeshMapperConfig that replicates the tensor over the entire mesh.
-std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device);
-
-// Creates a mapper that shards a tensor along a single dimension.
-// Shorthand for specifying a MeshMapperConfig with 1D mesh shape, and sharding the tensor along a single dimension of
-// the tensor.
-std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim);
-
-// Creates a composer that concatenates a tensor across a single dimension.
-// Shorthand for specifying a MeshComposerConfig with 1D mesh shape, and concatenating the tensor across a single
-// dimension.
-std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(MeshDevice& mesh_device, int dim);
 
 struct MeshMapperConfig {
     // Specifies the tensor should be replicated across devices.
@@ -85,6 +58,32 @@ struct MeshMapperConfig {
     tt::stl::SmallVector<std::variant<Replicate, Shard>> placements;
 };
 
+// Distributes a host tensor onto a multi-device configuration.
+class TensorToMesh {
+public:
+    ~TensorToMesh();
+    TensorToMesh(TensorToMesh&& other) noexcept;
+    TensorToMesh& operator=(TensorToMesh&& other) noexcept;
+    TensorToMesh(const TensorToMesh&) = delete;
+    TensorToMesh& operator=(const TensorToMesh&) = delete;
+
+    static TensorToMesh create(
+        const MeshDevice& mesh_device,
+        const MeshMapperConfig& config,
+        const std::optional<ttnn::MeshShape>& shape = std::nullopt);
+
+    Tensor operator()(const Tensor& tensor) const;
+
+    tt::tt_metal::DistributedTensorConfig config() const;
+
+private:
+    class Impl;
+
+    explicit TensorToMesh(std::unique_ptr<Impl> impl);
+
+    std::unique_ptr<Impl> impl_;
+};
+
 // Creates an ND mesh mapper that distributes a tensor according to the `config`.
 // If `shape` is not provided, the shape of `mesh_device` is used.
 // Otherwise, the size of the shape must be smaller than the mesh device shape.
@@ -93,9 +92,42 @@ std::unique_ptr<TensorToMesh> create_mesh_mapper(
     const MeshMapperConfig& config,
     const std::optional<ttnn::MeshShape>& shape = std::nullopt);
 
+// Creates a mapper that replicates a tensor across all devices.
+// Shorthand for specifying a MeshMapperConfig that replicates the tensor over the entire mesh.
+std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device);
+
+// Creates a mapper that shards a tensor along a single dimension.
+// Shorthand for specifying a MeshMapperConfig with 1D mesh shape, and sharding the tensor along a single dimension of
+// the tensor.
+std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim);
+
 struct MeshComposerConfig {
     // Specifies dimension of the tensor to concatenate.
     std::vector<int> dims;
+};
+
+// Composer interface that aggregates a multi-device tensor into a host tensor.
+class MeshToTensor {
+public:
+    ~MeshToTensor();
+    MeshToTensor(MeshToTensor&& other) noexcept;
+    MeshToTensor& operator=(MeshToTensor&& other) noexcept;
+    MeshToTensor(const MeshToTensor&) = delete;
+    MeshToTensor& operator=(const MeshToTensor&) = delete;
+
+    static MeshToTensor create(
+        const MeshDevice& mesh_device,
+        const MeshComposerConfig& config,
+        const std::optional<ttnn::MeshShape>& shape = std::nullopt);
+
+    Tensor compose(const std::vector<Tensor>& tensors) const;
+
+private:
+    class Impl;
+
+    explicit MeshToTensor(std::unique_ptr<Impl> impl);
+
+    std::unique_ptr<Impl> impl_;
 };
 
 // Creates an ND mesh composer that aggregates a tensor according to the `config`.
@@ -105,6 +137,11 @@ std::unique_ptr<MeshToTensor> create_mesh_composer(
     MeshDevice& mesh_device,
     const MeshComposerConfig& config,
     const std::optional<ttnn::MeshShape>& shape = std::nullopt);
+
+// Creates a composer that concatenates a tensor across a single dimension.
+// Shorthand for specifying a MeshComposerConfig with 1D mesh shape, and concatenating the tensor across a single
+// dimension.
+std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(MeshDevice& mesh_device, int dim);
 
 // Distributes a host tensor onto multi-device configuration according to the `mapper`.
 Tensor distribute_tensor(

@@ -62,7 +62,9 @@ TensorSpec compute_tensor_spec_for_shards(
     return TensorSpec(*shard_shape, global_layout);
 }
 
-class NdTensorToMesh : public TensorToMesh {
+}  // namespace
+
+class TensorToMesh::Impl {
 public:
     // Specifies how a tensor sharded over a specific shape will be distributed to a mesh device, which potentially
     // has a different shape.
@@ -75,7 +77,7 @@ public:
         SUBMESH,
     };
 
-    NdTensorToMesh(
+    Impl(
         const MeshDevice& mesh_device,
         DistributionMode distribution_mode,
         const MeshShape& distribution_shape,
@@ -89,7 +91,7 @@ public:
         config_(config),
         distributed_tensor_config_(distributed_tensor_config) {}
 
-    Tensor operator()(const Tensor& tensor) const override {
+    Tensor operator()(const Tensor& tensor) const {
         switch (tensor.tensor_spec().data_type()) {
             case tt::tt_metal::DataType::BFLOAT8_B:
             case tt::tt_metal::DataType::BFLOAT4_B:
@@ -104,7 +106,7 @@ public:
         TT_THROW("Unreachable");
     }
 
-    tt::tt_metal::DistributedTensorConfig config() const override { return distributed_tensor_config_; }
+    tt::tt_metal::DistributedTensorConfig config() const { return distributed_tensor_config_; }
 
 private:
     template <typename T>
@@ -239,11 +241,11 @@ private:
     tt::tt_metal::DistributedTensorConfig distributed_tensor_config_;
 };
 
-class NdMeshToTensor : public MeshToTensor {
+class MeshToTensor::Impl {
 public:
-    NdMeshToTensor(const MeshShape& shape, const MeshComposerConfig& config) : shape_(shape), config_(config) {}
+    Impl(const MeshShape& shape, const MeshComposerConfig& config) : shape_(shape), config_(config) {}
 
-    Tensor compose(const std::vector<Tensor>& tensors) const override {
+    Tensor compose(const std::vector<Tensor>& tensors) const {
         TT_FATAL(
             shape_.dims() == 1 || tensors.size() == shape_.mesh_size(),
             "ND composition requires the number of tensors {} to match the mesh shape {}",
@@ -285,44 +287,15 @@ private:
     MeshComposerConfig config_;
 };
 
-}  // namespace
+TensorToMesh::TensorToMesh(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+TensorToMesh::~TensorToMesh() = default;
+TensorToMesh::TensorToMesh(TensorToMesh&& other) noexcept = default;
+TensorToMesh& TensorToMesh::operator=(TensorToMesh&& other) noexcept = default;
+Tensor TensorToMesh::operator()(const Tensor& tensor) const { return (*impl_)(tensor); }
+tt::tt_metal::DistributedTensorConfig TensorToMesh::config() const { return impl_->config(); }
 
-std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device) {
-    return std::make_unique<NdTensorToMesh>(
-        mesh_device,
-        NdTensorToMesh::DistributionMode::ROW_MAJOR,
-        MeshShape(mesh_device.num_devices()),
-        MeshMapperConfig{
-            .placements =
-                {
-                    MeshMapperConfig::Replicate{},
-                }},
-        tt::tt_metal::DistributedTensorConfig{tt::tt_metal::ReplicateTensor{mesh_device.num_devices()}});
-}
-
-std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim) {
-    return std::make_unique<NdTensorToMesh>(
-        mesh_device,
-        NdTensorToMesh::DistributionMode::ROW_MAJOR,
-        MeshShape(mesh_device.num_devices()),
-        MeshMapperConfig{
-            .placements =
-                {
-                    MeshMapperConfig::Shard{dim},
-                }},
-        tt::tt_metal::DistributedTensorConfig{tt::tt_metal::ShardTensor{dim}});
-}
-
-std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(MeshDevice& mesh_device, int dim) {
-    return std::make_unique<NdMeshToTensor>(
-        MeshShape(mesh_device.num_devices()),
-        MeshComposerConfig{
-            .dims = {dim},
-        });
-}
-
-std::unique_ptr<TensorToMesh> create_mesh_mapper(
-    MeshDevice& mesh_device, const MeshMapperConfig& config, const std::optional<MeshShape>& shape) {
+TensorToMesh TensorToMesh::create(
+    const MeshDevice& mesh_device, const MeshMapperConfig& config, const std::optional<ttnn::MeshShape>& shape) {
     const auto distributed_shape = shape.value_or(mesh_device.shape());
     TT_FATAL(
         distributed_shape.mesh_size() <= mesh_device.shape().mesh_size(),
@@ -340,19 +313,19 @@ std::unique_ptr<TensorToMesh> create_mesh_mapper(
     const auto distribution_mode = [&]() {
         if (!shape.has_value()) {
             // When no shape is supplied, row-major order is equivalent to submesh.
-            return NdTensorToMesh::DistributionMode::SUBMESH;
+            return Impl::DistributionMode::SUBMESH;
         } else if (shape->dims() != mesh_device.shape().dims()) {
             // Shapes have different dimensions, so a reshape will be required.
-            return NdTensorToMesh::DistributionMode::ROW_MAJOR;
+            return Impl::DistributionMode::ROW_MAJOR;
         } else {
             // Check if `shape` fits within the mesh device. If it does, we can use submesh distribution. Otherwise,
             // a reshape will be required, and shards will be distributed in row-major order over the mesh device.
             for (size_t i = 0; i < shape->dims(); ++i) {
                 if ((*shape)[i] > mesh_device.shape()[i]) {
-                    return NdTensorToMesh::DistributionMode::ROW_MAJOR;
+                    return Impl::DistributionMode::ROW_MAJOR;
                 }
             }
-            return NdTensorToMesh::DistributionMode::SUBMESH;
+            return Impl::DistributionMode::SUBMESH;
         }
     }();
 
@@ -366,12 +339,20 @@ std::unique_ptr<TensorToMesh> create_mesh_mapper(
         distributed_tensor_config = tt::tt_metal::DistributedTensorConfig{tt::tt_metal::AllGatherTensor{}};
     }
 
-    return std::make_unique<NdTensorToMesh>(
+    auto impl = std::make_unique<TensorToMesh::Impl>(
         mesh_device, distribution_mode, distributed_shape, config, distributed_tensor_config);
+
+    return TensorToMesh(std::move(impl));
 }
 
-std::unique_ptr<MeshToTensor> create_mesh_composer(
-    MeshDevice& mesh_device, const MeshComposerConfig& config, const std::optional<MeshShape>& shape) {
+MeshToTensor::MeshToTensor(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+MeshToTensor::~MeshToTensor() = default;
+MeshToTensor::MeshToTensor(MeshToTensor&& other) noexcept = default;
+MeshToTensor& MeshToTensor::operator=(MeshToTensor&& other) noexcept = default;
+Tensor MeshToTensor::compose(const std::vector<Tensor>& tensors) const { return impl_->compose(tensors); }
+
+MeshToTensor MeshToTensor::create(
+    const MeshDevice& mesh_device, const MeshComposerConfig& config, const std::optional<ttnn::MeshShape>& shape) {
     const auto distributed_shape = shape.value_or(mesh_device.shape());
     TT_FATAL(
         distributed_shape.mesh_size() <= mesh_device.shape().mesh_size(),
@@ -385,7 +366,36 @@ std::unique_ptr<MeshToTensor> create_mesh_composer(
         distributed_shape,
         config);
 
-    return std::make_unique<NdMeshToTensor>(distributed_shape, config);
+    return MeshToTensor(std::make_unique<Impl>(distributed_shape, config));
+}
+
+std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device) {
+    return std::make_unique<TensorToMesh>(TensorToMesh::create(
+        mesh_device,
+        MeshMapperConfig{.placements = {MeshMapperConfig::Replicate{}}},
+        MeshShape(mesh_device.num_devices())));
+}
+
+std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim) {
+    return std::make_unique<TensorToMesh>(TensorToMesh::create(
+        mesh_device,
+        MeshMapperConfig{.placements = {MeshMapperConfig::Shard{dim}}},
+        MeshShape(mesh_device.num_devices())));
+}
+
+std::unique_ptr<TensorToMesh> create_mesh_mapper(
+    MeshDevice& mesh_device, const MeshMapperConfig& config, const std::optional<MeshShape>& shape) {
+    return std::make_unique<TensorToMesh>(TensorToMesh::create(mesh_device, config, shape));
+}
+
+std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(MeshDevice& mesh_device, int dim) {
+    return std::make_unique<MeshToTensor>(
+        MeshToTensor::create(mesh_device, MeshComposerConfig{.dims = {dim}}, MeshShape(mesh_device.num_devices())));
+}
+
+std::unique_ptr<MeshToTensor> create_mesh_composer(
+    MeshDevice& mesh_device, const MeshComposerConfig& config, const std::optional<MeshShape>& shape) {
+    return std::make_unique<MeshToTensor>(MeshToTensor::create(mesh_device, config, shape));
 }
 
 Tensor distribute_tensor(
