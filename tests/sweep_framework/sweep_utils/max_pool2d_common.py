@@ -72,7 +72,7 @@ def run_max_pool2d(
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
     act_shape = [in_n, in_c, in_h, in_w]
-    act = torch.ones(act_shape, dtype=torch.bfloat16)
+    act = torch.randn(act_shape, dtype=torch.bfloat16)
     act_shape = (1, 1, in_n * in_h * in_w, in_c)
     act_permuted = torch.permute(act, (0, 2, 3, 1))
     act_reshaped = act_permuted.reshape(act_shape)
