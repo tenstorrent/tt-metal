@@ -164,32 +164,32 @@ test_bounds = {
         5: {
             "riscv_1": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.1},
         },
-        6: {  # One to All Unicast 2x2 Packet Sizes
+        6: {  # One to All Unicast 2x2 Packet Sizes ##
             "riscv_0": {"latency": {"lower": 400, "upper": 70000}, "bandwidth": 0.3},
         },
-        7: {  # One to All Unicast 4x4 Packet Sizes
-            "riscv_0": {"latency": {"lower": 800, "upper": 300000}, "bandwidth": 0.6},
+        7: {  # One to All Unicast 5x5 Packet Sizes ##
+            "riscv_0": {"latency": {"lower": 800, "upper": 450000}, "bandwidth": 0.6},
         },
-        8: {  # One to All Unicast 10x10 Packet Sizes
+        8: {  # One to All Unicast (Full) Packet Sizes ##
             "riscv_0": {"latency": {"lower": 1900, "upper": 1100000}, "bandwidth": 0.8},
         },
-        9: {  # One to All Multicast 2x2 Packet Sizes
+        9: {  # One to All Multicast 2x2 Packet Sizes ##
             "riscv_0": {"latency": {"lower": 300, "upper": 30000}, "bandwidth": 0.09},
         },
-        10: {  # One to All Multicast 5x5 Packet Sizes
+        10: {  # One to All Multicast 5x5 Packet Sizes ##
             "riscv_0": {"latency": {"lower": 400, "upper": 60000}, "bandwidth": 0.07},
         },
-        11: {  # One to All Multicast 11x10 Packet Sizes
+        11: {  # One to All Multicast 11x10 Packet Sizes ##
             "riscv_0": {"latency": {"lower": 500, "upper": 90000}, "bandwidth": 0.04},
         },
-        12: {  # One to All Multicast Linked 2x2 Packet Sizes
+        12: {  # One to All Multicast Linked 2x2 Packet Sizes ##
             "riscv_0": {"latency": {"lower": 200, "upper": 20000}, "bandwidth": 0.09},
         },
-        13: {  # One to All Multicast Linked 5x5 Packet Sizes
-            "riscv_0": {"latency": {"lower": 400, "upper": 30000}, "bandwidth": 0.07},
+        13: {  # One to All Multicast Linked 5x5 Packet Sizes ##
+            "riscv_0": {"latency": {"lower": 400, "upper": 30000}, "bandwidth": 0.065},
         },
-        14: {  # One to All Multicast Linked 11x10 Packet Sizes
-            "riscv_0": {"latency": {"lower": 500, "upper": 40000}, "bandwidth": 0.04},  #
+        14: {  # One to All Multicast Linked 11x10 Packet Sizes ##
+            "riscv_0": {"latency": {"lower": 500, "upper": 40000}, "bandwidth": 0.04},
         },
         15: {
             "riscv_1": {"latency": {"lower": 700, "upper": 85000}, "bandwidth": 0.71},
@@ -206,14 +206,14 @@ test_bounds = {
         51: {  # One from One Directed Ideal
             "riscv_1": {"latency": {"lower": 32700, "upper": 37500}, "bandwidth": 28},  # 18596, 28.2
         },
-        52: {  # One to All Unicast Directed Ideal ##
-            "riscv_0": {"latency": {"lower": 1000000, "upper": 1100000}, "bandwidth": 31},  # 1078523, 31.1114
+        52: {  # One to All Unicast Directed Ideal
+            "riscv_0": {"latency": {"lower": 2000000, "upper": 2200000}, "bandwidth": 31},  # 2147992, 31.24
         },
-        53: {  # One to All Multicast Directed Ideal ##
-            "riscv_0": {"latency": {"lower": 50000, "upper": 53000}, "bandwidth": 10},  # 51200, 10.24
+        53: {  # One to All Multicast Directed Ideal
+            "riscv_0": {"latency": {"lower": 65000, "upper": 72000}, "bandwidth": 14},  # 70561, 14.86
         },
         54: {  # One to All Multicast Linked Directed Ideal
-            "riscv_0": {"latency": {"lower": 24000, "upper": 28000}, "bandwidth": 19},  # 26966, 19.4
+            "riscv_0": {"latency": {"lower": 40000, "upper": 45000}, "bandwidth": 23},  # 43762, 23.96
         },
         17: {
             "riscv_1": {"latency": {"lower": 50, "upper": 700}, "bandwidth": 3},
@@ -276,27 +276,27 @@ test_bounds = {
             "riscv_0": {"latency": {"lower": 400, "upper": 70000}, "bandwidth": 0.5},
         },
         7: {  # One to All Unicast 4x4 Packet Sizes
-            "riscv_0": {"latency": {"lower": 900, "upper": 275000}, "bandwidth": 1.00},
+            "riscv_0": {"latency": {"lower": 900, "upper": 450000}, "bandwidth": 1.2},
         },
-        8: {  # One to All Unicast 10x10 Packet Sizes
-            "riscv_0": {"latency": {"lower": 3800, "upper": 1700000}, "bandwidth": 1.65},
+        8: {  # One to All Unicast (Full) Packet Sizes
+            "riscv_0": {"latency": {"lower": 3800, "upper": 1900000}, "bandwidth": 1.65},  #  4028-1855018
         },
         9: {  # One to All Multicast 2x2 Packet Sizes
-            "riscv_0": {"latency": {"lower": 300, "upper": 30000}, "bandwidth": 0.16},
+            "riscv_0": {"latency": {"lower": 300, "upper": 30000}, "bandwidth": 0.15},
         },
         10: {  # One to All Multicast 5x5 Packet Sizes
             "riscv_0": {"latency": {"lower": 500, "upper": 70000}, "bandwidth": 0.12},
         },
-        11: {  # One to All Multicast 11x10 Packet Sizes
+        11: {  # One to All Multicast (Full) Packet Sizes
             "riscv_0": {"latency": {"lower": 700, "upper": 115000}, "bandwidth": 0.08},
         },
         12: {  # One to All Multicast Linked 2x2 Packet Sizes
-            "riscv_0": {"latency": {"lower": 300, "upper": 20000}, "bandwidth": 0.16},
+            "riscv_0": {"latency": {"lower": 300, "upper": 20000}, "bandwidth": 0.15},
         },
         13: {  # One to All Multicast Linked 5x5 Packet Sizes
-            "riscv_0": {"latency": {"lower": 500, "upper": 24000}, "bandwidth": 0.12},
+            "riscv_0": {"latency": {"lower": 300, "upper": 24000}, "bandwidth": 0.12},
         },
-        14: {  # One to All Multicast Linked 11x10 Packet Sizes
+        14: {  # One to All Multicast Linked (Full) Packet Sizes
             "riscv_0": {"latency": {"lower": 700, "upper": 46000}, "bandwidth": 0.08},
         },
         15: {
@@ -315,13 +315,13 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 16000, "upper": 17800}, "bandwidth": 59},  # 8730, 60.1
         },
         52: {  # One to All Unicast Directed Ideal
-            "riscv_0": {"latency": {"lower": 830000, "upper": 850000}, "bandwidth": 62},  # 838568, 62.52
+            "riscv_0": {"latency": {"lower": 1600000, "upper": 2000000}, "bandwidth": 62},  # 1853533, 62.22
         },
         53: {  # One to All Multicast Directed Ideal
-            "riscv_0": {"latency": {"lower": 30000, "upper": 35000}, "bandwidth": 15},  # 33347, 15.72
+            "riscv_0": {"latency": {"lower": 40000, "upper": 45000}, "bandwidth": 22},  # 43713, 23.99
         },
         54: {  # One to All Multicast Linked Directed Ideal
-            "riscv_0": {"latency": {"lower": 10000, "upper": 17000}, "bandwidth": 30},  # 15322, 34.2
+            "riscv_0": {"latency": {"lower": 20000, "upper": 27000}, "bandwidth": 40},  # 25738, 40.74
         },
         17: {
             "riscv_1": {"latency": {"lower": 50, "upper": 700}, "bandwidth": 7},

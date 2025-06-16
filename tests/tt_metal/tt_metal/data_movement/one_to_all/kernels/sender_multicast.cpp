@@ -61,10 +61,6 @@ void kernel_main() {
         noc_semaphore_inc(sem_addr, 1);
     }*/
 
-    DeviceTimestampedData("Bytes per page", bytes_per_page);
-    DeviceTimestampedData("Pages per transaction", pages_per_transaction);
-    DeviceTimestampedData("Bytes per transaction", bytes_per_transaction);
-
     DeviceTimestampedData("Number of transactions", num_of_transactions);
     DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction);
     DeviceTimestampedData("Test id", test_id);
