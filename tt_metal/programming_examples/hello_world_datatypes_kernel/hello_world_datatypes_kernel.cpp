@@ -8,6 +8,10 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
+
 int main() {
     // Initialize Program and Device
 
@@ -36,7 +40,7 @@ int main() {
 
     KernelHandle data_reader_kernel_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/hello_world_datatypes_kernel/kernels/dataflow/float_dataflow_kernel.cpp",
+        OVERRIDE_KERNEL_PREFIX "hello_world_datatypes_kernel/kernels/dataflow/float_dataflow_kernel.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 

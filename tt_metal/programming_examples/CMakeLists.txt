@@ -14,8 +14,8 @@ set(PROGRAMMING_EXAMPLES_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/matmul_multicore_reuse/matmul_multicore_reuse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/matmul_multicore_reuse_mcast/matmul_multicore_reuse_mcast.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/matmul_single_core/matmul_single_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pad/pad_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/sharding/shard_data_rm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pad_multi_core/pad_multi_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shard_data_rm/shard_data_rm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vecadd_sharding/vecadd_sharding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vecadd_multi_core/vecadd_multi_core.cpp
 )
@@ -33,15 +33,19 @@ add_custom_target(
     programming_examples
     DEPENDS
         profiler_examples
-        contributed
         ${PROGRAMMING_EXAMPLES_TEST_TARGETS}
 )
-
 install(
     DIRECTORY
+        add_2_integers_in_compute
+        add_2_integers_in_riscv
+        eltwise_binary
+        eltwise_sfpu
         hello_world_compute_kernel
         hello_world_datamovement_kernel
+        hello_world_datatypes_kernel
         loopback
+        shard_data_rm
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
     # FIXME(afuller): Something funky is happening when installing files into /usr/share/doc on a default Docker image.
     #                 Speculation: some dependency for magic doc handling is missing.
@@ -52,12 +56,17 @@ install(
     "/kernels/"
         EXCLUDE
 )
-
 install(
     DIRECTORY
+        add_2_integers_in_compute
+        add_2_integers_in_riscv
+        eltwise_binary
+        eltwise_sfpu
         hello_world_compute_kernel
         hello_world_datamovement_kernel
+        hello_world_datatypes_kernel
         loopback
+        shard_data_rm
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples
     FILES_MATCHING

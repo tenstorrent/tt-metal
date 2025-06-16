@@ -7,7 +7,9 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
-
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
 int main() {
     /* Silicon accelerator setup */
     IDevice* device = CreateDevice(0);
@@ -53,7 +55,7 @@ int main() {
     /* Specify data movement kernel for reading/writing data to/from DRAM */
     KernelHandle binary_reader_kernel_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/add_2_integers_in_riscv/kernels/reader_writer_add_in_riscv.cpp",
+        OVERRIDE_KERNEL_PREFIX "add_2_integers_in_riscv/kernels/reader_writer_add_in_riscv.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
