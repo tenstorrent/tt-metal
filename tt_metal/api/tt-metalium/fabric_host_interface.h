@@ -92,16 +92,14 @@ struct tensix_routing_l1_info_t {
     uint32_t device_id;         // Current device ID
     uint32_t num_chip_in_mesh;  // Number of chips in the mesh, less than or equal to NUM_CHIPS_PER_MESH
 
-#define NUM_CHANNELS_PER_CHIP 16
 #define NUM_CHIPS_PER_MESH 64
 #define NUM_MESHES_IN_FABRIC 64
-    // TODO: [NUM_CHIPS_PER_MESH][NUM_ROUTING_PLANES]
-    bool intra_mesh_routing_table[NUM_CHIPS_PER_MESH][NUM_CHANNELS_PER_CHIP];
-    bool inter_mesh_routing_table[NUM_CHIPS_PER_MESH][NUM_CHANNELS_PER_CHIP];
+    eth_chan_directions intra_mesh_routing_table[NUM_CHIPS_PER_MESH];
+    eth_chan_directions inter_mesh_routing_table[NUM_MESHES_IN_FABRIC];
 
     // TODO
-    // tensix_edm_adapter_spec intra_mesh_adapter_spec[NUM_CHIPS_PER_MESH][NUM_CHANNELS_PER_CHIP];
-    // tensix_edm_adapter_spec inter_mesh_adapter_spec[NUM_CHIPS_PER_MESH][NUM_CHANNELS_PER_CHIP];
+    // tensix_edm_adapter_spec intra_mesh_adapter_spec[NUM_CHIPS_PER_MESH];
+    // tensix_edm_adapter_spec inter_mesh_adapter_spec[NUM_CHIPS_PER_MESH];
 } __attribute__((packed));
 
 // TODO: not fully decided the size
