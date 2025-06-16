@@ -345,6 +345,15 @@
             "dispatch_duration_relative_margin": 0.5
         },
         "BinaryDeviceOperation_1": {
+            "op_name": "BinaryDeviceOperation_Temerature_Scaling",
+            "kernel_duration": 900,
+            "op_to_op": 720.0,
+            "non-overlapped-dispatch-time": 6464.0,
+            "kernel_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.2,
+            "dispatch_duration_relative_margin": 0.5
+        },
+        "BinaryDeviceOperation_2": {
             "op_name": "BinaryDeviceOperation_Indices_Correction",
             "kernel_duration": 3583.0,
             "op_to_op": 722.0,

@@ -334,9 +334,6 @@ def run_llama3_demo(
 
         # Sampling
         _ = tt_sampling(tt_out[0], top_k, top_p, seed, tt_out_tok=tt_out_tok)  # Compile once with setting the seed
-        _ = tt_sampling(
-            tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok
-        )  # Compile again without seed to obtain random sampling
         logger.info(f"Sampling done")
 
     if not stress_test:
@@ -348,7 +345,10 @@ def run_llama3_demo(
             rot_mat_idxs,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
-    # profiler.end(f"plus one position done")
+
+    _ = tt_sampling(
+        tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok
+    )  # Compile again without seed to obtain random sampling; at this position to simplify test_decoder_device_perf.py
 
     # Capture Trace
     logger.info(f"Capturing model trace...")
