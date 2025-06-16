@@ -20,39 +20,12 @@ namespace ttnn::operations::experimental {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-void check_if_bad_dim_or_shape(
+void validate_inputs(
     const Tensor& input_tensor,
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const int32_t& dim,
     const std::optional<Tensor>& output_tensor) {
-    // if (tensor_args.opt_output.has_value()) {
-    //     const auto& output_tensor{tensor_args.opt_output.value()};
-    //     const auto& output_shape{output_tensor.logical_shape()};
-    //     const auto& output_rank{output_shape.rank()};
-    //     const auto& output_dtype{output_tensor.dtype()};
-
-    //     TT_FATAL(
-    //         input_shape == output_shape,
-    //         "The shapes of input and output tensors must be equal (input_shape: {}, output_shape: {}).",
-    //         input_shape,
-    //         output_shape);
-
-    //     TT_FATAL(
-    //         input_dtype == output_dtype,
-    //         "input_dtype and output_dtype must be the same (input_dtype: {}, output_dtype: {})",
-    //         magic_enum::enum_name(input_dtype),
-    //         magic_enum::enum_name(output_dtype));
-
-    //     TT_FATAL(
-    //         output_tensor.get_layout() == input_tensor.get_layout(),
-    //         "Output tensor's and input tensor's layouts must be the same.");
-    //     TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor's buffer is null.");
-    //     TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor must be allocated on a
-    //     device."); TT_FATAL(!output_tensor.is_sharded(), "Sharded tensors are not supported - output_tensor is
-    //     sharded.");
-    // }
-
     const int32_t normalized_dim{(dim < 0) ? (dim + input_tensor.padded_shape().rank()) : dim};
 
     const auto& input_dtype{input_tensor.dtype()};
@@ -226,7 +199,7 @@ Tensor ScatterOperation::invoke(
     const ttnn::Shape original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.padded_shape().rank();
 
-    CMAKE_UNIQUE_NAMESPACE::check_if_bad_dim_or_shape(input_tensor, index_tensor, source_tensor, dim, opt_output);
+    CMAKE_UNIQUE_NAMESPACE::validate_inputs(input_tensor, index_tensor, source_tensor, dim, opt_output);
 
     const auto original_index_tensor_lshape = index_tensor.logical_shape();
     if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
