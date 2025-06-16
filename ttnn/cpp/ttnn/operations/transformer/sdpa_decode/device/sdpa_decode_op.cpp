@@ -213,8 +213,9 @@ void ScaledDotProductAttentionDecode::validate(
 std::vector<TensorSpec> ScaledDotProductAttentionDecode::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     auto& input = input_tensors.at(0);
-    return {TensorSpec(
-        input.logical_shape(), TensorLayout(input.dtype(), PageConfig(Layout::ROW_MAJOR), output_mem_config))};
+    ttnn::Shape output_shape = input.logical_shape();
+    output_shape[2] = 32;
+    return {TensorSpec(output_shape, TensorLayout(input.dtype(), PageConfig(Layout::ROW_MAJOR), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(

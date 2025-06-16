@@ -539,10 +539,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     // cb_out_final
     bool row_major_output = true;
-    // auto c_out4_config = CircularBufferConfig(out0_t * out_tile_size, {{CBIndex::c_20, out_df}})
-    //                          .set_page_size(CBIndex::c_20, out_tile_size)
-    //                          .set_tile_dims(CBIndex::c_20, out_tile);
-    auto c_out4_config = CircularBufferConfig(2048, {{CBIndex::c_20, out_df}}).set_page_size(CBIndex::c_20, 256);
+    auto c_out4_config = CircularBufferConfig(out0_t * out_tile_size, {{CBIndex::c_20, out_df}})
+                             .set_page_size(CBIndex::c_20, out_tile_size)
+                             .set_tile_dims(CBIndex::c_20, out_tile);
     if (is_output_sharded) {
         c_out4_config.set_globally_allocated_address(*out0_buffer);
     }
