@@ -14,6 +14,7 @@ struct operation_attributes_t {
     const int32_t dim;
     const tt::tt_metal::MemoryConfig output_memory_config;
     const std::optional<ScatterReductionType> opt_reduction;
+    const bool duplicates_allowed;
 };
 
 struct tensor_args_t {

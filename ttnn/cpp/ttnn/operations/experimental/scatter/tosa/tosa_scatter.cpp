@@ -1,0 +1,171 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "tosa_scatter.hpp"
+
+#include "../device/scatter_device_operation.hpp"
+
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/expand/expand.hpp"
+#include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
+
+namespace ttnn::operations::experimental {
+namespace {
+
+constexpr int32_t LAST_DIMENSION = -1;
+constexpr int32_t W_DIMENSION = -2;
+
+enum class InputTensorType : uint8_t {
+    INPUT,
+    INDEX,
+    SOURCE
+};
+
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+Tensor expand_tensor(const Tensor& tensor, const uint32_t& N, const uint32_t& K, const uint32_t& W, const uint32_t& C, const InputTensorType& input_tensor_type) {
+    switch (input_tensor_type) {
+        case InputTensorType::INPUT: {
+            return ttnn::unsqueeze_to_4D(tensor);
+        }
+
+        case InputTensorType::INDEX: {
+            return ttnn::unsqueeze_to_4D(ttnn::expand(ttnn::reshape(tensor, Shape{N, W, 1}), SmallVector<int32_t>{N, W, C}, tensor.memory_config()));
+        }
+
+        case InputTensorType::SOURCE: {
+            return ttnn::unsqueeze_to_4D(tensor);
+        }
+
+        default: return tensor;
+    }
+}
+
+Tensor pre_tosa_scatter_transform_tensor(const Tensor& tensor, const uint32_t& N, const uint32_t& K, const uint32_t& W, const uint32_t& C, const InputTensorType& input_tensor_type) {
+    if (tensor.logical_shape() == ttnn::Shape{1} || tensor.logical_shape() == ttnn::Shape{0}) {
+        return tensor;
+    }
+
+    Tensor processed_tensor = expand_tensor(tensor, N, K, W, C, input_tensor_type);
+    processed_tensor = ttnn::transpose(processed_tensor, W_DIMENSION, LAST_DIMENSION);
+    if (processed_tensor.layout() != Layout::ROW_MAJOR) {
+        processed_tensor =
+            ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, processed_tensor.device());
+    }
+
+    return processed_tensor;
+}
+
+Tensor post_tosa_scatter_transform_tensor(
+    Tensor& output_tensor, const uint32_t& N, const uint32_t& K, const uint32_t& W, const uint32_t& C, const Layout& original_layout) {
+    Tensor processed_tensor = ttnn::transpose(output_tensor, W_DIMENSION, LAST_DIMENSION);
+    processed_tensor = ttnn::squeeze_from_4D(processed_tensor, 3);
+    if (original_layout != Layout::ROW_MAJOR) {
+        processed_tensor = ttnn::to_layout(processed_tensor, original_layout, std::nullopt, std::nullopt, processed_tensor.device());
+    }
+
+    return processed_tensor;
+}
+
+void validate_tensors(
+    const Shape& input_shape,
+    const Shape& index_shape,
+    const Shape& source_shape
+) {
+    TT_FATAL(
+        input_shape.rank() == 3,
+        "According to TOSA specification, input tensor must be of rank 3, it is {} instead.",
+        input_shape.rank()
+    );
+
+    TT_FATAL(
+        index_shape.rank() == 2,
+        "According to TOSA specification, index tensor must be of rank 2, it is {} instead.",
+        input_shape.rank()
+    );
+
+    TT_FATAL(
+        source_shape.rank() == 3,
+        "According to TOSA specification, source tensor must be of rank 3, it is {} instead.",
+        input_shape.rank()
+    );
+
+    TT_FATAL(
+        input_shape[0] == source_shape[0],
+        "Input shape has a different dimension N than source shape (input shape: {}, source shape: {}).",
+        input_shape,
+        source_shape
+    );
+
+    TT_FATAL(
+        input_shape[2] == source_shape[2],
+        "Input shape has a different dimension C than source shape (input shape: {}, source shape: {}).",
+        input_shape,
+        source_shape
+    );
+
+    TT_FATAL(
+        input_shape[0] == index_shape[0],
+        "Input shape has a different dimension C than index shape (input shape: {}, index shape: {}).",
+        input_shape,
+        index_shape
+    );
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+Tensor TOSAScatterOperation::invoke(
+    const QueueId& queue_id,
+    const Tensor& input_tensor,
+    const Tensor& index_tensor,
+    const Tensor& source_tensor,
+    const std::optional<MemoryConfig>& output_memory_config,
+    std::optional<Tensor>& opt_output) {
+    CMAKE_UNIQUE_NAMESPACE::validate_tensors(input_tensor.get_logical_shape(), index_tensor.get_logical_shape(), source_tensor.get_logical_shape());
+    const ttnn::Shape original_input_tensor_lshape = input_tensor.logical_shape();
+    const auto input_tensor_rank = input_tensor.padded_shape().rank();
+
+    const auto original_index_tensor_lshape = index_tensor.logical_shape();
+    if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
+        return input_tensor;
+    }
+
+    const auto& input_shape{input_tensor.get_logical_shape()};
+    const auto& index_shape{input_tensor.get_logical_shape()};
+
+    const uint32_t N = input_shape[0];
+    const uint32_t K = input_shape[1];
+    const uint32_t W = index_shape[1];
+    const uint32_t C = input_shape[2];
+
+    Tensor processed_index_tensor = CMAKE_UNIQUE_NAMESPACE::pre_tosa_scatter_transform_tensor(index_tensor, N, K, W, C, InputTensorType::INDEX);
+
+    Tensor processed_source_tensor = CMAKE_UNIQUE_NAMESPACE::pre_tosa_scatter_transform_tensor(source_tensor, N, K, W, C, InputTensorType::SOURCE);
+
+    Tensor processed_input_tensor = CMAKE_UNIQUE_NAMESPACE::pre_tosa_scatter_transform_tensor(input_tensor, N, K, W, C, InputTensorType::INPUT);
+
+    const MemoryConfig final_memory_config{
+        output_memory_config.has_value()
+            ? output_memory_config.value()
+            : (opt_output.has_value() ? opt_output.value().memory_config()
+                                                        : input_tensor.memory_config())};
+
+    Tensor output = ttnn::prim::scatter_(
+        processed_input_tensor,
+        LAST_DIMENSION,
+        processed_index_tensor,
+        processed_source_tensor,
+        final_memory_config,
+        std::nullopt,
+        opt_output,
+        false,
+        queue_id);
+    return CMAKE_UNIQUE_NAMESPACE::post_tosa_scatter_transform_tensor(output, N, K, W, C, input_tensor.layout());
+}
+
+}  // namespace ttnn::operations::experimental
