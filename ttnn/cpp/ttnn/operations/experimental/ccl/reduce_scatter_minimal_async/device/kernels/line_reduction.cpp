@@ -5,6 +5,9 @@
 #include <cstdint>
 #include "compute_kernel_api/eltwise_binary.h"
 #include "debug/dprint.h"
+
+constexpr uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
+
 namespace NAMESPACE {
 void MAIN {
     // Define all compile-time arguments at the beginning
@@ -18,11 +21,11 @@ void MAIN {
     constexpr uint32_t num_links = get_compile_time_arg_val(7);
     constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(8);
 
-    const uint32_t num_packets = batch_slice_num_pages / tile_granularity / num_links;
-    UNPACK(
-        DPRINT << "num_packets: " << num_packets << ", batch_slice_num_pages: " << batch_slice_num_pages
-               << ", tile_granularity: " << tile_granularity << ", num_links: " << num_links << "\t" << num_packets
-               << " num_total_reduction_steps: " << num_total_reduction_steps << "\n");
+    constexpr uint32_t num_packets = div_up(div_up(batch_slice_num_pages, tile_granularity), num_links);
+    // UNPACK(
+    //     DPRINT << "num_packets: " << num_packets << ", batch_slice_num_pages: " << batch_slice_num_pages
+    //            << ", tile_granularity: " << tile_granularity << ", num_links: " << num_links << "\t" << num_packets
+    //            << " num_total_reduction_steps: " << num_total_reduction_steps << "\n");
 
     for (uint32_t b = 0; b < num_batches; b++) {
         for (uint32_t i = 0; i < num_total_reduction_steps; i++) {  // Don't reduce on the first slice
@@ -49,6 +52,6 @@ void MAIN {
         }
     }
 
-    UNPACK(DPRINT << "REDUCTION DONE\n");
+    // UNPACK(DPRINT << "REDUCTION DONE\n");
 }
 }  // namespace NAMESPACE

@@ -75,7 +75,10 @@ void kernel_main() {
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     uint32_t link = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t fwd_bwd_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t fwd_bwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+
+    DPRINT << (is_forward ? "FWD" : "BWD") << " READER: initial val of fwd_bwd_sem_addr: "
+           << (uint32_t)(*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr)) << "\n";
 
     // DPRINT all uint32_t args
     DPRINT << "my_chip_id: " << my_chip_id << "\n";
@@ -87,6 +90,8 @@ void kernel_main() {
     DPRINT << "num_batches: " << num_batches << "\n";
     DPRINT << "link: " << link << "\n";
     DPRINT << "num_links: " << num_links << "\n";
+    DPRINT << (is_forward ? "FWD" : "BWD")
+           << " READER: sync_with_other_direction: " << (uint32_t)sync_with_other_direction << "\n";
 
     ReduceScatterOpReceiver matmul_receiver;
     if constexpr (fuse_op) {
@@ -128,7 +133,7 @@ void kernel_main() {
         // If this device has both FWD and BWD neighbors, the FWD reader will do final reduction first
         // and then signal the BWD reader to do its final reduction.
         for (uint32_t iter = 0; iter < num_targets_in_direction; ++iter) {
-            DPRINT << (is_forward ? "FWD" : "BWD") << " READER: iter: " << iter << "\n";
+            // DPRINT << (is_forward ? "FWD" : "BWD") << " READER: iter: " << iter << "\n";
             // const bool do_reduce = !is_first_device_in_direction;
             // uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
 
@@ -154,7 +159,7 @@ void kernel_main() {
                 while (tiles_read < tiles_to_read) {
                     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
 
-                    cb_reserve_back(cb_in0, num_pages_to_read);
+                    cb_reserve_back(cb_in0, tile_granularity);
                     read_tiles<input_tensor_is_dram>(
                         cb_in0,
                         num_pages_to_read,
@@ -167,7 +172,7 @@ void kernel_main() {
                         stride_Wt);
                     tiles_read += num_pages_to_read;
                     noc_async_read_barrier();
-                    cb_push_back(cb_in0, num_pages_to_read);
+                    cb_push_back(cb_in0, tile_granularity);
                 }
             } else {
                 // I have incoming slices, so write my output to compute kernel and read intermediate input
@@ -178,7 +183,7 @@ void kernel_main() {
                 while (tiles_read < tiles_to_read) {
                     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
 
-                    cb_reserve_back(cb_in0, num_pages_to_read);
+                    cb_reserve_back(cb_in0, tile_granularity);
 
                     read_tiles<input_tensor_is_dram>(
                         cb_in0,
@@ -194,7 +199,7 @@ void kernel_main() {
                     tiles_read += num_pages_to_read;
 
                     // read the next intermediate slice out of the intermediate buffer, and put it in intermediate CB
-                    cb_reserve_back(cb_intermediate_id, num_pages_to_read);
+                    cb_reserve_back(cb_intermediate_id, tile_granularity);
                     read_tiles<intermediate_tensor_is_dram>(
                         cb_intermediate_id,
                         num_pages_to_read,
@@ -207,8 +212,8 @@ void kernel_main() {
                         stride_Wt);
 
                     noc_async_read_barrier();
-                    cb_push_back(cb_in0, num_pages_to_read);
-                    cb_push_back(cb_intermediate_id, num_pages_to_read);
+                    cb_push_back(cb_in0, tile_granularity);
+                    cb_push_back(cb_intermediate_id, tile_granularity);
                 }
             }
 
@@ -224,7 +229,8 @@ void kernel_main() {
         if constexpr (do_final_reduction) {
             DPRINT << (is_forward ? "FWD" : "BWD") << " READER: final reduction\n";
 
-            uint32_t slice_idx = my_chip_id;
+            bool accumulate_output =
+                false;  // If true, output += intermediate. Otherwise, output = input + intermediate
             auto reduction_input_addrgen = input_tensor_addrgen;
             if constexpr (sync_with_other_direction && !is_forward) {
                 /**
@@ -232,10 +238,14 @@ void kernel_main() {
                  * incoming BWD intermediate. Use slice_idx=0 to index into output buffer, and
                  * use output address generator.
                  */
-                uint32_t slice_idx = 0;
+                accumulate_output = true;
                 reduction_input_addrgen = output_tensor_addrgen;
                 // Wait for FWD writer to signal that it has done its final reduction
                 while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr) < 1);
+                DPRINT << (is_forward ? "FWD" : "BWD") << " READER: got signal from local FWD" << "\n";
+                DPRINT << (is_forward ? "FWD" : "BWD") << " READER: after signal val of fwd_bwd_sem_addr: "
+                       << *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr) << "\n";
+
                 // // Reset the semaphore to 0
                 // *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr) = 0;
             }
@@ -249,7 +259,7 @@ void kernel_main() {
              *
              * My first write was FWD if I'm on the left half of the ring, and BWD if I'm on the right half.
              */
-
+            uint32_t slice_idx = my_chip_id;
             uint32_t intermediate_slice_idx = my_chip_id;
 
             if constexpr (!is_forward) {
@@ -264,6 +274,7 @@ void kernel_main() {
             uint32_t input_tile_id_start = slice_idx * slice_Wt + batch_offset;
             uint32_t intermediate_tile_id_start = intermediate_slice_idx * slice_Wt;
             uint32_t stride_Wt = input_tensor_Wt;
+            uint32_t intermediate_stride_Wt = input_tensor_Wt;
             uint32_t pages_read_in_row = (link * batch_slice_num_pages / num_links) % slice_Wt;
             uint32_t row_offset = (link * batch_slice_num_pages / num_links) / slice_Wt * stride_Wt;
             uint32_t intermediate_pages_read_in_row = (link * batch_slice_num_pages / num_links) % slice_Wt;
@@ -271,13 +282,20 @@ void kernel_main() {
             uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
             uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
             uint32_t cb_in0 = cb_input_id;
+
+            if (accumulate_output) {
+                input_tile_id_start = batch_offset;
+                pages_read_in_row = (link * batch_slice_num_pages / num_links) % slice_Wt;
+                row_offset = (link * batch_slice_num_pages / num_links);
+                stride_Wt = slice_Wt;
+            }
             // Wait on output semaphore
             while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem) <= num_targets_in_direction);
 
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
 
-                cb_reserve_back(cb_in0, num_pages_to_read);
+                cb_reserve_back(cb_in0, tile_granularity);
 
                 read_tiles<input_tensor_is_dram>(
                     cb_in0,
@@ -293,7 +311,7 @@ void kernel_main() {
                 tiles_read += num_pages_to_read;
 
                 // read the next intermediate slice out of the intermediate buffer, and put it in intermediate CB
-                cb_reserve_back(cb_intermediate_id, num_pages_to_read);
+                cb_reserve_back(cb_intermediate_id, tile_granularity);
                 read_tiles<intermediate_tensor_is_dram>(
                     cb_intermediate_id,
                     num_pages_to_read,
@@ -303,11 +321,11 @@ void kernel_main() {
                     intermediate_pages_read_in_row,
                     intermediate_row_offset,
                     slice_Wt,
-                    stride_Wt);
+                    intermediate_stride_Wt);
 
                 noc_async_read_barrier();
-                cb_push_back(cb_in0, num_pages_to_read);
-                cb_push_back(cb_intermediate_id, num_pages_to_read);
+                cb_push_back(cb_in0, tile_granularity);
+                cb_push_back(cb_intermediate_id, tile_granularity);
             }
         }
     }
