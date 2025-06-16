@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "const.hpp"
 #include "helpers.hpp"
 
 namespace nd_sharding {

@@ -58,7 +58,9 @@ using ArrayWrapper = nd_sharding::detail::ArrayStaticWrapper<Dims...>;
 
 using ArrayWrapperDynamic = nd_sharding::detail::ArrayDynamicWrapper;
 
-using DevSpan = nd_sharding::detail::Span<uint32_t>;
+template <uint32_t Size>
+// using DevSpan = nd_sharding::detail::Span<uint32_t, Size>;
+using DevSpan = std::array<uint32_t, Size>;
 
 // If inputs are passed as constexpr arrays, we can use this style to directly create the structs
 // Example:
@@ -326,8 +328,8 @@ TEST(ShardedAccessorTestsCRTA, RuntimeTensorRuntimeShardShapeCompileTimeBanks) {
     std::array<uint32_t, crta_params::rank> tensor_shape_array = {2, 3};
     std::array<uint32_t, crta_params::rank> shard_shape_array = {1, 2};
 
-    auto dspec_val = dspec_t(
-        DevSpan(tensor_shape_array.data(), crta_params::rank), DevSpan(shard_shape_array.data(), crta_params::rank));
+    // print<dspec_t::Shape, dspec_t::BankCoords> _;
+    auto dspec_val = dspec_t(tensor_shape_array, shard_shape_array);
     auto sharded_accessor = nd_sharding::ShardedAccessor<dspec_t>(std::move(dspec_val), 0);
 
     crta_params::assert_sharded_accessor(sharded_accessor);
@@ -342,7 +344,7 @@ TEST(ShardedAccessorTestsCRTA, RuntimeTensorCompiletimeShardShapeCompileTimeBank
 
     std::array<uint32_t, crta_params::rank> tensor_shape_array = {2, 3};
 
-    auto dspec_val = dspec_t(DevSpan(tensor_shape_array.data(), crta_params::rank));
+    auto dspec_val = dspec_t(tensor_shape_array);
     auto sharded_accessor = nd_sharding::ShardedAccessor<dspec_t>(std::move(dspec_val), 0);
 
     crta_params::assert_sharded_accessor(sharded_accessor);
@@ -357,7 +359,7 @@ TEST(ShardedAccessorTestsCRTA, CompiletimeTensorRuntimeShardShapeCompileTimeBank
         DistributionSpec<crta_params::rank, crta_params::num_banks, TensorShapeT, ShardShapeT, bank_coords>;
     std::array<uint32_t, crta_params::rank> shard_shape_array = {1, 2};
 
-    auto dspec_val = dspec_t(DevSpan(), DevSpan(shard_shape_array.data(), crta_params::rank));
+    auto dspec_val = dspec_t({}, shard_shape_array);
     auto sharded_accessor = nd_sharding::ShardedAccessor<dspec_t>(std::move(dspec_val), 0);
 
     crta_params::assert_sharded_accessor(sharded_accessor);
@@ -375,10 +377,7 @@ TEST(ShardedAccessorTestsCRTA, RuntimeTensorRuntimeShardShapeRuntimeBanks) {
     std::array<uint32_t, crta_params::rank> shard_shape_array = {1, 2};
     std::array<uint32_t, crta_params::num_banks> bank_coord_array{0, 1, 2, 3};
 
-    auto dspec_val = dspec_t(
-        DevSpan(tensor_shape_array.data(), crta_params::rank),
-        DevSpan(shard_shape_array.data(), crta_params::rank),
-        DevSpan(bank_coord_array.data(), crta_params::rank));
+    auto dspec_val = dspec_t(tensor_shape_array, shard_shape_array, bank_coord_array);
     auto sharded_accessor = nd_sharding::ShardedAccessor<dspec_t>(std::move(dspec_val), 0);
 
     crta_params::assert_sharded_accessor(sharded_accessor);
@@ -395,10 +394,7 @@ TEST(ShardedAccessorTestsCRTA, RuntimeTensorCompiletimeShardShapeRuntimeBanks) {
     std::array<uint32_t, crta_params::rank> tensor_shape_array = {2, 3};
     std::array<uint32_t, crta_params::num_banks> bank_coord_array{0, 1, 2, 3};
 
-    auto dspec_val = dspec_t(
-        DevSpan(tensor_shape_array.data(), crta_params::rank),
-        DevSpan(),
-        DevSpan(bank_coord_array.data(), crta_params::rank));
+    auto dspec_val = dspec_t(tensor_shape_array, {}, bank_coord_array);
     auto sharded_accessor = nd_sharding::ShardedAccessor<dspec_t>(std::move(dspec_val), 0);
 
     crta_params::assert_sharded_accessor(sharded_accessor);
@@ -415,10 +411,7 @@ TEST(ShardedAccessorTestsCRTA, CompiletimeTensorRuntimeShardShapeRuntimeBanks) {
     std::array<uint32_t, crta_params::rank> shard_shape_array = {1, 2};
     std::array<uint32_t, crta_params::num_banks> bank_coord_array{0, 1, 2, 3};
 
-    auto dspec_val = dspec_t(
-        DevSpan(),
-        DevSpan(shard_shape_array.data(), crta_params::rank),
-        DevSpan(bank_coord_array.data(), crta_params::rank));
+    auto dspec_val = dspec_t({}, shard_shape_array, bank_coord_array);
     auto sharded_accessor = nd_sharding::ShardedAccessor<dspec_t>(std::move(dspec_val), 0);
 
     crta_params::assert_sharded_accessor(sharded_accessor);
@@ -435,7 +428,7 @@ TEST(ShardedAccessorTestsCRTA, CompiletimeTensorCompileTimeShardShapeRuntimeBank
     std::array<uint32_t, crta_params::rank> shard_shape_array = {1, 2};
     std::array<uint32_t, crta_params::num_banks> bank_coord_array{0, 1, 2, 3};
 
-    auto dspec_val = dspec_t(DevSpan(), DevSpan(), DevSpan(bank_coord_array.data(), crta_params::rank));
+    auto dspec_val = dspec_t({}, {}, bank_coord_array);
     auto sharded_accessor = nd_sharding::ShardedAccessor<dspec_t>(std::move(dspec_val), 0);
 
     crta_params::assert_sharded_accessor(sharded_accessor);
