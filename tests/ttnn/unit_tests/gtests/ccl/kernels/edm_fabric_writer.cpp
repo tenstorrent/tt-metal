@@ -288,9 +288,6 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
 
 void kernel_main() {
     using namespace tt::tt_fabric;
-    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-
     size_t arg_idx = 0;
 
     const size_t dest_bank_addr = get_arg_val<uint32_t>(arg_idx++);

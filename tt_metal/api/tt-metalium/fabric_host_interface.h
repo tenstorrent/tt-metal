@@ -83,26 +83,13 @@ struct fabric_router_l1_config_t {
     std::uint8_t padding[4];  // pad to 16-byte alignment.
 } __attribute__((packed));
 
-struct tensix_edm_adapter_spec {
-    // tt::tt_fabric::SenderWorkerAdapterSpec adapter_spec;
-};
-
 struct tensix_routing_l1_info_t {
     uint32_t mesh_id;           // Current mesh ID
     uint32_t device_id;         // Current device ID
     uint32_t num_chip_in_mesh;  // Number of chips in the mesh, less than or equal to NUM_CHIPS_PER_MESH
 
-#define NUM_CHIPS_PER_MESH 64
-#define NUM_MESHES_IN_FABRIC 64
-    eth_chan_directions intra_mesh_routing_table[NUM_CHIPS_PER_MESH];
-    eth_chan_directions inter_mesh_routing_table[NUM_MESHES_IN_FABRIC][NUM_CHIPS_PER_MESH];
-
-    // TODO
-    // tensix_edm_adapter_spec intra_mesh_adapter_spec[NUM_CHIPS_PER_MESH];
-    // tensix_edm_adapter_spec inter_mesh_adapter_spec[NUM_CHIPS_PER_MESH];
+    uint8_t intra_mesh_routing_table[MAX_MESH_SIZE];
+    uint8_t inter_mesh_routing_table[MAX_NUM_MESHES];
 } __attribute__((packed));
-
-// TODO: not fully decided the size
-static_assert(sizeof(tensix_routing_l1_info_t) <= 4096, "Tensix routing info must be <= 4KB");
 
 }  // namespace tt::tt_fabric

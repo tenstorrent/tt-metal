@@ -1047,38 +1047,42 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
     tensix_routing_info.device_id = chip_id;
     tensix_routing_info.num_chip_in_mesh = this->intra_mesh_routing_tables_.size();
 
-    // Get intra-mesh and inter-mesh routing tables for this chip
-    const auto& chip_intra_mesh_routing_tables = this->intra_mesh_routing_tables_.at(src_fabric_node_id);
-    const auto& chip_inter_mesh_routing_tables = this->inter_mesh_routing_tables_.at(src_fabric_node_id);
-
     // Build intra-mesh routing entries (chip-to-chip routing)
-    if (!chip_intra_mesh_routing_tables.empty()) {
-        for (std::uint32_t dst_chip_id = 0; dst_chip_id < this->intra_mesh_routing_tables_.size(); dst_chip_id++) {
-            auto forwarding_direction =
-                this->get_forwarding_direction(src_fabric_node_id, FabricNodeId(mesh_id, dst_chip_id));
+    const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
+    for (chip_id_t dst_chip_id = 0; dst_chip_id < router_intra_mesh_routing_table[*mesh_id][chip_id].size();
+         dst_chip_id++) {
+        if (chip_id == dst_chip_id) {
             tensix_routing_info.intra_mesh_routing_table[dst_chip_id] =
-                forwarding_direction.has_value()
-                    ? this->routing_direction_to_eth_direction(forwarding_direction.value_or(RoutingDirection::NONE))
-                    : (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
+                (uint8_t)eth_chan_magic_values::INVALID_DIRECTION;
+            continue;
         }
+        auto forwarding_direction = router_intra_mesh_routing_table[*mesh_id][chip_id][dst_chip_id];
+        tensix_routing_info.intra_mesh_routing_table[dst_chip_id] =
+            forwarding_direction != RoutingDirection::NONE
+                ? (uint8_t)this->routing_direction_to_eth_direction(forwarding_direction)
+                : (uint8_t)eth_chan_magic_values::INVALID_DIRECTION;
     }
 
     // Build inter-mesh routing entries (mesh-to-mesh routing)
-    if (!chip_inter_mesh_routing_tables.empty()) {
-        const auto& router_inter_mesh_routing_table = this->routing_table_generator_->get_inter_mesh_table();
-        for (std::uint32_t dst_mesh_id = 0; dst_mesh_id < router_inter_mesh_routing_table.size(); dst_mesh_id++) {
-            for (std::uint32_t dst_chip_id = 0; dst_chip_id < router_inter_mesh_routing_table[dst_mesh_id].size();
-                 dst_chip_id++) {
-                auto forwarding_direction =
-                    this->get_forwarding_direction(src_fabric_node_id, FabricNodeId(MeshId(dst_mesh_id), dst_chip_id));
-                tensix_routing_info.inter_mesh_routing_table[dst_mesh_id][dst_chip_id] =
-                    forwarding_direction.has_value() ? this->routing_direction_to_eth_direction(
-                                                           forwarding_direction.value_or(RoutingDirection::NONE))
-                                                     : (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
-            }
+    const auto& router_inter_mesh_routing_table = this->routing_table_generator_->get_inter_mesh_table();
+    for (std::uint32_t dst_mesh_id = 0; dst_mesh_id < router_inter_mesh_routing_table.size(); dst_mesh_id++) {
+        if (*mesh_id == dst_mesh_id) {
+            tensix_routing_info.inter_mesh_routing_table[dst_mesh_id] =
+                (uint8_t)eth_chan_magic_values::INVALID_DIRECTION;
+            continue;
         }
+        auto forwarding_direction = router_inter_mesh_routing_table[*mesh_id][chip_id][dst_mesh_id];
+        tensix_routing_info.inter_mesh_routing_table[dst_mesh_id] =
+            forwarding_direction != RoutingDirection::NONE
+                ? (uint8_t)this->routing_direction_to_eth_direction(forwarding_direction)
+                : (uint8_t)eth_chan_magic_values::INVALID_DIRECTION;
     }
 
+    TT_ASSERT(
+        tt_metal::MetalContext::instance().hal().get_dev_size(
+            tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::TENSIX_ROUTING_TABLE) >=
+            sizeof(tensix_routing_l1_info_t),
+        "ControlPlane: Tensix routing table size mismatch");
     const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
     const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_desc.get_cores(CoreType::TENSIX, CoordSystem::PHYSICAL);
     // Write to all Tensix cores
