@@ -5,6 +5,7 @@
 #pragma once
 
 #include <type_traits>
+#include "accessor/detail/array_wrapper.hpp"
 #include "detail/dspec.h"
 #include "detail/helpers.hpp"
 
@@ -13,6 +14,11 @@
 #endif
 
 namespace nd_sharding {
+using detail::ArrayDynamicWrapper;
+using detail::ArrayStaticWrapper;
+template <size_t StartIdx, uint32_t Size>
+using array_cta_sequence_wrapper_t = detail::struct_cta_sequence_wrapper_t<ArrayStaticWrapper, StartIdx, Size>;
+
 /**
  * @brief Accessor that encapsulates the logic for accessing sharded tensors pages.
  *
@@ -146,6 +152,29 @@ FORCE_INLINE auto make_sharded_accessor_from_args(
     const ArgsOffsetsT& args, const size_t bank_base_address_in, const uint32_t page_size_in) {
     auto dspec = detail::build_dspec_from_args(args);
     return ShardedAccessor<decltype(dspec)>(std::move(dspec), bank_base_address_in, page_size_in);
+}
+
+template <
+    uint32_t RankCT = 0,
+    uint32_t NumBanksCT = 0,
+    typename TensorShapeWrapper_ = ArrayDynamicWrapper,
+    typename ShardShapeWrapper_ = ArrayDynamicWrapper,
+    typename BankCoordsWrapper_ = ArrayDynamicWrapper>
+FORCE_INLINE auto make_dspec(
+    uint32_t rank_rt = 0,
+    uint32_t num_banks_rt = 0,
+    uint32_t* tensor_shape_ptr = nullptr,
+    uint32_t* shard_shape_ptr = nullptr,
+    uint32_t* bank_coords_ptr = nullptr) {
+    return detail::build_dspec<RankCT, NumBanksCT, TensorShapeWrapper_, ShardShapeWrapper_, BankCoordsWrapper_>(
+        rank_rt, num_banks_rt, tensor_shape_ptr, shard_shape_ptr, bank_coords_ptr);
+}
+
+template <typename DSpec>
+FORCE_INLINE auto make_sharded_accessor_from_dspec(
+    DSpec&& dspec, const size_t bank_base_address_in, const uint32_t page_size_in) {
+    return ShardedAccessor<std::decay_t<decltype(dspec)>>(
+        std::forward<DSpec>(dspec), bank_base_address_in, page_size_in);
 }
 
 }  // namespace nd_sharding

@@ -84,7 +84,7 @@ def impl_test(gtest_filter, res_dir):
 
 
 def test_get_noc_addr_page_id():
-    impl_test("AccessorTests/AccessorBenchmarks.GetNocAddr/0", res_dir="accessor_get_noc_addr_benchmarks")
+    impl_test("AccessorTests/AccessorBenchmarks.GetNocAddr/*", res_dir="accessor_get_noc_addr_benchmarks")
 
 
 def test_constructor():

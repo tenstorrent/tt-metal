@@ -52,7 +52,9 @@ These flags can be combined with bitwise OR (|) to specify multiple runtime para
 There is one important limitation: In case size of container (rank/num_banks) is crta, then values of containers (tensor_shape/shard_shape/bank_coords) must also be crta. The reason is that all CTA indecies must be constexpr expressions, and it's impossible to calculate offset for shapes without knowing their sizes.
 
 ## Device-Side Usage
-Creating an Accessor
+**Creating an Accessor**
+
+- From CTA/CRTA
 
 ```c++
 
@@ -71,6 +73,26 @@ uint32_t new_base_idx_crta = base_idx_crta + args.runtime_args_skip();
 
 // Create a ShardedAccessor with runtime page size
 auto sharded_accessor = nd_sharding::make_sharded_accessor_from_args(args, bank_base_address, page_size);
+```
+
+- Manual arguments
+Sometimes you might need more control. For example you want to reuse same bank coordinates between different accessors. In such case you can manually create DistributionSpec from rank, number of banks, tensor/shard shape and bank coordinates:
+
+```c++
+using tensor_shape = nd_sharding::ArrayStaticWrapper<10, 10>;
+using shard_shape = nd_sharding::ArrayStaticWrapper<3, 3>;
+using banks_coords = nd_sharding::ArrayStaticWrapper<1179666, 1245202, 1310738, 1376274, 1179667, 1245203, 1310739, 1376275, 1179668, 1245204, 1310740, 1376276, 1179669, 1245205, 1310741, 1376277>;
+auto dspec = nd_sharding::make_dspec<2, 16, tensor_shape, shard_shape, banks_coords>();
+auto sharded_accessor = nd_sharding::make_sharded_accessor_from_dspec(std::move(dspec), 0, 1024);
+
+// You can also mix constexpr/runtime values:
+uint32_t tensor_shape[2] = {10, 10};
+uint32_t shard_shape[2] = {3, 3};
+using dyn = nd_sharding::ArrayDynamicWrapper;
+using banks_coords = nd_sharding::ArrayStaticWrapper<1179666, 1245202, 1310738, 1376274, 1179667, 1245203, 1310739, 1376275, 1179668, 1245204, 1310740, 1376276, 1179669, 1245205, 1310741, 1376277>;
+auto dspec = nd_sharding::make_dspec<0, 16, dyn, dyn, banks_coords>(2, 0, tensor_shape, shard_shape, nullptr);
+auto sharded_accessor = nd_sharding::make_sharded_accessor_from_dspec(std::move(dspec), 0, 1024);
+
 ```
 
 **Key Operations**
