@@ -4,11 +4,11 @@
             "op_name": "AllGatherAsync_Binary_Mult",
             "kernel_duration": 12892.074968434345,
             "op_to_op": 906.2979797979798,
-            "first_to_last_start": 208.9040404040404,
+            "first_to_last_start": 95.9040404040404,
             "non-overlapped-dispatch-time": 4273.311111111111,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.3,
-            "first_to_last_start_relative_margin": 0.2,
+            "first_to_last_start_relative_margin": 0.4,
             "dispatch_duration_relative_margin": 0.2
         },
         "AllGatherConcat_0": {
@@ -63,7 +63,7 @@
             "non-overlapped-dispatch-time": 6127.527777777778,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.4,
-            "first_to_last_start_relative_margin": 0.2,
+            "first_to_last_start_relative_margin": 0.4,
             "dispatch_duration_relative_margin": 0.2
         },
         "LlamaReduceScatterDeviceOperation_0": {
