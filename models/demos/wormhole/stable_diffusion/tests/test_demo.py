@@ -15,31 +15,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 11 * 8192, "trace_region_size": 789321728}], indirect=True)
 @pytest.mark.parametrize(
-    "input_path",
-    (("models/demos/wormhole/stable_diffusion/demo/input_data.json"),),
-    ids=["default_input"],
-)
-@pytest.mark.parametrize(
-    "num_prompts",
-    ((1),),
-)
-@pytest.mark.parametrize(
-    "num_inference_steps",
-    ((5),),
-)
-@pytest.mark.parametrize(
-    "image_size",
-    ((512, 512),),
-)
-def test_demo_sd(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size):
-    if device.core_grid.y != 8:
-        pytest.skip("Needs 8x8 Grid")
-    demo(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size)
-
-
-@pytest.mark.timeout(600)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 11 * 8192, "trace_region_size": 789321728}], indirect=True)
-@pytest.mark.parametrize(
     "num_prompts",
     ((1),),
 )

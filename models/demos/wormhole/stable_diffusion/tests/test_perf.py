@@ -95,12 +95,9 @@ def test_stable_diffusion_unet_trace(device, use_program_cache):
     ).sample
 
     # Set up ttnn inputs
-    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     torch_encoder_hidden_states = torch.nn.functional.pad(torch_encoder_hidden_states, (0, 0, 0, 19))
-    encoder_hidden_states = ttnn.from_torch(
-        torch_encoder_hidden_states, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
-    )
-    encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    encoder_hidden_states = ttnn.from_torch(torch_encoder_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     _tlist = []
     for t in ttnn_scheduler.timesteps:
@@ -112,17 +109,17 @@ def test_stable_diffusion_unet_trace(device, use_program_cache):
 
     ttnn_model = UNet2D(device, parameters, batch_size, input_height, input_width)
 
-    input_tensor = ttnn.allocate_tensor_on_device(
-        ttnn_input.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+    encoder_hidden_states_device = ttnn.allocate_tensor_on_device(
+        encoder_hidden_states.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
 
     # COMPILE
-    ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=0)
+    ttnn.copy_host_to_device_tensor(encoder_hidden_states, encoder_hidden_states_device, cq_id=0)
     output_tensor = ttnn.from_device(
         ttnn_model(
-            input_tensor,
+            ttnn_input,
             timestep=_tlist[0],
-            encoder_hidden_states=encoder_hidden_states,
+            encoder_hidden_states=encoder_hidden_states_device,
             class_labels=class_labels,
             attention_mask=attention_mask,
             cross_attention_kwargs=cross_attention_kwargs,
@@ -133,13 +130,13 @@ def test_stable_diffusion_unet_trace(device, use_program_cache):
     )
 
     # CAPTURE
-    ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=0)
+    ttnn.copy_host_to_device_tensor(encoder_hidden_states, encoder_hidden_states_device, cq_id=0)
     output_tensor.deallocate(True)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     output_tensor = ttnn_model(
-        input_tensor,
+        ttnn_input,
         timestep=_tlist[0],
-        encoder_hidden_states=encoder_hidden_states,
+        encoder_hidden_states=encoder_hidden_states_device,
         class_labels=class_labels,
         attention_mask=attention_mask,
         cross_attention_kwargs=cross_attention_kwargs,
@@ -152,7 +149,7 @@ def test_stable_diffusion_unet_trace(device, use_program_cache):
     ttnn.synchronize_device(device)
     profiler.start(f"model_run_for_inference_{0}")
 
-    ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=0)
+    ttnn.copy_host_to_device_tensor(encoder_hidden_states, encoder_hidden_states_device, cq_id=0)
     ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
     host_output_tensor = output_tensor.cpu(blocking=False)
     ttnn.synchronize_device(device)

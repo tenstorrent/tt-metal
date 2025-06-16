@@ -15,7 +15,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import run
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import compile_trace_sd
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
@@ -113,52 +113,18 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
 
     time_step = ttnn_scheduler.timesteps.tolist()
 
-    ttnn_text_embeddings_device = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([2, 96, 768]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
-    )
-    encoder_hidden_states_rand = torch.randn([2, 77, 768])
-    encoder_hidden_states_rand = torch.nn.functional.pad(encoder_hidden_states_rand, (0, 0, 0, 19))
-    encoder_hidden_states_rand = ttnn.from_torch(
-        encoder_hidden_states_rand, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-    )
-
-    # COMPILE
-    ttnn_scheduler.set_timesteps(num_inference_steps)
-    ttnn.copy_host_to_device_tensor(encoder_hidden_states_rand, ttnn_text_embeddings_device, cq_id=0)
-    output = ttnn.from_device(
-        run(
-            -model,
-            config,
-            tt_vae,
-            rand_latents,
-            ttnn_text_embeddings_device,
-            _tlist,
-            time_step,
-            guidance_scale,
-            ttnn_scheduler,
-            is_blackhole(),
-        )
-    )
-
-    # CAPTURE
-    ttnn_scheduler.set_timesteps(num_inference_steps)
-    ttnn.copy_host_to_device_tensor(encoder_hidden_states_rand, ttnn_text_embeddings_device, cq_id=0)
-    output.deallocate(True)
-    tid = ttnn.begin_trace_capture(device, cq_id=0)
-    output = run(
+    ttnn_text_embeddings_device, output, tid = compile_trace_sd(
+        device,
         model,
         config,
         tt_vae,
         rand_latents,
-        ttnn_text_embeddings_device,
         _tlist,
         time_step,
         guidance_scale,
         ttnn_scheduler,
-        is_blackhole(),
+        num_inference_steps,
     )
-    ttnn.end_trace_capture(device, tid, cq_id=0)
-    ttnn.synchronize_device(device)
 
     # Function to generate an image from the given prompt
     def _model_pipeline(input_prompt):

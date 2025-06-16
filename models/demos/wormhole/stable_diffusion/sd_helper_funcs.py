@@ -11,6 +11,7 @@ import torch
 from tqdm.auto import tqdm
 
 import ttnn
+from models.utility_functions import is_blackhole
 
 
 @dataclass
@@ -185,3 +186,56 @@ def run(
     ttnn_output = tt_vae.decode(ttnn_output)
     ttnn_output = ttnn.reshape(ttnn_output, [1, 512, 512, ttnn_output.shape[3]])
     return ttnn.permute(ttnn_output, [0, 3, 1, 2])
+
+
+def compile_trace_sd(
+    device, model, config, tt_vae, input_latents, _tlist, time_step, guidance_scale, ttnn_scheduler, num_inference_steps
+):
+    ttnn_text_embeddings_device = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([2, 96, 768]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    encoder_hidden_states_rand = torch.randn([2, 77, 768])
+    encoder_hidden_states_rand = torch.nn.functional.pad(encoder_hidden_states_rand, (0, 0, 0, 19))
+    encoder_hidden_states_rand = ttnn.from_torch(
+        encoder_hidden_states_rand, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+
+    # COMPILE
+    ttnn_scheduler.set_timesteps(num_inference_steps)
+    ttnn.copy_host_to_device_tensor(encoder_hidden_states_rand, ttnn_text_embeddings_device, cq_id=0)
+    output = ttnn.from_device(
+        run(
+            model,
+            config,
+            tt_vae,
+            input_latents,
+            ttnn_text_embeddings_device,
+            _tlist,
+            time_step,
+            guidance_scale,
+            ttnn_scheduler,
+            is_blackhole(),
+        )
+    )
+
+    # CAPTURE
+    ttnn_scheduler.set_timesteps(num_inference_steps)
+    ttnn.copy_host_to_device_tensor(encoder_hidden_states_rand, ttnn_text_embeddings_device, cq_id=0)
+    output.deallocate(True)
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    output = run(
+        model,
+        config,
+        tt_vae,
+        input_latents,
+        ttnn_text_embeddings_device,
+        _tlist,
+        time_step,
+        guidance_scale,
+        ttnn_scheduler,
+        is_blackhole(),
+    )
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    ttnn.synchronize_device(device)
+
+    return ttnn_text_embeddings_device, output, tid
