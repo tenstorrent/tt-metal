@@ -538,7 +538,6 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     }
 
     // cb_out_final
-    bool row_major_output = true;
     auto c_out4_config = CircularBufferConfig(out0_t * out_tile_size, {{CBIndex::c_20, out_df}})
                              .set_page_size(CBIndex::c_20, out_tile_size)
                              .set_tile_dims(CBIndex::c_20, out_tile);

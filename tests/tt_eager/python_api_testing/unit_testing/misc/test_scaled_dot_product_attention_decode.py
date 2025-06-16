@@ -935,7 +935,6 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         Q_height_sharded_memcfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec_rm
         )
-
     else:
         Q_height_sharded_memcfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec
