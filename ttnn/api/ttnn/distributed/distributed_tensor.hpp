@@ -72,7 +72,17 @@ public:
         const MeshMapperConfig& config,
         const std::optional<ttnn::MeshShape>& shape = std::nullopt);
 
+    // Distributes a tensor onto a mesh.
     Tensor operator()(const Tensor& tensor) const;
+
+    // Overload that takes in a span of logical data; used in situations where the tensor object might not be
+    // materialized.
+    template <typename T>
+    Tensor operator()(
+        tt::stl::Span<const T> buffer,
+        const ttnn::Shape& shape,
+        const tt::tt_metal::TensorLayout& layout,
+        T pad_value = 0) const;
 
     tt::tt_metal::DistributedTensorConfig config() const;
 
@@ -147,7 +157,18 @@ std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(MeshDevice& mesh_de
 Tensor distribute_tensor(
     const Tensor& tensor,
     const TensorToMesh& mapper,
-    std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt);
+    std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt,
+    ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+
+// Creates a distributed tensor from a span of logical data specified in `buffer`.
+template <typename T>
+Tensor create_distributed_tensor(
+    tt::stl::Span<const T> buffer,
+    const TensorSpec& spec,
+    const TensorToMesh& mapper,
+    std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt,
+    ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+    T pad_value = 0);
 
 // Aggregates a multi-device tensor into a host tensor according to the `composer`.
 Tensor aggregate_tensor(const Tensor& tensor, const MeshToTensor& composer);

@@ -92,40 +92,50 @@ public:
         distributed_tensor_config_(distributed_tensor_config) {}
 
     Tensor operator()(const Tensor& tensor) const {
+        auto extract_logical_data = [this]<typename T>(const tt::tt_metal::Tensor& tensor) -> Tensor {
+            std::vector<T> logical_data;
+            auto data_span = [&]() {
+                const bool data_viewable =
+                    tensor.tensor_spec().layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+                    tensor.tensor_spec().physical_shape() == tensor.tensor_spec().logical_2d_shape();
+                if (data_viewable) {
+                    tt::tt_metal::HostBuffer buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor);
+                    return buffer.view_as<const T>();
+                } else {
+                    logical_data = tensor.to_vector<T>();
+                    return tt::stl::make_const_span(logical_data);
+                }
+            }();
+
+            return (*this)(data_span, tensor.tensor_spec().logical_shape(), tensor.tensor_spec().tensor_layout());
+        };
+
         switch (tensor.tensor_spec().data_type()) {
             case tt::tt_metal::DataType::BFLOAT8_B:
             case tt::tt_metal::DataType::BFLOAT4_B:
-            case tt::tt_metal::DataType::FLOAT32: return shard_tensor_typed<float>(tensor);
-            case tt::tt_metal::DataType::BFLOAT16: return shard_tensor_typed<bfloat16>(tensor);
-            case tt::tt_metal::DataType::UINT32: return shard_tensor_typed<uint32_t>(tensor);
-            case tt::tt_metal::DataType::UINT8: return shard_tensor_typed<uint8_t>(tensor);
-            case tt::tt_metal::DataType::UINT16: return shard_tensor_typed<uint16_t>(tensor);
-            case tt::tt_metal::DataType::INT32: return shard_tensor_typed<int32_t>(tensor);
+            case tt::tt_metal::DataType::FLOAT32: return extract_logical_data.template operator()<float>(tensor);
+            case tt::tt_metal::DataType::BFLOAT16: return extract_logical_data.template operator()<bfloat16>(tensor);
+            case tt::tt_metal::DataType::UINT32: return extract_logical_data.template operator()<uint32_t>(tensor);
+            case tt::tt_metal::DataType::UINT8: return extract_logical_data.template operator()<uint8_t>(tensor);
+            case tt::tt_metal::DataType::UINT16: return extract_logical_data.template operator()<uint16_t>(tensor);
+            case tt::tt_metal::DataType::INT32: return extract_logical_data.template operator()<int32_t>(tensor);
             case tt::tt_metal::DataType::INVALID: TT_THROW("Invalid data type: {}", tensor.tensor_spec().data_type());
         }
         TT_THROW("Unreachable");
     }
 
-    tt::tt_metal::DistributedTensorConfig config() const { return distributed_tensor_config_; }
-
-private:
     template <typename T>
-    Tensor shard_tensor_typed(const tt::tt_metal::Tensor& tensor) const {
-        std::vector<size_t> shape_vec(tensor.logical_shape().cbegin(), tensor.logical_shape().cend());
-        std::vector<T> logical_data;
-        auto input_xtensor = [&]() {
-            const bool data_viewable = tensor.tensor_spec().layout() == tt::tt_metal::Layout::ROW_MAJOR &&
-                                       tensor.tensor_spec().physical_shape() == tensor.tensor_spec().logical_2d_shape();
-            if (data_viewable) {
-                tt::tt_metal::HostBuffer buffer = tt::tt_metal::host_buffer::get_host_buffer(tensor);
-                auto span = buffer.view_as<T>();
-                return xt::adapt(span.data(), span.size(), xt::no_ownership(), shape_vec);
-            } else {
-                logical_data = tensor.to_vector<T>();
-                auto span = tt::stl::make_span(logical_data);
-                return xt::adapt(span.data(), span.size(), xt::no_ownership(), shape_vec);
-            }
-        }();
+    Tensor operator()(
+        tt::stl::Span<const T> span,
+        const Shape& shape,
+        const tt::tt_metal::TensorLayout& layout,
+        T pad_value = 0) const {
+        size_t volume = shape.volume();
+        TT_FATAL(
+            span.size() == volume, "Current buffer size is {} different from shape volume {}", span.size(), volume);
+
+        std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
+        auto input_xtensor = xt::adapt(span.data(), span.size(), xt::no_ownership(), shape_vec);
 
         // Perform sharding, followed by replication.
         tt::stl::SmallVector<size_t> shard_dims;
@@ -198,12 +208,16 @@ private:
             }
         }
 
-        return create_tensor<T>(sharded_xtensor_views, tensor.tensor_spec().tensor_layout());
+        return create_tensor<T>(sharded_xtensor_views, layout, pad_value);
     }
 
+    tt::tt_metal::DistributedTensorConfig config() const { return distributed_tensor_config_; }
+
+private:
     template <typename T>
-    Tensor create_tensor(const auto& sharded_xtensor_views, const tt::tt_metal::TensorLayout& global_layout) const {
-        const TensorSpec shard_spec = compute_tensor_spec_for_shards(sharded_xtensor_views, global_layout);
+    Tensor create_tensor(
+        const auto& sharded_xtensor_views, const tt::tt_metal::TensorLayout& layout, T pad_value) const {
+        const TensorSpec shard_spec = compute_tensor_spec_for_shards(sharded_xtensor_views, layout);
 
         auto distributed_buffer =
             tt::tt_metal::DistributedHostBuffer::create(global_shape_, local_shape_, local_offset_);
@@ -217,13 +231,32 @@ private:
             TT_THROW("Unreachable");
         };
 
+        // Deduplicate processing of replicated buffers, by keeping a cache of already converted buffers.
+        using XTensorViewKey = decltype(&sharded_xtensor_views.values().front()->get());
+        std::unordered_map<XTensorViewKey, tt::tt_metal::HostBuffer> converted_buffers;
+
         for (const auto& [coord, xtensor_view] : sharded_xtensor_views) {
             if (xtensor_view.has_value()) {
-                distributed_buffer.emplace_shard(get_dst_coord(coord), [&xtensor_view, &shard_spec, &coord]() {
-                    xt::xarray<T> data(xtensor_view->get());
-                    auto shard_tensor = experimental::xtensor::from_xtensor<T>(data, shard_spec);
-                    return tt::tt_metal::host_buffer::get_host_buffer(shard_tensor);
-                });
+                distributed_buffer.emplace_shard(
+                    get_dst_coord(coord), [&converted_buffers, &xtensor_view, &shard_spec, &coord, pad_value]() {
+                        // The callable makes a copy from the strided xtensor view to a vector; on multi-host systems,
+                        // executed only for shards that are local to this host.
+
+                        auto it = converted_buffers.find(&xtensor_view->get());
+                        if (it != converted_buffers.end()) {
+                            return it->second;
+                        }
+                        std::vector<T> data_vec(xtensor_view->get().begin(), xtensor_view->get().end());
+                        Tensor shard_tensor = Tensor::from_vector(
+                            std::move(data_vec),
+                            shard_spec,
+                            /*device=*/nullptr,
+                            ttnn::DefaultQueueId,
+                            pad_value);
+                        auto buffer = tt::tt_metal::host_buffer::get_host_buffer(shard_tensor);
+                        converted_buffers.emplace(&xtensor_view->get(), buffer);
+                        return buffer;
+                    });
             }
         }
 
@@ -292,6 +325,16 @@ TensorToMesh::~TensorToMesh() = default;
 TensorToMesh::TensorToMesh(TensorToMesh&& other) noexcept = default;
 TensorToMesh& TensorToMesh::operator=(TensorToMesh&& other) noexcept = default;
 Tensor TensorToMesh::operator()(const Tensor& tensor) const { return (*impl_)(tensor); }
+
+template <typename T>
+Tensor TensorToMesh::operator()(
+    tt::stl::Span<const T> buffer,
+    const ttnn::Shape& shape,
+    const tt::tt_metal::TensorLayout& layout,
+    T pad_value) const {
+    return (*impl_)(buffer, shape, layout, pad_value);
+}
+
 tt::tt_metal::DistributedTensorConfig TensorToMesh::config() const { return impl_->config(); }
 
 TensorToMesh TensorToMesh::create(
@@ -339,10 +382,8 @@ TensorToMesh TensorToMesh::create(
         distributed_tensor_config = tt::tt_metal::DistributedTensorConfig{tt::tt_metal::AllGatherTensor{}};
     }
 
-    auto impl = std::make_unique<TensorToMesh::Impl>(
-        mesh_device, distribution_mode, distributed_shape, config, distributed_tensor_config);
-
-    return TensorToMesh(std::move(impl));
+    return TensorToMesh(std::make_unique<TensorToMesh::Impl>(
+        mesh_device, distribution_mode, distributed_shape, config, distributed_tensor_config));
 }
 
 MeshToTensor::MeshToTensor(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -399,17 +440,85 @@ std::unique_ptr<MeshToTensor> create_mesh_composer(
 }
 
 Tensor distribute_tensor(
-    const Tensor& tensor, const TensorToMesh& mapper, std::optional<std::reference_wrapper<MeshDevice>> mesh_device) {
+    const Tensor& tensor,
+    const TensorToMesh& mapper,
+    std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
+    ttnn::QueueId cq_id) {
     TT_FATAL(
         tensor.storage_type() == tt::tt_metal::StorageType::HOST,
         "TensorToMesh only supports host tensors; got storage type: {}",
         tensor.storage_type());
     Tensor output = mapper(tensor);
     if (mesh_device.has_value()) {
-        return output.to_device(&(mesh_device->get()), output.memory_config());
+        return output.to_device(&(mesh_device->get()), output.memory_config(), cq_id);
     }
     return output;
 }
+
+template <typename T>
+Tensor create_distributed_tensor(
+    tt::stl::Span<const T> buffer,
+    const TensorSpec& spec,
+    const TensorToMesh& mapper,
+    std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
+    ttnn::QueueId cq_id,
+    T pad_value) {
+    Tensor output = mapper(buffer, spec.logical_shape(), spec.tensor_layout(), pad_value);
+    if (mesh_device.has_value()) {
+        return output.to_device(&(mesh_device->get()), output.memory_config(), cq_id);
+    }
+    return output;
+}
+
+// Explicit instantiation of `create_distributed_tensor` for supported data types.
+template <>
+Tensor create_distributed_tensor<bfloat16>(
+    tt::stl::Span<const bfloat16> buffer,
+    const TensorSpec& spec,
+    const TensorToMesh& mapper,
+    std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
+    ttnn::QueueId cq_id,
+    bfloat16 pad_value);
+template <>
+Tensor create_distributed_tensor<float>(
+    tt::stl::Span<const float> buffer,
+    const TensorSpec& spec,
+    const TensorToMesh& mapper,
+    std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
+    ttnn::QueueId cq_id,
+    float pad_value);
+template <>
+Tensor create_distributed_tensor<int32_t>(
+    tt::stl::Span<const int32_t> buffer,
+    const TensorSpec& spec,
+    const TensorToMesh& mapper,
+    std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
+    ttnn::QueueId cq_id,
+    int32_t pad_value);
+template <>
+Tensor create_distributed_tensor<uint8_t>(
+    tt::stl::Span<const uint8_t> buffer,
+    const TensorSpec& spec,
+    const TensorToMesh& mapper,
+    std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
+    ttnn::QueueId cq_id,
+    uint8_t pad_value);
+template <>
+Tensor create_distributed_tensor<uint16_t>(
+    tt::stl::Span<const uint16_t> buffer,
+    const TensorSpec& spec,
+    const TensorToMesh& mapper,
+    std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
+    ttnn::QueueId cq_id,
+    uint16_t pad_value);
+template <>
+Tensor create_distributed_tensor<uint32_t>(
+    tt::stl::Span<const uint32_t> buffer,
+    const TensorSpec& spec,
+    const TensorToMesh& mapper,
+    std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
+    ttnn::QueueId cq_id,
+    uint32_t pad_value);
 
 Tensor aggregate_tensor(const Tensor& tensor, const MeshToTensor& composer) {
     return composer.compose(get_device_tensors(tensor.cpu()));
