@@ -620,6 +620,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             ring_index,                                              // my_chip_id
             static_cast<uint32_t>(input_tensor_buffer_type),         // input_buffer_type
             static_cast<uint32_t>(intermediate_tensor_buffer_type),  // intermediate_buffer_type
+            static_cast<uint32_t>(output_tensor_buffer_type),        // output_buffer_type
             input_cb_index,                                          // cb_input_id
             intermediate_cb_index,                                   // cb_intermediate_id
             reader_output_cb_index,                                  // cb_reader_output_id
@@ -698,7 +699,6 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
             "line_reduction.cpp",
             is_forward ? sender_forward_core_ranges : sender_backward_core_ranges,
-            sender_writer_kernel_config,
             sender_reduce_kernel_config);
     }
 
@@ -707,25 +707,28 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     }
 
     // Kernel Runtime Args
-    auto fwd_bwd_semaphore = tt::tt_metal::CreateSemaphore(program, sender_worker_core_range, 0);
+    uint32_t fwd_bwd_semaphore_address = tt::tt_metal::CreateSemaphore(program, sender_worker_core_range, 0);
     CoreCoord drain_sync_core;
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t core_idx = 0; core_idx < num_senders_per_link; core_idx++) {
             const bool is_forward = core_idx % num_senders_per_link;
 
             CoreCoord core = sender_worker_cores[link * 2 + core_idx];
-            // FWD core needs BWD core coordinate for fwd/bwd final reduction sync
-            auto bwd_core = sender_worker_cores[link * 2];
-            auto bwd_core_coord = mesh_device->worker_core_from_logical_core(bwd_core);
+            // FWD core needs BWD core coordinate for fwd/bwd final reduction sync.
+            // For final synchronization, each core needs to know the coordinate of the opposite direction's core.
+            uint32_t opposite_core_idx = link * 2 + (1 - core_idx);
+            auto opposite_core = sender_worker_cores[opposite_core_idx];
+            auto opposite_core_coord = mesh_device->worker_core_from_logical_core(opposite_core);
             drain_sync_core = mesh_device->worker_core_from_logical_core(core);
 
             std::vector<uint32_t> reader_rt_args = {
                 input_tensor.buffer()->address(),         // input_tensor_address
                 intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
+                output_tensor.buffer()->address(),        // output_tensor_address
                 semaphore.at(0 + link * 3).address(),     // remote transfer sync semaphore
                 link,
                 num_links,
-                fwd_bwd_semaphore.address()};
+                fwd_bwd_semaphore_address};
             if (fuse_op) {
                 fused_op_signaler->push_reduce_scatter_fused_op_rt_args(reader_rt_args);
             }
@@ -741,9 +744,9 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 semaphore.at(2 + link * 3).address(),     // batch_ready_semaphore
                 link,
                 num_links,
-                fwd_bwd_semaphore.address(),
-                bwd_core_coord.x,
-                bwd_core_coord.y};
+                fwd_bwd_semaphore_address,
+                opposite_core_coord.x,
+                opposite_core_coord.y};
             if (core_idx % num_senders_per_link) {  // forward
                 writer_rt_args.push_back(forward_device.has_value());
                 if (forward_device.has_value()) {
@@ -788,6 +791,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     reader_runtime_args_by_core[i % num_senders_per_link][core.x][core.y];
                 worker_reader_sender_runtime_args[0] = input.buffer()->address();
                 worker_reader_sender_runtime_args[1] = intermed.buffer()->address();
+                worker_reader_sender_runtime_args[2] = output.buffer()->address();
                 // sender writer
                 auto& worker_writer_sender_runtime_args =
                     writer_runtime_args_by_core[i % num_senders_per_link][core.x][core.y];
