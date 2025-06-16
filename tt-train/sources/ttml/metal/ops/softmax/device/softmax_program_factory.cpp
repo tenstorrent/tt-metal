@@ -35,9 +35,10 @@ constexpr auto KReductionScalerCbIndex = tt::CBIndex::c_3;  // used to reduction
 constexpr auto kMatMulCbIndex = tt::CBIndex::c_4;
 constexpr auto kMaxValueBeforeReductionCbIndex = tt::CBIndex::c_5;
 constexpr auto kMaxValueAfterReductionCbIndex = tt::CBIndex::c_6;
-constexpr auto kExpSumBeforeReductionCbIndex = tt::CBIndex::c_7;
-constexpr auto KExpSumAfterReductionCbIndex = tt::CBIndex::c_8;
-constexpr auto kOutputCbIndex = tt::CBIndex::c_9;
+constexpr auto kExpCbIndex = tt::CBIndex::c_7;
+constexpr auto kExpSumBeforeReductionCbIndex = tt::CBIndex::c_8;
+constexpr auto KExpSumAfterReductionCbIndex = tt::CBIndex::c_9;
+constexpr auto kOutputCbIndex = tt::CBIndex::c_10;
 
 constexpr uint32_t kNumMaskTiles = 1U;
 constexpr uint32_t kMaxValueBeforeReductionTiles = 2U;
@@ -236,7 +237,7 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
 
     // Total L1 memory required
     const uint64_t required_L1_in_bytes =
-        input_memory + masks_memory + scalers_memory + max_value_memory + exp_sum_memory + output_memory;
+        2U * input_memory + masks_memory + scalers_memory + max_value_memory + exp_sum_memory + output_memory;
     // Is everything fits in L1
     const bool everything_fits_in_l1 = required_L1_in_bytes <= available_L1_in_bytes;
 
@@ -277,6 +278,9 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
         data_format,
         bfloat16_single_tile_size_bytes,
         kNumMaxValueAfterReductionTiles);
+
+    auto cb_exp_input = create_circular_buffer(
+        program, all_cores, kExpCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     auto cb_exp_sum_before_reduction = create_circular_buffer(
         program,

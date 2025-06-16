@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <cstdint>
 #include <cstring>
 
@@ -15,7 +14,7 @@ void kernel_main() {
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
-    constexpr uint32_t cb_output_idx = tt::CBIndex::c_9;
+    constexpr uint32_t cb_output_idx = tt::CBIndex::c_10;
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);  // number of tiles in inner dimension
