@@ -97,7 +97,9 @@ __attribute__((always_inline)) inline void sync_threads()
             continue;
         }
         while (barrier[i] != 0)
-            ;
+        {
+            asm volatile("fence");
+        }
     }
 
     // wait for all the threads to set the barrier
@@ -108,8 +110,10 @@ __attribute__((always_inline)) inline void sync_threads()
         {
             continue;
         }
-        while (barrier[i] == 0)
-            ;
+        while (barrier[i] != 1)
+        {
+            asm volatile("fence");
+        }
     }
 }
 

@@ -11,7 +11,7 @@ from .format_arg_mapping import (
     ReduceDimension,
     ReducePool,
 )
-from .format_config import InputOutputFormat
+from .format_config import FormatConfig, InputOutputFormat
 
 
 class ProfilerBuild(Enum):
@@ -82,7 +82,7 @@ def generate_build_header(
 
     # Data format configuration
     header_content.extend(["", "// Data format configuration"])
-    formats = test_config.get("formats")
+    formats = test_config.get("formats", None)
     if isinstance(formats, InputOutputFormat):
         header_content.extend(
             [
@@ -92,7 +92,7 @@ def generate_build_header(
                 f"constexpr auto PACK_OUT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::{formats.output_format.name});",
             ]
         )
-    else:
+    elif isinstance(formats, FormatConfig):
         header_content.append(f"#define DATA_FORMAT_INFERENCE_MODEL false")
         header_content.extend(
             [
