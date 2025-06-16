@@ -1067,3 +1067,7 @@ def test_demo_text(
                 high_tol_percentage=1.15,
                 expected_measurements={k: True for k in ci_targets.keys()},
             )
+        else:
+            logger.warning(
+                f"No CI performance targets found for {model_device_key}. Skipping performance verification."
+            )
