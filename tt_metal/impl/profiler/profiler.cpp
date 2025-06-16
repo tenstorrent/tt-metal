@@ -168,6 +168,51 @@ void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device) {
     }
 }
 
+std::vector<uint32_t> DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
+    IDevice* device, const CoreCoord& worker_core) {
+    ZoneScoped;
+    TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
+    const chip_id_t device_id = device->id();
+    const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);
+    profiler_msg_t* profiler_msg =
+        MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
+    std::vector<uint32_t> data_buffer(kernel_profiler::PROFILER_L1_VECTOR_SIZE * PROFILER_RISC_COUNT);
+    if (auto mesh_device = device->get_mesh_device()) {
+        const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
+        dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue())
+            .enqueue_read_shard_from_core(
+                distributed::DeviceMemoryAddress{
+                    device_coord, worker_core, reinterpret_cast<DeviceAddr>(profiler_msg->buffer)},
+                data_buffer.data(),
+                kernel_profiler::PROFILER_L1_BUFFER_SIZE * PROFILER_RISC_COUNT,
+                true);
+    } else {
+        dynamic_cast<HWCommandQueue&>(device->command_queue())
+            .enqueue_read_from_core(
+                worker_core,
+                data_buffer.data(),
+                reinterpret_cast<DeviceAddr>(profiler_msg->buffer),
+                kernel_profiler::PROFILER_L1_BUFFER_SIZE * PROFILER_RISC_COUNT,
+                true);
+    }
+
+    return data_buffer;
+}
+
+std::vector<uint32_t> DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
+    IDevice* device, const CoreCoord& worker_core) {
+    ZoneScoped;
+    const chip_id_t device_id = device->id();
+    const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);
+    profiler_msg_t* profiler_msg =
+        MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
+    return tt::llrt::read_hex_vec_from_core(
+        device_id,
+        worker_core,
+        reinterpret_cast<uint64_t>(profiler_msg->buffer),
+        kernel_profiler::PROFILER_L1_BUFFER_SIZE * PROFILER_RISC_COUNT);
+}
+
 void DeviceProfiler::readControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state) {
     ZoneScoped;
     chip_id_t device_id = device->id();
@@ -1143,20 +1188,23 @@ void DeviceProfiler::dumpResults(
                 ZoneScopedN("Reading L1 profiler Data buffer");
                 readControlBuffers(device, worker_core, state);
                 resetControlBuffers(device, worker_core, state);
-                HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);
 
-                profiler_msg_t* profiler_msg =
-                    MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-                std::vector<uint32_t> L1_data_buffer = tt::llrt::read_hex_vec_from_core(
-                    device_id,
-                    worker_core,
-                    reinterpret_cast<uint64_t>(profiler_msg->buffer),
-                    kernel_profiler::PROFILER_L1_VECTOR_SIZE * PROFILER_RISC_COUNT);
+                std::vector<uint32_t> core_l1_data_buffer;
+                if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
+                    if (rtoptions.get_profiler_do_dispatch_cores() || state == ProfilerDumpState::FORCE_UMD_READ) {
+                        core_l1_data_buffer = issueSlowDispatchReadFromL1DataBuffer(device, worker_core);
+                    } else {
+                        core_l1_data_buffer = issueFastDispatchReadFromL1DataBuffer(device, worker_core);
+                    }
+                } else {
+                    core_l1_data_buffer = issueSlowDispatchReadFromL1DataBuffer(device, worker_core);
+                }
+
                 readRiscProfilerResults(
                     device,
                     worker_core,
                     state,
-                    L1_data_buffer,
+                    core_l1_data_buffer,
                     ProfilerDataBufferSource::L1,
                     metadata,
                     log_file_ofs,
