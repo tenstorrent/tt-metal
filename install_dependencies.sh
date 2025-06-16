@@ -242,23 +242,40 @@ install_sfpi() {
 	    exit 1
 	fi
     fi
+    # determine packaging system
+    local pkg
+    if dpkg-query -f '${Version}' -W libc-bin >/dev/null 2>&1 ; then
+	pkg=deb
+    elif rpm -q --qf '%{VERSION}' glibc >/dev/null 2>&1 ; then
+	pkg=rpm
+    else
+	echo "Unknown packaging system" >&2
+	exit 1
+    fi
     local $(grep -v '^#' $version_file)
     local sfpi_arch_os=$(uname -m)_$(uname -s)
-    local sfpi_deb_md5=$(eval echo "\$sfpi_${sfpi_arch_os}_deb_md5")
-    if [ -z "$sfpi_deb_md5" ] ; then
-	echo "SFPI debian package for ${sfpi_arch_os} is not available" >&2
+    local sfpi_pkg_md5=$(eval echo "\$sfpi_${sfpi_arch_os}_${pkg}_md5")
+    if [ -z $(eval echo "$sfpi_${pkg}_md5") ] ; then
+	echo "SFPI $pkg package for ${sfpi_arch_os} is not available" >&2
 	exit 1
     fi
     local TEMP_DIR=$(mktemp -d)
-    wget -P $TEMP_DIR "$sfpi_url/$sfpi_version/sfpi-${sfpi_arch_os}.deb"
-    if [ $(md5sum -b "${TEMP_DIR}/sfpi-${sfpi_arch_os}.deb" | cut -d' ' -f1) \
-	     != "$sfpi_deb_md5" ] ; then
-	echo "SFPI sfpi-${sfpi_arch_os}.deb md5 mismatch" >&2
+    wget -P $TEMP_DIR "$sfpi_url/$sfpi_version/sfpi-${sfpi_arch_os}.${pkg}"
+    if [ $(md5sum -b "${TEMP_DIR}/sfpi-${sfpi_arch_os}.${pkg}" | cut -d' ' -f1) \
+	     != "$sfpi_pkg_md5" ] ; then
+	echo "SFPI sfpi-${sfpi_arch_os}.${pkg} md5 mismatch" >&2
 	rm -rf $TEMP_DIR
 	exit 1
     fi
     # we must select exactly this version
-    apt-get install -y --allow-downgrades $TEMP_DIR/sfpi-${sfpi_arch_os}.deb
+    case "$pkg" in
+	deb)
+	    apt-get install -y --allow-downgrades $TEMP_DIR/sfpi-${sfpi_arch_os}.deb
+	    ;;
+	rpm)
+	    rpm --upgrade --force $TEMP_DIR/sfpi-${sfpi_arch_os}.rpm
+	    ;;
+    esac
     rm -rf $TEMP_DIR
 }
 

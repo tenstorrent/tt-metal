@@ -281,6 +281,12 @@ public:
 
     // Read data from profiler buffer using slow dispatch
     void issueSlowDispatchReadFromProfilerBuffer(IDevice* device);
+
+    // Read data from L1 data buffer using fast dispatch
+    std::vector<uint32_t> issueFastDispatchReadFromL1DataBuffer(IDevice* device, const CoreCoord& worker_core);
+
+    // Read data from L1 data buffer using slow dispatch
+    std::vector<uint32_t> issueSlowDispatchReadFromL1DataBuffer(IDevice* device, const CoreCoord& worker_core);
 };
 
 void write_control_buffer_to_core(
