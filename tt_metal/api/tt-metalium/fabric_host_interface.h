@@ -95,7 +95,7 @@ struct tensix_routing_l1_info_t {
 #define NUM_CHIPS_PER_MESH 64
 #define NUM_MESHES_IN_FABRIC 64
     eth_chan_directions intra_mesh_routing_table[NUM_CHIPS_PER_MESH];
-    eth_chan_directions inter_mesh_routing_table[NUM_MESHES_IN_FABRIC];
+    eth_chan_directions inter_mesh_routing_table[NUM_MESHES_IN_FABRIC][NUM_CHIPS_PER_MESH];
 
     // TODO
     // tensix_edm_adapter_spec intra_mesh_adapter_spec[NUM_CHIPS_PER_MESH];

@@ -1059,7 +1059,7 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
             tensix_routing_info.intra_mesh_routing_table[dst_chip_id] =
                 forwarding_direction.has_value()
                     ? this->routing_direction_to_eth_direction(forwarding_direction.value_or(RoutingDirection::NONE))
-                    : (eth_chan_directions)255;  // 255 is unreachable
+                    : (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
         }
     }
 
@@ -1071,10 +1071,10 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
                  dst_chip_id++) {
                 auto forwarding_direction =
                     this->get_forwarding_direction(src_fabric_node_id, FabricNodeId(MeshId(dst_mesh_id), dst_chip_id));
-                tensix_routing_info.inter_mesh_routing_table[dst_chip_id] =
+                tensix_routing_info.inter_mesh_routing_table[dst_mesh_id][dst_chip_id] =
                     forwarding_direction.has_value() ? this->routing_direction_to_eth_direction(
                                                            forwarding_direction.value_or(RoutingDirection::NONE))
-                                                     : (eth_chan_directions)255;  // 255 is unreachable
+                                                     : (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
             }
         }
     }
