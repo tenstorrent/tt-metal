@@ -135,7 +135,7 @@ Tensor ExecuteMinimum::invoke(
 Tensor ExecuteMinimum::invoke(
     QueueId queue_id,
     const Tensor& input_a,
-    const std::variant<int, float> value,
+    const std::variant<int32_t, float> value,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
@@ -183,7 +183,7 @@ Tensor ExecuteMaximum::invoke(
 Tensor ExecuteMaximum::invoke(
     QueueId queue_id,
     const Tensor& input_a,
-    const std::variant<int, float> value,
+    const std::variant<int32_t, float> value,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,

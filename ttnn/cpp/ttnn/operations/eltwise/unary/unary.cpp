@@ -210,7 +210,7 @@ template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MAXIMUM>::
     QueueId, const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
 
 template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MAXIMUM>::invoke<int32_t>(
-    QueueId, const Tensor&, const int, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+    QueueId, const Tensor&, const int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
 
 Tensor Sigmoid_accurate::invoke(
     QueueId queue_id,
