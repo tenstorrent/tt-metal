@@ -31,7 +31,7 @@ from collections import namedtuple
 import time
 import os
 import sys
-from parse_inspector_logs import get_kernels, get_programs, get_devices_in_use
+from parse_inspector_logs import InspectorData
 
 RST = "\033[0m"
 BLUE = "\033[34m"  # For good values
@@ -44,8 +44,6 @@ VERBOSE_CLR = "\033[94m"  # For verbose output
 VERBOSE = False
 VVERBOSE = False
 context = None
-
-InspectorData = namedtuple("InspectorData", ["kernels", "programs", "devices_in_use"])
 
 try:
     from tabulate import tabulate, TableFormat, Line, DataRow
@@ -560,10 +558,7 @@ def main(argv=None):
         )
         inspector_data = None
     else:
-        programs = get_programs(log_directory)
-        kernels = get_kernels(log_directory)
-        devices_in_use = get_devices_in_use(programs)
-        inspector_data = InspectorData(kernels=kernels, programs=programs, devices_in_use=devices_in_use)
+        inspector_data = InspectorData(log_directory)
 
     # Populate integer array with device ids
     if len(args["--dev"]) == 1 and args["--dev"][0].lower() == "all":
