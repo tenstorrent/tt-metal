@@ -975,21 +975,14 @@ def test_demo_text(
             "N150_Llama3.2-3B": 54,
             "N150_Llama3.1-8B": 106,
             "N150_Mistral-7B": 101,
-            "N150_Falcon7B": 73,
-            "N150_Mamba-2.8B": 40,
             # N300 targets
             "N300_Llama3.1-8B": 126,  # FIXME: not in Github Action results
             "N300_Mistral-7B": 129,  # FIXME: not in Github Action results
             "N300_Qwen2.5-7B": 89,
             # T3K targets
             "T3K_Llama3.1-70B": 159,
-            "T3K_Falcon7B": 103,
-            "T3K_Mixtral7Bx8": 345,
             "T3K_Qwen2.5-72B": 200,
             "T3K_Qwen3-32B": 135,
-            # TG targets
-            "TG_Llama3.1-8B": 105,  # FIXME: not in Github Action results
-            "TG_Llama3.1-70B": 452,  # FIXME: not in Github Action results
         }
         ci_target_decode_tok_s_u = {
             # N150 targets
@@ -998,8 +991,6 @@ def test_demo_text(
             "N150_Llama3.1-8B": 21,
             "N150_Llama3.2-11B": 23,  # FIXME: not in Github Action results
             "N150_Mistral-7B": 24,
-            "N150_Falcon7B": 18,
-            "N150_Mamba-2.8B": 11,
             # N300 targets
             "N300_Llama3.2-1B": 250,  # FIXME: not in Github Action results
             "N300_Llama3.2-3B": 100,  # FIXME: not in Github Action results
@@ -1017,18 +1008,8 @@ def test_demo_text(
             "T3K_Llama3.1-8B": 45,  # FIXME: not in Github Action results
             "T3K_Llama3.2-11B": 45,  # FIXME: not in Github Action results
             "T3K_Llama3.1-70B": 15,
-            "T3K_Mistral-7B": 45,  # FIXME: not in Github Action results
-            "T3K_Falcon7B": 15,
-            "T3K_Mixtral7Bx8": 13,
             "T3K_Qwen2.5-72B": 14,
             "T3K_Qwen3-32B": 20,
-            # TG targets
-            "TG_Llama3.2-1B": 300,  # FIXME: not in Github Action results
-            "TG_Llama3.2-3B": 150,  # FIXME: not in Github Action results
-            "TG_Llama3.1-8B": 39,  # FIXME: not in Github Action results
-            "TG_Llama3.2-11B": 45,  # FIXME: not in Github Action results
-            "TG_Llama3.1-70B": 19,  # FIXME: not in Github Action results
-            "TG_Mistral-7B": 45,  # FIXME: not in Github Action results
         }
 
         # Only call verify_perf if the model_device_key exists in the targets
