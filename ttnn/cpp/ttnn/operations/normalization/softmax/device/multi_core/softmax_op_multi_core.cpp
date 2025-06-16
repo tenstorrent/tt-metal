@@ -140,11 +140,11 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     }
     if ((input_tensor.device()->l1_size_per_core() * 0.9) < cb_size_sum_bytes) {
         use_large_kernel = true;
-        cb_length = 120;
-        in0_t = 120;
-        im4_t = 120;
-        im0_t = 120;
-        im3_t = 120;
+        cb_length = 80;
+        in0_t = 80;
+        im4_t = 80;
+        im0_t = 80;
+        im3_t = 80;
         TT_FATAL(!inplace, "Tensor is too large to run softmax inplace, please use standard softmax");
     }
     // TODO: Not sure why this fatal is here but not needed for use_large_kernel
