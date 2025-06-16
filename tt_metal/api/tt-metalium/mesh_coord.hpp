@@ -21,6 +21,7 @@ public:
     using ShapeBase::operator[];
 
     // Shorthands for constructing 1D, 2D and 3D shapes.
+    // The values s0...sn are assumed to be supplied in row-major order (from outer dim to inner dim).
     explicit MeshShape(uint32_t s);
     MeshShape(uint32_t s0, uint32_t s1);
     MeshShape(uint32_t s0, uint32_t s1, uint32_t s2);
@@ -62,6 +63,7 @@ bool is_line_topology(const MeshShape& shape);
 class MeshCoordinate {
 public:
     // Shorthands for constructing 1D, 2D and 3D coordinates.
+    // The values c0...cn are assumed to be supplied in row-major order (from outer dim to inner dim).
     explicit MeshCoordinate(uint32_t c);
     MeshCoordinate(uint32_t c0, uint32_t c1);
     MeshCoordinate(uint32_t c0, uint32_t c1, uint32_t c2);
