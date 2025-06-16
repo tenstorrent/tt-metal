@@ -16,8 +16,9 @@ struct SamplingOperation {
         QueueId queue_id,
         const Tensor& input_values_tensor,
         const Tensor& input_indices_tensor,
-        const std::vector<uint16_t>& k,
-        const std::vector<float>& p,
+        const Tensor& k,
+        const Tensor& p,
+        const Tensor& temp,
         const std::optional<uint32_t>& seed = std::nullopt,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
@@ -25,8 +26,9 @@ struct SamplingOperation {
     static ttnn::Tensor invoke(
         const Tensor& input_values_tensor,
         const Tensor& input_indices_tensor,
-        const std::vector<uint16_t>& k,
-        const std::vector<float>& p,
+        const Tensor& k,
+        const Tensor& p,
+        const Tensor& temp,
         const std::optional<uint32_t>& seed = std::nullopt,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);

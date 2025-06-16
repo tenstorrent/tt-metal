@@ -13,10 +13,7 @@
 namespace ttnn::operations::reduction::detail {
 
 tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
-    const Tensor& input_values_tensor,
-    const Tensor& input_indices_tensor,
-    const std::vector<uint16_t>& k,
-    const std::vector<float>& p,
+    const std::vector<Tensor>& input_tensors,
     const std::optional<uint32_t>& seed,
     const std::optional<CoreRangeSet>& sub_core_grids,
     Tensor& output_tensor) {
@@ -24,22 +21,40 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     tt::tt_metal::Program program{};
     uint32_t random_seed = 0;
 
+    const auto& input_values_tensor = input_tensors[0];
+    const auto& input_indices_tensor = input_tensors[1];
+    const auto& k = input_tensors[2];
+    const auto& p = input_tensors[3];
+    const auto& temp = input_tensors[4];
+
     tt::DataFormat input_values_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.dtype());
     tt::DataFormat input_indices_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_indices_tensor.dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
+    tt::DataFormat k_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(k.dtype());
+    tt::DataFormat p_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(p.dtype());
+    tt::DataFormat temp_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(temp.dtype());
 
     uint32_t input_values_tile_size = tile_size(input_values_cb_data_format);
     uint32_t index_tile_size = tile_size(index_cb_data_format);
+    uint32_t k_tile_size = tile_size(k_cb_data_format);
+    uint32_t p_tile_size = tile_size(p_cb_data_format);
+    uint32_t temp_tile_size = tile_size(temp_cb_data_format);
 
     auto input_values_buffer = input_values_tensor.buffer();
     auto input_indices_buffer = input_indices_tensor.buffer();
+    auto k_buffer = k.buffer();
+    auto p_buffer = p.buffer();
+    auto temp_buffer = temp.buffer();
     auto output_buffer = output_tensor.buffer();
 
     bool input_values_is_dram = input_values_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool input_indices_is_dram = input_indices_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool k_is_dram = k_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool p_is_dram = p_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool temp_is_dram = temp_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool output_is_dram = output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     uint32_t num_input_values_tiles = input_values_tensor.physical_volume() / TILE_HW;
@@ -140,8 +155,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
             .set_page_size(output_ind_cb_index, index_tile_size);
     auto output_ind_cb_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, output_ind_cb_config);
 
-    uint32_t num_out_tiles =
-        Ht * round_up_to_mul32(static_cast<std::uint32_t>(*std::max_element(k.begin(), k.end()))) / TILE_WIDTH;
+    uint32_t num_out_tiles = Ht;
     uint32_t cb_cur_max_index = tt::CBIndex::c_9;
     tt::tt_metal::CircularBufferConfig cb_cur_max_config =
         tt::tt_metal::CircularBufferConfig(
@@ -187,6 +201,24 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
             .set_page_size(output_cb_index, aligned_out0_unit_size);
     auto cb_output_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, output_cb_config);
 
+    // Add k and p circular buffers
+    uint32_t k_cb_index = tt::CBIndex::c_14;
+    tt::tt_metal::CircularBufferConfig k_cb_config =
+        tt::tt_metal::CircularBufferConfig(32 * 4, {{k_cb_index, k_cb_data_format}}).set_page_size(k_cb_index, 32 * 4);
+    auto cb_k_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, k_cb_config);
+
+    uint32_t p_cb_index = tt::CBIndex::c_15;
+    tt::tt_metal::CircularBufferConfig p_cb_config =
+        tt::tt_metal::CircularBufferConfig(32 * 2, {{p_cb_index, p_cb_data_format}}).set_page_size(p_cb_index, 32 * 2);
+    auto cb_p_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, p_cb_config);
+
+    // Add temp circular buffer
+    uint32_t temp_cb_index = tt::CBIndex::c_16;
+    tt::tt_metal::CircularBufferConfig temp_cb_config =
+        tt::tt_metal::CircularBufferConfig(temp_tile_size, {{temp_cb_index, temp_cb_data_format}})
+            .set_page_size(temp_cb_index, temp_tile_size);
+    auto cb_temp_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, temp_cb_config);
+
     std::vector<uint32_t> reader_compile_time_args = {
         input_values_cb_index,
         final_indices_rm_cb_index,
@@ -223,33 +255,38 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
 
-        bfloat16 bfloat_p_scalar = bfloat16(p[i]);
-        uint32_t packed_p_scalar = pack_two_bfloat16_into_uint32({bfloat_p_scalar, bfloat_p_scalar});
-
         std::vector<uint32_t> writer_compile_time_args = {
             (std::uint32_t)output_is_dram,
+            (std::uint32_t)temp_is_dram,
+            (std::uint32_t)k_is_dram,
+            (std::uint32_t)p_is_dram,
             output_cb_index,
             topk_mask_cb_index,
             scale_cb_index,
             packed_identity_scalar,
             final_indices_rm_cb_index,
-            // values_cb_index,
             cb_local_vals_index,
             output_ind_cb_index,
             aligned_final_indices_rm_unit_size,
             aligned_out0_unit_size,
             rand_tile_index,
-            k[i],
-            packed_p_scalar,
+            k_cb_index,
+            p_cb_index,
+            temp_cb_index,
             i,
-            round_up_to_mul32(k[i])};
+            32,
+        };
         tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/dataflow/writer_interleaved.cpp",
             core,
             tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, {output_buffer->address()});
+        tt::tt_metal::SetRuntimeArgs(
+            program,
+            writer_kernel_id,
+            core,
+            {output_buffer->address(), temp_buffer->address(), k_buffer->address(), p_buffer->address()});
 
         writer_kernel_ids.push_back(writer_kernel_id);
 
@@ -267,11 +304,10 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
             Ht,
             Wt,
             (std::uint32_t)std::log2(Wt),
-            round_up_to_mul32(k[i]),
-            (std::uint32_t)std::log2(round_up_to_mul32(k[i])),
             rand_tile_index,
             random_seed,
-            cb_local_vals_index};
+            cb_local_vals_index,
+            temp_cb_index};
 
         tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
             program,
@@ -284,12 +320,15 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
 
     auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_ids, cores](
                                               const void* operation,
-                                              const tt::tt_metal::Program& program,
+                                              tt::tt_metal::Program& program,
                                               const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                               const std::vector<Tensor>& output_tensors) {
         auto input_values_buffer = input_tensors.at(0).buffer();
         auto input_indices_buffer = input_tensors.at(1).buffer();
+        auto k_buffer = input_tensors.at(2).buffer();
+        auto p_buffer = input_tensors.at(3).buffer();
+        auto temp_buffer = input_tensors.at(4).buffer();
 
         auto output_buffer = output_tensors.at(0).buffer();
 
@@ -301,6 +340,9 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
 
             auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids.at(i), core);
             writer_runtime_args[0] = output_buffer->address();
+            writer_runtime_args[1] = temp_buffer->address();
+            writer_runtime_args[2] = k_buffer->address();
+            writer_runtime_args[3] = p_buffer->address();
         }
     };
 
