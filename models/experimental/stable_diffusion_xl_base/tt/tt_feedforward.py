@@ -21,7 +21,7 @@ class TtFeedForward(nn.Module):
         super().__init__()
 
         self.device = device
-        self.tt_geglu = TtGEGLU(device, state_dict, f"{module_path}.net.0", weights_dtype=weights_dtype)
+        self.tt_geglu = TtGEGLU(device, state_dict, f"{module_path}.net.0", model_config, weights_dtype=weights_dtype)
 
         weights = state_dict[f"{module_path}.net.2.weight"].unsqueeze(0).unsqueeze(0)
         bias = state_dict[f"{module_path}.net.2.bias"]

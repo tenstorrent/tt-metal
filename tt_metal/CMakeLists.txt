@@ -127,6 +127,7 @@ target_sources(
             api/tt-metalium/fabric_edm_packet_header.hpp
             core_descriptors/blackhole_140_arch.yaml
             core_descriptors/wormhole_b0_80_arch.yaml
+            core_descriptors/wormhole_b0_80_arch_eth_dispatch.yaml
             fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.yaml
@@ -137,24 +138,38 @@ target_sources(
             fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
             fabric/hw/inc/fabric_routing_mode.h
+            fabric/hw/inc/noc_addr.h
             impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
             impl/dispatch/kernels/cq_helpers.hpp
             impl/dispatch/kernels/packet_queue.hpp
             impl/dispatch/kernels/packet_queue_ctrl.hpp
             include/compute_kernel_api.h
+            include/compute_kernel_api/bcast.h
             include/compute_kernel_api/blank.h
             include/compute_kernel_api/cb_api.h
             include/compute_kernel_api/common.h
             include/compute_kernel_api/common_globals.h
+            include/compute_kernel_api/eltwise_binary.h
             include/compute_kernel_api/eltwise_unary/eltwise_unary.h
             include/compute_kernel_api/eltwise_unary/exp.h
+            include/compute_kernel_api/eltwise_unary/negative.h
+            include/compute_kernel_api/eltwise_unary/recip.h
+            include/compute_kernel_api/eltwise_unary/relu.h
             include/compute_kernel_api/eltwise_unary/sfpu_split_includes.h
+            include/compute_kernel_api/eltwise_unary/sqrt.h
+            include/compute_kernel_api/mask.h
             include/compute_kernel_api/matmul.h
             include/compute_kernel_api/pack.h
+            include/compute_kernel_api/pack_untilize.h
             include/compute_kernel_api/reconfig_data_format.h
+            include/compute_kernel_api/reduce.h
             include/compute_kernel_api/reg_api.h
+            include/compute_kernel_api/softmax.h
             include/compute_kernel_api/tile_move_copy.h
+            include/compute_kernel_api/tilize.h
+            include/compute_kernel_api/transpose_wh.h
+            include/compute_kernel_api/untilize.h
             soc_descriptors/blackhole_140_arch.yaml
             soc_descriptors/wormhole_b0_80_arch.yaml
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h

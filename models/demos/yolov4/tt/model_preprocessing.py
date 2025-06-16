@@ -159,14 +159,14 @@ def _create_ds1_model_parameters(conv_args, resolution):
         conv_args.c1["enable_act_double_buffer"] = False
         conv_args.c1["deallocate_activation"] = True
         conv_args.c1["reshard_if_not_optimal"] = False
-        conv_args.c1["shard_layout"] = None
+        conv_args.c1["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 
-        conv_args.c2["act_block_h"] = None
+        conv_args.c2["act_block_h"] = 320
         conv_args.c2["enable_split_reader"] = False
         conv_args.c2["enable_act_double_buffer"] = False
         conv_args.c2["deallocate_activation"] = True
         conv_args.c2["reshard_if_not_optimal"] = False
-        conv_args.c2["shard_layout"] = None
+        conv_args.c2["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 
         conv_args.c3["act_block_h"] = None
         conv_args.c3["enable_split_reader"] = True

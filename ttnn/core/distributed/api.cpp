@@ -8,6 +8,7 @@
 
 #include <tt_stl/overloaded.hpp>
 #include "tt-metalium/assert.hpp"
+#include "tt-metalium/distributed_host_buffer.hpp"
 #include "tt-metalium/mesh_coord.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -74,10 +75,10 @@ void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_de
 std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
     if (std::holds_alternative<tt::tt_metal::MultiDeviceHostStorage>(tensor.storage())) {
         std::vector<ttnn::Tensor> tensors;
-        auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.storage());
-        for (int i = 0; i < host_storage.num_buffers(); ++i) {
-            tensors.push_back(Tensor{host_storage.get_buffer(i), tensor.tensor_spec()});
-        }
+        auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
+        const auto& distributed_buffer = host_storage.distributed_buffer();
+        distributed_buffer.apply(
+            [&](const HostBuffer& buffer) { tensors.push_back(Tensor{buffer, tensor.get_tensor_spec()}); });
         return tensors;
     } else if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage())) {
         auto& device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
@@ -112,28 +113,16 @@ Tensor aggregate_as_tensor(
     // Based whether the first tensor shard has Host or Device buffer,
     // we want to use MultiDeviceHostStorage or MultiDeviceStorage
     StorageType storage_type = reference_shard.storage_type();
-    Tile tile = reference_shard.tensor_spec().tile();
     if (storage_type == StorageType::HOST) {
-        std::vector<ttnn::TensorSpec> specs;
-        std::vector<HostBuffer> host_owned_buffers;
+        std::vector<HostBuffer> buffers;
         for (const auto& shard : tensor_shards) {
-            host_owned_buffers.push_back(std::get<HostStorage>(shard.storage()).buffer);
-            specs.push_back(shard.tensor_spec());
-            Tile shard_tile = shard.tensor_spec().tile();
-            if (shard_tile != tile) {
-                TT_THROW(
-                    "Error aggregating multichip tensors: Attempting to aggregate tensors with different tiling "
-                    "configurations. Device {} has tiling ({}x{}) while device {} has tiling {}x{}.",
-                    reference_shard.device()->id(),
-                    tile.get_height(),
-                    tile.get_width(),
-                    shard.device()->id(),
-                    shard_tile.get_height(),
-                    shard_tile.get_width());
-            }
+            buffers.push_back(std::get<HostStorage>(shard.get_storage()).buffer);
+            TT_FATAL(
+                shard.get_tensor_spec() == reference_shard.get_tensor_spec(),
+                "Error aggregating multichip tensors: Attempting to aggregate tensors with different tensor specs.");
         }
-        auto storage = MultiDeviceHostStorage{std::move(host_owned_buffers)};
-        return Tensor(std::move(storage), reference_shard.tensor_spec(), config);
+        auto storage = MultiDeviceHostStorage{std::move(buffers)};
+        return Tensor(std::move(storage), reference_shard.get_tensor_spec(), config);
     } else if (storage_type == StorageType::DEVICE) {
         return combine_device_tensors_impl(tensor_shards, reference_shard);
     } else {
