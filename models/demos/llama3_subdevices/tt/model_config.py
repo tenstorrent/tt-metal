@@ -1042,17 +1042,6 @@ class TtModelArgs:
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            self.model_config[
-                "SDPA_RM_OUTPUT_MEMCFG"
-            ] = lambda batch_size_per_device_group: ttnn.create_sharded_memory_config(
-                shape=(self.n_local_heads, self.head_dim),  # self.n_heads padded to tile size
-                core_grid=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                    self.start_core, batch_size_per_device_group, self.sub_core_grids, row_wise=True
-                ),
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
             self.model_config["ROT_MAT_MEMCONFIG"] = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
