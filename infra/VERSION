@@ -1,3 +1,8 @@
 # This VERSION file is not the official source of the software version
 # This is solely for helping with version management via our release system
+<<<<<<< HEAD
 v0.60.0
+=======
+# as of this writing
+v0.59.0
+>>>>>>> f4c17803f1 (Rolling VERSION file back to 0.59.0)
