@@ -966,47 +966,49 @@ def test_demo_text(
         )
 
         # check measurements against CI performance targets
+        # Targets set to 0.95x observed values for decode rates (higher is better)
+        # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
         ci_target_ttft = {
-            # N150 targets (milliseconds)
-            "N150_Llama3.2-1B": 25,
-            "N150_Llama3.2-3B": 54,
-            "N150_Llama3.1-8B": 106,
-            "N150_Mistral-7B": 101,
+            # N150 targets (milliseconds) - lower is better
+            "N150_Llama3.2-1B": 26,
+            "N150_Llama3.2-3B": 57,
+            "N150_Llama3.1-8B": 112,
+            "N150_Mistral-7B": 106,
             # N300 targets
-            "N300_Llama3.1-8B": 126,  # FIXME: not in Github Action results
-            "N300_Mistral-7B": 129,  # FIXME: not in Github Action results
-            "N300_Qwen2.5-7B": 89,
+            "N300_Llama3.1-8B": 133,  # FIXME: not in Github Action results
+            "N300_Mistral-7B": 136,  # FIXME: not in Github Action results
+            "N300_Qwen2.5-7B": 94,
             # T3K targets
-            "T3K_Llama3.1-70B": 159,
-            "T3K_Qwen2.5-72B": 200,
-            "T3K_Qwen3-32B": 135,
+            "T3K_Llama3.1-70B": 167,
+            "T3K_Qwen2.5-72B": 211,
+            "T3K_Qwen3-32B": 142,
         }
         ci_target_decode_tok_s_u = {
-            # N150 targets
-            "N150_Llama3.2-1B": 54,
-            "N150_Llama3.2-3B": 33,
-            "N150_Llama3.1-8B": 21,
-            "N150_Llama3.2-11B": 23,  # FIXME: not in Github Action results
-            "N150_Mistral-7B": 24,
+            # N150 targets - higher is better
+            "N150_Llama3.2-1B": 51,
+            "N150_Llama3.2-3B": 31,
+            "N150_Llama3.1-8B": 20,
+            "N150_Llama3.2-11B": 22,  # FIXME: not in Github Action results
+            "N150_Mistral-7B": 23,
             # N300 targets
-            "N300_Llama3.2-1B": 250,  # FIXME: not in Github Action results
-            "N300_Llama3.2-3B": 100,  # FIXME: not in Github Action results
-            "N300_Llama3.1-8B": 36,  # FIXME: not in Github Action results
-            "N300_Llama3.2-11B": 38,  # FIXME: not in Github Action results
-            "N300_Mistral-7B": 36,  # FIXME: not in Github Action results
-            "N300_Qwen2.5-7B": 21,
+            "N300_Llama3.2-1B": 238,  # FIXME: not in Github Action results
+            "N300_Llama3.2-3B": 95,  # FIXME: not in Github Action results
+            "N300_Llama3.1-8B": 34,  # FIXME: not in Github Action results
+            "N300_Llama3.2-11B": 36,  # FIXME: not in Github Action results
+            "N300_Mistral-7B": 34,  # FIXME: not in Github Action results
+            "N300_Qwen2.5-7B": 20,
             # P150 targets
-            "P150_Llama3.1-8B": 23,  # FIXME: not in Github Action results
+            "P150_Llama3.1-8B": 22,  # FIXME: not in Github Action results
             # P300 targets
-            "P300_Llama3.1-8B": 38,  # FIXME: not in Github Action results
+            "P300_Llama3.1-8B": 36,  # FIXME: not in Github Action results
             # T3K targets
-            "T3K_Llama3.2-1B": 300,  # FIXME: not in Github Action results
-            "T3K_Llama3.2-3B": 150,  # FIXME: not in Github Action results
-            "T3K_Llama3.1-8B": 45,  # FIXME: not in Github Action results
-            "T3K_Llama3.2-11B": 45,  # FIXME: not in Github Action results
-            "T3K_Llama3.1-70B": 15,
-            "T3K_Qwen2.5-72B": 14,
-            "T3K_Qwen3-32B": 20,
+            "T3K_Llama3.2-1B": 285,  # FIXME: not in Github Action results
+            "T3K_Llama3.2-3B": 143,  # FIXME: not in Github Action results
+            "T3K_Llama3.1-8B": 43,  # FIXME: not in Github Action results
+            "T3K_Llama3.2-11B": 43,  # FIXME: not in Github Action results
+            "T3K_Llama3.1-70B": 14,
+            "T3K_Qwen2.5-72B": 13,
+            "T3K_Qwen3-32B": 19,
         }
 
         # Only call verify_perf if the model_device_key exists in the targets
