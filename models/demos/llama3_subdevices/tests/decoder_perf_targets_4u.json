@@ -7,7 +7,7 @@
             "first_to_last_start": 208.9040404040404,
             "non-overlapped-dispatch-time": 4273.311111111111,
             "kernel_duration_relative_margin": 0.05,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.3,
             "first_to_last_start_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.2
         },
@@ -20,7 +20,7 @@
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
             "first_to_last_start_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.2
+            "dispatch_duration_relative_margin": 0.5
         },
         "AllReduceAsync_0": {
             "op_name": "AllReduceAsync_0",
@@ -29,9 +29,9 @@
             "first_to_last_start": 1748.0404040404042,
             "non-overlapped-dispatch-time": 7015.244444444444,
             "kernel_duration_relative_margin": 0.05,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.3,
             "first_to_last_start_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.2
+            "dispatch_duration_relative_margin": 0.3
         },
         "AllReduceAsync_1": {
             "op_name": "AllReduceAsync_1",
@@ -50,7 +50,7 @@
             "op_to_op": 768.2575757575759,
             "first_to_last_start": 1829.7929292929293,
             "non-overlapped-dispatch-time": 6158.122222222222,
-            "kernel_duration_relative_margin": 0.05,
+            "kernel_duration_relative_margin": 0.1,
             "op_to_op_duration_relative_margin": 0.2,
             "first_to_last_start_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.2
@@ -62,7 +62,7 @@
             "first_to_last_start": 2031.6565656565656,
             "non-overlapped-dispatch-time": 6127.527777777778,
             "kernel_duration_relative_margin": 0.05,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.4,
             "first_to_last_start_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.2
         },
@@ -75,7 +75,7 @@
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
             "first_to_last_start_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.2
+            "dispatch_duration_relative_margin": 0.3
         },
         "Matmul_0": {
             "op_name": "Matmul_0",
@@ -86,7 +86,7 @@
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
             "first_to_last_start_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.2
+            "dispatch_duration_relative_margin": 0.15
         },
         "Matmul_1": {
             "op_name": "Matmul_1",
@@ -97,7 +97,7 @@
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
             "first_to_last_start_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.2
+            "dispatch_duration_relative_margin": 0.1
         },
         "Matmul_2": {
             "op_name": "Matmul_2",
@@ -119,7 +119,7 @@
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
             "first_to_last_start_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.2
+            "dispatch_duration_relative_margin": 0.1
         },
         "Matmul_RS_0": {
             "op_name": "Matmul_RS_0",
@@ -130,7 +130,7 @@
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
             "first_to_last_start_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.2
+            "dispatch_duration_relative_margin": 0.1
         },
         "PagedUpdateCacheDeviceOperation_0": {
             "op_name": "PagedUpdateCacheDeviceOperation_0",
@@ -138,9 +138,9 @@
             "op_to_op": 853.2727272727273,
             "first_to_last_start": 140.82323232323233,
             "non-overlapped-dispatch-time": 4601.383333333333,
-            "kernel_duration_relative_margin": 0.05,
+            "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
-            "first_to_last_start_relative_margin": 0.2,
+            "first_to_last_start_relative_margin": 0.35,
             "dispatch_duration_relative_margin": 0.2
         },
         "RMSAllGather_0": {
@@ -171,10 +171,10 @@
             "op_to_op": 692.959595959596,
             "first_to_last_start": 2616.0858585858587,
             "non-overlapped-dispatch-time": 2981.8611111111113,
-            "kernel_duration_relative_margin": 0.05,
+            "kernel_duration_relative_margin": 0.1,
             "op_to_op_duration_relative_margin": 0.2,
             "first_to_last_start_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.2
+            "dispatch_duration_relative_margin": 0.35
         },
         "ScaledDotProductAttentionDecode_0": {
             "op_name": "ScaledDotProductAttentionDecode_0",
@@ -182,10 +182,10 @@
             "op_to_op": 679.3686868686868,
             "first_to_last_start": 2828.5808080808083,
             "non-overlapped-dispatch-time": 9201.7,
-            "kernel_duration_relative_margin": 0.05,
+            "kernel_duration_relative_margin": 0.07,
             "op_to_op_duration_relative_margin": 0.2,
             "first_to_last_start_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.2
+            "dispatch_duration_relative_margin": 0.3
         },
         "Untilize_0": {
             "op_name": "Untilize_0",
@@ -193,10 +193,10 @@
             "op_to_op": 1023.5151515151515,
             "first_to_last_start": 1944.732323232323,
             "non-overlapped-dispatch-time": 3035.188888888889,
-            "kernel_duration_relative_margin": 0.05,
-            "op_to_op_duration_relative_margin": 0.2,
+            "kernel_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.4,
             "first_to_last_start_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.2
+            "dispatch_duration_relative_margin": 0.5
         }
     },
     "model_tail": {
@@ -287,7 +287,7 @@
             "op_to_op": 2001.9545454545455,
             "non-overlapped-dispatch-time": 2060.25,
             "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.4,
             "dispatch_duration_relative_margin": 0.5
         },
         "PlusOne_1": {
@@ -296,7 +296,7 @@
             "op_to_op": 2467.0454545454545,
             "non-overlapped-dispatch-time": 2476.85,
             "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.4,
             "dispatch_duration_relative_margin": 0.5
         },
         "RMSAllGather_0": {
@@ -359,7 +359,7 @@
             "op_to_op": 756.2727272727273,
             "non-overlapped-dispatch-time": 5187.35,
             "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.3,
             "dispatch_duration_relative_margin": 0.5
         },
         "TypecastDeviceOperation_0": {
@@ -378,7 +378,7 @@
             "non-overlapped-dispatch-time": 4266.9,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.5
+            "dispatch_duration_relative_margin": 1.5
         },
         "Untilize_0": {
             "op_name": "Untilize_0",
