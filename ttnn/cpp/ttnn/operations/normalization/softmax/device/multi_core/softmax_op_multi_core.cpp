@@ -111,7 +111,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    uint32_t in0_t = tt::div_up(Wt, block_size) * block_size;
+    uint32_t in0_t = numeric_stable ? tt::div_up(Wt, block_size) * block_size : block_size * 2;
     uint32_t out0_t = block_size * 2;
     uint32_t im1_t = 1;  // 1/sum(exp(x))
     uint32_t in2_t = 1;  // scaler for reduce coming from reader
@@ -259,15 +259,17 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     auto c_intermed1_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CBIndex::c_7, im_cb_data_format}})
                                   .set_page_size(tt::CBIndex::c_7, im_tile_size);
     auto cb_intermed1_id = CreateCircularBuffer(program, all_device_cores, c_intermed1_config);
-    auto c_intermedsum_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CBIndex::c_12, im_cb_data_format}})
-                                    .set_page_size(tt::CBIndex::c_12, im_tile_size);
-    auto cb_intermedsum_id = CreateCircularBuffer(program, all_device_cores, c_intermedsum_config);
-    auto c_intermedmax_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CBIndex::c_15, im_cb_data_format}})
-                                    .set_page_size(tt::CBIndex::c_15, im_tile_size);
-    auto cb_intermedmax_id = CreateCircularBuffer(program, all_device_cores, c_intermedmax_config);
-    auto c_recip_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CBIndex::c_16, im_cb_data_format}})
-                              .set_page_size(tt::CBIndex::c_16, im_tile_size);
-    auto cb_recip_id = CreateCircularBuffer(program, all_device_cores, c_recip_config);
+    if (use_large_kernel) {
+        auto c_intermedsum_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CBIndex::c_12, im_cb_data_format}})
+                                        .set_page_size(tt::CBIndex::c_12, im_tile_size);
+        auto cb_intermedsum_id = CreateCircularBuffer(program, all_device_cores, c_intermedsum_config);
+        auto c_intermedmax_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CBIndex::c_15, im_cb_data_format}})
+                                        .set_page_size(tt::CBIndex::c_15, im_tile_size);
+        auto cb_intermedmax_id = CreateCircularBuffer(program, all_device_cores, c_intermedmax_config);
+        auto c_recip_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CBIndex::c_16, im_cb_data_format}})
+                                  .set_page_size(tt::CBIndex::c_16, im_tile_size);
+        auto cb_recip_id = CreateCircularBuffer(program, all_device_cores, c_recip_config);
+    }
     auto c_in2_config = CircularBufferConfig(in2_t * scalar_tile_size, {{tt::CBIndex::c_2, scalar_cb_data_format}})
                             .set_page_size(tt::CBIndex::c_2, scalar_tile_size);
     auto cb_in2_id = CreateCircularBuffer(program, all_device_cores, c_in2_config);
