@@ -67,9 +67,9 @@ bool check_mergeable(const MeshCoordinateRange& a, const MeshCoordinateRange& b)
 
 }  // namespace
 
-MeshShape::MeshShape(uint32_t x) : MeshShape({x}) {}
-MeshShape::MeshShape(uint32_t x, uint32_t y) : MeshShape({x, y}) {}
-MeshShape::MeshShape(uint32_t x, uint32_t y, uint32_t z) : MeshShape({x, y, z}) {}
+MeshShape::MeshShape(uint32_t s) : MeshShape({s}) {}
+MeshShape::MeshShape(uint32_t s0, uint32_t s1) : MeshShape({s0, s1}) {}
+MeshShape::MeshShape(uint32_t s0, uint32_t s1, uint32_t s2) : MeshShape({s0, s1, s2}) {}
 
 MeshShape::MeshShape(const tt::stl::SmallVector<uint32_t>& shape) : ShapeBase(shape) { compute_strides(); }
 MeshShape::MeshShape(tt::stl::SmallVector<uint32_t>&& shape) : ShapeBase(std::move(shape)) { compute_strides(); }
@@ -112,9 +112,9 @@ bool is_line_topology(const MeshShape& shape) {
     return std::count_if(shape.cbegin(), shape.cend(), [](size_t dim) { return dim != 1; }) <= 1;
 }
 
-MeshCoordinate::MeshCoordinate(uint32_t x) : value_({x}) {}
-MeshCoordinate::MeshCoordinate(uint32_t x, uint32_t y) : value_({x, y}) {}
-MeshCoordinate::MeshCoordinate(uint32_t x, uint32_t y, uint32_t z) : value_({x, y, z}) {}
+MeshCoordinate::MeshCoordinate(uint32_t c) : value_({c}) {}
+MeshCoordinate::MeshCoordinate(uint32_t c0, uint32_t c1) : value_({c0, c1}) {}
+MeshCoordinate::MeshCoordinate(uint32_t c0, uint32_t c1, uint32_t c2) : value_({c0, c1, c2}) {}
 
 MeshCoordinate::MeshCoordinate(tt::stl::Span<const uint32_t> coords) : value_(coords.begin(), coords.end()) {}
 
