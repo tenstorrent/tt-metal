@@ -12,6 +12,7 @@
 
 [![C++](https://img.shields.io/badge/C++-17-green.svg)](#)
 [![Python](https://img.shields.io/badge/python-3.10-green.svg)](#)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tenstorrent/tt-llk)
 </div>
 
 ## Overview ##
