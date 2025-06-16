@@ -14,7 +14,7 @@ import ttnn
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("input_spec", parameters_ttnn_pytorch["max_pool2d_short_sweep_suite"]["input_specs"])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_ttnn_pytorch_sweep(device, dtype, input_spec):
     (

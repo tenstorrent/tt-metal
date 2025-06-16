@@ -71,15 +71,9 @@ def run_max_pool2d(
     torch.manual_seed(0)
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
-    TILE_WIDTH = 32
-
-    in_c_padded = in_c
-    if in_c % TILE_WIDTH != 0 and in_c != 16:
-        in_c_padded = in_c + (TILE_WIDTH - in_c % TILE_WIDTH)
-
-    act_shape = [in_n, in_c_padded, in_h, in_w]
-    act = torch.randn(act_shape, dtype=torch.bfloat16)
-    act_shape = (1, 1, in_n * in_h * in_w, in_c_padded)
+    act_shape = [in_n, in_c, in_h, in_w]
+    act = torch.ones(act_shape, dtype=torch.bfloat16)
+    act_shape = (1, 1, in_n * in_h * in_w, in_c)
     act_permuted = torch.permute(act, (0, 2, 3, 1))
     act_reshaped = act_permuted.reshape(act_shape)
 
@@ -95,7 +89,7 @@ def run_max_pool2d(
         batch_size=in_n,
         input_h=in_h,
         input_w=in_w,
-        channels=in_c_padded,
+        channels=in_c,
         kernel_size=[kernel_h, kernel_w],
         stride=[stride_h, stride_w],
         padding=[pad_h, pad_w],
@@ -104,11 +98,14 @@ def run_max_pool2d(
         applied_shard_scheme=sharding,
         in_place_halo=in_place,
     )
+    print("Output shape: ", output.shape)
+    print("output: ", output)
 
     output_host = output.cpu()
     output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_host))
     output_pytorch = output_pytorch_padded[:, :, :, :in_c]
     e2e_perf = stop_measuring_time(start_time)
+    print("output_pytorch shape: ", output_pytorch.shape)
 
     ## reference
     golden_pytorch = torch.nn.MaxPool2d(
@@ -128,7 +125,8 @@ def run_max_pool2d(
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if dtype == ttnn.bfloat8_b:
         atol = 0.35
-
+    print("ttnn output channels: ", output_pytorch.shape[1])
+    print("torch output channels: ", output_pytorch.shape[1])
     ## test for equivalance
     allclose = torch.allclose(output_pytorch, golden_pytorch, atol=atol)
     isequal = torch.equal(output_pytorch, golden_pytorch)

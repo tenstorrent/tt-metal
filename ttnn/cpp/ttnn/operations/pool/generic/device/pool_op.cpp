@@ -32,11 +32,6 @@ void validate_pool2d(
     TT_FATAL(out_mem_config.is_sharded(), "Output memory config needs to be sharded");
 
     const auto& input_shape = input.padded_shape();
-    TT_FATAL(
-        (input_shape[3] % tt::constants::TILE_WIDTH == 0) || (input_shape[3] == 16),
-        "Input channels ({}) should be padded to nearest TILE_WIDTH ({}) or should be 16",
-        input_shape[3],
-        tt::constants::TILE_WIDTH);
 
     // check that C dimnenion is a multiple of num_shards_c for all but height sharding
     TensorMemoryLayout in_memory_layout = input.memory_config().memory_layout();
@@ -78,7 +73,7 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     // NOTE: Only for RM
     // NOTE2: Assuming { N, 1, H * W, C }
     // NOTE3: Assuming output data type is same as input
-    const auto input_shape = input.padded_shape();
+    const auto input_shape = input.logical_shape();
 
     // confirm that the output size supplied to the function matches
     uint32_t out_h = sliding_window_config.get_output_shape()[1];
@@ -87,8 +82,8 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     bool is_out_tiled = output_dtype == DataType::BFLOAT8_B;
 
     // need to pad the last dim to TILE_WIDTH
-    uint32_t out_c = input_shape[3];
-    uint32_t out_c_padded = tt::round_up(out_c, (out_c <= 16) ? 16 : tt::constants::TILE_WIDTH);
+    uint32_t out_c = sliding_window_config.channels;
+    uint32_t out_c_padded = tt::round_up(out_c, tt::constants::TILE_WIDTH);
     uint32_t out_nhw = sliding_window_config.batch_size * out_h * out_w;
 
     uint32_t out_nhw_padded =

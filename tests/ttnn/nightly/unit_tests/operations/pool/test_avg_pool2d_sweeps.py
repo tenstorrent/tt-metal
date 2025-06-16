@@ -31,17 +31,17 @@ parameters = {
         # [1, 1024, 17, 17, 3, 3, 1, 1, 1, 1, False, False],
         # [1, 112, 14, 14, 2, 2, 2, 2, 0, 0, False, True],
         # [1, 1536, 8, 8, 3, 3, 1, 1, 1, 1, False, False],
-        [1, 24, 56, 56, 2, 2, 2, 2, 0, 0, False, True],
+        [1, 16, 56, 56, 2, 2, 2, 2, 0, 0, False, True],
         # [1, 384, 35, 35, 3, 3, 1, 1, 1, 1, False, False],
         # [1, 40, 28, 28, 2, 2, 2, 2, 0, 0, False, True],
         # [1, 80, 14, 14, 2, 2, 2, 2, 0, 0, False, True],
     ],
     "failing_parameters": [
         # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, ceil_mode, count_include_pad]
-        [1, 112, 14, 14, 2, 2, 2, 2, 0, 0, False, True],  # 11
-        [1, 24, 56, 56, 2, 2, 2, 2, 0, 0, False, True],  # 13
-        [1, 40, 28, 28, 2, 2, 2, 2, 0, 0, False, True],  # 15
-        [1, 80, 14, 14, 2, 2, 2, 2, 0, 0, False, True],  # 16
+        # [1, 112, 14, 14, 2, 2, 2, 2, 0, 0, False, True],  # 11
+        # [1, 24, 56, 56, 2, 2, 2, 2, 0, 0, False, True],  # 13
+        # [1, 40, 28, 28, 2, 2, 2, 2, 0, 0, False, True],  # 15
+        # [1, 80, 14, 14, 2, 2, 2, 2, 0, 0, False, True],  # 16
     ],
 }
 

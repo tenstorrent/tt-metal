@@ -71,7 +71,7 @@ void MAIN {
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
 
     constexpr bool is_partial_tile = in_c < 32;
-    static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
+    // static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
     constexpr uint32_t num_faces_in_tile = window_size_hw > 16 ? 4 : (is_partial_tile ? 1 : 2);
     constexpr uint32_t num_out_rows = 1;
 
