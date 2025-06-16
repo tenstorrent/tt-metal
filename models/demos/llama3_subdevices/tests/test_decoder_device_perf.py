@@ -50,7 +50,7 @@ MAX_TYPE = "max"
             1,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             127,  # start_pos
         ),

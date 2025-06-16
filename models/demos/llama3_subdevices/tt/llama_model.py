@@ -441,7 +441,7 @@ class TtTransformer(LightweightModule):
         )
 
         # sampling
-        tt_logits = self.tt_sampling(tt_logits[0], x)
+        tt_logits = self.tt_sampling(tt_logits[0], tt_out_tok=x)
 
         ttnn.plus_one(
             current_pos,
