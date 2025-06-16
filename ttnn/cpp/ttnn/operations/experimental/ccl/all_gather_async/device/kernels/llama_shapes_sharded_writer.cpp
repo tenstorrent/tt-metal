@@ -111,17 +111,37 @@ void kernel_main() {
                     get_noc_addr(core_noc_x[core_id + 1], core_noc_y[core_id + 1], tensor_address0, 0 /*noc_id*/);
             }
 
+            if (num_tiles_to_read_this_core > 0) {  // call the packet scatter writer function
+                scatter_write_and_advance_local_read_address_for_fabric_write(
+                    noc0_dest_noc_addr,
+                    noc0_dest_noc_addr_next_core,
+                    pkt_hdr_forward,
+                    pkt_hdr_backward,
+                    fabric_connection,
+                    l1_read_addr,
+                    num_tiles_to_read_this_core * tensor0_page_size,
+                    num_tiles_to_read_next_core * tensor0_page_size);
+            } else {  // call the normal writer function
+                write_and_advance_local_read_address_for_fabric_write(
+                    noc0_dest_noc_addr,
+                    pkt_hdr_forward,
+                    pkt_hdr_backward,
+                    fabric_connection,
+                    l1_read_addr,
+                    num_tiles_to_read_this_core * tensor0_page_size);
+            }
+
             // call function to write to fabric
 
-            cb_pop_front(cb0_id, num_tiles_to_read_this_core);
-            tiles_read += num_tiles_to_read_this_core;
-            shard_tile_id += num_tiles_to_read_this_core;
+            cb_pop_front(cb0_id, num_tiles_to_read_this_core + num_tiles_to_read_next_core);
+            tiles_read += num_tiles_to_read_this_core + num_tiles_to_read_next_core;
+            shard_tile_id += num_tiles_to_read_this_core + num_tiles_to_read_next_core;
             if (shard_tile_id >= num_tiles_per_core) {
-                shard_tile_id = 0;
+                shard_tile_id -= num_tiles_per_core;
                 core_id++;
             }
 
-        } else {  // old style that sends partial packets that's smaller than 4K as 1 core might take 2-2-1 packets(in
+        } else {  // old method that sends partial packets that's smaller than 4K as 1 core might take 2-2-1 packets(in
                   // tiles)
             uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
             num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);

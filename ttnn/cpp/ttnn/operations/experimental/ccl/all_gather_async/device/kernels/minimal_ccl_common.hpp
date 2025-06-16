@@ -47,6 +47,56 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     l1_read_addr += payload_size_bytes;
 }
 
+FORCE_INLINE void scatter_write_and_advance_local_read_address_for_fabric_write(
+    uint64_t noc0_dest_noc_addr,
+    uint64_t noc0_dest_noc_addr_next_core,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
+    FabricConnectionManager& fabric_connection,
+    size_t& l1_read_addr,
+    uint32_t payload_size_bytes_first_core,
+    uint32_t payload_size_bytes_second_core) {
+    const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
+    const auto [dest_noc_xy_next_core, dest_addr_next_core] = get_noc_address_components(noc0_dest_noc_addr_next_core);
+    const size_t payload_l1_address = l1_read_addr;
+
+    pkt_hdr_forward->to_noc_unicast_scatter_write(
+        tt::tt_fabric::NocUnicastScatterCommandHeader{
+            noc0_dest_noc_addr, noc0_dest_noc_addr_next_core, payload_size_bytes_first_core},
+        payload_size_bytes_first_core + payload_size_bytes_second_core);
+    pkt_hdr_backward->to_noc_unicast_scatter_write(
+        tt::tt_fabric::NocUnicastScatterCommandHeader{
+            noc0_dest_noc_addr, noc0_dest_noc_addr_next_core, payload_size_bytes_first_core},
+        payload_size_bytes_first_core + payload_size_bytes_second_core);
+
+    noc_async_write(
+        payload_l1_address, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), payload_size_bytes_first_core);
+    noc_async_write(
+        payload_l1_address + payload_size_bytes_first_core,
+        safe_get_noc_addr(dest_noc_xy_next_core.x, dest_noc_xy_next_core.y, dest_addr_next_core),
+        payload_size_bytes_second_core);
+
+    if (fabric_connection.has_forward_connection()) {
+        fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+        fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
+            l1_read_addr, payload_size_bytes_first_core + payload_size_bytes_second_core);
+        fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
+            (uint32_t)pkt_hdr_forward, sizeof(PACKET_HEADER_TYPE));
+    }
+
+    if (fabric_connection.has_backward_connection()) {
+        fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+        fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
+            l1_read_addr, payload_size_bytes_first_core + payload_size_bytes_second_core);
+        fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
+            (uint32_t)pkt_hdr_backward, sizeof(PACKET_HEADER_TYPE));
+    }
+
+    noc_async_writes_flushed();
+
+    l1_read_addr += payload_size_bytes_first_core + payload_size_bytes_second_core;
+}
+
 FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     uint64_t noc0_dest_noc_addr_first_page,
     uint64_t noc0_dest_noc_addr_second_page,
