@@ -729,13 +729,15 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     auto dilation_w = sliding_window_config.dilation_hw.second;
     auto num_shards_c = sliding_window_config.num_cores_c;
 
-    auto op_trace_metadata = sliding_window::generate_op_trace_metadata(sliding_window_config);
-    auto shard_boundaries = sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
-    auto top_left_indices =
+    std::vector<uint32_t> op_trace_metadata =
+        ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
+    std::vector<sliding_window::ShardBoundary> shard_boundaries =
+        ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
+    std::vector<std::vector<uint16_t>> top_left_indices =
         sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, stride_w);
 
-    auto reader_indices = sliding_window::construct_on_host_config_tensor(top_left_indices, parallel_config);
-    auto reader_indices_on_device =
+    Tensor reader_indices = sliding_window::construct_on_host_config_tensor(top_left_indices, parallel_config);
+    Tensor reader_indices_on_device =
         sliding_window::move_config_tensor_to_device(reader_indices, parallel_config, is_block_sharded, input.device());
 
     return pool2d_multi_core_sharded_with_halo_v2_impl_new(

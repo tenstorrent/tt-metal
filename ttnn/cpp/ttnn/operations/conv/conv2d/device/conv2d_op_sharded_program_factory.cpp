@@ -31,6 +31,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     const ttnn::Shape& ashape,
     std::optional<const Tensor> bias,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
+    const sliding_window::ParallelConfig& parallel_config,
+    const std::vector<uint32_t>& op_trace_metadata,
+    const std::vector<sliding_window::ShardBoundary>& shard_boundaries,
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
@@ -382,6 +385,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const ttnn::Shape& ashape,
     std::optional<const Tensor> bias,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
+    const sliding_window::ParallelConfig& parallel_config,
+    const std::vector<uint32_t>& op_trace_metadata,
+    const std::vector<sliding_window::ShardBoundary>& shard_boundaries,
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
@@ -944,20 +950,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t act_block_h_datums_last_block =
         (per_core_out_matrix_height_ntiles - (num_blocks_act_h_per_core - 1) * act_block_h_ntiles) * TILE_HEIGHT;
 
-    ttnn::operations::sliding_window::ParallelConfig parallel_config{
-        .grid = a.shard_spec().value().grid,
-        .shard_scheme = a.memory_config().memory_layout(),
-        .shard_orientation = a.shard_spec().value().orientation};
-    auto op_trace_metadata = ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
-    auto shard_boundaries =
-        ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
-    auto conv_sharded_input_top_left_indices = ttnn::operations::sliding_window::generate_sliding_window_op_config(
-        op_trace_metadata,
-        shard_boundaries,
-        stride_w,
-        true,
-        enable_split_reader ? act_block_h_datums_split : act_block_h_datums,
-        enable_split_reader ? act_block_h_datums_split_last : 0);
+    std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
+        ttnn::operations::sliding_window::generate_sliding_window_op_config(
+            op_trace_metadata,
+            shard_boundaries,
+            stride_w,
+            true,
+            enable_split_reader ? act_block_h_datums_split : act_block_h_datums,
+            enable_split_reader ? act_block_h_datums_split_last : 0);
 
     // create sharded ttnn config tensors
     DataType indices_tt_dtype = DataType::UINT16;
@@ -966,12 +966,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     bool is_block_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
-    auto conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
+    Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
         conv_sharded_input_top_left_indices, parallel_config);
     conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
         conv_reader_indices_tensor, parallel_config, is_block_sharded, a.device());
 
-    auto conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
+    const DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
 
     log_debug(LogOp, "total_num_cores_per_weight_slice: {}", total_num_cores_per_weight_slice);
     log_debug(LogOp, "num_blocks_act_h_per_core: {}", num_blocks_act_h_per_core);
@@ -1789,6 +1789,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool enable_subblock_padding) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
+    ttnn::operations::sliding_window::ParallelConfig parallel_config{
+        .grid = a.shard_spec().value().grid,
+        .shard_scheme = a.memory_config().memory_layout(),
+        .shard_orientation = a.shard_spec().value().orientation};
+
+    std::vector<uint32_t> op_trace_metadata =
+        ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
+    std::vector<sliding_window::ShardBoundary> shard_boundaries =
+        ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
+
     if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         return multi_core_optimized_conv_width_sharded_v2_impl(
             program,
@@ -1797,6 +1807,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             ttnn::Shape(input_tensor_shape),
             bias,
             sliding_window_config,
+            parallel_config,
+            op_trace_metadata,
+            shard_boundaries,
             output_channels,
             groups,
             untilize_out,
@@ -1819,6 +1832,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         ttnn::Shape(input_tensor_shape),
         bias,
         sliding_window_config,
+        parallel_config,
+        op_trace_metadata,
+        shard_boundaries,
         output_channels,
         groups,
         untilize_out,
