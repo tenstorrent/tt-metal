@@ -924,7 +924,10 @@ class TT_CCL:
         seqlen = input_tensor_mesh.shape[-2]
         persistent_buffers = self.persistent_buffers[seqlen].get(buffer_key, None)
 
-        num_links = 1
+        if seqlen == 128:
+            num_links = 1
+        else:
+            num_links = 4
         print(f"+ RING RS: {buffer_key} - {input_tensor_mesh.shape} {num_links} links ")
         num_semaphores = 3 * num_links
         ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
@@ -1005,26 +1008,6 @@ class TT_CCL:
         return ttnn_tensor_out
 
     def ring_all_gather(self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, buffer_key=None):
-        # if buffer_key is None:
-        #     print("LINE IMPLEMENTATION")
-        #     ttnn_tensor_out = ttnn.experimental.all_gather_async(
-        #         input_tensor_mesh,
-        #         dim,
-        #         cluster_axis=cluster_axis,
-        #         mesh_device=self.mesh_device,
-        #         topology=ttnn.Topology.Linear,
-        #         multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][
-        #             self.gather_idx[cluster_axis]
-        #         ],
-        #         persistent_output_tensor=None,
-        #         num_links=num_links,
-        #         memory_config=memory_config,
-        #         subdevice_id=self.worker_sub_device_id,
-        #     )
-        #     self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
-        #     return ttnn_tensor_out
-        # else:
-        # reshape input to [1, 1, S, x]
         B = input_tensor_mesh.shape[1]
         input_tensor_mesh = ttnn.reshape(
             input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
@@ -1033,8 +1016,10 @@ class TT_CCL:
         persistent_buffers = self.all_gather_buffers[seqlen].get(buffer_key, None)
 
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
-
-        num_links = 1
+        if seqlen == 128:
+            num_links = 1
+        else:
+            num_links = 4
         print(f"+ !! RING AG: {buffer_key} - {input_tensor_mesh.shape} {num_links} links ")
         ttnn_tensor_out = ttnn.experimental.all_gather_async(
             input_tensor=input_tensor_mesh,
