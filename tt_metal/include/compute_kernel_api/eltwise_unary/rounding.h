@@ -86,7 +86,7 @@ ALWI void floor_tile_float32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_
 
 // clang-format off
 /**
- * Performs floor operation on each row of a tile.
+ * Performs trunc operation on each row of a tile.
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
@@ -95,7 +95,7 @@ ALWI void floor_tile_float32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform floor operation    | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst            | The index of the tile in DST register buffer to perform trunc operation    | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
 ALWI void trunc_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_trunc<APPROX>(idst))); }
@@ -111,7 +111,7 @@ ALWI void trunc_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_trunc<AP
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform floor operation    | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst            | The index of the tile in DST register buffer to perform trunc operation    | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
 ALWI void trunc_tile_float32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_trunc_float32<APPROX>(idst))); }

@@ -36,6 +36,8 @@ def create_full_range_tensor(input_shapes, dtype):
     in_data = torch.cat([in_data, corner_cases])
 
     in_data = in_data[:num_elements]
+    if in_data.numel() < num_elements:  # add some random noise to the tensor to make it full range
+        in_data = torch.cat([in_data, torch.randn(num_elements - in_data.numel(), dtype=dtype)])
     in_data = in_data.reshape(input_shapes)
 
     return in_data
