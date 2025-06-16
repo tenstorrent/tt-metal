@@ -690,12 +690,9 @@ def test_demo_text(
         paged_attention=paged_attention,
     )
 
-    for m_args in model_args:
-        if m_args.max_context_len < max_seq_len:
-            pytest.skip(
-                f"Max seq len {max_seq_len} not supported by model {m_args.model_name}. The model's max context len is {m_args.max_context_len}"
-            )
-
+    if token_accuracy:
+        token_acc = TokenAccuracy(model_name=model_args[0].model_name)
+      
     for m_args in model_args:
         if m_args.max_context_len < max_seq_len:
             pytest.skip(
