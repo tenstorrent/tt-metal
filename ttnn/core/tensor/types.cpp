@@ -122,7 +122,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Layout& layout) {
 
 }  // namespace tt::tt_metal
 
-nlohmann::json tt::stl::json::to_json_t<tt::tt_metal::MemoryConfig>::operator()(
+nlohmann::json ttsl::json::to_json_t<tt::tt_metal::MemoryConfig>::operator()(
     const tt::tt_metal::MemoryConfig& config) const {
     nlohmann::json json_object;
     json_object["memory_layout"] = config.memory_layout();
@@ -130,28 +130,28 @@ nlohmann::json tt::stl::json::to_json_t<tt::tt_metal::MemoryConfig>::operator()(
     json_object["created_with_nd_shard_spec"] = config.created_with_nd_shard_spec();
     if (config.created_with_nd_shard_spec()) {
         if (config.nd_shard_spec().has_value()) {
-            json_object["nd_shard_spec"] = tt::stl::json::to_json(config.nd_shard_spec().value());
+            json_object["nd_shard_spec"] = ttsl::json::to_json(config.nd_shard_spec().value());
         }
     } else {
         if (config.shard_spec().has_value()) {
-            json_object["shard_spec"] = tt::stl::json::to_json(config.shard_spec().value());
+            json_object["shard_spec"] = ttsl::json::to_json(config.shard_spec().value());
         }
     }
     return json_object;
 }
 
-tt::tt_metal::MemoryConfig tt::stl::json::from_json_t<tt::tt_metal::MemoryConfig>::operator()(
+tt::tt_metal::MemoryConfig ttsl::json::from_json_t<tt::tt_metal::MemoryConfig>::operator()(
     const nlohmann::json& json_object) const {
     auto memory_layout = json_object["memory_layout"].get<tt::tt_metal::TensorMemoryLayout>();
     auto buffer_type = json_object["buffer_type"].get<tt::tt_metal::BufferType>();
     auto created_with_nd_shard_spec = json_object["created_with_nd_shard_spec"].get<bool>();
     if (created_with_nd_shard_spec) {
-        auto nd_shard_spec = tt::stl::json::from_json<tt::tt_metal::NdShardSpec>(json_object["nd_shard_spec"]);
+        auto nd_shard_spec = ttsl::json::from_json<tt::tt_metal::NdShardSpec>(json_object["nd_shard_spec"]);
         return tt::tt_metal::MemoryConfig(buffer_type, std::move(nd_shard_spec));
     } else {
         std::optional<tt::tt_metal::ShardSpec> shard_spec;
         if (json_object.contains("shard_spec")) {
-            shard_spec = tt::stl::json::from_json<tt::tt_metal::ShardSpec>(json_object["shard_spec"]);
+            shard_spec = ttsl::json::from_json<tt::tt_metal::ShardSpec>(json_object["shard_spec"]);
         }
         return tt::tt_metal::MemoryConfig(memory_layout, buffer_type, std::move(shard_spec));
     }

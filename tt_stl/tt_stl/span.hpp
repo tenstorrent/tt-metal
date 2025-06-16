@@ -6,7 +6,7 @@
 
 #include <boost/core/span.hpp>
 
-namespace tt::stl {
+namespace ttsl {
 
 using boost::dynamic_extent;
 
@@ -114,4 +114,10 @@ auto as_writable_bytes(Span<T> span) noexcept {
     return Span<std::byte>(reinterpret_cast<std::byte*>(span.data()), span.size_bytes());
 }
 
-}  // namespace tt::stl
+}  // namespace ttsl
+
+namespace tt {
+namespace [[deprecated("Use ttsl namespace instead")]] stl {
+using namespace ::ttsl;
+}  // namespace stl
+}  // namespace tt
