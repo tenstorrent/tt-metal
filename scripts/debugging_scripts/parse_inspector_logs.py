@@ -53,11 +53,14 @@ def read_yaml(yaml_path: str):
         with open(yaml_path, "r") as f:
             content = f.read()
             tree = ryml.parse_in_arena(content)
-            return ryml_to_lazy(tree, tree.root_id())
+            data = ryml_to_lazy(tree, tree.root_id())
     except:
         # Fallback to standard yaml library
         with open(yaml_path, "r") as f:
-            return yaml.safe_load(f)
+            data = yaml.safe_load(f)
+    if data is None:
+        return []
+    return data
 
 
 @dataclass
