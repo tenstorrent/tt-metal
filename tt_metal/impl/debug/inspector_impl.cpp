@@ -76,14 +76,7 @@ void Logger::log_program_compile_started(const ProgramData& program_data) noexce
 }
 
 void Logger::log_program_compile_already_exists(const ProgramData& program_data) noexcept {
-    try {
-        programs_ostream << "- program_compile_already_exists:\n";
-        programs_ostream << "    id: " << program_data.program_id << "\n";
-        programs_ostream << "    timestamp_ns: " << convert_timestamp(program_data.compile_started_timestamp) << "\n";
-        programs_ostream.flush();
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log program compile already exists: {}", e.what());
-    }
+    // Long running programs call this log entry too many times, so we don't want to log it.
 }
 
 void Logger::log_program_kernel_compile_finished(const ProgramData& program_data, const KernelData& kernel_data) noexcept {
