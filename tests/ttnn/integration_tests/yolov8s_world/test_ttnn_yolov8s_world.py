@@ -715,7 +715,7 @@ def test_YoloModel(device, use_pretrained_weight, reset_seeds):
 
     ttnn_x = x.permute(0, 2, 3, 1)
     ttnn_x = ttnn.from_torch(
-        ttnn_x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        ttnn_x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
     parameters = preprocess_model_parameters(
