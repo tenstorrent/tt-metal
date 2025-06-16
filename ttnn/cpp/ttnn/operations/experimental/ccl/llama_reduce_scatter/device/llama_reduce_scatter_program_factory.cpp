@@ -298,7 +298,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     tt::tt_metal::Program& program) {
-    bool use_noc1_only = true;
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
@@ -648,8 +647,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         all_cores_grid,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
-            .noc = (use_noc1_only) ? NOC::NOC_0 : NOC::RISCV_1_default,
-            .noc_mode = (use_noc1_only) ? tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt_metal::NOC_MODE::DM_DEDICATED_NOC,
+            .noc = (operation_attributes.use_noc1_only) ? NOC::NOC_1 : NOC::RISCV_1_default,
+            .noc_mode = (operation_attributes.use_noc1_only) ? tt_metal::NOC_MODE::DM_DYNAMIC_NOC
+                                                             : tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
 
@@ -688,8 +688,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         all_cores_grid,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
-            .noc = (use_noc1_only) ? NOC::NOC_1 : NOC::RISCV_0_default,
-            .noc_mode = (use_noc1_only) ? tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt_metal::NOC_MODE::DM_DEDICATED_NOC,
+            .noc = (operation_attributes.use_noc1_only) ? NOC::NOC_1 : NOC::RISCV_0_default,
+            .noc_mode = (operation_attributes.use_noc1_only) ? tt_metal::NOC_MODE::DM_DYNAMIC_NOC
+                                                             : tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = writer_compile_time_args,
             .defines = writer_defines});
 

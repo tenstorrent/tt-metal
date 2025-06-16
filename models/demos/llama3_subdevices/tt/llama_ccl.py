@@ -593,6 +593,7 @@ class TT_CCL:
             memory_config_mm=memory_config,
             global_cb=global_cb,
             topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
+            use_noc1_only=True,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         self.reduce_scatter_buffer_idx[cluster_axis] = (self.reduce_scatter_buffer_idx[cluster_axis] + 1) % self.num_cbs
@@ -690,6 +691,7 @@ class TT_CCL:
                 num_links=num_links,
                 memory_config=memory_config,
                 topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
+                use_noc1_only=True,
             )
             self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
             self.reduce_scatter_buffer_idx[cluster_axis] = (

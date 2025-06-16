@@ -73,6 +73,7 @@ def run_reduce_scatter_test(
     dtype=ttnn.bfloat8_b,
     profiler=BenchmarkProfiler(),
     topology=ttnn.Topology.Linear,
+    use_noc1_only=False,
 ):
     mesh_device.enable_program_cache()
     num_pages_per_packet = 4
@@ -228,6 +229,7 @@ def run_reduce_scatter_test(
                 num_links=num_links,
                 memory_config=output_mem_config,
                 topology=topology,
+                use_noc1_only=use_noc1_only,
             )
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
@@ -407,6 +409,7 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
         num_links=3,
         scheme="random",
         topology=ttnn.Topology.Linear,
+        use_noc1_only=True,
     )
 
 
