@@ -641,4 +641,3 @@ As with Wormhole, these results reflect the performance based on auto-selected m
 | 3840 | 5632 | 5632 | True      | (11, 10)  | DRAM             | DRAM             | DRAM             | DataType.BFLOAT4_B | MathFidelity.LoFi  | 497007.37               | 490.14       | 80.58%                     | 80.58%                     |
 | 5120 | 5632 | 5632 | True      | (11, 10)  | DRAM             | DRAM             | DRAM             | DataType.BFLOAT4_B | MathFidelity.LoFi  | 655646.32               | 495.40       | 81.45%                     | 81.45%                     |
 |      |      |      |           |           |                  |                  |                  |                    |                    |                         |              |                            |                            |
-
