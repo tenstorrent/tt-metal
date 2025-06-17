@@ -99,6 +99,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     }
 
     uint32_t subordinate_l1_byte_address = master_l1_info.base_address;
+    // Offset the address for loopback to avoid data race when master writes to self
     uint32_t master_l1_byte_address =
         test_config.loopback ? subordinate_l1_byte_address + transaction_size_bytes : subordinate_l1_byte_address;
 
