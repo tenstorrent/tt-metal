@@ -99,86 +99,58 @@ def custom_preprocessor(model, name):
 def _create_ds1_model_parameters(conv_args, resolution):
     if resolution == (320, 320):
         conv_args.c1["act_block_h"] = 128
-        conv_args.c1["deallocate_activation"] = True
-        conv_args.c1["reshard_if_not_optimal"] = False
-        conv_args.c1["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-
-        conv_args.c2["act_block_h"] = None
-        conv_args.c2["deallocate_activation"] = True
-        conv_args.c2["reshard_if_not_optimal"] = False
-        conv_args.c2["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-
-        conv_args.c3["act_block_h"] = None
-        conv_args.c3["deallocate_activation"] = False
-        conv_args.c3["reshard_if_not_optimal"] = False
-        conv_args.c3["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-
-        conv_args.c4["act_block_h"] = None
-        conv_args.c4["deallocate_activation"] = True
-        conv_args.c4["reshard_if_not_optimal"] = False
-        conv_args.c4["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-
-        conv_args.c5["act_block_h"] = None
-        conv_args.c5["deallocate_activation"] = False
-        conv_args.c5["reshard_if_not_optimal"] = False
-        conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-
-        conv_args.c6["act_block_h"] = None
-        conv_args.c6["deallocate_activation"] = True
-        conv_args.c6["reshard_if_not_optimal"] = False
-        conv_args.c6["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-
-        conv_args.c7["act_block_h"] = None
-        conv_args.c7["deallocate_activation"] = True
-        conv_args.c7["reshard_if_not_optimal"] = False
-        conv_args.c7["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-
-        conv_args.c8["act_block_h"] = None
-        conv_args.c8["deallocate_activation"] = True
-        conv_args.c8["reshard_if_not_optimal"] = False
-        conv_args.c8["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     elif resolution == (640, 640):
         conv_args.c1["act_block_h"] = 256
-        conv_args.c1["deallocate_activation"] = True
-        conv_args.c1["reshard_if_not_optimal"] = False
-        conv_args.c1["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-
-        conv_args.c2["act_block_h"] = 320
-        conv_args.c2["deallocate_activation"] = True
-        conv_args.c2["reshard_if_not_optimal"] = False
-        conv_args.c2["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-
-        conv_args.c3["act_block_h"] = None
-        conv_args.c3["deallocate_activation"] = False
-        conv_args.c3["reshard_if_not_optimal"] = False
-        conv_args.c3["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-
-        conv_args.c4["act_block_h"] = None
-        conv_args.c4["deallocate_activation"] = True
-        conv_args.c4["reshard_if_not_optimal"] = False
-        conv_args.c4["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-
-        conv_args.c5["act_block_h"] = None
-        conv_args.c5["deallocate_activation"] = False
-        conv_args.c5["reshard_if_not_optimal"] = False
-        conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-
-        conv_args.c6["act_block_h"] = 256
-        conv_args.c6["deallocate_activation"] = True
-        conv_args.c6["reshard_if_not_optimal"] = False
-        conv_args.c6["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-
-        conv_args.c7["act_block_h"] = None
-        conv_args.c7["deallocate_activation"] = True
-        conv_args.c7["reshard_if_not_optimal"] = False
-        conv_args.c7["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-
-        conv_args.c8["act_block_h"] = None
-        conv_args.c8["deallocate_activation"] = True
-        conv_args.c8["reshard_if_not_optimal"] = False
-        conv_args.c8["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     else:
         raise ValueError(f"Unsupported resolution: {resolution}")
+    conv_args.c1["deallocate_activation"] = True
+    conv_args.c1["reshard_if_not_optimal"] = False
+    conv_args.c1["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+
+    if resolution == (320, 320):
+        conv_args.c2["act_block_h"] = None
+    elif resolution == (640, 640):
+        conv_args.c2["act_block_h"] = 320
+    else:
+        raise ValueError(f"Unsupported resolution: {resolution}")
+    conv_args.c2["deallocate_activation"] = True
+    conv_args.c2["reshard_if_not_optimal"] = False
+    conv_args.c2["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+
+    conv_args.c3["act_block_h"] = None
+    conv_args.c3["deallocate_activation"] = False
+    conv_args.c3["reshard_if_not_optimal"] = False
+    conv_args.c3["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+
+    conv_args.c4["act_block_h"] = None
+    conv_args.c4["deallocate_activation"] = True
+    conv_args.c4["reshard_if_not_optimal"] = False
+    conv_args.c4["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+
+    conv_args.c5["act_block_h"] = None
+    conv_args.c5["deallocate_activation"] = False
+    conv_args.c5["reshard_if_not_optimal"] = False
+    conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+
+    if resolution == (320, 320):
+        conv_args.c6["act_block_h"] = None
+    elif resolution == (640, 640):
+        conv_args.c6["act_block_h"] = 256
+    else:
+        raise ValueError(f"Unsupported resolution: {resolution}")
+    conv_args.c6["deallocate_activation"] = True
+    conv_args.c6["reshard_if_not_optimal"] = False
+    conv_args.c6["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+
+    conv_args.c7["act_block_h"] = None
+    conv_args.c7["deallocate_activation"] = True
+    conv_args.c7["reshard_if_not_optimal"] = False
+    conv_args.c7["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+
+    conv_args.c8["act_block_h"] = None
+    conv_args.c8["deallocate_activation"] = True
+    conv_args.c8["reshard_if_not_optimal"] = False
+    conv_args.c8["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 
 
 def create_ds1_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, resolution, device):
