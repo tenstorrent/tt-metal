@@ -10,7 +10,6 @@
 #include "tt-metalium/hal.hpp"
 
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-
 namespace ttnn::operations::pool {
 // Return a single bf16 scalar for the pool type in u32 (packed in the least 16 bits)
 // For the maxpool it is 1, for the avg pool it is 1/kernel_size or the divisor override used to initialize compile
@@ -131,12 +130,12 @@ uint32_t calculate_L1_usage(
     uint32_t in_nbytes = datum_size(in_df);
     uint32_t out_nbytes = in_nbytes;
 
-    auto pconfig = input.memory_config();
+    // auto pconfig = input.memory_config();
     const auto grid_size = input_memory.shard_spec().value().grid.bounding_box().grid_size();
     uint32_t num_shards_c = 0;
-    if (pconfig.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+    if (input_memory.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         num_shards_c = 1;
-    } else if (pconfig.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+    } else if (input_memory.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         num_shards_c = input_memory.shard_spec().value().grid.num_cores();
     } else if (input_memory.shard_spec().value().orientation == ShardOrientation::COL_MAJOR) {
         num_shards_c = grid_size.y;
@@ -147,7 +146,9 @@ uint32_t calculate_L1_usage(
     uint32_t kernel_size_hw = kernel_h * kernel_w;  // number of valid rows, to read
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
 
-    TT_ASSERT(input_shape[3] % num_shards_c == 0);
+    if (input_shape[3] % num_shards_c != 0) {
+        return std::numeric_limits<uint32_t>::max();
+    }
     const bool is_partial_tile = (input_shape[3] / num_shards_c) == 16;
 
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
@@ -192,7 +193,7 @@ uint32_t calculate_L1_usage(
 
     uint32_t clear_value_cb_size = 0;
     const bool avg_pool_on_blackhole = is_blackhole && pool_type == Pool2DType::AVG_POOL2D;
-    if (max_rows_for_reduction == tt::constants::TILE_HEIGHT || avg_pool_on_blackhole) {
+    if (max_rows_for_reduction == tt::constants::TILE_HEIGHT) {
         // CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
         // is needed only if we use more then 16 sticks per tile for reduction.
         clear_value_cb_size = tile_size(in_df);
@@ -232,8 +233,16 @@ uint32_t calculate_L1_usage(
         max_pool_partials_cb_config_size = max_pool_partials_cb_npages * max_pool_partials_cb_pagesize;
     }
 
+    uint32_t alignment_bytes = 32;
+    if (is_blackhole) {
+        alignment_bytes = 64;
+    }
+    auto align = [alignment_bytes](uint32_t size) {
+        uint32_t factor = (size + alignment_bytes - 1) / alignment_bytes;
+        return factor * alignment_bytes;
+    };
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + in_one_cb_size + clear_value_cb_size + in_cb_config_0_size +
-           in_cb_config_1_size + out_cb_config_size /* global, involved */
+           in_cb_config_1_size + align(out_cb_config_size) /* global, involved */
            + max_pool_partials_cb_config_size;
 }
 
