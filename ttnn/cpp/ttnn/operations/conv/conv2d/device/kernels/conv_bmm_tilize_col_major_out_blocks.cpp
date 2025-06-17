@@ -444,7 +444,7 @@ void MAIN {
                 }
                 pack_untilize_uninit(matmul_partials_cb);
 #else
-                untilize_init_short(matmul_partials_cb);
+                untilize_init(matmul_partials_cb);
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     for (uint32_t out_block_h_i = 0; out_block_h_i < out_subblock_h; ++out_block_h_i) {
                         cb_wait_front(matmul_partials_cb, out_block_w);
