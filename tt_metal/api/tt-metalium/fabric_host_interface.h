@@ -89,6 +89,7 @@ struct tensix_routing_l1_info_t {
 
     eth_chan_directions intra_mesh_routing_table[MAX_MESH_SIZE];
     eth_chan_directions inter_mesh_routing_table[MAX_NUM_MESHES];
+    std::uint8_t padding[8];  // pad to 16-byte alignment
 } __attribute__((packed));
 
 }  // namespace tt::tt_fabric
