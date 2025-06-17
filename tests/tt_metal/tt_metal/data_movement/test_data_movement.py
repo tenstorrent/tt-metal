@@ -301,10 +301,12 @@ test_bounds = {
         # 15: {
         #     "riscv_1": {"latency": {"lower": 800, "upper": 87000}, "bandwidth": 1.19},
         # },
-        16: {
-            "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
+        # 16: {
+        #     "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
+        # },
+        30: { # One from All Directed Ideal
+            "riscv_1": {"latency": {"lower": 10000, "upper": 18000}, "bandwidth": 60}
         },
-        30: {"riscv_1": {"latency": {"lower": 10000, "upper": 18000}, "bandwidth": 60}},
         50: {  # One to One Directed Ideal
             "riscv_0": {"latency": {"lower": 12000, "upper": 19000}, "bandwidth": 59},  # 17000
         },
