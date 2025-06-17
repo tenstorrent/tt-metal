@@ -43,17 +43,21 @@ struct MeshMapperConfig {
     //
     // Distributed Tensor on Mesh (placements = {Replicate{}, Shard{1}}):
     //
-    // +-------------------------------------+---------------------------------------+
-    // |  (0,0)                              |  (0,1)                                |
-    // | +---+---+---+---+---+---+----+----+ | +---+---+---+---+----+----+----+----+ |
-    // | | 0 | 1 | 2 | 3 | 8 | 9 | 10 | 11 | | | 4 | 5 | 6 | 7 | 12 | 13 | 14 | 15 | |
-    // | +---+---+---+---+---+---+----+----+ | +---+---+---+---+----+----+----+----+ |
-    // +-------------------------------------+---------------------------------------+
-    // |  (1,0)                              |  (1,1)                                |
-    // | +---+---+---+---+---+---+----+----+ | +---+---+---+---+----+----+----+----+ |
-    // | | 0 | 1 | 2 | 3 | 8 | 9 | 10 | 11 | | | 4 | 5 | 6 | 7 | 12 | 13 | 14 | 15 | |
-    // | +---+---+---+---+---+---+----+----+ | +---+---+---+---+----+----+----+----+ |
-    // +-------------------------------------+---------------------------------------+
+    // +-----------------------------+-----------------------------+
+    // |     (0,0)                   |     (0,1)                   |
+    // |    +----+----+----+----+    |    +----+----+----+----+    |
+    // |    |  0 |  1 |  2 |  3 |    |    |  4 |  5 |  6 |  7 |    |
+    // |    +----+----+----+----+    |    +----+----+----+----+    |
+    // |    |  8 |  9 | 10 | 11 |    |    | 12 | 13 | 14 | 15 |    |
+    // |    +----+----+----+----+    |    +----+----+----+----+    |
+    // +-----------------------------+-----------------------------+
+    // |     (1,0)                   |     (1,1)                   |
+    // |    +----+----+----+----+    |    +----+----+----+----+    |
+    // |    |  0 |  1 |  2 |  3 |    |    |  4 |  5 |  6 |  7 |    |
+    // |    +----+----+----+----+    |    +----+----+----+----+    |
+    // |    |  8 |  9 | 10 | 11 |    |    | 12 | 13 | 14 | 15 |    |
+    // |    +----+----+----+----+    |    +----+----+----+----+    |
+    // +-----------------------------+-----------------------------+
     //
 
     using Placement = std::variant<Replicate, Shard>;
@@ -102,8 +106,6 @@ private:
 };
 
 // Creates an ND mesh mapper that distributes a tensor according to the `config`.
-// If `shape` is not provided, the shape of `mesh_device` is used.
-// Otherwise, the size of the shape must be smaller than the mesh device shape.
 std::unique_ptr<TensorToMesh> create_mesh_mapper(MeshDevice& mesh_device, const MeshMapperConfig& config);
 
 // Creates a mapper that replicates a tensor across all devices.
@@ -149,8 +151,6 @@ private:
 };
 
 // Creates an ND mesh composer that aggregates a tensor according to the `config`.
-// If `shape` is not provided, the shape of `mesh_device` is used.
-// Otherwise, the size of the shape must match the size of the mesh device shape.
 std::unique_ptr<MeshToTensor> create_mesh_composer(MeshDevice& mesh_device, const MeshComposerConfig& config);
 
 // Creates a composer that concatenates a tensor across a single dimension.
