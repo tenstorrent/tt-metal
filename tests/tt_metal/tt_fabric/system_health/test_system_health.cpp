@@ -76,7 +76,7 @@ TEST(Cluster, ReportIntermeshLinks) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Check if cluster supports intermesh links
-    if (!control_plane.contains_intermesh_links()) {
+    if (!control_plane.system_has_intermesh_links()) {
         log_info(tt::LogTest, "Cluster does not support intermesh links");
         return;
     }

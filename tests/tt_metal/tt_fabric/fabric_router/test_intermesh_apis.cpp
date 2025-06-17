@@ -17,7 +17,7 @@ TEST(IntermeshAPIs, BasicQueries) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Test that cluster supports intermesh links
-    bool supports_intermesh = control_plane.contains_intermesh_links();
+    bool supports_intermesh = control_plane.system_has_intermesh_links();
 
     // Get all intermesh links
     auto all_links = control_plane.get_all_intermesh_eth_links();
@@ -75,7 +75,7 @@ TEST(IntermeshAPIs, IntermeshLinksAreDistinctFromEthernetLinks) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
-    if (!control_plane.contains_intermesh_links()) {
+    if (!control_plane.system_has_intermesh_links()) {
         GTEST_SKIP() << "Cluster does not support intermesh links";
     }
 

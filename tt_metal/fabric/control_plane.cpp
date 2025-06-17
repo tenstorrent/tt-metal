@@ -47,7 +47,7 @@ namespace intermesh_constants {
 constexpr uint32_t MULTI_MESH_CONFIG_ADDR = 0x104C;
 constexpr uint32_t MULTI_MESH_LINK_STATUS_ADDR = 0x1104;
 constexpr uint32_t MULTI_MESH_ENABLED_VALUE = 0x2;
-constexpr uint32_t LINK_CONNECTED_VALUE = 0x1;
+constexpr uint32_t LINK_CONNECTED_MASK = 0x1;
 constexpr uint32_t MULTI_MESH_MODE_MASK = 0xFF;
 constexpr uint32_t INTERMESH_ETH_LINK_BITS_SHIFT = 8;
 constexpr uint32_t INTERMESH_ETH_LINK_BITS_MASK = 0xFFFF;
@@ -58,11 +58,11 @@ constexpr uint32_t MAX_ETH_LINKS = 16;
 namespace {
 
 // Helper to extract intermesh ports from config value
-std::vector<uint32_t> extract_intermesh_eth_links(uint32_t config_value) {
-    std::vector<uint32_t> intermesh_eth_links;
+std::vector<chan_id_t> extract_intermesh_eth_links(uint32_t config_value) {
+    std::vector<chan_id_t> intermesh_eth_links;
     uint32_t intermesh_eth_links_bits = (config_value >> intermesh_constants::INTERMESH_ETH_LINK_BITS_SHIFT) &
                                         intermesh_constants::INTERMESH_ETH_LINK_BITS_MASK;
-    for (uint32_t link = 0; link < intermesh_constants::MAX_ETH_LINKS; ++link) {
+    for (chan_id_t link = 0; link < intermesh_constants::MAX_ETH_LINKS; ++link) {
         if (intermesh_eth_links_bits & (1 << link)) {
             intermesh_eth_links.push_back(link);
         }
@@ -1202,7 +1202,7 @@ void ControlPlane::initialize_intermesh_eth_links() {
 
         std::vector<uint32_t> config_data(1, 0);
         cluster.read_core(config_data, sizeof(uint32_t), virtual_eth_core, intermesh_constants::MULTI_MESH_CONFIG_ADDR);
-        std::vector<std::pair<CoreCoord, uint32_t>> intermesh_eth_links;
+        std::vector<std::pair<CoreCoord, chan_id_t>> intermesh_eth_links;
         for (auto link : extract_intermesh_eth_links(config_data[0])) {
             // Find the CoreCoord for this channel
             for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
@@ -1231,7 +1231,7 @@ bool ControlPlane::is_intermesh_enabled() const {
     return intermesh_enabled;
 }
 
-bool ControlPlane::contains_intermesh_links() const { return !this->get_all_intermesh_eth_links().empty(); }
+bool ControlPlane::system_has_intermesh_links() const { return !this->get_all_intermesh_eth_links().empty(); }
 
 bool ControlPlane::has_intermesh_links(chip_id_t chip_id) const {
     return !this->get_intermesh_eth_links(chip_id).empty();
@@ -1246,12 +1246,11 @@ bool ControlPlane::is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) 
     return false;
 }
 
+// TODO: Support Intramesh links through this API as well
 bool ControlPlane::is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord eth_core) const {
+    TT_FATAL(
+        this->is_intermesh_eth_link(chip_id, eth_core), "Can only call {} on intermesh ethernet links.", __FUNCTION__);
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    if (!this->is_intermesh_eth_link(chip_id, eth_core)) {
-        return false;
-    }
-
     // Read the link status from designated L1 address
     tt_cxy_pair virtual_eth_core(
         chip_id, cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
@@ -1260,14 +1259,14 @@ bool ControlPlane::is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord et
         status_data, sizeof(uint32_t), virtual_eth_core, intermesh_constants::MULTI_MESH_LINK_STATUS_ADDR);
 
     // Check if the link is trained
-    return (status_data[0] & intermesh_constants::LINK_CONNECTED_VALUE) == intermesh_constants::LINK_CONNECTED_VALUE;
+    return (status_data[0] & intermesh_constants::LINK_CONNECTED_MASK) == intermesh_constants::LINK_CONNECTED_MASK;
 }
 
-const std::vector<std::pair<CoreCoord, uint32_t>>& ControlPlane::get_intermesh_eth_links(chip_id_t chip_id) const {
+const std::vector<std::pair<CoreCoord, chan_id_t>>& ControlPlane::get_intermesh_eth_links(chip_id_t chip_id) const {
     return this->intermesh_eth_links_.at(chip_id);
 }
 
-const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, uint32_t>>>&
+const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>>&
 ControlPlane::get_all_intermesh_eth_links() const {
     return intermesh_eth_links_;
 }

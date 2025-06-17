@@ -87,18 +87,18 @@ public:
     void clear_fabric_context();
 
     // Check if ANY managed chip supports intermesh links
-    bool contains_intermesh_links() const;
+    bool system_has_intermesh_links() const;
 
     // Check if a specific chip has intermesh links configured
     bool has_intermesh_links(chip_id_t chip_id) const;
 
     // Get intermesh ethernet links for a specific chip
     // Returns: vector of (eth_core, channel)
-    const std::vector<std::pair<CoreCoord, uint32_t>>& get_intermesh_eth_links(chip_id_t chip_id) const;
+    const std::vector<std::pair<CoreCoord, chan_id_t>>& get_intermesh_eth_links(chip_id_t chip_id) const;
 
     // Get all intermesh ethernet links in the system
     // Returns: map of chip_id -> vector of (eth_core, channel)
-    const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, uint32_t>>>& get_all_intermesh_eth_links()
+    const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>>& get_all_intermesh_eth_links()
         const;
 
     // Check if a specific ethernet core is an intermesh link
@@ -122,7 +122,7 @@ private:
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
     // map[phys_chip_id] has a vector of (eth_core, channel) pairs used for intermesh routing
-    std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, uint32_t>>> intermesh_eth_links_;
+    std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>> intermesh_eth_links_;
 
     // custom logic to order eth channels
     void order_ethernet_channels();
