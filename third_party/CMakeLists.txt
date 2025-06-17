@@ -245,7 +245,9 @@ CPMAddPackage(
         "TF_BUILD_EXAMPLES OFF"
 )
 if(Taskflow_ADDED AND NOT TARGET Taskflow::Taskflow)
-    add_library(Taskflow::Taskflow ALIAS Taskflow)
+    add_library(taskflow INTERFACE)
+    add_library(Taskflow::Taskflow ALIAS taskflow)
+    target_include_directories(taskflow SYSTEM INTERFACE ${Taskflow_SOURCE_DIR})
 endif()
 
 ############################################################################################################################
