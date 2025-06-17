@@ -101,10 +101,10 @@ struct BufferPageMapping {
         Iterator() = default;
         Iterator(
             const BufferPageMapping* page_mapping,
-            size_t core_id,
-            size_t page_mapping_index,
-            size_t host_range_index,
-            size_t host_page_index) :
+            uint32_t core_id,
+            uint32_t page_mapping_index,
+            uint32_t host_range_index,
+            uint32_t host_page_index) :
             page_mapping_(page_mapping),
             core_id_(core_id),
             page_mapping_index_(page_mapping_index),
