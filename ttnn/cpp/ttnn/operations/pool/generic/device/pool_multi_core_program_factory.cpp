@@ -272,8 +272,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;  // number of valid rows, to read
     const uint32_t kernel_size_hw_padded = tt::round_up(kernel_size_hw, tt::constants::TILE_HEIGHT);
     const uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
-    const uint32_t out_ntiles_c = (uint32_t)std::ceil((float)in_c / num_shards_c / tt::constants::TILE_WIDTH);
-    const bool last_tile_is_partial = (in_c / num_shards_c) % 32 != 0;
+    const uint32_t out_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
+    const bool last_tile_is_partial = (input_shape[3] / num_shards_c) % 32 != 0;
 
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     const bool is_large_kernel =
@@ -303,7 +303,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // CBs
     const uint32_t multi_buffering_factor = 2;
 
-    const uint32_t split_reader = 1;
+    const uint32_t split_reader = 0;
 
     // scalar CB as coefficient of reduce
     using tt::tt_metal::CBHandle;

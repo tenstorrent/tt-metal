@@ -58,7 +58,10 @@ static Tensor pool2d_invoke(
     auto input_shape = sliding_window_config.get_input_shape();
     auto input_tensor_shape = input_tensor.logical_shape();
     auto input_padded_shape = ttnn::Shape(
-        {input_tensor_shape[0], input_tensor_shape[1], input_tensor_shape[2], tt::round_up(input_tensor_shape[3], 16)});
+        {input_tensor_shape[0],
+         input_tensor_shape[1],
+         input_tensor_shape[2],
+         tt::round_up(input_tensor_shape[3], tt::constants::TILE_WIDTH)});
     auto input_padded_tensor = input_tensor;
     // input_padded_tensor = input_padded_tensor.pad(input_tensor_shape, input_padded_shape,
     // get_bf16_pool_init_value(pool_type));

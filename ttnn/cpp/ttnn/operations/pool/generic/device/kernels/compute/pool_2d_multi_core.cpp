@@ -15,6 +15,17 @@
 #include "debug/dprint_tensix.h"
 #endif
 
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint32_t r = 0; r < 32; ++r) {
+        SliceRange sr = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+        {
+            DPRINT << r << " " << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL();
+        };
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 template <
     uint32_t num_output_tiles,
     bool is_partial_tile,
@@ -30,24 +41,44 @@ inline void reduce_h_fused(
     const uint32_t in_stick_index,
     const uint32_t out_cb_id) {
     constexpr uint32_t num_out_rows = 1;
-    constexpr uint32_t num_output_faces = (is_partial_tile ? 1 : 2);
+    constexpr uint32_t num_output_faces = 2;
     cb_reserve_back(out_cb_id, num_output_tiles);
     const uint32_t curr_in_cb_id = (split_reader && (in_stick_index & 0x1)) ? in_cb_id_1 : in_cb_id_0;
     cb_wait_front(curr_in_cb_id, 1);
+    print_full_tile(curr_in_cb_id, 0);
 
     tile_regs_acquire();
     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
         curr_in_cb_id, in_scalar_cb_id, num_output_tiles, 0, num_faces_in_tile, unpA_face_r_dim);
     for (uint32_t c_i = 0; c_i < num_output_tiles; ++c_i) {
-        reduce_tile_math(c_i, num_faces_in_tile);
+        if (c_i == num_output_tiles - 1 && is_partial_tile) {
+            // If this is the last tile and it is partial, we need to reduce only the number of faces in the tile.
+            reduce_tile_math(c_i, 1);
+        } else {
+            // Otherwise, we reduce all faces in the tile.
+            reduce_tile_math(c_i, num_faces_in_tile);
+        }
     }
     cb_pop_front(curr_in_cb_id, 1);
     tile_regs_wait();
     tile_regs_commit();
-    pack_untilize_dest<num_output_tiles>(
-        out_cb_id, 1 /*out_subblock_h*/, 0, num_out_rows, num_output_faces); /* pack 1 row (1x16 or 1x32) */
-    tile_regs_release();
-    cb_push_back(out_cb_id, num_output_tiles);
+    if (is_partial_tile) {
+        if (num_output_tiles > 1) {
+            pack_untilize_dst<num_output_tiles - 1>(out_cb_id, 1 /*out_subblock_h*/, 0, num_out_rows, 2);
+            tile_regs_release();
+            cb_push_back(out_cb_id, num_output_tiles - 1);
+            tile_regs_wait();
+            tile_regs_commit();
+        }
+        pack_untilize_dst<1>(out_cb_id, 1 /*out_subblock_h*/, num_output_tiles - 1, num_out_rows, 1);
+        tile_regs_release();
+        cb_push_back(out_cb_id, 1);
+    } else {
+        pack_untilize_dst<num_output_tiles>(
+            out_cb_id, 1 /*out_subblock_h*/, 0, num_out_rows, num_output_faces); /* pack 1 row (1x16 or 1x32) */
+        tile_regs_release();
+        cb_push_back(out_cb_id, num_output_tiles);
+    }
 }
 
 namespace NAMESPACE {
@@ -115,11 +146,11 @@ void MAIN {
             UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                 in_cb_id_0, curr_scalar_cb_id, max_tiles_per_iter, num_faces_in_tile, face_r_dim, 1)));
         }
-
+        DPRINT << "in_blocks_c: " << in_nblocks_c << ENDL();
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; ++b_i) {
             reduce_h_fused<
                 max_tiles_per_iter,
-                false,
+                last_tile_is_partial,
                 split_reader,
                 face_r_dim,
                 num_faces_in_tile,
@@ -132,12 +163,13 @@ void MAIN {
                 in_cb_id_0, curr_scalar_cb_id, partial_iter_output_tiles, num_faces_in_tile, face_r_dim, 1)));
         }
         // perform the reduction over the either whole or partial chunk N
+        DPRINT << "in_blocks_c: " << partial_iter_output_tiles << ENDL();
         reduce_h_fused<
             partial_iter_output_tiles,
             last_tile_is_partial,
             split_reader,
             face_r_dim,
-            last_tile_is_partial ? 1 : 2,
+            num_faces_in_tile,
             neginf_srca_maxpool,
             zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, out_cb_id);
         if constexpr (!one_scalar_per_core) {
