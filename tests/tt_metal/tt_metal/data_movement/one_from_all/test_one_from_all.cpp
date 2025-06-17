@@ -42,37 +42,40 @@ bool run_dm(IDevice* device, const OneFromAllConfig& test_config) {
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
     size_t total_subordinate_cores = test_config.subordinate_core_set.num_cores();
 
-    const size_t total_size_bytes = test_config.num_of_transactions * test_config.transaction_size_pages *
-                                    test_config.page_size_bytes * total_subordinate_cores;
-    const size_t total_size_pages =
-        test_config.num_of_transactions * test_config.transaction_size_pages * total_subordinate_cores;
+    const size_t transaction_size_bytes = test_config.transaction_size_pages * test_config.page_size_bytes;
+    const size_t total_size_bytes = test_config.num_of_transactions * transaction_size_bytes * total_subordinate_cores;
 
-    auto master_shard_parameters = ShardSpecBuffer(
-        master_core_set,
-        {1, total_size_bytes / 2},
-        ShardOrientation::ROW_MAJOR,
-        {1, test_config.page_size_bytes / 2},
-        {1, total_size_pages});
-    auto master_l1_buffer = CreateBuffer(ShardedBufferConfig{
-        .device = device,
-        .size = total_size_bytes,
-        .page_size = test_config.page_size_bytes,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-        .shard_parameters = std::move(master_shard_parameters),
-    });
-    uint32_t master_l1_byte_address = master_l1_buffer->address();
+    // Obtain L1 Address for Storing Data
+    // NOTE: We don't know if the whole block of memory is actually available.
+    //       This is something that could probably be checked
+    L1AddressInfo master_l1_info =
+        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.master_core_coord);
 
-    const size_t subordinate_size_bytes =
-        test_config.num_of_transactions * test_config.transaction_size_pages * test_config.page_size_bytes;
-    const size_t subordinate_size_pages = test_config.num_of_transactions * test_config.transaction_size_pages;
+    auto sub_core_list = corerange_to_cores(test_config.subordinate_core_set);
+    for (auto& core : sub_core_list) {
+        L1AddressInfo subordinate_l1_info = tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, core);
+        // Checks that both master and subordinate cores have the same L1 base address and size
+        if (master_l1_info.base_address != subordinate_l1_info.base_address ||
+            master_l1_info.size != subordinate_l1_info.size) {
+            log_error(tt::LogTest, "Mismatch in L1 address or size between master and subordinate cores");
+            return false;
+        }
+    }
+    // Check if the L1 size is sufficient for the test configuration
+    if (master_l1_info.size < total_size_bytes) {
+        log_error(tt::LogTest, "Insufficient L1 size for the test configuration");
+        return false;
+    }
+    // Assigns a "safe" L1 local address for the master and subordinate cores
+    uint32_t l1_base_address = master_l1_info.base_address;
+
+    const size_t subordinate_size_bytes = test_config.num_of_transactions * transaction_size_bytes;
 
     // Compile-time arguments for kernels
     vector<uint32_t> gatherer_compile_args = {
-        (uint32_t)master_l1_byte_address,
+        (uint32_t)l1_base_address,
         (uint32_t)test_config.num_of_transactions,
-        (uint32_t)test_config.transaction_size_pages,
-        (uint32_t)test_config.page_size_bytes,
+        (uint32_t)transaction_size_bytes,
         (uint32_t)test_config.test_id,
         (uint32_t)total_subordinate_cores,
     };
@@ -90,27 +93,7 @@ bool run_dm(IDevice* device, const OneFromAllConfig& test_config) {
     // Runtime Arguments
     vector<uint32_t> master_runtime_args;
 
-    // Create buffers for each subordinate core and add to runtime args
-    vector<shared_ptr<Buffer>> subordinate_l1_buffers;
-    for (auto& core : corerange_to_cores(test_config.subordinate_core_set)) {
-        auto subordinate_shard_parameters = ShardSpecBuffer(
-            CoreRangeSet({CoreRange(core)}),
-            {1, subordinate_size_bytes / 2},
-            ShardOrientation::ROW_MAJOR,
-            {1, test_config.page_size_bytes / 2},
-            {1, subordinate_size_pages});
-        ShardedBufferConfig subordinate_buffer_config{
-            .device = device,
-            .size = subordinate_size_bytes,
-            .page_size = test_config.page_size_bytes,
-            .buffer_type = BufferType::L1,
-            .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-            .shard_parameters = std::move(subordinate_shard_parameters),
-        };
-        auto subordinate_l1_buffer = CreateBuffer(subordinate_buffer_config);
-        subordinate_l1_buffers.push_back(subordinate_l1_buffer);
-        master_runtime_args.push_back((uint32_t)subordinate_l1_buffer->address());
-
+    for (auto& core : sub_core_list) {
         CoreCoord physical_core = device->worker_core_from_logical_core(core);
         master_runtime_args.push_back(physical_core.x);
         master_runtime_args.push_back(physical_core.y);
@@ -127,18 +110,20 @@ bool run_dm(IDevice* device, const OneFromAllConfig& test_config) {
 
     // Golden output
     vector<uint32_t> packed_golden = packed_input;
-    vector<uint32_t> packed_output;
 
     // Launch program and record outputs
     for (size_t i = 0; i < total_subordinate_cores; i++) {
         auto begin = packed_input.data() + i * subordinate_size_bytes / sizeof(uint32_t);
         auto end = packed_input.data() + (i + 1) * subordinate_size_bytes / sizeof(uint32_t);
-        detail::WriteToBuffer(subordinate_l1_buffers[i], vector<uint32_t>(begin, end));
+        vector<uint32_t> partial_input(begin, end);
+        detail::WriteToDeviceL1(device, sub_core_list[i], l1_base_address, partial_input);
     }
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     detail::LaunchProgram(device, program);
-    detail::ReadFromBuffer(master_l1_buffer, packed_output);
+
+    vector<uint32_t> packed_output;
+    detail::ReadFromDeviceL1(device, test_config.master_core_coord, l1_base_address, total_size_bytes, packed_output);
 
     // Results comparison
     bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
@@ -158,23 +143,23 @@ bool run_dm(IDevice* device, const OneFromAllConfig& test_config) {
 
 /* ========== Test case for one from all data movement; Test id = 15 ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
+    // Physical Constraints
+    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+
     // Parameters
     uint32_t max_transactions = 256;
     uint32_t max_transaction_size_pages = 64;
-    uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
 
     // Cores
     CoreCoord master_core_coord = {0, 0};
     CoreRangeSet subordinate_core_set = {CoreRange(CoreCoord(1, 1), CoreCoord(4, 4))};
     size_t total_subordinate_cores = subordinate_core_set.num_cores();
 
-    uint32_t l1_size = 1024 * 1024;  // 1MB
-
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
              transaction_size_pages *= 2) {
-            if (num_of_transactions * transaction_size_pages * page_size_bytes * total_subordinate_cores >=
-                1024 * 1024) {
+            if (num_of_transactions * transaction_size_pages * total_subordinate_cores > max_transmittable_pages) {
                 continue;
             }
 
@@ -199,21 +184,22 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
 
 /* ========== Test case for one from all data movement; Test id = 30 ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneFromAllDirectedIdeal) {
-    // Parameters
-    uint32_t num_of_transactions, page_size_bytes;
-    uint32_t transaction_size_pages = 128;
-    if (arch_ == tt::ARCH::BLACKHOLE) {
-        page_size_bytes = 64;  // (=flit size): 64 bytes for BH
-        num_of_transactions = 5;
-    } else {
-        page_size_bytes = 32;  // (=flit size): 32 bytes for WH
-        num_of_transactions = 10;
-    }
+    // Physical Constraints
+    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
     // Cores
     CoreCoord master_core_coord = {0, 0};
     CoreRangeSet subordinate_core_set = {CoreRange(CoreCoord(1, 1), CoreCoord(4, 4))};
     size_t total_subordinate_cores = subordinate_core_set.num_cores();
+
+    // Parameters
+    // Ideal: Less transactions, more data per transaction
+    uint32_t num_of_transactions = 1;
+    if (max_transmittable_pages % (num_of_transactions * total_subordinate_cores) != 0) {
+        log_error(tt::LogTest, "Max transmittable pages not evenly divisible by transactions and subordinate cores");
+    }
+    uint32_t transaction_size_pages = max_transmittable_pages / num_of_transactions / total_subordinate_cores;
 
     // Test config
     unit_tests::dm::core_to_core::OneFromAllConfig test_config = {

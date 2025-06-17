@@ -36,7 +36,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
     auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
-
+    auto l1_size = my_dispatch_constants.get_prefetcher_l1_size();
     // May be zero if not using dispatch on fabric
     static_config_.fabric_header_rb_base =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_HEADER_RB);
@@ -208,6 +208,14 @@ void PrefetchKernel::GenerateStaticConfigs() {
     } else {
         TT_FATAL(false, "PrefetchKernel must be one of (or both) H and D variants");
     }
+    auto scratch_db_base = static_config_.scratch_db_base.value_or(0);
+    auto ringbuffer_size = static_config_.ringbuffer_size.value_or(0);
+    TT_ASSERT(
+        scratch_db_base + ringbuffer_size <= l1_size,
+        "Prefetcher allocations exceed L1 size: scratch_db_base: 0x{:X}, ringbuffer_size: 0x{:X} B, L1 size: 0x{:X} B",
+        scratch_db_base,
+        ringbuffer_size,
+        l1_size);
 
     if ((static_config_.is_h_variant.value() ^ static_config_.is_d_variant.value()) &&
         tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {

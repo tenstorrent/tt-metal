@@ -8,6 +8,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include "tt-metalium/distributed_host_buffer.hpp"
 #include "tt-metalium/memory_pin.hpp"
 #include "tt-metalium/mesh_buffer.hpp"
 #include "tt-metalium/mesh_device.hpp"
@@ -577,41 +578,24 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     const auto& mesh_buffer = storage.mesh_buffer;
     ttnn::MeshDevice* device = mesh_buffer->device();
     distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue(*cq_id);
-    const auto num_buffers = storage.coords.size();
 
-    // Initialize vector of host buffers that data will be read into
-    std::vector<HostBuffer> buffers(num_buffers);
-    std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers;
-    std::vector<TensorSpec> specs;
-    specs.reserve(num_buffers);
-    shard_data_transfers.reserve(num_buffers);
-
-    // For performance, batch host-side allocations, then split the memory chunk across shards using host buffer
-    // borrowing.
-    {
-        ZoneScopedN("AllocateBuffer");
-        const size_t shard_size = tensor.get_tensor_spec().compute_packed_buffer_size_bytes() / sizeof(T);
-        SharedMemoryPtr batch_memory = allocate_host_data(num_buffers * shard_size * sizeof(T));
-        MemoryPin allocation_pin(batch_memory);
-
-        for (std::size_t shard_idx = 0; shard_idx < num_buffers; shard_idx++) {
-            buffers[shard_idx] = HostBuffer(
-                tt::stl::Span<T>(static_cast<T*>(batch_memory.get()) + shard_idx * shard_size, shard_size),
-                allocation_pin);
-        }
+    // For performance, perform all allocations via DistributedHostBuffer::transform, run from multiple threads.
+    auto distributed_host_buffer = DistributedHostBuffer::create(device->shape());
+    for (const auto& coord : storage.coords) {
+        distributed_host_buffer.emplace_shard(coord, []() { return HostBuffer(); });
     }
 
-    for (std::size_t shard_idx = 0; shard_idx < num_buffers; shard_idx++) {
-        shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
-            .shard_coord = storage.coords[shard_idx],
-            .host_data = buffers[shard_idx].view_bytes().data(),
-            .region = BufferRegion(0, buffers[shard_idx].view_bytes().size()),
-        });
-    }
+    distributed_host_buffer = distributed_host_buffer.transform(
+        [&](const HostBuffer&) {
+            ZoneScopedN("AllocateBuffer");
+            std::vector<T> data_vec(tensor.get_tensor_spec().compute_packed_buffer_size_bytes() / sizeof(T));
+            return HostBuffer(std::move(data_vec));
+        },
+        DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-    mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
+    mesh_cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
-    MultiDeviceHostStorage host_storage(std::move(buffers));
+    MultiDeviceHostStorage host_storage(std::move(distributed_host_buffer));
     return Tensor(std::move(host_storage), tensor.tensor_spec(), tensor.distributed_tensor_config());
 }
 
@@ -740,16 +724,17 @@ Tensor to_device<bfloat8_b>(
     return to_device<uint32_t>(tensor, target_device, memory_config, cq_id);
 }
 
-template <typename T>
+namespace {
+
 DeviceStorage replicate_to_mesh_buffer(
     const HostStorage& storage,
     distributed::MeshDevice* mesh_device,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     const TensorSpec& tensor_spec,
     ttnn::QueueId cq_id) {
-    auto data_to_write = host_buffer::get_as<T>(storage.buffer);
+    auto data_to_write = storage.buffer.view_bytes();
     const auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
-    const auto input_size_bytes = data_to_write.size() * sizeof(T);
+    const auto input_size_bytes = data_to_write.size();
     TT_FATAL(
         input_size_bytes == expected_packed_buffer_size_bytes,
         "Host data with total size {}B does not match expected size {}B of device buffer!",
@@ -767,45 +752,22 @@ DeviceStorage replicate_to_mesh_buffer(
     return DeviceStorage(mesh_buffer, std::move(coords));
 }
 
-template <typename T>
 DeviceStorage shard_to_mesh_buffer(
-    const MultiDeviceHostStorage& storage,
-    distributed::MeshDevice* mesh_device,
+    const DistributedHostBuffer& distributed_host_buffer,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
-    const TensorSpec& tensor_spec,
-    const std::vector<distributed::MeshCoordinate>& coords,
     ttnn::QueueId cq_id) {
-    const auto& mesh_shape = mesh_device->shape();
-    TT_FATAL(
-        coords.size() == storage.num_buffers(),
-        "Number of shards {} does not match number of buffers {}",
-        coords.size(),
-        storage.num_buffers());
-
-    std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers;
-    shard_data_transfers.reserve(storage.num_buffers());
-
-    const auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
-    for (int i = 0; i < storage.num_buffers(); ++i) {
-        const auto& shard_host_buffer = storage.get_buffer(i);
-
-        auto data_to_write = host_buffer::get_as<T>(shard_host_buffer);
-        const auto input_size_bytes = data_to_write.size() * sizeof(T);
-        TT_FATAL(
-            input_size_bytes == expected_packed_buffer_size_bytes,
-            "Host data with total size {}B does not match expected size {}B of device buffer!",
-            input_size_bytes,
-            expected_packed_buffer_size_bytes);
-        shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
-            .shard_coord = coords[i],
-            .host_data = const_cast<void*>(reinterpret_cast<const void*>(data_to_write.data())),
-            .region = BufferRegion(0, input_size_bytes)});
-    }
-
-    mesh_device->mesh_command_queue(*cq_id).enqueue_write_shards(mesh_buffer, shard_data_transfers, /*blocking=*/false);
-
-    return DeviceStorage(std::move(mesh_buffer), coords);
+    mesh_buffer->device()->mesh_command_queue(*cq_id).enqueue_write(
+        mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+    std::vector<distributed::MeshCoordinate> coords;
+    coords.reserve(distributed_host_buffer.shard_coords().size());
+    std::copy(
+        distributed_host_buffer.shard_coords().begin(),
+        distributed_host_buffer.shard_coords().end(),
+        std::back_inserter(coords));
+    return DeviceStorage(mesh_buffer, std::move(coords));
 }
+
+}  // namespace
 
 template <typename T>
 DeviceStorage to_device_mesh_buffer(
@@ -818,13 +780,46 @@ DeviceStorage to_device_mesh_buffer(
         tt::stl::overloaded{
             [&mesh_buffer, &tensor_spec, cq_id](const HostStorage& storage) {
                 // Replicate data across devices in a mesh.
-                return replicate_to_mesh_buffer<T>(storage, mesh_buffer->device(), mesh_buffer, tensor_spec, cq_id);
+                return replicate_to_mesh_buffer(storage, mesh_buffer->device(), mesh_buffer, tensor_spec, cq_id);
             },
             [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes](const MultiDeviceHostStorage& storage) {
                 // Shard multi device host shards across devices in a mesh.
-                auto* mesh_device = mesh_buffer->device();
-                auto coords = host_tensor_attributes.determine_distribution(mesh_device->shape());
-                return shard_to_mesh_buffer<T>(storage, mesh_device, mesh_buffer, tensor_spec, coords, cq_id);
+                if (storage.distributed_buffer().shape() == mesh_buffer->device()->shape()) {
+                    return shard_to_mesh_buffer(storage.distributed_buffer(), mesh_buffer, cq_id);
+                } else {
+                    // Reshape distributed host buffer.
+                    // TODO: #22169 - there are 2 reasons for this code path - legacy serialization path that stored
+                    // multi device host tensors without the necessary metadata, and `aggregate_as_tensor` calls that
+                    // similarly lack the metadata to properly distribute the shards across the mesh.
+                    auto* mesh_device = mesh_buffer->device();
+
+                    TT_FATAL(
+                        storage.distributed_buffer().shape().mesh_size() <= mesh_device->shape().mesh_size(),
+                        "Distributed host buffer has more shards than the mesh device");
+
+                    auto dst_distributed_host_buffer = DistributedHostBuffer::create(mesh_device->shape());
+
+                    const auto dst_range = [mesh_device, &host_tensor_attributes]() {
+                        if (auto* shard2d_strategy =
+                                std::get_if<ShardTensor2D>(&host_tensor_attributes.get_distributed_tensor_config())) {
+                            distributed::MeshShape distribution_shape(
+                                shard2d_strategy->shard_mesh.y, shard2d_strategy->shard_mesh.x);
+                            return distributed::MeshCoordinateRange(distribution_shape);
+                        } else {
+                            return distributed::MeshCoordinateRange(mesh_device->shape());
+                        }
+                    }();
+
+                    std::vector<HostBuffer> shards;
+                    storage.distributed_buffer().apply([&](const HostBuffer& shard) { shards.push_back(shard); });
+
+                    auto dst_coord_it = dst_range.begin();
+                    for (int i = 0; i < shards.size(); ++i, ++dst_coord_it) {
+                        dst_distributed_host_buffer.emplace_shard(
+                            *dst_coord_it, [&shards, i]() { return std::move(shards[i]); });
+                    }
+                    return shard_to_mesh_buffer(dst_distributed_host_buffer, mesh_buffer, cq_id);
+                }
             },
             [](const auto& s) -> DeviceStorage { TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s)); }},
         host_storage);
@@ -1000,79 +995,118 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
     }
     return logical_physical_mapping;
 };
+
+// Converts a span of logical data to row major physical data.
+template <typename T>
+std::vector<T> convert_to_row_major_physical_data(
+    tt::stl::Span<const T> logical_data, const TensorSpec& tensor_spec, T pad_value) {
+    const auto& physical_shape = tensor_spec.physical_shape();
+    const size_t physical_stride = physical_shape.width();
+    auto [logical_shard_shape, physical_shard_shape] =
+        CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
+
+    std::vector<T> row_major_physical_data(physical_shape.height() * physical_shape.width(), pad_value);
+
+    const auto logical_physical_mapping = CMAKE_UNIQUE_NAMESPACE::compute_logical_to_physical_shards_mapping(
+        tensor_spec.logical_2d_shape(), logical_shard_shape, physical_shard_shape, physical_stride);
+
+    for (const auto& [indices, cols] : logical_physical_mapping) {
+        for (const auto& [logical_idx_start, physical_idx_start] : indices) {
+            for (size_t col = 0; col < cols; col++) {
+                row_major_physical_data[physical_idx_start + col] = logical_data[logical_idx_start + col];
+            }
+        }
+    }
+    return row_major_physical_data;
+}
+
+// Converts a span of row major physical data to logical data.
+template <typename T>
+std::vector<T> convert_to_logical_data(tt::stl::Span<const T> row_major_physical_data, const TensorSpec& tensor_spec) {
+    const auto& logical_2d_shape = tensor_spec.logical_2d_shape();
+    const size_t physical_stride = tensor_spec.physical_shape().width();
+    auto [logical_shard_shape, physical_shard_shape] =
+        CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
+
+    std::vector<T> logical_data(logical_2d_shape.height() * logical_2d_shape.width(), 0);
+
+    const auto logical_physical_mapping = CMAKE_UNIQUE_NAMESPACE::compute_logical_to_physical_shards_mapping(
+        logical_2d_shape, logical_shard_shape, physical_shard_shape, physical_stride);
+
+    for (const auto& [indices, cols] : logical_physical_mapping) {
+        for (const auto& [logical_idx_start, physical_idx_start] : indices) {
+            for (size_t col = 0; col < cols; col++) {
+                logical_data[logical_idx_start + col] = row_major_physical_data[physical_idx_start + col];
+            }
+        }
+    }
+    return logical_data;
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 template <typename T>
-std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpec& tensor_spec, T pad_value) {
+std::vector<T> encode_tensor_data(tt::stl::Span<const T> logical_data, const TensorSpec& tensor_spec, T pad_value) {
     if (logical_data.size() == 0) {
         return {};
     }
 
     const auto& logical_shape = tensor_spec.logical_shape();
+    const auto& physical_shape = tensor_spec.physical_shape();
+
     TT_FATAL(
         logical_data.size() == logical_shape.volume(),
         "Logical data size {} should be same as volume indicated by logical shape {}",
         logical_data.size(),
         logical_shape);
 
-    const auto& physical_shape = tensor_spec.physical_shape();
-
-    auto row_major_physical_data = [&tensor_spec, &physical_shape, pad_value](auto&& logical_data) {
-        const auto& logical_2d_shape = tensor_spec.logical_2d_shape();
-
-        if (logical_2d_shape != physical_shape) {
-            auto [logical_shard_shape, physical_shard_shape] =
-                CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
-
-            auto row_major_physical_data = std::vector<T>(physical_shape.height() * physical_shape.width(), pad_value);
-
-            size_t physical_stride = physical_shape.width();
-
-            const auto logical_physical_mapping = CMAKE_UNIQUE_NAMESPACE::compute_logical_to_physical_shards_mapping(
-                logical_2d_shape, logical_shard_shape, physical_shard_shape, physical_stride);
-
-            for (const auto& [indices, cols] : logical_physical_mapping) {
-                for (const auto& [logical_idx_start, physical_idx_start] : indices) {
-                    for (size_t col = 0; col < cols; col++) {
-                        row_major_physical_data[physical_idx_start + col] = logical_data[logical_idx_start + col];
-                    }
-                }
-            }
-            return row_major_physical_data;
-        } else {
-            return logical_data;
-        }
-    }(std::move(logical_data));
+    // If needed, convert logical data to row major physical data.
+    // `row_major_physical_data_span` stores span unconditionally (cheap), while `row_major_physical_data` stores the
+    // converted vector only when needed (expensive).
+    std::vector<T> row_major_physical_data;
+    tt::stl::Span<const T> row_major_physical_data_span;
+    if (tensor_spec.logical_2d_shape() != physical_shape) {
+        row_major_physical_data =
+            CMAKE_UNIQUE_NAMESPACE::convert_to_row_major_physical_data(logical_data, tensor_spec, pad_value);
+        row_major_physical_data_span = tt::stl::make_const_span(row_major_physical_data);
+    } else {
+        row_major_physical_data_span = logical_data;
+    }
 
     TT_FATAL(
-        row_major_physical_data.size() == physical_shape.height() * physical_shape.width(),
+        row_major_physical_data_span.size() == physical_shape.height() * physical_shape.width(),
         "Physical data size {} should be same as volume indicated by physical shape {}",
-        row_major_physical_data.size(),
+        row_major_physical_data_span.size(),
         physical_shape);
 
     if (tensor_spec.layout() == Layout::TILE) {
         return tensor_impl::convert_layout_row_major_to_tile(
-            physical_shape, tensor_spec.tile(), tt::stl::make_const_span(row_major_physical_data));
+            physical_shape, tensor_spec.tile(), row_major_physical_data_span);
+    } else if (!row_major_physical_data.empty()) {
+        // If conversion to physical data was performed, return the row major physical data to avoid extra copy.
+        return row_major_physical_data;
+    } else {
+        // Otherwise, copy the `row_major_physical_data_span`.
+        return std::vector<T>(row_major_physical_data_span.begin(), row_major_physical_data_span.end());
     }
-    return row_major_physical_data;
 }
 
 template std::vector<bfloat16> encode_tensor_data<bfloat16>(
-    std::vector<bfloat16>&& logical_data, const TensorSpec& tensor_spec, bfloat16 pad_value);
+    tt::stl::Span<const bfloat16> logical_data, const TensorSpec& tensor_spec, bfloat16 pad_value);
 template std::vector<float> encode_tensor_data<float>(
-    std::vector<float>&& logical_data, const TensorSpec& tensor_spec, float pad_value);
+    tt::stl::Span<const float> logical_data, const TensorSpec& tensor_spec, float pad_value);
 template std::vector<int32_t> encode_tensor_data<int32_t>(
-    std::vector<int32_t>&& logical_data, const TensorSpec& tensor_spec, int32_t pad_value);
+    tt::stl::Span<const int32_t> logical_data, const TensorSpec& tensor_spec, int32_t pad_value);
 template std::vector<uint32_t> encode_tensor_data<uint32_t>(
-    std::vector<uint32_t>&& logical_data, const TensorSpec& tensor_spec, uint32_t pad_value);
+    tt::stl::Span<const uint32_t> logical_data, const TensorSpec& tensor_spec, uint32_t pad_value);
 template std::vector<uint16_t> encode_tensor_data<uint16_t>(
-    std::vector<uint16_t>&& logical_data, const TensorSpec& tensor_spec, uint16_t pad_value);
+    tt::stl::Span<const uint16_t> logical_data, const TensorSpec& tensor_spec, uint16_t pad_value);
 template std::vector<uint8_t> encode_tensor_data<uint8_t>(
-    std::vector<uint8_t>&& logical_data, const TensorSpec& tensor_spec, uint8_t pad_value);
+    tt::stl::Span<const uint8_t> logical_data, const TensorSpec& tensor_spec, uint8_t pad_value);
 
 template <typename T>
-std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSpec& tensor_spec) {
+std::vector<T> decode_tensor_data(tt::stl::Span<const T> physical_data, const TensorSpec& tensor_spec) {
     if (physical_data.size() == 0) {
         return {};
     }
@@ -1084,64 +1118,62 @@ std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSp
         physical_data.size(),
         physical_shape);
 
-    auto row_major_physical_data = [&tensor_spec, &physical_shape](std::vector<T>&& physical_data) {
-        if (tensor_spec.layout() == Layout::TILE) {
-            return tensor_impl::convert_layout_tile_to_row_major(
-                physical_shape, tensor_spec.tile(), tt::stl::make_const_span(physical_data));
-        } else {
-            return std::move(physical_data);
-        }
-    }(std::move(physical_data));
+    // If needed, convert physical data to row major physical data.
+    // `row_major_physical_data_span` stores span unconditionally (cheap), while `row_major_physical_data` stores the
+    // converted vector only when needed (expensive).
+    std::vector<T> row_major_physical_data;
+    tt::stl::Span<const T> row_major_physical_data_span;
+    if (tensor_spec.layout() == Layout::TILE) {
+        row_major_physical_data =
+            tensor_impl::convert_layout_tile_to_row_major(physical_shape, tensor_spec.tile(), physical_data);
+        row_major_physical_data_span = tt::stl::make_const_span(row_major_physical_data);
+    } else {
+        row_major_physical_data_span = physical_data;
+    }
 
-    auto logical_data = [&tensor_spec, &physical_shape](std::vector<T>&& row_major_physical_data) {
-        const auto& logical_2d_shape = tensor_spec.logical_2d_shape();
-
-        if (logical_2d_shape != physical_shape) {
-            auto [logical_shard_shape, physical_shard_shape] =
-                CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
-
-            auto logical_data = std::vector<T>(logical_2d_shape.height() * logical_2d_shape.width(), 0);
-
-            size_t physical_stride = physical_shape.width();
-
-            const auto logical_physical_mapping = CMAKE_UNIQUE_NAMESPACE::compute_logical_to_physical_shards_mapping(
-                logical_2d_shape, logical_shard_shape, physical_shard_shape, physical_stride);
-
-            for (const auto& [indices, cols] : logical_physical_mapping) {
-                for (const auto& [logical_idx_start, physical_idx_start] : indices) {
-                    for (size_t col = 0; col < cols; col++) {
-                        logical_data[logical_idx_start + col] = row_major_physical_data[physical_idx_start + col];
-                    }
-                }
-            }
-            return logical_data;
-        } else {
-            return row_major_physical_data;
-        }
-    }(std::move(row_major_physical_data));
+    // Same pattern as the above - `logical_data` is non empty only when the conversion to logical data was performed.
+    std::vector<T> logical_data;
+    tt::stl::Span<const T> logical_data_span;
+    if (const auto& logical_2d_shape = tensor_spec.logical_2d_shape(); logical_2d_shape != physical_shape) {
+        logical_data = CMAKE_UNIQUE_NAMESPACE::convert_to_logical_data(row_major_physical_data_span, tensor_spec);
+        logical_data_span = tt::stl::make_const_span(logical_data);
+    } else {
+        logical_data_span = row_major_physical_data_span;
+    }
 
     const auto& logical_shape = tensor_spec.logical_shape();
     TT_FATAL(
-        logical_data.size() == logical_shape.volume(),
+        logical_data_span.size() == logical_shape.volume(),
         "Logical data size {} should be same as volume indicated by logical shape {}",
-        logical_data.size(),
+        logical_data_span.size(),
         logical_shape);
 
-    return logical_data;
+    // Check if conversion to logical data was performed, to avoid extra copy upon return.
+    if (!logical_data.empty()) {
+        return logical_data;
+    } else if (!row_major_physical_data.empty()) {
+        return row_major_physical_data;
+    } else {
+        return std::vector<T>(logical_data_span.begin(), logical_data_span.end());
+    }
+}
+
+bool logical_matches_physical(const TensorSpec& tensor_spec) {
+    return tensor_spec.layout() == Layout::ROW_MAJOR && tensor_spec.logical_2d_shape() == tensor_spec.physical_shape();
 }
 
 template std::vector<bfloat16> decode_tensor_data<bfloat16>(
-    std::vector<bfloat16>&& physical_data, const TensorSpec& tensor_spec);
+    tt::stl::Span<const bfloat16> physical_data, const TensorSpec& tensor_spec);
 template std::vector<float> decode_tensor_data<float>(
-    std::vector<float>&& physical_data, const TensorSpec& tensor_spec);
+    tt::stl::Span<const float> physical_data, const TensorSpec& tensor_spec);
 template std::vector<int32_t> decode_tensor_data<int32_t>(
-    std::vector<int32_t>&& physical_data, const TensorSpec& tensor_spec);
+    tt::stl::Span<const int32_t> physical_data, const TensorSpec& tensor_spec);
 template std::vector<uint32_t> decode_tensor_data<uint32_t>(
-    std::vector<uint32_t>&& physical_data, const TensorSpec& tensor_spec);
+    tt::stl::Span<const uint32_t> physical_data, const TensorSpec& tensor_spec);
 template std::vector<uint16_t> decode_tensor_data<uint16_t>(
-    std::vector<uint16_t>&& physical_data, const TensorSpec& tensor_spec);
+    tt::stl::Span<const uint16_t> physical_data, const TensorSpec& tensor_spec);
 template std::vector<uint8_t> decode_tensor_data<uint8_t>(
-    std::vector<uint8_t>&& physical_data, const TensorSpec& tensor_spec);
+    tt::stl::Span<const uint8_t> physical_data, const TensorSpec& tensor_spec);
 
 // ======================================================================================
 //                                  .to_layout()

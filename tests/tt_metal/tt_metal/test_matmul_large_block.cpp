@@ -372,8 +372,9 @@ bool test_matmul_large_block(tt_metal::IDevice* device, bool activations_rm, boo
                 print_faces(result_bfp16, "Result");
             }
         } else {
-            auto result_flat_layout = convert_to_flat_layout(tt::stl::make_const_span(result_bfp16));
-            auto result_untilized = untilize(result_flat_layout, M * 32, N * 32);
+            auto result_flat_layout =
+                convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
+            auto result_untilized = untilize_swizzled(result_flat_layout, M * 32, N * 32);
             pass &= (tensor.get_values() == result_untilized);
             if (not pass) {
                 print_faces(result_untilized, "Result");

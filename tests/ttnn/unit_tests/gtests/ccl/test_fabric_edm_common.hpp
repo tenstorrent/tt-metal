@@ -14,6 +14,7 @@
 #include <tt-metalium/fabric.hpp>
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/common/executor.hpp"
 #include <tt-metalium/fabric_edm_packet_header.hpp>
 
 #include "ttnn/common/queue_id.hpp"
@@ -97,7 +98,7 @@ protected:
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
 
-        if (!(arch_ == tt::ARCH::WORMHOLE_B0 && num_devices_ >= 8 &&
+        if (!(num_devices_ >= 8 &&
               (tt::tt_metal::GetNumPCIeDevices() == 4 || tt::tt_metal::GetNumPCIeDevices() == GALAXY_6U_NUM_DEVICES))) {
             TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
         }
@@ -345,32 +346,40 @@ std::tuple<std::shared_ptr<Buffer>, std::vector<uint32_t>> build_input_buffer(
     return {local_input_buffer, inputs};
 }
 
+template <typename ProgramContainer>
 static void build_and_enqueue(
-    const std::vector<IDevice*>& devices, std::vector<Program>& programs, bool enqueue_only = false) {
+    const std::vector<IDevice*>& devices, ProgramContainer& programs, bool enqueue_only = false) {
+    static_assert(
+        std::is_same_v<ProgramContainer, std::vector<Program*>> ||
+            std::is_same_v<ProgramContainer, std::vector<Program>>,
+        "programs must be a vector of Program* or Program");
     TT_FATAL(
         devices.size() == programs.size(),
         "Number of devices must match number of programs when calling build_and_enqueue in test");
-    if (!enqueue_only) {
-        for (size_t i = 0; i < devices.size(); i++) {
-            tt::tt_metal::detail::CompileProgram(devices[i], programs[i]);
-        }
-    }
+
+    // Parallel compile and enqueue as a single atomic operation per device
+    std::vector<std::shared_future<void>> futures;
+    futures.reserve(devices.size());
+
     for (size_t i = 0; i < devices.size(); i++) {
-        tt_metal::EnqueueProgram(devices[i]->command_queue(), programs[i], false);
+        futures.emplace_back(tt::tt_metal::detail::async([&devices, &programs, i, enqueue_only]() {
+            if constexpr (std::is_same_v<ProgramContainer, std::vector<Program*>>) {
+                if (!enqueue_only) {
+                    tt::tt_metal::detail::CompileProgram(devices[i], *programs[i]);
+                }
+                tt_metal::EnqueueProgram(devices[i]->command_queue(), *programs[i], false);
+            } else {
+                if (!enqueue_only) {
+                    tt::tt_metal::detail::CompileProgram(devices[i], programs[i]);
+                }
+                tt_metal::EnqueueProgram(devices[i]->command_queue(), programs[i], false);
+            }
+        }));
     }
-}
-static void build_and_enqueue(
-    const std::vector<IDevice*>& devices, std::vector<Program*>& program_ptrs, bool enqueue_only = false) {
-    TT_FATAL(
-        devices.size() == program_ptrs.size(),
-        "Number of devices must match number of programs when calling build_and_enqueue in test");
-    if (!enqueue_only) {
-        for (size_t i = 0; i < devices.size(); i++) {
-            tt::tt_metal::detail::CompileProgram(devices[i], *program_ptrs[i]);
-        }
-    }
-    for (size_t i = 0; i < devices.size(); i++) {
-        tt_metal::EnqueueProgram(devices[i]->command_queue(), *program_ptrs[i], false);
+
+    // Wait for all compile and enqueue operations to complete
+    for (const auto& future : futures) {
+        future.get();
     }
 }
 
@@ -1112,7 +1121,7 @@ void persistent_fabric_teardown_sequence(
     const std::vector<IDevice*>& devices,
     std::optional<SubdeviceInfo>& subdevice_managers,
     ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
-    tt::tt_fabric::TerminationSignal termination_mode = tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE) {
+    tt::tt_fabric::TerminationSignal termination_mode = tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE) {
     log_info(tt::LogTest, "Tearing down fabric");
 
     // Wait for workers to finish
@@ -1142,7 +1151,8 @@ void setup_test_with_persistent_fabric(
     bool en_dateline_sender_extra_buffer = false,
     bool en_dateline_receiver_extra_buffer = false,
     bool en_dateline_upstream_sender_extra_buffer = false,
-    bool en_dateline_upstream_receiver_extra_buffer = false) {
+    bool en_dateline_upstream_receiver_extra_buffer = false,
+    bool en_dateline_upstream_adjcent_sender_extra_buffer = false) {
     log_info(tt::LogTest, "Enabling persistent fabric");
     fabric_programs = std::vector<Program>(devices.size());
     subdevice_managers = create_subdevices(devices);
@@ -1161,7 +1171,8 @@ void setup_test_with_persistent_fabric(
         en_dateline_sender_extra_buffer,
         en_dateline_receiver_extra_buffer,
         en_dateline_upstream_sender_extra_buffer,
-        en_dateline_upstream_receiver_extra_buffer);
+        en_dateline_upstream_receiver_extra_buffer,
+        en_dateline_upstream_adjcent_sender_extra_buffer);
     line_fabric->set_firmware_context_switch_interval(switch_interval);
     if (loopback_on_last_device) {
         for (auto& edm_builder : line_fabric->edm_builders_backward_direction.at(devices.back()->id())) {
@@ -2501,6 +2512,7 @@ void Run1DFabricPacketSendTest(
             params.fabric_mode == FabricTestMode::RingAsLinear,
         "This test can only be run with disable_end_workers_in_backward_direction set to true or fabric_mode set to "
         "Linear");
+    bool use_t3k = num_devices == 8;
     bool use_galaxy = num_devices == 32;
     bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
     bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
@@ -2520,9 +2532,9 @@ void Run1DFabricPacketSendTest(
         !(params.num_fabric_rows > 0 && params.num_fabric_cols > 0),
         "Only one of num_fabric_rows and num_fabric_cols may be greater than 0. Test support for both axes live at the "
         "same time is not yet supported");
-    TT_FATAL(
-        use_device_init_fabric ^ (params.num_fabric_rows == 0 && params.num_fabric_cols == 0),
-        "Device init fabric is only supported in this test when launching with multiple fabric rows and/or columns");
+    if (use_device_init_fabric && params.num_fabric_rows == 0 && params.num_fabric_cols == 0) {
+        TT_FATAL(use_t3k, "Using the full mesh as one ring topoplogy is only supported for T3K");
+    }
 
     ttnn::ccl::Topology topology;
     FabricTestMode fabric_mode = params.fabric_mode;
@@ -2539,29 +2551,34 @@ void Run1DFabricPacketSendTest(
     bool en_dateline_receiver_extra_buffer = false;
     bool en_dateline_upstream_sender_extra_buffer = false;
     bool en_dateline_upstream_receiver_extra_buffer = false;
+    bool en_dateline_upstream_adjcent_sender_extra_buffer = false;
     if (fabric_mode == FabricTestMode::HalfRing) {
         // HalfRing test is more optimal with extra recv buffer on upstream edm.
         en_dateline_sender_extra_buffer = true;
         en_dateline_receiver_extra_buffer = true;
         en_dateline_upstream_sender_extra_buffer = false;
         en_dateline_upstream_receiver_extra_buffer = true;
+        en_dateline_upstream_adjcent_sender_extra_buffer = true;
     } else if (fabric_mode == FabricTestMode::FullRing) {
         // FullRing is more optimal with extra buffer on both send/recv channels.
         en_dateline_sender_extra_buffer = false;
         en_dateline_receiver_extra_buffer = true;
         en_dateline_upstream_sender_extra_buffer = true;
         en_dateline_upstream_receiver_extra_buffer = false;
+        en_dateline_upstream_adjcent_sender_extra_buffer = true;
     } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
         // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
         en_dateline_sender_extra_buffer = true;
         en_dateline_receiver_extra_buffer = true;
         en_dateline_upstream_sender_extra_buffer = false;
         en_dateline_upstream_receiver_extra_buffer = false;
+        en_dateline_upstream_adjcent_sender_extra_buffer = false;
     } else if (fabric_mode == FabricTestMode::RingAsLinear) {
         en_dateline_sender_extra_buffer = true;
         en_dateline_receiver_extra_buffer = true;
         en_dateline_upstream_sender_extra_buffer = true;
         en_dateline_upstream_receiver_extra_buffer = true;
+        en_dateline_upstream_adjcent_sender_extra_buffer = false;
     }
 
     auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
@@ -2608,7 +2625,8 @@ void Run1DFabricPacketSendTest(
             en_dateline_sender_extra_buffer,
             en_dateline_receiver_extra_buffer,
             en_dateline_upstream_sender_extra_buffer,
-            en_dateline_upstream_receiver_extra_buffer);
+            en_dateline_upstream_receiver_extra_buffer,
+            en_dateline_upstream_adjcent_sender_extra_buffer);
     }
 
     // Other boiler plate setup
@@ -2930,7 +2948,10 @@ void Run1DFabricPacketSendTest(
         TT_FATAL(fabric_programs->size() == devices.size(), "Expected fabric programs size to be same as devices size");
         log_info(tt::LogTest, "Fabric teardown");
         persistent_fabric_teardown_sequence(
-            devices, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+            devices,
+            subdevice_managers,
+            fabric_handle.value(),
+            tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
         for (auto& device : devices) {
             device->clear_loaded_sub_device_manager();
         }
