@@ -23,9 +23,6 @@ from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
 is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
-DECODER_OP_START_INDEX = 4
-DECODER_OP_END_INDEX = -21
-
 DECODER_PREFIX = "model"
 MODEL_TAIL_PREFIX = "model_tail"
 KERNEL_MEASUREMENT_TYPE = "kernel"
@@ -34,6 +31,9 @@ DISPATCH_MEASUREMENT_TYPE = "dispatch"
 AVG_TYPE = "avg"
 MIN_TYPE = "min"
 MAX_TYPE = "max"
+
+DECODER_OP_START_INDEX = 4
+DECODER_OP_END_INDEX = -20
 
 perf_targets = {
     "RMSAllGather_0": {
@@ -590,6 +590,12 @@ def test_llama_TG_perf_device(
     df_layers_compilation = df_model_compilation[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     df_layers_trace = df_model_trace[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     # Use layers 2-9 for verifying against targets for more stability
+
+    print("Total ops:", len(df_model_compilation))
+    print("Sliced layers:", len(df_layers_compilation))
+
+    print(df_model_compilation["OP CODE"].tolist())
+
     assert len(df_layers_compilation) % num_layers == 0
 
     # first decoder layer
@@ -972,6 +978,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df_model = df[int(len(df) / 3 * 2) :]
 
     df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
+
     assert len(df_layers) % num_layers == 0
     df_layers = df_layers[int(len(df_layers) / num_layers) :]  # Exclude first layer
 
