@@ -19,11 +19,9 @@ void SDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    auto shard_view = buffer.get_device_buffer(device_coord)->shared_from_this();
-    if (region) {
-        shard_view = shard_view->view(*region);
-    }
-    auto region_value = region.value_or(BufferRegion(0, shard_view->size()));
+    auto device_buffer = buffer.get_device_buffer(device_coord);
+    auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
+    auto shard_view = device_buffer->view(region_value);
 
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
     tt::tt_metal::detail::WriteToBuffer(
@@ -38,10 +36,8 @@ void SDMeshCommandQueue::read_shard_from_device(
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>&,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    auto shard_view = buffer.get_device_buffer(device_coord)->shared_from_this();
-    if (region) {
-        shard_view = shard_view->view(*region);
-    }
+    auto device_buffer = buffer.get_device_buffer(device_coord);
+    auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
 
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
     tt::tt_metal::detail::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
