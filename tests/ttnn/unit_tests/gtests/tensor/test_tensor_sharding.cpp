@@ -137,7 +137,7 @@ TEST_P(ShardWithAlignmentTests, LogicalToPhysical) {
     const auto& expected_physical_data = params.expected.physical_data;
 
     // Convert output physical data to row major (if necessary) for testing
-    auto physical_data = tensor_impl::encode_tensor_data(std::move(logical_data), tensor_spec);
+    auto physical_data = tensor_impl::encode_tensor_data(tt::stl::make_const_span(logical_data), tensor_spec);
     if (tensor_spec.layout() == Layout::TILE) {
         // TODO: Fix convert_layout_tile_to_row_major to take in vector instead of buffer?
         physical_data = tensor_impl::convert_layout_tile_to_row_major(
@@ -193,7 +193,7 @@ TEST_P(ShardWithAlignmentTests, PhysicalToLogical) {
         physical_data = tensor_impl::convert_layout_row_major_to_tile(
             physical_shape, tensor_spec.tile(), tt::stl::make_const_span(physical_data));
     }
-    auto logical_data = tensor_impl::decode_tensor_data(std::move(physical_data), tensor_spec);
+    auto logical_data = tensor_impl::decode_tensor_data(tt::stl::make_const_span(physical_data), tensor_spec);
 
     // auto shape_2d = tensor_spec.logical_2d_shape();
     // pretty_print_data_as_shards(params.expected.physical_data, physical_shape, physical_shard_shape);

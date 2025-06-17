@@ -6,6 +6,7 @@
 
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/reflection.hpp>
+#include <type_traits>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -14,24 +15,25 @@ namespace host_buffer {
 
 template <typename T>
 void validate_datatype(const Tensor& tensor) {
-    if constexpr (std::is_same_v<T, uint32_t>) {
+    using BaseType = std::remove_cvref_t<T>;
+    if constexpr (std::is_same_v<BaseType, uint32_t>) {
         TT_FATAL(
             tensor.dtype() == DataType::UINT32 or tensor.dtype() == DataType::BFLOAT8_B or
                 tensor.dtype() == DataType::BFLOAT4_B,
             "Incorrect data type {}",
             tensor.dtype());
-    } else if constexpr (std::is_same_v<T, int32_t>) {
+    } else if constexpr (std::is_same_v<BaseType, int32_t>) {
         TT_FATAL(tensor.dtype() == DataType::INT32, "Incorrect data type {}", tensor.dtype());
-    } else if constexpr (std::is_same_v<T, float>) {
+    } else if constexpr (std::is_same_v<BaseType, float>) {
         TT_FATAL(tensor.dtype() == DataType::FLOAT32, "Incorrect data type {}", tensor.dtype());
-    } else if constexpr (std::is_same_v<T, bfloat16>) {
+    } else if constexpr (std::is_same_v<BaseType, bfloat16>) {
         TT_FATAL(tensor.dtype() == DataType::BFLOAT16, "Incorrect data type {}", tensor.dtype());
-    } else if constexpr (std::is_same_v<T, uint16_t>) {
+    } else if constexpr (std::is_same_v<BaseType, uint16_t>) {
         TT_FATAL(tensor.dtype() == DataType::UINT16, "Incorrect data type {}", tensor.dtype());
-    } else if constexpr (std::is_same_v<T, uint8_t>) {
+    } else if constexpr (std::is_same_v<BaseType, uint8_t>) {
         TT_FATAL(tensor.dtype() == DataType::UINT8, "Incorrect data type {}", tensor.dtype());
     } else {
-        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported DataType");
+        static_assert(tt::stl::concepts::always_false_v<BaseType>, "Unsupported DataType");
     }
 }
 

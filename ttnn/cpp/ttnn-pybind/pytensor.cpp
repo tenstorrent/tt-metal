@@ -107,7 +107,7 @@ Tensor create_typed_tt_tensor_from_py_data(
         return output;
     } else {
         return Tensor::from_span(
-            tt::stl::Span<const T>(pydata_span), tensor_spec, device, cq_id, static_cast<T>(pad_value));
+            tt::stl::make_const_span(pydata_span), tensor_spec, device, cq_id, static_cast<T>(pad_value));
     }
 }
 
@@ -406,16 +406,12 @@ HostBuffer create_row_major_host_buffer(
     }
 
     // No modifications needed; direclty return buffer
-    if (tensor_spec.layout() == Layout::ROW_MAJOR and tensor_spec.logical_2d_shape() == tensor_spec.physical_shape()) {
+    if (tensor_impl::logical_matches_physical(tensor_spec)) {
         return host_buffer;
     }
 
-    // TODO: Switch to use span in decode_tensor_data and avoid data copy here
-    auto typed_view = host_buffer::get_as<T>(host_buffer);
-    std::vector<T> physical_data(typed_view.begin(), typed_view.end());
-
-    // See implementation for documentation
-    auto logical_data = tensor_impl::decode_tensor_data(std::move(physical_data), tensor_spec);
+    auto typed_view = host_buffer::get_as<const T>(host_buffer);
+    auto logical_data = tensor_impl::decode_tensor_data(typed_view, tensor_spec);
 
     return HostBuffer(std::move(logical_data));
 }
