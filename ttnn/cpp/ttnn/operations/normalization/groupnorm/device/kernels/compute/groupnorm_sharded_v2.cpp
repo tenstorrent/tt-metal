@@ -540,7 +540,7 @@ void MAIN {
 
 #ifdef UNTILIZE_OUT
     // untilize
-    untilize_init_short(cb_untilize_in);
+    untilize_init(cb_untilize_in);
     cb_wait_front(cb_untilize_in, per_core_MN);
     for (uint32_t m = 0; m < per_core_M; ++m) {
         cb_reserve_back(cb_untilize_out, per_core_N);
