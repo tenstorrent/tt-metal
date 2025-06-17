@@ -17,9 +17,9 @@ void MAIN {
     constexpr uint32_t num_links = get_compile_time_arg_val(7);
 
     // const uint32_t num_packets = batch_slice_num_pages / tile_granularity / num_links;
-    uint32_t total_tiles = (batch_slice_num_pages + tile_granularity - 1) / tile_granularity;
-    const uint32_t num_packets = (total_tiles + num_links - 1) / num_links;
-    uint32_t tiles_per_slice = batch_slice_num_pages / num_links;
+    constexpr uint32_t total_tiles = (batch_slice_num_pages + tile_granularity - 1) / tile_granularity;
+    constexpr uint32_t num_packets = (total_tiles + num_links - 1) / num_links;
+    constexpr uint32_t tiles_per_slice = batch_slice_num_pages / num_links;
 
     for (uint32_t b = 0; b < num_batches; b++) {
         for (uint32_t i = 0; i < ring_size - 1; i++) {  // Don't reduce on the first slice

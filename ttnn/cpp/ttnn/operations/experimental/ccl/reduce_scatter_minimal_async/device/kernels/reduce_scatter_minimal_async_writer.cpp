@@ -107,9 +107,6 @@ void kernel_main() {
     }
 
     for (uint32_t b = 0; b < num_batches; b++) {
-        int fwd_slice_idx = my_chip_id - 1;
-        int bwd_slice_idx = my_chip_id + 1;
-
         uint32_t batch_offset = batch_slice_num_pages * b;
         uint32_t actual_fwd_slice_id_x = my_chip_id_x;
         uint32_t actual_fwd_slice_id_y = my_chip_id_y;
@@ -283,8 +280,6 @@ void kernel_main() {
                 }
                 noc_async_writes_flushed();
             }
-            fwd_slice_idx--;
-            bwd_slice_idx++;
         }
         // Reset the global semaphore before the next batch
         while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem) < ring_size - 1);

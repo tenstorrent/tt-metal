@@ -359,7 +359,7 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
         num_iters,
         warmup_iters,
         trace_mode,
-        num_links=1,
+        num_links=3,
         scheme="random",
     )
 

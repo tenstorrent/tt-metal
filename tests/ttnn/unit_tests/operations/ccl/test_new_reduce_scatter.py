@@ -65,7 +65,6 @@ def run_reduce_scatter_impl(
     rs_num_batches = rs_input_shape[0]
     single_batch_input_shape = rs_input_shape[:]
     single_batch_input_shape[2] //= rs_num_batches
-    single_batch_input_shape[0] += 2
     persistent_intermediate_buffers = [
         ttnn.from_torch(
             torch.zeros(single_batch_input_shape),

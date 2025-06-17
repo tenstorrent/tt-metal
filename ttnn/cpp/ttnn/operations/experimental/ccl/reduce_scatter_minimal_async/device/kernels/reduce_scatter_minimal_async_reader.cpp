@@ -82,8 +82,6 @@ void kernel_main() {
         if (fuse_op) {
             matmul_receiver.wait_for_matmul_batch(b);
         }
-        int fwd_slice_id = my_chip_id - 1;
-        int bwd_slice_id = my_chip_id + 1;
         uint32_t batch_offset = batch_num_pages * b;
 
         uint32_t actual_fwd_slice_id_x = my_chip_id_x;
@@ -201,10 +199,6 @@ void kernel_main() {
                 noc_async_read_barrier();
                 cb_push_back(cb_in0, num_pages_to_read);
             }
-
-            // Next slice idx
-            fwd_slice_id--;
-            bwd_slice_id++;
         }
     }
     DPRINT << "Done Reader\n";
