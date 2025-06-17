@@ -294,7 +294,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
                     // set downstream_num_sender_buffer_slots, downstream is dateline edm
                     num_downstream_sender_buffer_slots.fill(dateline_num_sender_buffer_slots);
                 }
-                if (options.enable_dateline_upstream_adjcent_sender_extra_buffer_slots) {
+                if (options.enable_dateline_upstream_adjacent_sender_extra_buffer_slots) {
                     // set remote sender buffer slots equal to dateline upstream dajcent sender buffer slots
                     for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
                         bool skip_current_channel = i == this->dateline_upstream_adjcent_sender_channel_skip_idx;
@@ -311,7 +311,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
                 }
                 break;
             case FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice:
-                if (options.enable_dateline_upstream_adjcent_sender_extra_buffer_slots) {
+                if (options.enable_dateline_upstream_adjacent_sender_extra_buffer_slots) {
                     // set num_sender_buffer_slots
                     for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
                         bool skip_current_channel = (i == this->dateline_upstream_adjcent_sender_channel_skip_idx);
@@ -355,7 +355,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
                 }
                 break;
             case FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream:
-                if (options.enable_dateline_upstream_adjcent_sender_extra_buffer_slots) {
+                if (options.enable_dateline_upstream_adjacent_sender_extra_buffer_slots) {
                     // set downstream_num_sender_buffer_slots, downstream is dateline upstream adjcent edm
                     num_downstream_sender_buffer_slots.fill(dateline_upstream_adjcent_num_sender_buffer_slots);
                 }

@@ -162,7 +162,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 .enable_dateline_receiver_extra_buffer_slots = en_dateline_receiver_extra_buffer,
                 .enable_dateline_upstream_sender_extra_buffer_slots = en_dateline_upstream_sender_extra_buffer,
                 .enable_dateline_upstream_receiver_extra_buffer_slots = en_dateline_upstream_receiver_extra_buffer,
-                .enable_dateline_upstream_adjcent_sender_extra_buffer_slots =
+                .enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
                     en_dateline_upstream_adjcent_sender_extra_buffer,
             };
             auto dest_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
@@ -171,7 +171,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 .enable_dateline_receiver_extra_buffer_slots = en_dateline_receiver_extra_buffer,
                 .enable_dateline_upstream_sender_extra_buffer_slots = en_dateline_upstream_sender_extra_buffer,
                 .enable_dateline_upstream_receiver_extra_buffer_slots = en_dateline_upstream_receiver_extra_buffer,
-                .enable_dateline_upstream_adjcent_sender_extra_buffer_slots =
+                .enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
                     en_dateline_upstream_adjcent_sender_extra_buffer,
             };
             const auto src_curr_edm_config =

@@ -81,7 +81,7 @@ std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_ed
     constexpr bool enable_dateline_receiver_extra_buffer_slots = true;
     constexpr bool enable_dateline_upstream_sender_extra_buffer_slots = true;
     constexpr bool enable_dateline_upstream_receiver_extra_buffer_slots = true;
-    constexpr bool enable_dateline_upstream_adjcent_sender_extra_buffer_slots = true;
+    constexpr bool enable_dateline_upstream_adjacent_sender_extra_buffer_slots = true;
 
     auto edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
         .edm_type = edm_type,
@@ -89,8 +89,8 @@ std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_ed
         .enable_dateline_receiver_extra_buffer_slots = enable_dateline_receiver_extra_buffer_slots,
         .enable_dateline_upstream_sender_extra_buffer_slots = enable_dateline_upstream_sender_extra_buffer_slots,
         .enable_dateline_upstream_receiver_extra_buffer_slots = enable_dateline_upstream_receiver_extra_buffer_slots,
-        .enable_dateline_upstream_adjcent_sender_extra_buffer_slots =
-            enable_dateline_upstream_adjcent_sender_extra_buffer_slots,
+        .enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
+            enable_dateline_upstream_adjacent_sender_extra_buffer_slots,
     };
 
     return std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(

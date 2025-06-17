@@ -72,7 +72,7 @@ struct FabricEriscDatamoverOptions {
     bool enable_dateline_receiver_extra_buffer_slots = false;
     bool enable_dateline_upstream_sender_extra_buffer_slots = false;
     bool enable_dateline_upstream_receiver_extra_buffer_slots = false;
-    bool enable_dateline_upstream_adjcent_sender_extra_buffer_slots = false;
+    bool enable_dateline_upstream_adjacent_sender_extra_buffer_slots = false;
 };
 
 struct FabricEriscDatamoverConfig {
