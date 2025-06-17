@@ -38,6 +38,7 @@ target_link_libraries(
         umd::Firmware
         umd::device
         simde::simde
+        Taskflow::Taskflow
     PRIVATE
         Metalium::Metal::Hardware
         Tracy::TracyClient

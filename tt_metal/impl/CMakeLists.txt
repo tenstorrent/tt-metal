@@ -114,7 +114,6 @@ target_link_libraries(
         FlatBuffers::FlatBuffers
         range-v3::range-v3
         TT::Metalium::Common
-        Taskflow::Taskflow
         TT::Metalium::HostDevCommon
         Metalium::Metal::Hardware
         Metalium::Metal::LLRT

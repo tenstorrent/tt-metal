@@ -31,6 +31,7 @@ tt_metal/**/CMakeLists.txt @tenstorrent/metalium-developers-infra
 tt_metal/ @tenstorrent/metalium-developers-infra # nothing should be caught by this, if so, someone added a path somewhere
 tt_metal/api/ @tenstorrent/metalium-api-owners
 tt_metal/common/ @abhullar-tt @tt-aho @tt-asaigal @omilyutin-tt @cfjchu
+tt_metal/common/**/CMakeLists.txt @abhullar-tt @tt-aho @tt-asaigal @omilyutin-tt @cfjchu @tenstorrent/metalium-developers-infra
 tt_metal/core_descriptors/ @abhullar-tt @aliuTT @ubcheema
 tt_metal/detail/ @abhullar-tt @tt-aho @tt-asaigal @omilyutin-tt @cfjchu # this should go away
 tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @omilyutin-tt
@@ -66,6 +67,7 @@ tt_metal/impl/trace/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho
 tt_metal/include/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/jit_build/ @pgkeller @abhullar-tt @nathan-TT @jbaumanTT
+tt_metal/jit_build/**/CMakeLists.txt @pgkeller @abhullar-tt @nathan-TT @jbaumanTT @tenstorrent/metalium-developers-infra
 tt_metal/kernels/ @abhullar-tt # these should go away or get moved to tests
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @pgkeller @tt-asaigal @tt-aho
 tt_metal/programming_examples/ @tt-asaigal @afuller-TT @mo-tenstorrent @tenstorrent/metalium-api-owners
