@@ -1194,11 +1194,6 @@ void run_fabric_edm_main_loop(
 
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         invalidate_l1_cache();
-        bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
-        if (got_graceful_termination) {
-            DPRINT << "EDM Graceful termination\n";
-            return;
-        }
         did_something = false;
         for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
             // Capture these to see if we made progress
@@ -1282,7 +1277,6 @@ void run_fabric_edm_main_loop(
             }
         }
     }
-    DPRINT << "EDM Terminating\n";
 }
 
 template <typename EdmChannelWorkerIFs>
@@ -2064,6 +2058,5 @@ void kernel_main() {
 
     *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
 
-    DPRINT << "EDM DONE\n";
     WAYPOINT("DONE");
 }
