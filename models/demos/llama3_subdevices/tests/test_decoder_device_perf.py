@@ -594,8 +594,6 @@ def test_llama_TG_perf_device(
     print("Total ops:", len(df_model_compilation))
     print("Sliced layers:", len(df_layers_compilation))
 
-    print(df_model_compilation["OP CODE"].tolist())
-
     assert len(df_layers_compilation) % num_layers == 0
 
     # first decoder layer
@@ -607,6 +605,10 @@ def test_llama_TG_perf_device(
     # model tail ops (lm head + sampling)
     df_model_tail_compilation = df_model_compilation[DECODER_OP_END_INDEX:]
     df_model_tail_trace = df_model_trace[DECODER_OP_END_INDEX:]
+
+    for op in df_model_tail_trace["OP CODE"].unique():
+        print(op)
+
     # Get first layer compilation and trace measurements
     avg_kernel_duration_first_layer_compilation, _, _, _, _, _, _, _, _ = process_measurements(
         df_first_layer_compilation, 1

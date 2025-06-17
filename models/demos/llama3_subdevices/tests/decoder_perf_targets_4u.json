@@ -245,15 +245,6 @@
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
         },
-        "ReshardDeviceOperation_1": {
-            "op_name": "Reshard_1",
-            "kernel_duration": 3380.0,
-            "op_to_op":  662.0,
-            "non-overlapped-dispatch-time": 4991.0,
-            "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.5
-        },
         "Matmul_0": {
             "op_name": "Matmul_0",
             "kernel_duration": 197557.0,
