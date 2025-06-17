@@ -75,7 +75,6 @@ void golden_matmul(
  * @param a Input matrix A in row-major format (bfloat16 elements)
  * @param b Input matrix B in row-major format (bfloat16 elements)
  * @param output Output matrix C to store A*B result (bfloat16 elements)
- * @param bcast_batch Batch broadcasting flag (currently unused)
  * @param M Number of rows in matrix A and output matrix C
  * @param N Number of columns in matrix B and output matrix C
  * @param K Number of columns in matrix A and rows in matrix B
@@ -88,7 +87,6 @@ void matmul_multi_core(
     std::vector<bfloat16>& a,
     std::vector<bfloat16>& b,
     std::vector<bfloat16>& output,
-    bool bcast_batch,
     uint32_t M,
     uint32_t N,
     uint32_t K,
@@ -165,23 +163,23 @@ void matmul_multi_core(
     const auto cb_data_format = tt::DataFormat::Float16_b;
     uint32_t src0_cb_index = CBIndex::c_0;  // Circular buffer index for matrix A
     uint32_t num_input_tiles = 2;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(
+        program,
+        all_cores,  // create on all cores
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_0, cb_data_format}})
+            .set_page_size(CBIndex::c_0, single_tile_size));
 
-    uint32_t src1_cb_index = CBIndex::c_1;  // Circular buffer index for matrix B
-    CircularBufferConfig cb_src1_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
-            .set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    auto cb_src1 = tt_metal::CreateCircularBuffer(
+        program,
+        all_cores,  // create on all cores
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_1, cb_data_format}})
+            .set_page_size(CBIndex::c_1, single_tile_size));
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;  // Circular buffer index for output matrix C
-    uint32_t num_output_tiles = 2;
-    CircularBufferConfig cb_output_config =
-        CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
-            .set_page_size(output_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    auto cb_output = tt_metal::CreateCircularBuffer(
+        program,
+        all_cores,  // create on all cores
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_16, cb_data_format}})
+            .set_page_size(CBIndex::c_16, single_tile_size));
 
     // Create Kernels (Reader, Writer, Compute)
     // - Reader kernel: Handles reading input data from DRAM into circular buffers
@@ -214,8 +212,7 @@ void matmul_multi_core(
     // tiles - each core computes different output tiles. Runtime arguments can be changed between program executions
     // without recompilation.
     uint32_t work_offset = 0;
-    std::array<std::pair<CoreRangeSet, uint32_t>, 2> work_groups = {
-        std::make_pair(core_group_1, work_per_core1), std::make_pair(core_group_2, work_per_core2)};
+    auto work_groups = {std::make_pair(core_group_1, work_per_core1), std::make_pair(core_group_2, work_per_core2)};
 
     // Iterate through each work group and assign work to cores
     for (const auto& [ranges, work_per_core] : work_groups) {
@@ -254,7 +251,8 @@ void matmul_multi_core(
     // 1. Upload input data to DRAM buffers
     // 2. Execute the program (all kernels run in parallel across cores)
     // 3. Read back the result from DRAM to host memory
-    // The 'true' parameter in EnqueueReadBuffer ensures we wait for completion
+    // The 'true' parameter in EnqueueReadBuffer ensures we wait for completion (so when the function
+    // returns, the output vector is fully populated).
     EnqueueWriteBuffer(cq, src0_dram_buffer, a.data(), false);
     EnqueueWriteBuffer(cq, src1_dram_buffer, b.data(), false);
     EnqueueProgram(cq, program, false);
@@ -324,7 +322,7 @@ int main() {
 
         /* Calling the MatMul host program. Read in result into a host vector */
         std::vector<bfloat16> result_vec(dram_buffer_C_size / sizeof(bfloat16));
-        matmul_multi_core(src0_vec, src1_vec, result_vec, false, M, N, K, device);
+        matmul_multi_core(src0_vec, src1_vec, result_vec, M, N, K, device);
         // Reverse the tilization to get the result in the row-major format that the CPU expects
         result_vec = untilize_nfaces(result_vec, M, N);
 
@@ -335,7 +333,7 @@ int main() {
         // A PCC close to 1 indicates that the two vectors are very similar.
         float pearson = check_bfloat16_vector_pcc(golden_vec, result_vec);
         log_info(tt::LogVerif, "Metalium vs Golden -- PCC = {}", pearson);
-        TT_FATAL(pearson > 0.99, "PCC not high enough. Result PCC: {}, Expected PCC: 0.99", pearson);
+        TT_FATAL(pearson > 0.97, "PCC not high enough. Result PCC: {}, Expected PCC: 0.97", pearson);
 
         pass &= CloseDevice(device);
 

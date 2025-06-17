@@ -36,7 +36,7 @@ namespace NAMESPACE {
  * the appropriate tiles for each output tile computation.
  */
 void MAIN {
-    uint32_t num_porduced_tiles = get_arg_val<uint32_t>(0);  // number of output tiles to produce
+    uint32_t num_output_tiles = get_arg_val<uint32_t>(0);    // number of output tiles to produce
     uint32_t Kt = get_arg_val<uint32_t>(1);                  // number of tiles in K dimension for dot product
 
     constexpr tt::CBIndex cb_in0 = tt::CBIndex::c_0;
@@ -49,7 +49,7 @@ void MAIN {
 
     // the simplest possible version of outer product blocked matmul
     // the reader is expected to read the A's and B's tile rows and tile columns for each output tile
-    for (uint32_t i = 0; i < num_porduced_tiles; ++i) {
+    for (uint32_t i = 0; i < num_output_tiles; ++i) {
         // Make sure registers can be used for the output tile. This also sets the registers to zero.
         acquire_dst();
         for (uint32_t kt = 0; kt < Kt; kt++) {

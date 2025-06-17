@@ -12,11 +12,11 @@ changes to:
 - Set up each core to process a subset of the tiles.
 - What changes (and what doesn't change) in the API usage to achieve this.
 
-It is important to note that this example build on top of the previous single core matmul example, so it is recommended to understand the single core matmul example first. The single core matmul example is available under the ``tt_metal/programming_examples/matmul_single_core/`` directory.
+It is important to note that this example builds on top of the previous single core matmul example, so it is recommended to understand the single core matmul example first. The single core matmul example is available under the ``tt_metal/programming_examples/matmul_single_core/`` directory.
 
 The full source code for this example is available under the ``tt_metal/programming_examples/matmul_multi_core/`` directory.
 
-Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``matmul_single_core`` executable in the ``build/programming_examples`` directory. For example:
+Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``matmul_multi_core`` executable in the ``build/programming_examples`` directory. For example:
 
 .. code-block:: bash
 
@@ -38,7 +38,7 @@ Building the example can be done by adding a ``--build-programming-examples`` fl
 Device Initialization & Program Setup
 -------------------------------------
 
-Device initialization and parameter setup are the same as in the single core example. You create a device, initialize the program with the required parameters, and compute the reference result on the CPU. This section is unchanged from the single core example; see :ref:`mm_single_core_device_initialization` in the single core matrix multiplication example for details on device setup and program initialization.
+Device initialization and parameter setup are the same as in the single core example. You create a device, initialize the program with the required parameters, and compute the reference result on the CPU. This section is unchanged from the single core example; see :ref:`Device Initialization & Program Setup in the single core matrix multiplication<mm_single_core_device_initialization>` in the single core matrix multiplication example for details on device setup and program initialization.
 
 .. code-block:: cpp
 
@@ -82,20 +82,21 @@ Next, convert the source matrices to tiled format before preparing for execution
 Calculating Work Distribution
 -----------------------------
 
-Tenstorrent's AI processors support multiple parallelization strategies. The grid structure of the AI processors enables various approaches to distributing work. In this example, we use a simple SPMD (Single Program, Multiple Data) strategy similar to GPU programming. Each core runs the same program but processes a different subset of the data to compute the full result. We parallelize across the output tiles of the result matrix, with each core is responsible to produce ``1/num_cores`` of the output tiles, where ``num_cores`` is the number of available cores.
+Tenstorrent's AI processors support multiple parallelization strategies. The grid structure of the AI processors enables various approaches to distributing work. In this example, we use a simple SPMD (Single Program, Multiple Data) strategy similar to GPU programming. Each core runs the same program but processes a different subset of the data to compute the full result. We parallelize across the output tiles of the result matrix, with each core responsible for producing ``1/num_cores`` of the output tiles, where ``num_cores`` is the number of available cores.
 
 .. note::
-    The SPMD strategy is a standard approach in parallel computing and works well for many workloads. However, for matrix multiplication, the most efficient method on Tenstorrent's AI processors is to use a systolic array pattern, and use a subset of cores to read in an reuse the read data. This example does not cover that approach. See :ref:`MatMul_Multi_Core_example` for further optimizations, at the cost of genericity. SPMD remains a flexible and general-purpose strategy, making it suitable for a variety of tasks in Metalium.
+
+    The SPMD strategy is a standard approach in parallel computing and works well for many workloads. However, for matrix multiplication, the most efficient method on Tenstorrent's AI processors is to use a systolic array pattern, and use a subset of cores to read in and reuse the read data. This example does not cover that approach. See :ref:`MatMul_Multi_Core_example` for further optimizations, at the cost of genericity. SPMD remains a flexible and general-purpose strategy, making it suitable for a variety of tasks in Metalium.
 
 For a matrix of size ``288 x 288`` (9 tiles along each dimension, with each tile being 32x32), and 11 cores available, the work is divided as evenly as possible. In the example case, 10 cores are assigned 8 output tiles each, and the 11th core processes the remaining tile. The diagram below shows how the output tiles are distributed among the cores. Each color corresponds to a different core, and each tile is handled by only one core:
 
 .. figure:: /images/matmul-spmd-core-works-distribution.webp
    :alt: MatMul Multi Core Parallelization Strategy under SPMD (Each color represents a different core)
 
-Metalium includes utilities to simplify work distribution across cores. The ``tt::tt_metal::split_work_to_cores`` function calculates how many tiles each core should process, based on the total amount of work and the number of available cores. It distributes the work as evenly as possible, even if the number of tiles does not divide evenly among the cores. The function returns several values:
+Metalium includes utilities to simplify work distribution across cores. The ``tt::tt_metal::split_work_to_cores(core_grid, num_work)`` function calculates how many tiles each core should process, based on the total amount of work and the number of available cores. It distributes the work as evenly as possible, even if the number of tiles does not divide evenly among the cores. The function returns several values:
 
 - ``num_cores``: Number of cores used for the operation.
-- ``all_cores``: Set of all cores assigned to the operation (may be fewer than the full grid if there is not enough work).
+- ``all_cores``: Set of all cores assigned to the operation.
 - ``core_group_1``: Primary group of cores, each handling more work.
 - ``core_group_2``: Secondary group of cores, each handling less work (empty if the work divides evenly).
 - ``work_per_core1``: Number of output tiles each core in the primary group processes.
@@ -104,13 +105,24 @@ Metalium includes utilities to simplify work distribution across cores. The ``tt
 .. code-block:: cpp
 
     auto core_grid = device->compute_with_storage_grid_size();
-    uint32_t num_output_tiles_total = (M * N) / TILE_HW; // number of output tiles
+    uint32_t num_output_tiles = (M * N) / TILE_HW; // number of output tiles
 
     auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core1, work_per_core2] =
-        tt::tt_metal::split_work_to_cores(core_grid, num_output_tiles_total);
-
+        tt::tt_metal::split_work_to_cores(core_grid, num_output_tiles);
 
 .. note::
+
+    The following properties describe the output of ``tt::tt_metal::split_work_to_cores``:
+
+    - ``all_cores`` is the set of cores assigned work for this operation.
+    - If there is not enough work, ``all_cores`` may be smaller than the total number of cores in ``core_grid``.
+    - ``all_cores`` contains exactly ``num_cores`` cores.
+    - ``all_cores`` is always the union of ``core_group_1`` and ``core_group_2``.
+    - The total amount of work (``num_work``) is always fully assigned: ``work_per_core1 * num_cores_in_core_group_1 + work_per_core2 * num_cores_in_core_group_2 == num_work``.
+    - The function automatically handles uneven work distribution; you do not need to manage edge cases manually.
+
+.. note::
+
     **How Metalium Parallelism Differs from OpenCL/CUDA**
 
     In frameworks like OpenCL and CUDA, you typically launch many more work groups (or thread blocks) than there are physical compute units. The hardware scheduler dynamically assigns these work groups to available compute units. If a group of threads (warp/wavefront) stalls - such as waiting for memory - the scheduler can quickly switch to another ready group, keeping the hardware busy and improving overall throughput. This dynamic scheduling and oversubscription allow for automatic load balancing and efficient handling of workloads with unpredictable execution times.
@@ -118,6 +130,7 @@ Metalium includes utilities to simplify work distribution across cores. The ``tt
     In contrast, Metalium's parallelism model is static. The number of parallel tasks you can launch is limited to the number of available Tensix cores on the device. Each core is assigned a specific portion of the work at launch, and there is no dynamic scheduling or oversubscription: once a core finishes its assigned work, it remains idle until the next task is launched. This is similar to static scheduling in OpenMP, where work is divided as evenly as possible among available threads at the start.
 
     As a result, when using Metalium, it is important to:
+
       - Carefully partition your workload so that all cores are kept busy.
       - Be aware that you cannot launch more tasks than there are cores.
       - Understand that dynamic load balancing (as in CUDA/OpenCL) is not available.
@@ -154,27 +167,28 @@ Creating buffers and circular buffers in Metalium is similar to the single core 
 
     // Create circular buffers on all participating cores
     const auto cb_data_format = tt::DataFormat::Float16_b;
+    uint32_t num_input_tiles = 2;
     auto cb_src0 = tt_metal::CreateCircularBuffer(
         program, all_cores, // create on all cores
-        CircularBufferConfig(2 * single_tile_size, {{CBIndex::c_0, cb_data_format}})
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_0, cb_data_format}})
             .set_page_size(CBIndex::c_0, single_tile_size)
     );
 
     auto cb_src1 = tt_metal::CreateCircularBuffer(
         program, all_cores, // create on all cores
-        CircularBufferConfig(2 * single_tile_size, {{CBIndex::c_1, cb_data_format}})
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_1, cb_data_format}})
             .set_page_size(CBIndex::c_1, single_tile_size)
     );
 
     auto cb_output = tt_metal::CreateCircularBuffer(
         program, all_cores, // create on all cores
-        CircularBufferConfig(2 * single_tile_size, {{CBIndex::c_16, cb_data_format}})
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_16, cb_data_format}})
             .set_page_size(CBIndex::c_16, single_tile_size)
     );
 
 
-Solving sub-problems in Kernel
--------------------------------
+Partitioning Work in Kernels
+----------------------------
 
 To support work distribution, the kernel is updated so that each core processes only its assigned portion of the output. Instead of having one core handle the entire matrix, we add parameters to the kernel that specify how many tiles each core should process and the starting tile index. This way, each core computes a subset of the output tiles. Below is the writer kernel, which writes the output tiles to the DRAM buffer:
 
@@ -211,33 +225,36 @@ The compute kernel does not handle IO directly and is not concerned with how wor
 
     namespace NAMESPACE {
     void MAIN {
-        uint32_t num_porduced_tiles = get_arg_val<uint32_t>(0); // Number of output tiles to produce
+        uint32_t num_output_tiles = get_arg_val<uint32_t>(0); // Number of output tiles to produce
         uint32_t Kt = get_arg_val<uint32_t>(1); // Size of the inner dimension (K)
 
-        mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+        constexpr tt::CBIndex cb_in0 = tt::CBIndex::c_0;
+        constexpr tt::CBIndex cb_in1 = tt::CBIndex::c_1;
+        constexpr tt::CBIndex cb_out = tt::CBIndex::c_16;
+
+        mm_init(cb_in0, cb_in1, cb_out);
 
         // Instead of processing all tiles, we process only the assigned amount of tiles.
-        for (uint32_t i = 0; i < num_porduced_tiles; ++i) {
+        for (uint32_t i = 0; i < num_output_tiles; ++i) {
             acquire_dst();
             // Same inner loop as in the single core example, only the outer loop is adjusted
             // to produce the assigned number of tiles.
             for (uint32_t kt = 0; kt < Kt; kt++) {
-                cb_wait_front(tt::CBIndex::c_0, 1);
-                cb_wait_front(tt::CBIndex::c_1, 1);
+                cb_wait_front(cb_in0, 1);
+                cb_wait_front(cb_in1, 1);
 
-                matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0, false);
+                matmul_tiles(cb_in0, cb_in1, 0, 0, 0, false);
 
-                cb_pop_front(tt::CBIndex::c_0, 1);
-                cb_pop_front(tt::CBIndex::c_1, 1);
+                cb_pop_front(cb_in0, 1);
+                cb_pop_front(cb_in1, 1);
             }
 
-            cb_reserve_back(tt::CBIndex::c_16, 1);
-            pack_tile(0, tt::CBIndex::c_16);
-            cb_push_back(tt::CBIndex::c_16, 1);
+            cb_reserve_back(cb_out, 1);
+            pack_tile(0, cb_out);
+            cb_push_back(cb_out, 1);
 
             release_dst();
         }
-    }
     }
 
 The reader kernel is responsible for reading the input data from the DRAM buffers and pushing it into the circular buffers. It also needs to know how many tiles to read and the starting tile index for each core. Due to needing to calculate where to start reading from the DRAM buffer, it also needs to know the exact dimensions of the input matrices (Mt, Kt, Nt). Again the reader is almost identical to the single core version, except that it reads only the assigned number of tiles and uses the starting tile index to calculate the correct offset in the DRAM buffer:
@@ -301,7 +318,7 @@ The reader kernel is responsible for reading the input data from the DRAM buffer
 
 
 Kernel Creation and Parameter Setup
-----------------------------------
+-----------------------------------
 
 With the work distribution calculated, you can now create the kernels and set up their parameters. Since not all cores may be used, make sure to create kernels only on the cores listed in ``all_cores``. This avoids having idle kernels on unused cores.
 
@@ -336,7 +353,7 @@ Unlike OpenCL or CUDA, Metalium does not provide built-in parameters for work di
 .. code-block:: cpp
 
     uint32_t work_offset = 0;
-    std::array<std::pair<CoreRangeSet, uint32_t>, 2> work_groups = {
+    auto work_groups = {
         std::make_pair(core_group_1, work_per_core1), std::make_pair(core_group_2, work_per_core2)};
 
     // Iterate through each work group and assign work to cores
@@ -383,7 +400,7 @@ Program Execution, Downloading and Cleanup
 
 This part is the same as in the single core example. You execute the program, wait for it to finish, and then download the results from the DRAM buffer. The cleanup process is also unchanged.
 
-See :ref:`mm_single_core_kernel_execution` in the single core matrix multiplication example for details on how program execution, downloading results, untilize, verification, and cleanup are performed. There is no change in the API usage for these steps compared to the single core example.
+See :ref:`Kernel execution and result verification in the single core matrix multiplication<mm_single_core_kernel_execution>` in the single core matrix multiplication example for details on how program execution, downloading results, untilize, verification, and cleanup are performed. There is no change in the API usage for these steps compared to the single core example.
 
 .. code-block:: cpp
 
@@ -392,6 +409,7 @@ See :ref:`mm_single_core_kernel_execution` in the single core matrix multiplicat
     EnqueueProgram(cq, program, false);
     EnqueueReadBuffer(cq, dst_dram_buffer, output.data(), true);
 
+    // outside of the fcunction, `output` is returned as `result_vec`
     result_vec = untilize_nfaces(result_vec, M, N);
 
     float pearson = check_bfloat16_vector_pcc(golden_vec, result_vec);
@@ -403,7 +421,7 @@ Conclusion
 
 This concludes the multi-core matmul example and the basic usage of the Metalium API to distribute work across multiple cores. The key changes compared to the single core example are:
 
-* Work distribution Calculations using the ``tt::tt_metal::split_work_to_cores`` function
+* Work distribution calculations using the ``tt::tt_metal::split_work_to_cores`` function
 * Allocate circular buffers across all cores that will be used in the operation
 * Set runtime arguments for each core to specify how many tiles to process and the starting tile index
 * Adjust the kernels to process only the assigned number of tiles and use the starting tile index for reading/writing data

@@ -129,7 +129,7 @@ Create a kernel that will copy data from DRAM to L1 and back. Since we are only 
     The path to the kernel source file can either be
 
     * Relative to the ``TT_METAL_HOME`` environment variable, or
-    * Absolute path to the file.
+    * Absolute path to the file, or
     * Relative to the current working directory
 
     Metalium will search for the kernel source file in order of the above. In this case the kernel will be found relative to ``TT_METAL_HOME``. If the file is not found, an error will be thrown.

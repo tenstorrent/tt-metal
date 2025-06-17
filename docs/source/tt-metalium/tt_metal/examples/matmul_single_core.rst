@@ -346,7 +346,7 @@ The writer kernel consumes tiles from the output circular buffer ``cb_id_out0`` 
 
 .. _mm_single_core_kernel_execution:
 
-Kernel exexution and result verification
+Kernel execution and result verification
 ----------------------------------------
 
 On the host side, runtime arguments are configured for each kernel. These typically include DRAM buffer addresses (for A, B, and C) and tile counts (``Mt``, ``Kt``, ``Nt``) that define the scope of the operation for the current invocation.
