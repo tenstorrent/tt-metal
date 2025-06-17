@@ -118,7 +118,6 @@ class upsample2d:
                 input_layout=tt_out.get_layout(),
                 **conv_kwargs,
                 input_dtype=ttnn.bfloat8_b,
-                output_dtype=ttnn.bfloat8_b,
             )
 
             self.conv_weight_tensor = ttnn.to_device(self.conv_weight_tensor, self.device)

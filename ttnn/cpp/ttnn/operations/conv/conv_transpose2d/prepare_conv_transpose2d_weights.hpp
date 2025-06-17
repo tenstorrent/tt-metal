@@ -33,7 +33,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     uint32_t groups,
     T* device,
     DataType input_dtype,
-    DataType output_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     bool mirror_kernel = true);
@@ -55,7 +55,7 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     uint32_t groups,
     T* device,
     DataType input_dtype,
-    DataType output_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 

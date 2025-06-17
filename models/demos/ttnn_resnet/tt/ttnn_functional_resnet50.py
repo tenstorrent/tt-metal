@@ -219,7 +219,6 @@ class resnet50Bottleneck:
                     input_layout=x.get_layout(),
                     **conv_kwargs,
                     input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
-                    output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 )
                 self.ds_conv_weight_tensor = ttnn.to_device(self.ds_conv_weight_tensor, device)
                 self.ds_conv_bias_tensor = ttnn.to_device(self.ds_conv_bias_tensor, device)
@@ -311,7 +310,6 @@ class resnet50Bottleneck:
                 input_layout=x.get_layout(),
                 **conv_kwargs_1,
                 input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
-                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
 
             self.conv1_weight_tensor = ttnn.to_device(self.conv1_weight_tensor, device)
@@ -456,7 +454,6 @@ class resnet50Bottleneck:
                 input_layout=out.get_layout(),
                 **conv_kwargs_2,
                 input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
-                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
             self.conv2_weight_tensor = ttnn.to_device(self.conv2_weight_tensor, device)
             self.conv2_bias_tensor = ttnn.to_device(self.conv2_bias_tensor, device)
@@ -528,7 +525,6 @@ class resnet50Bottleneck:
                 input_layout=out.get_layout(),
                 **conv_kwargs_3,
                 input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
-                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
             self.conv3_weight_tensor = ttnn.to_device(self.conv3_weight_tensor, device)
             self.conv3_bias_tensor = ttnn.to_device(self.conv3_bias_tensor, device)
@@ -896,7 +892,6 @@ class resnet50:
                 input_layout=fold_output_tensor.get_layout(),
                 **conv_kwargs,
                 input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
-                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
             self.conv1_weight_tensor = ttnn.to_device(self.conv1_weight_tensor, device)
             self.conv1_bias_tensor = ttnn.to_device(self.conv1_bias_tensor, device)
