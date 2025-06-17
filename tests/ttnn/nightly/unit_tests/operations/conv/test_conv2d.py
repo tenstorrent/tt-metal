@@ -3738,3 +3738,71 @@ def test_conv_yolov10x(
     activation = activation,
     math_approx_mode = False,
 )
+
+@pytest.mark.parametrize(
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation",
+    (
+        (1, 1920, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0, 0, 0), (1, 1)),
+    ),
+)
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_act_dealloc(
+    device,
+    torch_tensor_map,
+    batch,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    weights_dtype,
+    output_dtype,
+    groups,
+    kernel,
+    stride,
+    padding,
+    dilation,
+):
+    input_shape = (batch, input_channels, input_height, input_width)
+    weight_shape = (output_channels, input_channels // groups, kernel[0], kernel[1])
+    torch_input_tensor = randomize_torch_tensor(torch_tensor_map, input_shape)
+    torch_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+
+    torch_weight_tensor = randomize_torch_tensor(torch_tensor_map, weight_shape)
+
+    tt_weight_tensor = ttnn.from_torch(
+        torch_weight_tensor,
+        ttnn.bfloat16 if weights_dtype == ttnn.bfloat16 else ttnn.float32,
+    )
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        output_dtype,
+        layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else ttnn.ROW_MAJOR_LAYOUT,
+        device=device # set the tensor to be on device because is_allocated() returns true for host tensors
+    )
+
+    conv_config = ttnn.Conv2dConfig(
+        dtype=output_dtype,
+        weights_dtype=weights_dtype,
+        shard_layout=None,
+        deallocate_activation=True,
+        in_place=False,
+    )
+    _ = ttnn.conv2d(
+        input_tensor=tt_input_tensor,
+        weight_tensor=tt_weight_tensor,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=None,
+        kernel_size=kernel,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        batch_size=batch,
+        input_height=input_height,
+        input_width=input_width,
+        conv_config=conv_config,
+        groups=groups,
+    )
+    assert not tt_input_tensor.is_allocated(), "Input tensor is allocated"
