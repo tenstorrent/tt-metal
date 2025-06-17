@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <limits>
+
 #include "sfpi.h"
 
 namespace ckernel
@@ -124,6 +126,54 @@ inline void _calculate_cosine_(const int iterations)
         sfpi::dst_reg[0] = v;
         sfpi::dst_reg++;
     }
+}
+
+inline sfpi::vFloat _calculate_sqrt_body_(sfpi::vFloat val)
+{
+    sfpi::vFloat magic = sfpi::s2vFloat16b(16256); // 127 << 7
+    // sqrt initial approximation
+    // adjust bias
+    sfpi::vUInt val_s = sfpi::reinterpret<sfpi::vUInt>(magic) + sfpi::reinterpret<sfpi::vUInt>(val);
+    // approximation of square root
+    val_s >>= 1;
+    return sfpi::reinterpret<sfpi::vFloat>(val_s);
+}
+
+// https://en.wikipedia.org/wiki/Inverse_hyperbolic_functions#Definitions_in_terms_of_logarithms
+// acosh(x) = log(x + sqrt(x^2 - 1))
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_acosh_()
+{
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        sfpi::vFloat inp = sfpi::dst_reg[0];
+        v_if (inp < sfpi::vConst1)
+        {
+            sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN();
+        }
+        v_elseif (inp == sfpi::vConst1)
+        {
+            sfpi::dst_reg[0] = sfpi::vConst0;
+        }
+        v_else
+        {
+            sfpi::vFloat tmp = inp * inp;
+            tmp              = tmp - sfpi::vConst1;
+            tmp              = _calculate_sqrt_body_(tmp);
+            tmp              = tmp + inp;
+            sfpi::dst_reg[0] = tmp;
+            _calculate_log_body_<APPROXIMATION_MODE>(0);
+        }
+        v_endif;
+        sfpi::dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE>
+void _init_acosh_()
+{
+    _init_log_<APPROXIMATION_MODE>();
 }
 
 } // namespace sfpu
