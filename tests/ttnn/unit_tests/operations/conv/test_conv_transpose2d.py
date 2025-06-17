@@ -114,6 +114,7 @@ def run_conv_transpose2d(
 
     if preprocess_weights_bias:
         tt_weight_tensor = ttnn.to_device(tt_weight_tensor, device)
+        conv_config.preprocess_weights_bias = False
         tt_weight_tensor = ttnn.prepare_conv_transpose2d_weights(
             weight_tensor=tt_weight_tensor,
             input_memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -239,7 +240,7 @@ def run_conv_transpose2d(
         ttnn.bfloat8_b,
     ],
 )
-@pytest.mark.parametrize("preprocess_weights", [True, False])
+@pytest.mark.parametrize("preprocess_weights_bias", [True, False])
 @pytest.mark.parametrize("mirror_kernel", [True, False])
 def test_simple_conv_t2d(
     device,
@@ -262,7 +263,7 @@ def test_simple_conv_t2d(
     config,
     shard_layout,
     mirror_kernel,
-    preprocess_weights,
+    preprocess_weights_bias,
 ):
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 Grid for Wormhole_b0")
@@ -288,7 +289,7 @@ def test_simple_conv_t2d(
         shard_layout=shard_layout,
         auto_shard=True,
         mirror_kernel=mirror_kernel,
-        preprocess_weights_bias=preprocess_weights,
+        preprocess_weights_bias=preprocess_weights_bias,
     )
 
 

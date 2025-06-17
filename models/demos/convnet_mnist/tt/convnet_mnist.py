@@ -25,6 +25,7 @@ def convnet_mnist(
         reshard_if_not_optimal=True,
         deallocate_activation=True,
         reallocate_halo_output=True,
+        preprocess_weights_bias=False,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),

@@ -121,6 +121,7 @@ class downsample_2d:
             activation="",
             shard_layout=self.shard_layout,
             reshard_if_not_optimal=False,
+            preprocess_weights_bias=False,
         )
 
         if hidden_states.memory_config() != self.input_memory_config:

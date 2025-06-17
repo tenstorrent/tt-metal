@@ -23,7 +23,6 @@ def prepare_conv_weights_func(
     pad_h,
     pad_w,
     config_override,
-    on_device,
     device,
     groups,
     is_owned,
@@ -76,7 +75,7 @@ def prepare_conv_weights_func(
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
-        preprocess_weights_on_device=on_device,
+        preprocess_weights_bias=False,
         enable_kernel_stride_folding=enable_kernel_stride_folding,
     )
     compute_config = ttnn.init_device_compute_kernel_config(device.arch())
@@ -110,9 +109,6 @@ def prepare_conv_weights_func(
     }
 
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
-    if on_device:
-        tt_weight_tensor = ttnn.to_device(tt_weight_tensor, device)
-        tt_bias_tensor = ttnn.to_device(tt_bias_tensor, device) if has_bias else None
 
     tt_weight_tensor_formatted = ttnn.prepare_conv_weights(
         weight_tensor=tt_weight_tensor,
@@ -203,7 +199,6 @@ def prepare_conv_weights_func(
         (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, None, 1),
     ),
 )
-@pytest.mark.parametrize("on_device", [True, False], ids=["on_device", "on_host"])
 @pytest.mark.parametrize("is_owned", [True, False], ids=["owned_storage", "borrowed_storage"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
 def test_prepare_conv_weights(
@@ -219,7 +214,6 @@ def test_prepare_conv_weights(
     pad_h,
     pad_w,
     config_override,
-    on_device,
     device,
     groups,
     is_owned,
@@ -237,7 +231,6 @@ def test_prepare_conv_weights(
         pad_h,
         pad_w,
         config_override,
-        on_device,
         device,
         groups,
         is_owned,
@@ -251,7 +244,6 @@ def test_prepare_conv_weights(
         (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, None, 1),
     ),
 )
-@pytest.mark.parametrize("on_device", [True, False], ids=["on_device", "on_host"])
 @pytest.mark.parametrize("weights_dtype", [None, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("torch_weights_dtype", [ttnn.float32])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
@@ -270,7 +262,6 @@ def test_conv_weights_dtype(
     config_override,
     device,
     groups,
-    on_device,
     weights_dtype,
     torch_weights_dtype,
 ):
@@ -287,7 +278,6 @@ def test_conv_weights_dtype(
         pad_h,
         pad_w,
         config_override,
-        on_device,
         device,
         groups,
         False,
@@ -491,7 +481,6 @@ def test_conv_dram(
         (1, 768, 3, 384, 512, 32, 32, 32, 32),
     ),
 )
-@pytest.mark.parametrize("on_device", [True, False], ids=["on_device", "on_host"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
 def test_prepare_conv_weights_with_fold(
     batch_size,
@@ -503,7 +492,6 @@ def test_prepare_conv_weights_with_fold(
     filter_width,
     stride_h,
     stride_w,
-    on_device,
     device,
 ):
     pad_h = 0
@@ -523,7 +511,6 @@ def test_prepare_conv_weights_with_fold(
         pad_h,
         pad_w,
         None,
-        on_device,
         device,
         groups,
         is_owned=False,

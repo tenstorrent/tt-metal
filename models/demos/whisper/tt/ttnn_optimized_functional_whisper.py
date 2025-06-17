@@ -439,6 +439,7 @@ def get_conv_configs(device):
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        preprocess_weights_bias=False,
     )
     conv1d_compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),

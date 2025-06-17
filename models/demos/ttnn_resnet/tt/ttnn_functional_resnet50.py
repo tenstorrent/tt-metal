@@ -199,6 +199,7 @@ class resnet50Bottleneck:
                     enable_weights_double_buffer=True if input_width < 56 else False,
                     enable_split_reader=enable_split_reader,
                     enable_subblock_padding=enable_subblock_padding,
+                    preprocess_weights_bias=False,
                 ),
             }
 
@@ -288,6 +289,7 @@ class resnet50Bottleneck:
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
+                preprocess_weights_bias=False,
             ),
         }
 
@@ -401,6 +403,7 @@ class resnet50Bottleneck:
                 enable_weights_double_buffer=True,
                 enable_split_reader=enable_split_reader,
                 enable_subblock_padding=enable_subblock_padding,
+                preprocess_weights_bias=False,
             ),
         }
 
@@ -497,6 +500,7 @@ class resnet50Bottleneck:
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
+                preprocess_weights_bias=False,
             ),
         }
 
@@ -689,6 +693,7 @@ class resnet50:
             enable_subblock_padding=False,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             reshard_if_not_optimal=False,
+            preprocess_weights_bias=False,
         )
         self.conv1_compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),

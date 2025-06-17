@@ -445,6 +445,7 @@ class resnetBlock2D:
                 activation="",
                 shard_layout=self.conv1_shard_layout,
                 reshard_if_not_optimal=False,
+                preprocess_weights_bias=False,
             )
             compute_config = ttnn.init_device_compute_kernel_config(
                 self.device.arch(),
@@ -543,6 +544,7 @@ class resnetBlock2D:
                     activation="",
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                     reshard_if_not_optimal=False,
+                    preprocess_weights_bias=False,
                 )
                 compute_config = ttnn.init_device_compute_kernel_config(
                     self.device.arch(),
@@ -696,6 +698,7 @@ class resnetBlock2D:
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             reshard_if_not_optimal=False,
+            preprocess_weights_bias=False,
         )
         compute_config = get_default_compute_config(self.device)
         if self.conv2_config_override and "act_block_h" in self.conv2_config_override:
@@ -763,6 +766,7 @@ class resnetBlock2D:
                 activation="",
                 shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=False,
+                preprocess_weights_bias=False,
             )
             compute_config = ttnn.init_device_compute_kernel_config(
                 self.device.arch(),

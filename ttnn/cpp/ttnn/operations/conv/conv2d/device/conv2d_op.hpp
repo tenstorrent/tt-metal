@@ -63,12 +63,9 @@ struct Conv2dConfig {
     // BFLOAT8 is always Tile layout.
     tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE;
 
-    // Select between preprocessing weights on device or on host.
-    bool preprocess_weights_on_device = false;
-
-    // If false, only preprocess weights if they are originally located on host.
-    // If true, preprocess weights regarding of original location.
-    bool always_preprocess_weights = false;
+    // If true, preprocess weights on host and move to device.
+    // If false, skip preprocessing weights and use weights on device directly.
+    bool preprocess_weights_bias = true;
 
     // Doubles the size of the CBs for activation.
     // Increased perf, but increased L1 usage.
@@ -113,7 +110,7 @@ struct Conv2dConfig {
         "core_grid",
         "transpose_shards",
         "output_layout",
-        "preprocess_weights_on_device",
+        "preprocess_weights_bias",
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
         "enable_split_reader",
@@ -135,7 +132,7 @@ struct Conv2dConfig {
             std::cref(this->core_grid),
             std::cref(this->transpose_shards),
             std::cref(this->output_layout),
-            std::cref(this->preprocess_weights_on_device),
+            std::cref(this->preprocess_weights_bias),
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
             std::cref(this->enable_split_reader),

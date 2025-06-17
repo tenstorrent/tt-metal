@@ -246,6 +246,7 @@ class transformer_2d_model:
             reshard_if_not_optimal=False,
             override_sharding_config=True,
             core_grid=core_grid,
+            preprocess_weights_bias=False,
         )
         compute_config = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
@@ -326,6 +327,7 @@ class transformer_2d_model:
                     weights_dtype=ttnn.bfloat8_b,
                     activation="",
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                    preprocess_weights_bias=False,
                 )
                 compute_config = ttnn.init_device_compute_kernel_config(
                     self.device.arch(),

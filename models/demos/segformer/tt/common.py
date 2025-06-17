@@ -49,6 +49,7 @@ class Conv:
             enable_act_double_buffer=True,
             enable_split_reader=False,
             output_layout=self.output_layout,
+            preprocess_weights_bias=False,
         )
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),

@@ -181,6 +181,7 @@ class resnet50Bottleneck:
                     deallocate_activation=True,
                     reallocate_halo_output=True,
                     reshard_if_not_optimal=reshard_if_not_optimal,
+                    preprocess_weights_bias=False,
                 ),
             }
 
@@ -259,6 +260,7 @@ class resnet50Bottleneck:
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
+                preprocess_weights_bias=False,
             ),
         }
 
@@ -392,6 +394,7 @@ class resnet50Bottleneck:
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
+                preprocess_weights_bias=False,
             ),
         }
 
@@ -447,6 +450,7 @@ class resnet50Bottleneck:
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
+                preprocess_weights_bias=False,
             ),
         }
         if not ttnn.is_tensor_storage_on_device(self.conv3_weight_tensor):
@@ -694,6 +698,7 @@ class resnet50:
                 deallocate_activation=True,
                 reallocate_halo_output=True,
                 act_block_h_override=act_block_h_override,
+                preprocess_weights_bias=False,
             ),
         }
         if not ttnn.is_tensor_storage_on_device(self.conv1_weight_tensor):
@@ -1048,6 +1053,7 @@ class resnet50:
                 activation="relu",
                 deallocate_activation=True,
                 act_block_h_override=act_block_h_override,
+                preprocess_weights_bias=False,
             ),
         }
 
