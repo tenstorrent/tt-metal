@@ -24,21 +24,25 @@ FORCE_INLINE void copy_padding_small_sticks(uint64_t padding_l1_addr, uint64_t d
     constexpr uint32_t batch_size_bytes = sticks_per_batch * StickNBytes;
 
     if constexpr (sticks_per_batch > 1) {
-        uint16_t remaining_sticks = nsticks;
-        while (remaining_sticks >= sticks_per_batch) {
-            noc_async_read(padding_l1_addr, dst_addr, batch_size_bytes);
-            dst_addr += batch_size_bytes;
-            remaining_sticks -= sticks_per_batch;
+        const uint16_t num_full_batches = nsticks / sticks_per_batch;
+        const uint16_t remaining_sticks = nsticks % sticks_per_batch;
+
+        uint64_t current_dst = dst_addr;
+        for (uint16_t batch = 0; batch < num_full_batches; ++batch) {
+            noc_async_read(padding_l1_addr, current_dst, batch_size_bytes);
+            current_dst += batch_size_bytes;
         }
+
         for (uint16_t k = 0; k < remaining_sticks; ++k) {
-            noc_async_read(padding_l1_addr, dst_addr, StickNBytes);
-            dst_addr += StickNBytes;
+            noc_async_read(padding_l1_addr, current_dst, StickNBytes);
+            current_dst += StickNBytes;
         }
     } else {
         noc_async_read_one_packet_set_state(padding_l1_addr, StickNBytes);
+        uint64_t current_dst = dst_addr;
         for (uint16_t k = 0; k < nsticks; ++k) {
-            noc_async_read_one_packet_with_state(padding_l1_addr, dst_addr);
-            dst_addr += StickNBytes;
+            noc_async_read_one_packet_with_state(padding_l1_addr, current_dst);
+            current_dst += StickNBytes;
         }
     }
 }
@@ -47,25 +51,31 @@ template <uint32_t StickNBytes, uint32_t MaxChunkSize>
 FORCE_INLINE void copy_padding_large_sticks(uint64_t padding_l1_addr, uint64_t dst_addr, uint16_t nsticks) {
     constexpr uint32_t num_full_chunks = StickNBytes / MaxChunkSize;
     constexpr uint32_t remainder_bytes = StickNBytes % MaxChunkSize;
+    constexpr uint32_t remainder_offset = num_full_chunks * MaxChunkSize;
 
     // Copy all full chunks for all sticks
     if constexpr (num_full_chunks > 0) {
         noc_async_read_one_packet_set_state(padding_l1_addr, MaxChunkSize);
-        for (uint16_t k = 0; k < nsticks; ++k) {
-            uint64_t stick_start_addr = dst_addr + (k * StickNBytes);
+
+        uint64_t stick_base_addr = dst_addr;
+        for (uint16_t stick = 0; stick < nsticks; ++stick) {
+            uint64_t chunk_addr = stick_base_addr;
             for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
-                uint64_t chunk_dst_addr = stick_start_addr + (chunk * MaxChunkSize);
-                noc_async_read_one_packet_with_state(padding_l1_addr, chunk_dst_addr);
+                noc_async_read_one_packet_with_state(padding_l1_addr, chunk_addr);
+                chunk_addr += MaxChunkSize;
             }
+            stick_base_addr += StickNBytes;
         }
     }
 
     // Copy all remainder chunks for all sticks
     if constexpr (remainder_bytes > 0) {
         noc_async_read_one_packet_set_state(padding_l1_addr, remainder_bytes);
-        for (uint16_t k = 0; k < nsticks; ++k) {
-            uint64_t remainder_dst_addr = dst_addr + (k * StickNBytes) + (num_full_chunks * MaxChunkSize);
-            noc_async_read_one_packet_with_state(padding_l1_addr, remainder_dst_addr);
+
+        uint64_t remainder_base_addr = dst_addr + remainder_offset;
+        for (uint16_t stick = 0; stick < nsticks; ++stick) {
+            noc_async_read_one_packet_with_state(padding_l1_addr, remainder_base_addr);
+            remainder_base_addr += StickNBytes;
         }
     }
 }
@@ -76,14 +86,15 @@ FORCE_INLINE void copy_padding(uint16_t my_noc_x, uint16_t my_noc_y) {
     volatile tt_l1_ptr uint16_t* config_data = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(padding_config_l1_addr);
 
     const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, MEM_ZEROS_BASE);
-    const uint32_t dst_base_addr = get_write_ptr(OutCBId);
+    const uint64_t dst_base_addr = get_write_ptr(OutCBId);
 
     uint16_t nsticks = 1;
+    constexpr uint32_t stick_stride = StickNBytes;
     for (uint16_t j = 0; nsticks; j += 2) {
         uint16_t dst_local_idx = config_data[j + 0];
         nsticks = config_data[j + 1];
-        uint64_t dst_addr = dst_base_addr + (dst_local_idx * StickNBytes);
 
+        const uint64_t dst_addr = dst_base_addr + (static_cast<uint64_t>(dst_local_idx) * stick_stride);
         if constexpr (StickNBytes <= MaxChunkSize) {
             copy_padding_small_sticks<StickNBytes, MaxChunkSize>(padding_l1_addr, dst_addr, nsticks);
         } else {
