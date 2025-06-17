@@ -78,6 +78,10 @@ def run_elf_files(testname, core_loc="0,0", run_brisc=True):
     for i in range(3):
         load_elf(f"{ELF_LOCATION}{testname}_trisc{i}.elf", core_loc, risc_id=i + 1)
 
+    # Reset the profiler barrier
+    TRISC_PROFILER_BARRIER = 0x16AFF4
+    write_words_to_device(core_loc, TRISC_PROFILER_BARRIER, [0, 0, 0])
+
     # Clear soft reset
     soft_reset &= ~0x7800
     write_words_to_device(core_loc, RISC_DBG_SOFT_RESET0, soft_reset)
