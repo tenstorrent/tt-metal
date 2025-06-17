@@ -695,6 +695,7 @@ void RunAsyncWriteMulticastTest(
 void RunGetNextHopRouterDirectionAllToAllTest(BaseFabricFixture* fixture) {
     CoreCoord logical_core = {0, 0};
     CoreRangeSet logical_crs = {logical_core};
+    MeshId mesh_id{0};
 
     // Get all available devices
     auto devices = DevicePool::instance().get_all_active_devices();
@@ -716,7 +717,7 @@ void RunGetNextHopRouterDirectionAllToAllTest(BaseFabricFixture* fixture) {
         result_buffers[src_fabric_chip_id] = PrepareBuffer(src_device, result_size, logical_crs, result_buffer_data);
         programs[src_idx] = tt::tt_metal::CreateProgram();
 
-        uint32_t dst_mesh_id = 0;
+        uint32_t dst_mesh_id = *mesh_id;
         uint32_t result_addr = result_buffers[src_fabric_chip_id]->address();
         std::vector<uint32_t> runtime_args = {
             src_fabric_chip_id,
@@ -746,6 +747,30 @@ void RunGetNextHopRouterDirectionAllToAllTest(BaseFabricFixture* fixture) {
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
         auto* src_device = devices[src_idx];
         tt::tt_metal::Finish(src_device->command_queue());
+    }
+
+    for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
+        auto* src_device = devices[src_idx];
+        uint32_t src_fabric_chip_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device->id()).chip_id;
+        std::vector<uint32_t> result_data;
+        tt::tt_metal::detail::ReadFromBuffer(result_buffers[src_fabric_chip_id], result_data);
+        for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
+            if (src_fabric_chip_id == dst_idx) {
+                EXPECT_EQ(result_data[dst_idx], (uint32_t)eth_chan_magic_values::INVALID_DIRECTION)
+                    << "Self-routing should return INVALID_DIRECTION";
+                continue;  // Skip self
+            }
+            uint32_t dst_dev_id = devices[dst_idx]->id();
+            uint32_t direction = result_data[dst_idx];  // Read from 1xN kernel result, logical id
+            auto expected_direction =
+                control_plane
+                    .get_forwarding_direction(FabricNodeId{mesh_id, src_fabric_chip_id}, FabricNodeId{mesh_id, dst_idx})
+                    .value_or(RoutingDirection::NONE);
+            auto forwarding_direction = expected_direction != RoutingDirection::NONE
+                                            ? control_plane.routing_direction_to_eth_direction(expected_direction)
+                                            : (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
+            EXPECT_EQ(direction, forwarding_direction);
+        }
     }
 }
 
