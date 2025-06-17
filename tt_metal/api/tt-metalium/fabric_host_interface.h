@@ -50,12 +50,12 @@ enum packet_session_command : std::uint32_t {
     SOCKET_CONNECT = (0x1 << 10),
 };
 
-enum eth_chan_magic_values {
+enum eth_chan_magic_values : std::uint8_t {
     INVALID_DIRECTION = 0xDD,
     INVALID_ROUTING_TABLE_ENTRY = 0xFF,
 };
 
-enum eth_chan_directions {
+enum eth_chan_directions : std::uint8_t {
     EAST = 0,
     WEST = 1,
     NORTH = 2,
@@ -86,10 +86,9 @@ struct fabric_router_l1_config_t {
 struct tensix_routing_l1_info_t {
     uint32_t mesh_id;           // Current mesh ID
     uint32_t device_id;         // Current device ID
-    uint32_t num_chip_in_mesh;  // Number of chips in the mesh, less than or equal to NUM_CHIPS_PER_MESH
 
-    uint8_t intra_mesh_routing_table[MAX_MESH_SIZE];
-    uint8_t inter_mesh_routing_table[MAX_NUM_MESHES];
+    eth_chan_directions intra_mesh_routing_table[MAX_MESH_SIZE];
+    eth_chan_directions inter_mesh_routing_table[MAX_NUM_MESHES];
 } __attribute__((packed));
 
 }  // namespace tt::tt_fabric

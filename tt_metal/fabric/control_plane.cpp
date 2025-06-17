@@ -1045,37 +1045,44 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
     tensix_routing_l1_info_t tensix_routing_info = {};
     tensix_routing_info.mesh_id = *mesh_id;
     tensix_routing_info.device_id = chip_id;
-    tensix_routing_info.num_chip_in_mesh = this->intra_mesh_routing_tables_.size();
 
     // Build intra-mesh routing entries (chip-to-chip routing)
+    std::fill_n(
+        tensix_routing_info.intra_mesh_routing_table,
+        tt::tt_fabric::MAX_MESH_SIZE,
+        (eth_chan_directions)eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
     const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
     for (chip_id_t dst_chip_id = 0; dst_chip_id < router_intra_mesh_routing_table[*mesh_id][chip_id].size();
          dst_chip_id++) {
         if (chip_id == dst_chip_id) {
             tensix_routing_info.intra_mesh_routing_table[dst_chip_id] =
-                (uint8_t)eth_chan_magic_values::INVALID_DIRECTION;
+                (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
             continue;
         }
         auto forwarding_direction = router_intra_mesh_routing_table[*mesh_id][chip_id][dst_chip_id];
         tensix_routing_info.intra_mesh_routing_table[dst_chip_id] =
             forwarding_direction != RoutingDirection::NONE
-                ? (uint8_t)this->routing_direction_to_eth_direction(forwarding_direction)
-                : (uint8_t)eth_chan_magic_values::INVALID_DIRECTION;
+                ? this->routing_direction_to_eth_direction(forwarding_direction)
+                : (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
     }
 
     // Build inter-mesh routing entries (mesh-to-mesh routing)
+    std::fill_n(
+        tensix_routing_info.inter_mesh_routing_table,
+        tt::tt_fabric::MAX_NUM_MESHES,
+        (eth_chan_directions)eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
     const auto& router_inter_mesh_routing_table = this->routing_table_generator_->get_inter_mesh_table();
     for (std::uint32_t dst_mesh_id = 0; dst_mesh_id < router_inter_mesh_routing_table.size(); dst_mesh_id++) {
         if (*mesh_id == dst_mesh_id) {
             tensix_routing_info.inter_mesh_routing_table[dst_mesh_id] =
-                (uint8_t)eth_chan_magic_values::INVALID_DIRECTION;
+                (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
             continue;
         }
         auto forwarding_direction = router_inter_mesh_routing_table[*mesh_id][chip_id][dst_mesh_id];
         tensix_routing_info.inter_mesh_routing_table[dst_mesh_id] =
             forwarding_direction != RoutingDirection::NONE
-                ? (uint8_t)this->routing_direction_to_eth_direction(forwarding_direction)
-                : (uint8_t)eth_chan_magic_values::INVALID_DIRECTION;
+                ? this->routing_direction_to_eth_direction(forwarding_direction)
+                : (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
     }
 
     TT_ASSERT(
