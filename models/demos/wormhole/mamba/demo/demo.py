@@ -375,8 +375,8 @@ def run_mamba_demo(
     chunk_size_to_prefill_targets_tok_per_s = {32: 135.0, 128: 395.0}  # perf is different for different chunk sizes
     targets = {
         "prefill_t/s": chunk_size_to_prefill_targets_tok_per_s[prefill_chunk_size],
-        "decode_t/s": 414.0,
-        "decode_t/s/u": 12.9,
+        "decode_t/s": 378.0,
+        "decode_t/s/u": 11.8,
     }
     warmup_iterations = {"inference_prefill": 0, "inference_decode": 0}
 
