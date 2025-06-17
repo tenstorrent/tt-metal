@@ -186,17 +186,6 @@
             "op_to_op_duration_relative_margin": 0.2,
             "first_to_last_start_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.2
-        },
-        "Untilize_0": {
-            "op_name": "Untilize",
-            "kernel_duration": 1261.1851851851852,
-            "op_to_op": 930.6666666666666,
-            "first_to_last_start": 2043.3333333333333,
-            "non-overlapped-dispatch-time": 2726.0,
-            "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
-            "first_to_last_start_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.5
         }
     },
     "model_tail": {
