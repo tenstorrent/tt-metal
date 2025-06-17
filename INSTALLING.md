@@ -27,11 +27,20 @@ Note the current compatibility matrix:
 | Blackhole            | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.18.0.0 (v80.18.0.0)             | v3.0.12 or above      | N/A                            |
 
 #### Install System-level Dependencies
-```
+For Ubuntu users. You can use the script provided in our repo to install build and runtime dependencies along with a working copy of Clang 17.
+
+```bash
 wget https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/{install_dependencies.sh,tt_metal/sfpi-version.sh}
 chmod a+x install_dependencies.sh
 sudo ./install_dependencies.sh
 ```
+
+For users on other Linux distributions, please consult the `install_dependencies.sh` script to see what packages need to be installed, then install the equivalent packages using your distribution's package manager. Package names may vary between distributions, and some distributions (like Gentoo and Arch) may not use suffixes like `-dev` or `-devel` for development packages.
+
+> [!IMPORTANT]
+>
+> Building with Clang 17 and GCC 12 is supported. Later versions, while not officially supported, should work. For Ubuntu 22.04 users, the default compiler is GCC 11 and Clang 14. Please install a newer compiler to ensure a successful build (the dependency installaion script will install Clang 17 for you).
+
 
 ---
 
@@ -43,6 +52,7 @@ sudo ./install_dependencies.sh
 | Ubuntu / Debian        | ```apt install dkms```                             |
 | Fedora                 | ```dnf install dkms```                             |
 | Enterprise Linux Based | ```dnf install epel-release && dnf install dkms``` |
+| Arch Linux             | ```pacman -S dkms```                               |
 
 - Install the latest TT-KMD version:
 ```
@@ -147,11 +157,31 @@ Install from source if you are a developer who wants to be close to the metal an
 git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
 ```
 
-#### Step 2. Invoke our Build Scripts:
+#### Step 2. Build the Library:
+
+You have two options for building the library:
+
+**Option A: Using the Build Script (Recommended)**
+
+The build script provides the simplest way to build the library and works well with the standard build tools installed via `install_dependencies.sh`.
 
 ```
 ./build_metal.sh
 ```
+
+**Option B: Manual Build with CMake**
+
+For users who prefer more control over build options or have custom setups, you can build manually:
+
+```bash
+mkdir build
+cd build
+cmake .. -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebugInfo -DCMAKE_CXX_COMPILER=<your compiler>
+ninja
+ninja install # Installs to build directory by default, required for Python environment
+```
+
+#### Step 3. Crate a virtual environment and (optional) documentation.
 
 - (recommended) For an out-of-the-box virtual environment to use, execute:
 ```
@@ -219,18 +249,9 @@ To try our pre-built models in `models/`, you must:
 
 - First, set the following environment variables:
 
-  - Run the appropriate command for the Tenstorrent card you have installed:
-
-  | Card             | Command                              |
-  |------------------|--------------------------------------|
-  | Grayskull        | ```export ARCH_NAME=grayskull```     |
-  | Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
-  | Blackhole        | ```export ARCH_NAME=blackhole```     |
-
-  - Run:
   ```
-  export TT_METAL_HOME=$(pwd)
-  export PYTHONPATH=$(pwd)
+  export TT_METAL_HOME=</path/to/your/tt-metal>
+  export PYTHONPATH="${TT_METAL_HOME}" # Same path
   ```
 
 - Then, try running a programming example:

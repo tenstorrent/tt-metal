@@ -20,7 +20,6 @@ struct tensor_args_t {
     const Tensor& input_tensor;
     const Tensor& index_tensor;
     const Tensor& src_tensor;
-    std::optional<Tensor> opt_output;
 };
 
 using spec_return_value_t = TensorSpec;

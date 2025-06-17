@@ -94,6 +94,22 @@ class ModelOptimisations:
             preprocess_weights_on_device=False,
             always_preprocess_weights=False,
         )
+        self.conv_configs["ABH_64_NO_ADB_WDB_MOVE_BS"] = ttnn.Conv2dConfig(
+            dtype=conv_act_dtype,
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=64,
+            preprocess_weights_on_device=False,
+            always_preprocess_weights=False,
+        )
         self.conv_configs["ABH_64_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             dtype=conv_act_dtype,
             weights_dtype=self.conv_ws_dtype,
@@ -228,6 +244,38 @@ class ModelOptimisations:
             deallocate_activation=True,
             reallocate_halo_output=False,
             enable_act_double_buffer=False,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=256,
+            preprocess_weights_on_device=False,
+            always_preprocess_weights=False,
+        )
+        self.conv_configs["ABH_256_NO_ADB_WDB_BS"] = ttnn.Conv2dConfig(
+            dtype=conv_act_dtype,
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=True,
+            enable_split_reader=False,
+            enable_subblock_padding=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=256,
+            preprocess_weights_on_device=False,
+            always_preprocess_weights=False,
+        )
+        self.conv_configs["ABH_256_ADB_WDB_NO_DEALLOC_BS"] = ttnn.Conv2dConfig(
+            dtype=conv_act_dtype,
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=False,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             enable_split_reader=False,
             enable_subblock_padding=False,
             reshard_if_not_optimal=True,
@@ -602,35 +650,35 @@ class ModelOptimisations:
             elif "down_blocks.0.resnets" in conv_path:
                 return self.conv_configs["ABH_128_ADB_WDB_BS"]
             elif "down_blocks.0.downsamplers.0" == conv_path:
-                return self.conv_configs["ABH_128_ADB_WDB_NO_DEALLOC_BS"]
+                return self.conv_configs["ABH_256_ADB_WDB_NO_DEALLOC_BS"]
 
             # DOWN BLOCK 1
             elif "down_blocks.1.resnets.0.conv1" == conv_path:
-                return self.conv_configs["ABH_128_ADB_WDB_BS"]  # Note: ABH should be 256 with no ABD/WDB (OOM)
+                return self.conv_configs["ABH_256_NO_ADB_WDB_BS"]  # Note: ABH should be 256 with no ABD/WDB (OOM)
             elif ("down_blocks.1.resnets.0.conv2" == conv_path) or ("down_blocks.1.resnets.1" in conv_path):
-                return self.conv_configs["ABH_128_NO_ADB_WDB_BS"]  # Note: should have ADB
+                return self.conv_configs["ABH_128_ADB_WDB_BS"]  # Note: should have ADB
             elif "down_blocks.1.downsamplers.0" == conv_path:
                 return self.conv_configs["ABH_128_ADB_WDB_NO_DEALLOC_BS"]
 
             # DOWN BLOCK 2
             elif "down_blocks.2.resnets.1.conv1" == conv_path:
-                return self.conv_configs["ABH_64_NO_ADB_WDB_BS"]  # Note: should be 128 with ADB/WDB
+                return self.conv_configs["ABH_64_ADB_WDB_BS"]  # Note: should be 128 with ADB/WDB
             elif "down_blocks.2.resnets.0.conv1" == conv_path:
                 return self.conv_configs["ABH_128_NO_ADB_WDB_BS"]
             elif ("down_blocks.2.resnets.0.conv2" == conv_path) or ("down_blocks.2.resnets.1.conv2" == conv_path):
-                return self.conv_configs["ABH_64_NO_ADB_WDB_BS"]
+                return self.conv_configs["ABH_64_ADB_WDB_BS"]
 
             # MID BLOCK
             elif "mid_block" in conv_path:
-                return self.conv_configs["ABH_64_NO_ADB_WDB_BS"]
+                return self.conv_configs["ABH_64_ADB_WDB_BS"]
 
             # UP BLOCK 0
             elif ("up_blocks.0.resnets.0.conv1" == conv_path) or ("up_blocks.0.resnets.1.conv1" == conv_path):
                 return self.conv_configs["ABH_32_NO_ADB_BS"]
             elif "up_blocks.0.upsamplers.0" == conv_path:
-                return self.conv_configs["ABH_64_NO_ADB_BS"]
+                return self.conv_configs["ABH_64_NO_ADB_WDB_BS"]
             elif ("up_blocks.0.resnets" in conv_path) and ("conv2" in conv_path):
-                return self.conv_configs["ABH_64_NO_ADB_BS_BF16"]
+                return self.conv_configs["ABH_64_NO_ADB_BS_BF16"]  # Note: pcc drop if bf16 is removed
             elif "up_blocks.0.resnets.2.conv1" == conv_path:
                 return self.conv_configs["ABH_512_NO_ADB_WS"]
 
@@ -638,13 +686,13 @@ class ModelOptimisations:
             elif "up_blocks.1.resnets.0.conv1" == conv_path:
                 return self.conv_configs["ABH_32_NO_ADB_BS"]
             elif "up_blocks.1.resnets.1.conv1" == conv_path:
-                return self.conv_configs["ABH_64_NO_ADB_BS"]
+                return self.conv_configs["ABH_64_NO_ADB_WDB_BS"]
             elif "up_blocks.1.resnets.2.conv1" == conv_path:
-                return self.conv_configs["ABH_32_NO_ADB_BS"]
+                return self.conv_configs["ABH_64_NO_ADB_WDB_MOVE_BS"]
             elif ("up_blocks.1.resnets" in conv_path) and ("conv2" in conv_path):
-                return self.conv_configs["ABH_128_NO_ADB_WDB_BS"]
+                return self.conv_configs["ABH_128_ADB_WDB_BS"]
             elif "up_blocks.1.upsamplers.0" == conv_path:
-                return self.conv_configs["ABH_64_NO_ADB_BS"]
+                return self.conv_configs["ABH_64_NO_ADB_WDB_BS"]
 
             # UP BLOCK 2
             elif "up_blocks.2.resnets.0.conv1" == conv_path:
