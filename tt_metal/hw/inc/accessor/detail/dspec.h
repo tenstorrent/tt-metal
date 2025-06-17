@@ -19,10 +19,14 @@ namespace detail {
  * shape, bank coordinates. Each of these can be static or dynamic. ArgsLoc_ is used to determine the compile-time and
  * runtime arguments for the distribution specification.
  *
- * @tparam TensorShape_
- * @tparam ShardShape_
- * @tparam BankCoords_
- * @tparam ArgsLoc_
+ * @tparam RankCT         Compile-time rank of the tensor. If 0, the rank is dynamic.
+ * @tparam NumBanksCT     Compile-time number of banks. If 0, the number of banks is dynamic.
+ * @tparam TensorShapeWrapper_  Wrapper for the tensor shape. Can be detail::ArrayStaticWrapperU32<...> for static
+ * shapes or detail::ArrayDynamicWrapper for dynamic shapes.
+ * @tparam ShardShapeWrapper_   Wrapper for the shard shape. Can be detail::ArrayStaticWrapperU32<...> for static shapes
+ *                              or detail::ArrayDynamicWrapper for dynamic shapes.
+ * @tparam BankCoordsWrapper_   Wrapper for the bank coordinates. Can be detail::ArrayStaticWrapperU16<...> for static
+ * shapes or detail::ArrayDynamicWrapper for dynamic shapes.
  */
 template <
     uint32_t RankCT = 0,
@@ -223,6 +227,7 @@ private:
     static constexpr ShapeStatic shard_grid_strides_ct =
         precompute_shard_grid_strides_ct(TensorShapeWrapper::elements, ShardShapeWrapper::elements);
 
+    // Buffers to wrap around span in case of dynamic rank
     mutable detail::ConditionalField<!has_static_rank, uint32_t[MAX_RANK]> tensor_strides_rt_buf;
     mutable detail::ConditionalField<!has_static_rank, uint32_t[MAX_RANK]> shard_strides_rt_buf;
     Shape tensor_strides_rt = {};
@@ -236,6 +241,22 @@ private:
     static constexpr size_t shard_volume_ct = precompute_volume_ct(ShardShapeWrapper::elements);
 };
 
+/**
+ * @brief Build a DistributionSpec from the provided arguments. This function allows for both static and dynamic rank,
+ * number of banks, tensor shape, shard shape, and bank coordinates.
+ *
+ * @tparam RankCT               Compile-time rank of the tensor. If 0, the rank is dynamic.
+ * @tparam NumBanksCT           Compile-time number of banks. If 0, the number of banks is dynamic.
+ * @tparam TensorShapeWrapper_  ArrayDynamicWrapper or ArrayStaticWrapperU32 for the tensor shape.
+ * @tparam ShardShapeWrapper_   ArrayDynamicWrapper or ArrayStaticWrapperU32 for the shard shape.
+ * @tparam BankCoordsWrapper_   ArrayDynamicWrapper or ArrayStaticWrapperU16 for the bank coordinates.
+ * @param rank_rt               Runtime rank of the tensor. Used if RankCT is 0.
+ * @param num_banks_rt          Runtime number of banks. Used if NumBanksCT is 0.
+ * @param tensor_shape_ptr      Pointer to the tensor shape array. Used if TensorShapeWrapper_ is dynamic.
+ * @param shard_shape_ptr       Pointer to the shard shape array. Used if ShardShapeWrapper_ is dynamic.
+ * @param bank_coords_ptr       Pointer to the bank coordinates array. Used if BankCoordsWrapper_ is dynamic.
+ * @return auto                 DistributionSpec instance built from the provided arguments.
+ */
 template <
     uint32_t RankCT = 0,
     uint32_t NumBanksCT = 0,
@@ -312,11 +333,11 @@ auto build_dspec(
 }
 
 /**
- * @brief Helper function to build a DistributionSpec from commom runtime arguments. Parses tensor shape, shard shape,
+ * @brief Helper function to build a DistributionSpec from CTA and CRTA. Parses tensor shape, shard shape,
  * bank coordinates if needed, and passes to DSpec constructor.
  *
- * @tparam ArgsOffsets Structure containing offsets for cta/crta.
- * @return auto DistributionSpec instance built from common runtime arguments.
+ * @tparam ArgsOffsets Structure containing offsets for CTA/CRTA.
+ * @return auto DistributionSpec instance built from provided argumnets.
  */
 template <typename ArgsOffsets>
 auto build_dspec_from_args(const ArgsOffsets& args_offsets) {

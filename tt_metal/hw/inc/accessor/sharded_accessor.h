@@ -27,7 +27,6 @@ using array_packed_u16_cta_sequence_wrapper_t =
  * @brief Accessor that encapsulates the logic for accessing sharded tensors pages.
  *
  * @tparam DSpec        DistributionSpec type.
- * @tparam PageSize     Page size in bytes. If set to detail::UNKNOWN, it must be passed to constructor.
  */
 template <typename DSpec>
 struct ShardedAccessor {
@@ -52,7 +51,6 @@ public:
     ShardedAccessor(const size_t bank_base_address_in = 0, uint32_t page_size_in = 0) :
         bank_base_address(bank_base_address_in), page_size(page_size_in) {}
 
-    // Helper to get the appropriate DSpec instance
     constexpr auto& dspec() const {
         if constexpr (DSpec::is_static) {
             return StaticDspec::instance;
@@ -139,6 +137,7 @@ public:
     }
 };
 
+// Factory functions to create ShardedAccessor instance
 template <size_t CTA_BASE, size_t CRTA_BASE>
 FORCE_INLINE auto make_args() {
     return detail::ArgsOffsets<CTA_BASE, CRTA_BASE>();
