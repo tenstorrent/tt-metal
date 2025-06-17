@@ -77,23 +77,23 @@ struct DistributionSpec {
             num_banks_rt = bank_coords_rt.size();
         }
         if constexpr (!has_static_rank) {
-            shard_grid_rt = Shape(shard_grid_rt_buf.value, get_rank());
-            shard_grid_strides_rt = Shape(shard_grid_strides_rt_buf.value, get_rank());
+            shard_grid_rt = Shape(shard_grid_rt_buf.value, rank());
+            shard_grid_strides_rt = Shape(shard_grid_strides_rt_buf.value, rank());
 
-            tensor_strides_rt = Shape(tensor_strides_rt_buf.value, get_rank());
-            shard_strides_rt = Shape(shard_strides_rt_buf.value, get_rank());
+            tensor_strides_rt = Shape(tensor_strides_rt_buf.value, rank());
+            shard_strides_rt = Shape(shard_strides_rt_buf.value, rank());
         }
         if constexpr (!tensor_shape_static) {
             // If tensor shape is not static, we need to compute strides and volume at runtime
-            compute_strides_volume_rt(get_tensor_shape(), tensor_strides_rt, tensor_volume_rt);
+            compute_strides_volume_rt(tensor_shape(), tensor_strides_rt, tensor_volume_rt);
         }
         if constexpr (!shard_shape_static) {
             // If shard shape is not static, we need to compute strides and volume at runtime
-            compute_strides_volume_rt(get_shard_shape(), shard_strides_rt, shard_volume_rt);
+            compute_strides_volume_rt(shard_shape(), shard_strides_rt, shard_volume_rt);
         }
         if constexpr (!shapes_static) {
-            compute_shard_grid_and_strides_rt(get_tensor_shape(), get_shard_shape());
-            ASSERT(shard_grid_rt[0] * shard_grid_strides_rt[0] >= get_num_banks());
+            compute_shard_grid_and_strides_rt(tensor_shape(), shard_shape());
+            ASSERT(shard_grid_rt[0] * shard_grid_strides_rt[0] >= num_banks());
         }
     }
 
@@ -105,36 +105,34 @@ struct DistributionSpec {
         return val_rt;                           \
     }
     // Getters
-    FORCE_INLINE constexpr uint32_t get_rank() const { getter_helper(has_static_rank, rank_ct, rank_rt); }
+    FORCE_INLINE constexpr uint32_t rank() const { getter_helper(has_static_rank, rank_ct, rank_rt); }
 
-    FORCE_INLINE constexpr uint32_t get_num_banks() const {
-        getter_helper(has_static_num_banks, num_banks_ct, num_banks_rt)}
+    FORCE_INLINE constexpr uint32_t num_banks() const {getter_helper(has_static_num_banks, num_banks_ct, num_banks_rt)}
 
-    FORCE_INLINE constexpr const
-        auto& get_shard_grid() const {getter_helper(shapes_static, shard_grid_ct, shard_grid_rt)}
-
-    FORCE_INLINE constexpr const auto& get_shard_grid_strides() const {
-        getter_helper(shapes_static, shard_grid_strides_ct, shard_grid_strides_rt)}
-
-    FORCE_INLINE constexpr const auto& get_tensor_shape() const {
-        getter_helper(tensor_shape_static, TensorShapeWrapper::elements, tensor_shape_rt)}
+    FORCE_INLINE constexpr const auto& shard_grid() const {getter_helper(shapes_static, shard_grid_ct, shard_grid_rt)}
 
     FORCE_INLINE constexpr const
-        auto& get_tensor_strides() const {getter_helper(tensor_shape_static, tensor_strides_ct, tensor_strides_rt)}
+        auto& shard_grid_strides() const {getter_helper(shapes_static, shard_grid_strides_ct, shard_grid_strides_rt)}
+
+    FORCE_INLINE constexpr const
+        auto& tensor_shape() const {getter_helper(tensor_shape_static, TensorShapeWrapper::elements, tensor_shape_rt)}
+
+    FORCE_INLINE constexpr const
+        auto& tensor_strides() const {getter_helper(tensor_shape_static, tensor_strides_ct, tensor_strides_rt)}
 
     FORCE_INLINE constexpr size_t
-        get_tensor_volume() const {getter_helper(tensor_shape_static, tensor_volume_ct, tensor_volume_rt)}
+        tensor_volume() const {getter_helper(tensor_shape_static, tensor_volume_ct, tensor_volume_rt)}
 
     FORCE_INLINE constexpr const
-        auto& get_shard_shape() const {getter_helper(shard_shape_static, ShardShapeWrapper::elements, shard_shape_rt)}
+        auto& shard_shape() const {getter_helper(shard_shape_static, ShardShapeWrapper::elements, shard_shape_rt)}
 
     FORCE_INLINE constexpr const
-        auto& get_shard_strides() const {getter_helper(shard_shape_static, shard_strides_ct, shard_strides_rt)}
+        auto& shard_strides() const {getter_helper(shard_shape_static, shard_strides_ct, shard_strides_rt)}
 
     FORCE_INLINE constexpr size_t
-        get_shard_volume() const {getter_helper(shard_shape_static, shard_volume_ct, shard_volume_rt)}
+        shard_volume() const {getter_helper(shard_shape_static, shard_volume_ct, shard_volume_rt)}
 
-    FORCE_INLINE constexpr const auto& get_packed_xy_coords() const {
+    FORCE_INLINE constexpr const auto& packed_xy_coords() const {
         getter_helper(bank_coords_static, BankCoordsWrapper::elements, bank_coords_rt)
     }
 
@@ -197,13 +195,13 @@ private:
     template <typename TensorShape, typename ShardShape>
     void compute_shard_grid_and_strides_rt(const TensorShape& tensor_shape, const ShardShape& shard_shape) {
         uint32_t stride = 1;
-        for (int i = get_rank() - 1; i >= 0; --i) {
+        for (int i = rank() - 1; i >= 0; --i) {
             shard_grid_rt[i] = (tensor_shape[i] - 1) / shard_shape[i] + 1;  // div_up
             shard_grid_strides_rt[i] = stride;
             stride *= shard_grid_rt[i];
         }
         // Check that the number of shards is greater than or equal to the number of banks
-        ASSERT(shard_grid_rt[0] * shard_grid_strides_rt[0] >= get_num_banks());
+        ASSERT(shard_grid_rt[0] * shard_grid_strides_rt[0] >= num_banks());
     }
 
     uint32_t rank_rt = 0;
@@ -338,8 +336,8 @@ auto build_dspec_from_args(const ArgsOffsets& args_offsets) {
         ArgsOffsets::BankCoordsCTAOffset,
         ArgsOffsets::NumBanksCT>::type;
 
-    auto rank = args_offsets.fetch_rank();
-    auto num_banks = args_offsets.fetch_num_banks();
+    auto rank = args_offsets.get_rank();
+    auto num_banks = args_offsets.get_num_banks();
 
     ASSERT(rank > 0);
     ASSERT(num_banks > 0);

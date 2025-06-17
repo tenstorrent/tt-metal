@@ -24,7 +24,7 @@ void kernel_main() {
      */
     constexpr size_t loop_count = 125;
     for (size_t i = 0; i < loop_count; ++i) {
-        auto page_id = i % sharded_accessor.get_dspec().get_tensor_volume();
+        auto page_id = i % sharded_accessor.dspec().tensor_volume();
         {
             DeviceZoneScopedN(ACCESSOR_CONFIG_NAME);
             volatile auto _ = sharded_accessor.get_noc_addr(i);

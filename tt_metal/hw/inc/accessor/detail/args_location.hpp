@@ -124,7 +124,7 @@ struct ArgsOffsets {
     ArgsOffsets() {}
 
     // Functions to calculate offsets for common runtime arguments
-    constexpr uint32_t get_crta_offset() const {
+    constexpr uint32_t crta_offset() const {
         if constexpr (CRTA_OFFSET != UNKNOWN) {
             return CRTA_OFFSET;
         } else {
@@ -132,10 +132,10 @@ struct ArgsOffsets {
         }
     }
 
-    constexpr uint32_t rank_crta_offset() const { return get_crta_offset(); }
-    constexpr uint32_t num_banks_crta_offset() const { return get_crta_offset() + ArgsLoc::RankCRTA; }
+    constexpr uint32_t rank_crta_offset() const { return crta_offset(); }
+    constexpr uint32_t num_banks_crta_offset() const { return crta_offset() + ArgsLoc::RankCRTA; }
 
-    constexpr uint32_t fetch_rank() const {
+    constexpr uint32_t get_rank() const {
         if constexpr (ArgsLoc::RankStatic) {
             return RankCT;
         } else {
@@ -143,7 +143,7 @@ struct ArgsOffsets {
         }
     }
 
-    constexpr uint32_t fetch_num_banks() const {
+    constexpr uint32_t get_num_banks() const {
         if constexpr (ArgsLoc::NumBanksStatic) {
             return NumBanksCT;
         } else {
@@ -151,19 +151,19 @@ struct ArgsOffsets {
         }
     }
 
-    constexpr uint32_t fetch_physical_num_banks() const {
+    constexpr uint32_t get_physical_num_banks() const {
         // 2 coordinates are packed in one uint32_t
-        return (fetch_num_banks() - 1) / 2 + 1;
+        return (get_num_banks() - 1) / 2 + 1;
     }
 
     constexpr uint32_t tensor_shape_crta_offset() const { return num_banks_crta_offset() + ArgsLoc::NumBanksCRTA; }
 
     constexpr uint32_t shard_shape_crta_offset() const {
-        return tensor_shape_crta_offset() + (ArgsLoc::TensorShapeCRTA ? fetch_rank() : 0);
+        return tensor_shape_crta_offset() + (ArgsLoc::TensorShapeCRTA ? get_rank() : 0);
     }
 
     constexpr uint32_t bank_coords_crta_offset() const {
-        return shard_shape_crta_offset() + (ArgsLoc::ShardShapeCRTA ? fetch_rank() : 0);
+        return shard_shape_crta_offset() + (ArgsLoc::ShardShapeCRTA ? get_rank() : 0);
     }
 
     /**
@@ -180,8 +180,7 @@ struct ArgsOffsets {
      * @return constexpr size_t     Number of common runtime arguments used by the DistributionSpec.
      */
     constexpr uint32_t runtime_args_skip() const {
-        return bank_coords_crta_offset() + (ArgsLoc::BankCoordsCRTA ? fetch_physical_num_banks() : 0) -
-               get_crta_offset();
+        return bank_coords_crta_offset() + (ArgsLoc::BankCoordsCRTA ? get_physical_num_banks() : 0) - crta_offset();
     }
 };
 

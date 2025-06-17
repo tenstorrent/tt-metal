@@ -15,9 +15,13 @@
 
 namespace nd_sharding {
 using detail::ArrayDynamicWrapper;
+using detail::ArrayStaticWrapperU16;
 using detail::ArrayStaticWrapperU32;
 template <size_t StartIdx, uint32_t Size>
-using array_cta_sequence_wrapper_t = detail::struct_cta_sequence_wrapper_t<ArrayStaticWrapperU32, StartIdx, Size>;
+using array_u32_cta_sequence_wrapper_t = detail::struct_cta_sequence_wrapper_t<ArrayStaticWrapperU32, StartIdx, Size>;
+template <size_t StartIdx, uint32_t Size>
+using array_packed_u16_cta_sequence_wrapper_t =
+    detail::struct_cta_sequence_wrapper_packed_u16_from_u32_t<StartIdx, Size>;
 
 /**
  * @brief Accessor that encapsulates the logic for accessing sharded tensors pages.
@@ -49,7 +53,7 @@ public:
         bank_base_address(bank_base_address_in), page_size(page_size_in) {}
 
     // Helper to get the appropriate DSpec instance
-    constexpr auto& get_dspec() const {
+    constexpr auto& dspec() const {
         if constexpr (DSpec::is_static) {
             return StaticDspec::instance;
         } else {
@@ -61,9 +65,9 @@ public:
     FORCE_INLINE
     std::uint64_t get_noc_addr(const uint32_t page_id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
         const auto [bank_id, bank_offset] = this->get_bank_and_offset(page_id);
-        const auto& packed_xy_coords = get_dspec().get_packed_xy_coords();
+        const auto& packed_xy_coords = dspec().packed_xy_coords();
         return NOC_XY_ADDR(
-            DYNAMIC_NOC_X(noc, (packed_xy_coords[bank_id] >> 8) & 0xFFFF),
+            DYNAMIC_NOC_X(noc, (packed_xy_coords[bank_id] >> 8) & 0xFF),
             DYNAMIC_NOC_Y(noc, packed_xy_coords[bank_id] & 0xFF),
             bank_base_address + bank_offset * page_size + offset);
     }
@@ -88,18 +92,18 @@ public:
 
     PageMapping get_bank_and_offset(uint32_t page_id) const {
         // Check that page_id is within bounds
-        ASSERT(page_id < get_dspec().get_tensor_volume());
-        // TODO: Should be possible to directly implement get_bank_and_offset logic with page_id and skip computing the
+        ASSERT(page_id < dspec().tensor_volume());
+        // TODO: Should be possible to directly implement bank_and_offset logic with page_id and skip computing the
         // page_coord
         // std::array<uint32_t, detail::MAX_RANK> page_coord;
         typename DSpec::Shape page_coord;
         if constexpr (!DSpec::has_static_rank) {
             // If rank is not known at compile time, we need to use the _page_coord buffer for span
-            page_coord = typename DSpec::Shape(_page_coord.value, get_dspec().get_rank());
+            page_coord = typename DSpec::Shape(_page_coord.value, dspec().rank());
         }
-        for (int i = get_dspec().get_rank() - 1; i >= 0; --i) {
-            page_coord[i] = page_id % get_dspec().get_tensor_shape()[i];
-            page_id /= get_dspec().get_tensor_shape()[i];
+        for (int i = dspec().rank() - 1; i >= 0; --i) {
+            page_coord[i] = page_id % dspec().tensor_shape()[i];
+            page_id /= dspec().tensor_shape()[i];
         }
         return get_bank_and_offset(page_coord);
     }
@@ -118,20 +122,18 @@ public:
 
         size_t flattened_shard_id = 0;
         size_t page_offset_within_shard = 0;
-        for (size_t i = 0; i < get_dspec().get_rank(); ++i) {
+        for (size_t i = 0; i < dspec().rank(); ++i) {
             // Check that page_coord is within bounds
-            ASSERT(page_coord[i] < get_dspec().get_tensor_shape()[i]);
-            flattened_shard_id +=
-                (page_coord[i] / get_dspec().get_shard_shape()[i]) * get_dspec().get_shard_grid_strides()[i];
-            page_offset_within_shard +=
-                (page_coord[i] % get_dspec().get_shard_shape()[i]) * get_dspec().get_shard_strides()[i];
+            ASSERT(page_coord[i] < dspec().tensor_shape()[i]);
+            flattened_shard_id += (page_coord[i] / dspec().shard_shape()[i]) * dspec().shard_grid_strides()[i];
+            page_offset_within_shard += (page_coord[i] % dspec().shard_shape()[i]) * dspec().shard_strides()[i];
         }
 
         // NOTE: This assumes shards are round-robin assigned across banks
-        size_t bank_id = flattened_shard_id % get_dspec().get_num_banks();
-        size_t bank_shard_id = flattened_shard_id / get_dspec().get_num_banks();
+        size_t bank_id = flattened_shard_id % dspec().num_banks();
+        size_t bank_shard_id = flattened_shard_id / dspec().num_banks();
 
-        size_t bank_page_offset = bank_shard_id * get_dspec().get_shard_volume() + page_offset_within_shard;
+        size_t bank_page_offset = bank_shard_id * dspec().shard_volume() + page_offset_within_shard;
 
         return {bank_id, bank_page_offset};
     }

@@ -124,21 +124,22 @@ Distribution Spec Information
 
 ```c++
 // Access information about the tensor / shard / banks
-const auto& dspec = sharded_accessor.get_dspec();
+const auto& dspec = sharded_accessor.dspec();
 
-auto rank = dspec.get_rank();
-auto num_banks = dspec.get_num_banks();
+auto rank = dspec.rank();
+auto num_banks = dspec.num_banks();
 
 // Note: all volumes, shapes and strides are in pages!!!
-auto tensor_volume = dspec.get_tensor_volume();
-const auto& tensor_shape = dspec.get_tensor_shape();
-const auto& tensor_strides = dspec.get_tensor_strides();
+auto tensor_volume = dspec.tensor_volume();
+const auto& tensor_shape = dspec.tensor_shape();
+const auto& tensor_strides = dspec.tensor_strides();
 
-auto shard_volume = dspec.get_shard_volume();
-const auto& shard_shape = dspec.get_shard_shape();
-const auto& shard_strides = dspec.get_shard_strides();
+auto shard_volume = dspec.shard_volume();
+const auto& shard_shape = dspec.shard_shape();
+const auto& shard_strides = dspec.hard_strides();
 
-const auto& packed_xy_coords = dspec.get_packed_xy_coords();
+// Note: x=(packed >> 8) & 0xFF, y=packed & 0xFF
+const auto& packed_xy_coords = dspec.packed_xy_coords();
 ```
 
 Note: In case containers size is CTA, then shapes, strides, coords are `std::array<uint32_t, rank/num_banks>`, otherwide `Span<uint32_t>`

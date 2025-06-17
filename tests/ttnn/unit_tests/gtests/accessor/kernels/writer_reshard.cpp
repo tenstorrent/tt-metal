@@ -24,11 +24,11 @@ void kernel_main() {
 
     auto sharded_accessor = nd_sharding::make_sharded_accessor_from_args(args, bank_base_address, page_size);
     // Both rank and num banks can be made constexpr if they are static
-    uint32_t rank = sharded_accessor.get_dspec().get_rank();
-    uint32_t num_banks = sharded_accessor.get_dspec().get_num_banks();
+    uint32_t rank = sharded_accessor.dspec().rank();
+    uint32_t num_banks = sharded_accessor.dspec().num_banks();
 
     constexpr uint32_t one_tile = 1;
-    for (size_t i = 0; i < sharded_accessor.get_dspec().get_tensor_volume(); ++i) {
+    for (size_t i = 0; i < sharded_accessor.dspec().tensor_volume(); ++i) {
         cb_wait_front(cb_id, one_tile);
         uint32_t l1_read_addr = get_read_ptr(cb_id);
         sharded_accessor.noc_async_write_page(i, l1_read_addr);

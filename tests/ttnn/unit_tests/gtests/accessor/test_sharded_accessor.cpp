@@ -261,12 +261,12 @@ TYPED_TEST(ShardedAccessorTests, PageLookUp) {
     auto sharded_accessor = nd_sharding::ShardedAccessor<dspec_t>(dspec_val, 0);
 
     // Check that the computed values in DSpec match the expected values
-    ASSERT_EQ(dspec_val.get_tensor_strides(), expected::dspec.tensor_strides);
-    ASSERT_EQ(dspec_val.get_tensor_volume(), expected::dspec.tensor_volume);
-    ASSERT_EQ(dspec_val.get_shard_strides(), expected::dspec.shard_strides);
-    ASSERT_EQ(dspec_val.get_shard_volume(), expected::dspec.shard_volume);
-    ASSERT_EQ(dspec_val.get_shard_grid(), expected::dspec.shard_grid);
-    ASSERT_EQ(dspec_val.get_shard_grid_strides(), expected::dspec.shard_grid_strides);
+    ASSERT_EQ(dspec_val.tensor_strides(), expected::dspec.tensor_strides);
+    ASSERT_EQ(dspec_val.tensor_volume(), expected::dspec.tensor_volume);
+    ASSERT_EQ(dspec_val.shard_strides(), expected::dspec.shard_strides);
+    ASSERT_EQ(dspec_val.shard_volume(), expected::dspec.shard_volume);
+    ASSERT_EQ(dspec_val.shard_grid(), expected::dspec.shard_grid);
+    ASSERT_EQ(dspec_val.shard_grid_strides(), expected::dspec.shard_grid_strides);
 
     // Check that the computed bank and offset values match the expected values
     for (const auto& expected_bank_and_offset : expected::bank_and_offset) {
@@ -299,18 +299,18 @@ using expected = ShardedAccessorExpected<
 template <typename DSpecT>
 void assert_dspec(const DSpecT& dspec_val) {
     auto cmpare_array = [](const auto& a, const auto& b) { return std::equal(a.begin(), a.end(), b.begin()); };
-    ASSERT_TRUE(cmpare_array(dspec_val.get_tensor_strides(), expected::dspec.tensor_strides));
-    ASSERT_EQ(dspec_val.get_tensor_volume(), expected::dspec.tensor_volume);
-    ASSERT_TRUE(cmpare_array(dspec_val.get_shard_strides(), expected::dspec.shard_strides));
-    ASSERT_EQ(dspec_val.get_shard_volume(), expected::dspec.shard_volume);
-    ASSERT_TRUE(cmpare_array(dspec_val.get_shard_grid(), expected::dspec.shard_grid));
-    ASSERT_TRUE(cmpare_array(dspec_val.get_shard_grid_strides(), expected::dspec.shard_grid_strides));
+    ASSERT_TRUE(cmpare_array(dspec_val.tensor_strides(), expected::dspec.tensor_strides));
+    ASSERT_TRUE(cmpare_array(dspec_val.shard_strides(), expected::dspec.shard_strides));
+    ASSERT_TRUE(cmpare_array(dspec_val.shard_grid(), expected::dspec.shard_grid));
+    ASSERT_TRUE(cmpare_array(dspec_val.shard_grid_strides(), expected::dspec.shard_grid_strides));
+    ASSERT_EQ(dspec_val.tensor_volume(), expected::dspec.tensor_volume);
+    ASSERT_EQ(dspec_val.shard_volume(), expected::dspec.shard_volume);
 }
 
 template <typename ShardAccessorT>
 void assert_sharded_accessor(const ShardAccessorT& sharded_accessor) {
     // Check that the computed values in DSpec match the expected values
-    assert_dspec(sharded_accessor.get_dspec());
+    assert_dspec(sharded_accessor.dspec());
 
     // Check that the computed bank and offset values match the expected values
     for (const auto& expected_bank_and_offset : expected::bank_and_offset) {
