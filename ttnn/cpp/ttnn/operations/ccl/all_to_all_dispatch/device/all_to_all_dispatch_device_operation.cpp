@@ -71,20 +71,38 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
     tt::log_info("selected_experts_k: {}", selected_experts_k);
 
     auto mem_config = operation_attributes.output_mem_config;
-    return {
-        TensorSpec(
-            Shape(output_shape),
-            TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), mem_config)),
-        TensorSpec(
-            Shape(metadata_shape),
-            TensorLayout(
-                tensor_args.expert_indices_tensor.get_dtype(),
-                PageConfig(tensor_args.expert_indices_tensor.get_layout()),
-                mem_config))};
+    auto output_tokens_spec = TensorSpec(
+        Shape(output_shape), TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), mem_config));
+    auto metadata_spec = TensorSpec(
+        Shape(metadata_shape),
+        TensorLayout(
+            tensor_args.expert_indices_tensor.get_dtype(),
+            PageConfig(tensor_args.expert_indices_tensor.get_layout()),
+            mem_config));
+    if (tensor_args.optional_output_tensors.has_value()) {
+        auto output_tensors = tensor_args.optional_output_tensors.value();
+        auto preallocated_output_spec = output_tensors[0].get_tensor_spec();
+        auto preallocated_metadata_spec = output_tensors[1].get_tensor_spec();
+        TT_FATAL(
+            preallocated_output_spec == output_tokens_spec,
+            "Preallocated output spec {} does not match output spec {}",
+            preallocated_output_spec,
+            output_tokens_spec);
+        TT_FATAL(
+            preallocated_metadata_spec == metadata_spec,
+            "Preallocated metadata spec {} does not match metadata spec {}",
+            preallocated_metadata_spec,
+            metadata_spec);
+        return {preallocated_output_spec, preallocated_metadata_spec};
+    }
+    return {output_tokens_spec, metadata_spec};
 }
 
 AllToAllDispatchDeviceOperation::tensor_return_value_t AllToAllDispatchDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.optional_output_tensors.has_value()) {
+        return tensor_args.optional_output_tensors.value();
+    }
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
 
     auto output_tensor = create_device_tensor(output_spec[0], tensor_args.input_tensor.device());
@@ -98,6 +116,7 @@ AllToAllDispatchDeviceOperation::invoke(
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     const std::optional<uint32_t> axis,
+    const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
     const uint32_t num_links,
     const tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
@@ -114,7 +133,8 @@ AllToAllDispatchDeviceOperation::invoke(
         tensor_args_t{
             .input_tensor = input_tensor,
             .expert_indices_tensor = expert_indices_tensor,
-            .expert_mapping_tensor = expert_mapping_tensor}};
+            .expert_mapping_tensor = expert_mapping_tensor,
+            .optional_output_tensors = optional_output_tensors}};
 }
 
 }  // namespace ttnn::operations::ccl

@@ -32,6 +32,7 @@ struct AllToAllDispatchDeviceOperation {
         const Tensor input_tensor;
         const Tensor expert_indices_tensor;
         const Tensor expert_mapping_tensor;
+        const std::optional<std::array<Tensor, 2>> optional_output_tensors;
     };
 
     using spec_return_value_t = std::array<ttnn::TensorSpec, 2>;
@@ -91,6 +92,7 @@ struct AllToAllDispatchDeviceOperation {
         const ttnn::Tensor& expert_indices_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
         const std::optional<uint32_t> axis,
+        const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
         const uint32_t num_links,
         const tt::tt_fabric::Topology topology,
         const ttnn::MemoryConfig& memory_config,

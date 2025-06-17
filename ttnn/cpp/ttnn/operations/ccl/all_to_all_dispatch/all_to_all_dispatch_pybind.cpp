@@ -64,6 +64,7 @@ void py_bind_all_to_all_dispatch(py::module& module) {
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& expert_indices_tensor,
                const ttnn::Tensor& expert_mapping_tensor,
+               const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
                const std::optional<uint32_t> axis,
                const uint32_t num_links,
                const tt::tt_fabric::Topology topology,
@@ -71,12 +72,15 @@ void py_bind_all_to_all_dispatch(py::module& module) {
                const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
                const std::optional<GlobalSemaphore>& global_semaphore,
                QueueId queue_id) {
+                // Invoke with correct parameter ordering: axis first, followed by optional_output_tensors, as expected
+                // by ExecuteAllToAllDispatch::invoke.
                 return self(
                     queue_id,
                     input_tensor,
                     expert_indices_tensor,
                     expert_mapping_tensor,
                     axis,
+                    optional_output_tensors,
                     num_links,
                     topology,
                     memory_config,
@@ -87,6 +91,7 @@ void py_bind_all_to_all_dispatch(py::module& module) {
             py::arg("expert_indices_tensor").noconvert(),
             py::arg("expert_mapping_tensor").noconvert(),
             py::kw_only(),
+            py::arg("output_tensors") = std::nullopt,
             py::arg("axis") = std::nullopt,
             py::arg("num_links") = 1,
             py::arg("topology") = tt::tt_fabric::Topology::Linear,
