@@ -401,10 +401,11 @@ When a tensix core executes an operation, it does so by reading in data from SRA
 
 Each Tensix core on a WH ASIC has ~1.5MB of SRAM. When feeding data from SRAM, each tensix can operate unencumbered. However some problems require more working memory than is available via SRAM. When this happens, Tensix will instead map data to device memory or DRAM. Accessing data from DRAM is slower both in terms of bandwidth and latency than SRAM. Simultaneously, because of the interconnected nature of the WH ASIC, a clever programmer may often find that the result of one tensix unit is what is needed for the input of another tensix core. Instead of writing that data back to device memory, the data can instead be forwarded directly over the NOC.
 
-#### Blackhole Performance
+### Blackhole Performance
 A similar benchmark can be used to demonstrate the "manual" and "out of box" matmul performance provided with Blackhole cards. These devices have larger compute grids, and so the matrix dimensions have been increased to maintain a similar about of work-per-core. The below results are collected on a *p100a*.
 
-### Manually Tuned Performance
+#### Blackhole Manually Tuned Performance
+As with Wormhole, these results reflect a selection of manually selected matmul configurations for peak results.
 
 | m     | k     | n     | use_trace | grid_size | in0_sharded | out_sharded | in0_storage_type | in1_storage_type | out_storage_type | dtype              | math_fidelity      | inference_time_avg (ns) | TFLOPs (avg) | Utilization (vs user grid) | Utilization (vs Full grid) |
 | ----- | ----- | ----- | --------- | --------- | ----------- | ----------- | ---------------- | ---------------- | ---------------- | ------------------ | ------------------ | ----------------------- | ------------ | -------------------------- | -------------------------- |
@@ -556,7 +557,9 @@ A similar benchmark can be used to demonstrate the "manual" and "out of box" mat
 | 20480 | 22528 | 22528 | True      | (11, 10)  | False       | False       | DRAM             | DRAM             | DRAM             | DataType.BFLOAT4_B | MathFidelity.LoFi  | 41724891.66             | 498.21       | 81.91%                     | 81.91%                     |
 |       |       |       |           |           |             |             |                  |                  |                  |                    |                    |                         |              |                            |                            |
 
-### Out of Box Performance
+### Blackhole Out of Box Performance
+As with Wormhole, these results reflect the performance based on auto-selected matmul configurations.
+
 | m    | k    | n    | use_trace | grid_size | in0_storage_type | in1_storage_type | out_storage_type | dtype              | math_fidelity      | inference_time_avg (ns) | TFLOPs (avg) | Utilization (vs user grid) | Utilization (vs Full grid) |
 | ---- | ---- | ---- | --------- | --------- | ---------------- | ---------------- | ---------------- | ------------------ | ------------------ | ----------------------- | ------------ | -------------------------- | -------------------------- |
 | 640  | 704  | 704  | False     | (11, 10)  | DRAM             | DRAM             | DRAM             | DataType.BFLOAT16  | MathFidelity.HiFi2 | 17509.46                | 36.23        | 11.91%                     | 11.91%                     |
@@ -638,3 +641,4 @@ A similar benchmark can be used to demonstrate the "manual" and "out of box" mat
 | 3840 | 5632 | 5632 | True      | (11, 10)  | DRAM             | DRAM             | DRAM             | DataType.BFLOAT4_B | MathFidelity.LoFi  | 497007.37               | 490.14       | 80.58%                     | 80.58%                     |
 | 5120 | 5632 | 5632 | True      | (11, 10)  | DRAM             | DRAM             | DRAM             | DataType.BFLOAT4_B | MathFidelity.LoFi  | 655646.32               | 495.40       | 81.45%                     | 81.45%                     |
 |      |      |      |           |           |                  |                  |                  |                    |                    |                         |              |                            |                            |
+
