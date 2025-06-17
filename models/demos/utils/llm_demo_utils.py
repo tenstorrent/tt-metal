@@ -181,7 +181,7 @@ def verify_perf(
             elif measurements[key] > expected_perf_metrics[key] * high_tol_percentage:  # Much higher than expected
                 does_pass = False
                 logger.warning(
-                    f"{key} ({measurements[key]}) is higher than expected {expected_perf_metrics[key]}. Please update the expected perf."
+                    f"{key} ({measurements[key]}) is much higher than expected {expected_perf_metrics[key]}. Please update the expected perf."
                 )
 
     if does_pass:
