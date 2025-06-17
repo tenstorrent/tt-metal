@@ -140,9 +140,18 @@ void kernel_main() {
                 ->to_noc_unicast_write(
                     tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
         } else {
-            packet_header->to_chip_unicast(config.unicast.distance)
-                ->to_noc_unicast_write(
-                    tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
+            if constexpr (false) {
+                packet_header->to_chip_unicast(config.unicast.distance)
+                    ->to_noc_unicast_write(
+                        tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
+            } else {
+                p += num_pages_per_send;
+                const auto dest_noc_address2 = get_noc_addr(p, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
+                packet_header->to_chip_unicast(config.unicast.distance)
+                    ->to_noc_unicast_scatter_write(
+                        tt::tt_fabric::NocUnicastScatterCommandHeader{dest_noc_address, dest_noc_address2},
+                        (2 * page_size) + sizeof(PACKET_HEADER_TYPE));
+            }
         }
 
         sender.send_payload_without_header_non_blocking_from_address(payload_addr, pages_to_send * page_size);

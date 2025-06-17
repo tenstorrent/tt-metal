@@ -92,6 +92,16 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_2_messages_Persiste
     ASSERT_EQ(result, 0);
 }
 // Will wrapp sender but not receiver buffers
+TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_2_messages_PersistentFabric_Scatter) {
+    const uint32_t page_size = 2048;
+    const uint32_t num_pages_total = 2;
+    const bool src_is_dram = true;
+    const bool dest_is_dram = true;
+
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, true);
+    ASSERT_EQ(result, 0);
+}
+// Will wrapp sender but not receiver buffers
 TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_10_messages_PersistentFabric) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 10;
