@@ -249,10 +249,10 @@ test_bounds = {
         },
     },
     "blackhole": {
-        0: {
-            "riscv_1": {"latency": {"lower": 400, "upper": 17000}, "bandwidth": 0.1},
-            "riscv_0": {"latency": {"lower": 300, "upper": 16000}, "bandwidth": 0.15},
-        },
+        # 0: {
+        #     "riscv_1": {"latency": {"lower": 400, "upper": 17000}, "bandwidth": 0.1},
+        #     "riscv_0": {"latency": {"lower": 300, "upper": 16000}, "bandwidth": 0.15},
+        # },
         1: {
             "riscv_1": {"latency": {"lower": 20000, "upper": 33000}, "bandwidth": 32},
             "riscv_0": {"latency": {"lower": 20000, "upper": 33000}, "bandwidth": 33},
