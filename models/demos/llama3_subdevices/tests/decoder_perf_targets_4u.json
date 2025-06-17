@@ -63,7 +63,7 @@
             "non-overlapped-dispatch-time": 6127.527777777778,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.4,
-            "first_to_last_start_relative_margin": 0.4,
+            "first_to_last_start_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.2
         },
         "LlamaReduceScatterDeviceOperation_0": {
@@ -74,7 +74,7 @@
             "non-overlapped-dispatch-time": 7952.344444444445,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
-            "first_to_last_start_relative_margin": 0.2,
+            "first_to_last_start_relative_margin": 0.4,
             "dispatch_duration_relative_margin": 0.3
         },
         "Matmul_0": {
