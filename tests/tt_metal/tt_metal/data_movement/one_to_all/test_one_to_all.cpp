@@ -55,7 +55,8 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 
     assert((test_config.is_multicast && test_config.loopback) || (!test_config.is_multicast && !test_config.is_linked));
 
-    if (test_config.loopback && (test_config.num_of_transactions * transaction_size_bytes > 1024 * 1024 / 2)) {
+    if (test_config.loopback && (test_config.num_of_transactions * transaction_size_bytes >
+                                 1024 * 1024 / 2)) {  // FIX the 1024 1024 number here
         log_error(tt::LogTest, "Not enough memory for master core using loopback");
         return false;
     }
@@ -113,9 +114,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     }
     uint32_t mst_l1_base_address = mst_l1_info.base_address;
     uint32_t sub_l1_base_address =
-        test_config.loopback ? master_l1_base_address
-                             : master_l1_base_address + (test_config.num_of_transactions *
-                                                         total_size_bytes);  // OR bytes_per_transaction instead?
+        test_config.loopback ? mst_l1_base_address : mst_l1_base_address + (total_size_bytes);
 
     // Semaphores
     const uint32_t sem_id = CreateSemaphore(program, sub_logical_core_set, 0);
