@@ -184,7 +184,9 @@ def non_max_suppression(
     nc = nc or (prediction.shape[1] - 4)
     nm = prediction.shape[1] - nc - 4
     mi = 4 + nc
+    # print("BEFORE XC", prediction.shape)
     xc = prediction[:, 4:mi].amax(1) > conf_thres
+    # print("XCCCCCCC",xc[0].shape)
 
     time_limit = 2.0 + max_time_img * bs
     multi_label &= nc > 1
@@ -197,14 +199,22 @@ def non_max_suppression(
             prediction = torch.cat((xywh2xyxy(prediction[..., :4]), prediction[..., 4:]), dim=-1)
 
     t = time.time()
+    # print("Pred",prediction.shape)
     output = [torch.zeros((0, 6 + nm), device=prediction.device)] * bs
     for xi, x in enumerate(prediction):
+        # print(xc[xi])
         x = x[xc[xi]]
+        # print(x.shape)
 
         if not x.shape[0]:
             continue
 
+        # print("################################ before")
+        # print(nc,nm)
+        # print(x.shape)
+
         box, cls, mask = x.split((4, nc, nm), 1)
+        # print("################################ after")
 
         if multi_label:
             i, j = torch.where(cls > conf_thres)
@@ -279,8 +289,10 @@ def scale_boxes(img1_shape, boxes, img0_shape, ratio_pad=None, padding=True, xyw
 
 
 def postprocess(preds, img, orig_imgs, batch, names):
-    args = {"conf": 0.25, "iou": 0.7, "agnostic_nms": False, "max_det": 300, "classes": None}
+    args = {"conf": 0.0025, "iou": 0.7, "agnostic_nms": False, "max_det": 300, "classes": None}
+    # print(preds[0].shape,orig_imgs[0].shape,batch[0])
 
+    # print("POSTPROCESS")
     preds = non_max_suppression(
         preds,
         args["conf"],
@@ -291,8 +303,10 @@ def postprocess(preds, img, orig_imgs, batch, names):
     )
 
     results = []
+    # print("ITER")
+    # print(preds,orig_imgs,batch[0])
     for pred, orig_img, img_path in zip(preds, orig_imgs, batch[0]):
-        pred[:, :4] = scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
+        # pred[:, :4] = scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
         results.append(Results(orig_img, path=img_path, names=names, boxes=pred))
 
     return results

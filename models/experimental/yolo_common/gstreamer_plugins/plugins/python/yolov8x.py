@@ -16,9 +16,8 @@ import ttnn
 
 # print("ARCH YAML   ", os.environ["WH_ARCH_YAML"])
 
-from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
-from models.experimental.yolo_evaluation.yolo_evaluation_utils import postprocess
-from models.demos.yolov9c.demo.demo_utils import load_coco_class_names
+from models.demos.yolov8x.tests.yolov8x_e2e_performant import Yolov8xTrace2CQ
+from models.demos.yolov8x.demo.demo_utils import load_coco_class_names
 from models.experimental.yolo_evaluation.yolo_evaluation_utils import postprocess as obj_postprocess
 
 
@@ -27,13 +26,13 @@ Gst.init(None)
 
 
 # --- Element Class Definition ---
-class Yolov9c(GstBase.BaseTransform):
+class Yolov8x(GstBase.BaseTransform):
     # Element metadata (for GStreamer)
 
-    __gtype_name__ = "GstYolov9cPythonBatching"
+    __gtype_name__ = "GstYolov8xPythonBatching"
 
     __gstmetadata__ = (
-        "Yolov9c Python",  # Long name
+        "Yolov8x Python",  # Long name
         "Filter/Effect/Converter",  # Classification
         "Prepends a configurable string to text buffer data",  # Description
         "Your Name <your.email@example.com>",  # Author
@@ -69,7 +68,7 @@ class Yolov9c(GstBase.BaseTransform):
 
     def initialize_device(self):
         device_id = 0
-        print("########################################3 #######################3", self.model_task)
+        # print("########################################3 #######################3", self.model_task)
         self.device = ttnn.CreateDevice(
             device_id,
             dispatch_core_config=self.get_dispatch_core_config(),
@@ -78,16 +77,11 @@ class Yolov9c(GstBase.BaseTransform):
             num_command_queues=2,
         )
         self.device.enable_program_cache()
-        self.model = YOLOv9PerformantRunner(
+        self.model = Yolov8xTrace2CQ()
+        self.model.initialize_yolov8x_trace_2cqs_inference(
             self.device,
-            self.batch_size,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-            model_task=self.model_task,
-            resolution=(640, 640),
-            model_location_generator=None,
+            1,
         )
-        self.model._capture_yolov9_trace_2cqs()
         print("########################################", self.batch_size)
 
     def save_yolo_predictions_by_model(self, result, image, model_name):
@@ -141,15 +135,15 @@ class Yolov9c(GstBase.BaseTransform):
         try:
             success, in_map_info = inbuf.map(Gst.MapFlags.READ)
             if not success:
-                Gst.error("Yolov9c: Failed to map input buffer")
+                Gst.error("Yolov8x: Failed to map input buffer")
                 return Gst.FlowReturn.ERROR
-            original_frame_for_drawing = []
             # frame_data1 = np.frombuffer(in_map_info.data, dtype=np.uint8).reshape(640, 640, 4)
+            # print(np.frombuffer(in_map_info.data, dtype=np.uint8).shape)
             frame_data_bgrx = np.frombuffer(in_map_info.data, dtype=np.uint8).reshape(640, 640, 4)
-            original_frame_for_drawing.append(frame_data_bgrx[:, :, :3].copy())
+            original_frame_for_drawing = frame_data_bgrx[:, :, :3].copy()
             # frame_data = frame_data1[:, :, :3].copy()
             # frame_data = cv2.cvtColor(frame_data, cv2.COLOR_BGR2RGB)
-            frame_data_rgb = cv2.cvtColor(original_frame_for_drawing[0], cv2.COLOR_BGR2RGB)
+            frame_data_rgb = cv2.cvtColor(original_frame_for_drawing, cv2.COLOR_BGR2RGB)
             frame_data_rgb = np.array(frame_data_rgb)
 
             if type(frame_data_rgb) == np.ndarray and len(frame_data_rgb.shape) == 3:
@@ -159,37 +153,26 @@ class Yolov9c(GstBase.BaseTransform):
 
             ts = time.time()
             torch_frame_data = torch.permute(torch_frame_data, (0, 3, 1, 2))
-            print("INPUT", torch_frame_data)
-            print("INPUT", torch_frame_data.shape)
+            # print("INPUT",torch_frame_data)
+            # print("INPUT",torch_frame_data.shape)
 
             preds = self.model.run(torch_frame_data)
             # out = ttnn.to_torch(out[0], dtype=torch.float32)
-            print("######################A1")
-            print(preds)
-            preds[0] = ttnn.to_torch(preds[0], dtype=torch.float32)
-            print("######################A2")
+            # print("######################A1")
+            # print(preds)
+            preds = ttnn.to_torch(preds, dtype=torch.float32)
+            # print("######################A2")
             te = time.time()
 
             names = load_coco_class_names()
-            if self.model_task == "segment":
-                detect1_out, detect2_out, detect3_out = [
-                    ttnn.to_torch(tensor, dtype=torch.float32) for tensor in preds[1][0]
-                ]
-                mask = ttnn.to_torch(preds[1][1], dtype=torch.float32)
-                proto = ttnn.to_torch(preds[1][2], dtype=torch.float32)
-                proto = proto.reshape((1, 160, 160, 32)).permute((0, 3, 1, 2))
-                preds[1] = [[detect1_out, detect2_out, detect3_out], mask, proto]
-                results = postprocess(preds, frame_data, torch_frame_data, [["1"]])
-                for i in range(len(results)):
-                    self.save_seg_predictions_by_model(results[i], frame_data, "tt_model")
-            else:
-                print("TASK", self.model_task)
-                # results = obj_postprocess(preds[0], torch_frame_data, frame_data, [1], names)[0]
-                results = obj_postprocess(preds[0], torch_frame_data, original_frame_for_drawing, [["1"]], names)[0]
-                outImage = self.save_yolo_predictions_by_model(results, original_frame_for_drawing, "tt_model")
+            # print("TASK", self.model_task)
+            # results = obj_postprocess(preds[0], torch_frame_data, frame_data, [1], names)[0]
+            results = obj_postprocess(preds, torch_frame_data, original_frame_for_drawing, [["1"]], names)[0]
+            # print(results)
+            outImage = self.save_yolo_predictions_by_model(results, original_frame_for_drawing, "tt_model")
 
-                # outImage = self.save_yolo_predictions_by_model(results, frame_data, "tt_model")
-                # outImage=frame_data
+            # outImage = self.save_yolo_predictions_by_model(results, frame_data, "tt_model")
+            # outImage=frame_data
 
             # results = postprocess(out, torch_frame_data, frame_data, names=names)[0]
             # outImage = save_yolo_predictions_by_model(results, model_name="tt_model", orig_image=frame_data)
@@ -199,13 +182,13 @@ class Yolov9c(GstBase.BaseTransform):
 
             success, out_map_info = outbuf.map(Gst.MapFlags.WRITE)
             if not success:
-                Gst.error("Yolov9c: Failed to map output buffer for writing")
+                Gst.error("Yolov8x: Failed to map output buffer for writing")
                 return Gst.FlowReturn.ERROR
 
             # Ensure the output buffer has enough space for the transformed image
             required_size = outImage.nbytes
             if outbuf.get_size() < required_size:
-                Gst.error(f"Yolov9c: Output buffer too small. Required: {required_size}, Actual: {outbuf.get_size()}")
+                Gst.error(f"Yolov8x: Output buffer too small. Required: {required_size}, Actual: {outbuf.get_size()}")
                 return Gst.FlowReturn.ERROR
 
             # Corrected line: assign bytes to the memoryview slice
@@ -225,7 +208,7 @@ class Yolov9c(GstBase.BaseTransform):
             return Gst.FlowReturn.OK
 
         except Exception as e:
-            Gst.error(f"Yolov9c: Error in transform: {e}")
+            Gst.error(f"Yolov8x: Error in transform: {e}")
             return Gst.FlowReturn.ERROR
         finally:
             # Ensure buffers are unmapped even if an error occurs
@@ -235,10 +218,10 @@ class Yolov9c(GstBase.BaseTransform):
             #    outbuf.unmap(out_map_info)
 
 
-GObject.type_register(Yolov9c)
+GObject.type_register(Yolov8x)
 
-__gstelementfactory__ = ("yolov9c", Gst.Rank.NONE, Yolov9c)
+__gstelementfactory__ = ("yolov8x", Gst.Rank.NONE, Yolov8x)
 
 # The following are not strictly needed for __gstelementfactory__ but good for plugin tools
-GST_PLUGIN_NAME = "yolov9cplugin"
+GST_PLUGIN_NAME = "yolov8xplugin"
 __gstplugininit__ = None  # Not using a plugin_init function with __gstelementfactory__
