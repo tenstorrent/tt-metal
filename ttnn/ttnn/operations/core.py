@@ -242,7 +242,7 @@ def from_torch(
     layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
     device: Optional[ttnn.MeshDevice] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
-    mesh_mapper: Optional[ttnn.TensorToMesh] = None,
+    mesh_mapper: Optional[ttnn.CppTensorToMesh] = None,
     cq_id: Optional[int] = ttnn.DefaultQueueId,
 ) -> ttnn.Tensor:
     """
@@ -286,8 +286,8 @@ def from_torch(
             raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
 
     if mesh_mapper:
-        shards = mesh_mapper.map(tensor)
-        tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config(), tile, layout, memory_config, pad_value)
+        # TODO: #22258 - supply device to pytensor constructor directly.
+        tensor = ttnn.Tensor(tensor, dtype, mesh_mapper, tile, layout, memory_config, pad_value)
         if device is not None:
             tensor = ttnn.to_device(tensor, device, memory_config=memory_config, cq_id=cq_id)
         return tensor
@@ -569,7 +569,7 @@ def as_tensor(
     memory_config: Optional[ttnn.MemoryConfig] = None,
     cache_file_name: Optional[Union[str, pathlib.Path]] = None,
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
-    mesh_mapper: Optional[ttnn.TensorToMesh] = None,
+    mesh_mapper: Optional[ttnn.CppTensorToMesh] = None,
     use_device_tilizer: bool = False,
 ) -> ttnn.Tensor:
     """
@@ -585,7 +585,7 @@ def as_tensor(
         memory_config (ttnn.MemoryConfig, optional): The `ttnn` memory configuration. Defaults to `None`.
         cache_file_name (str | pathlib.Path, optional): The cache file name. Defaults to `None`.
         preprocess (Callable[[ttnn.Tensor], ttnn.Tensor], optional): The function to preprocess the tensor before serializing/converting to ttnn. Defaults to `None`.
-        mesh_mapper (ttnn.TensorToMesh, optional): The TensorToMesh to define the mapping from torch to multi-device. Defaults to `None`.
+        mesh_mapper (ttnn.CppTensorToMesh, optional): The TensorToMesh to define the mapping from torch to multi-device. Defaults to `None`.
         use_device_tilizer (bool, optional): The flag that toggles whether to use host vs. device tilizer. Defaults to `False`.
 
             - For Grayskull, the on-device tilizer will truncate mantissa bits for bfp* formats.
@@ -621,7 +621,7 @@ def as_tensor(
         layout: Optional[ttnn.Layout],
         device: Optional[ttnn.MeshDevice],
         memory_config: Optional[ttnn.MemoryConfig],
-        mesh_mapper: Optional[ttnn.TensorToMesh],
+        mesh_mapper: Optional[ttnn.CppTensorToMesh],
     ):
         if preprocess:
             tensor = preprocess(tensor)
@@ -654,7 +654,7 @@ def as_tensor(
             dtype: Optional[ttnn.DataType],
             layout: Optional[ttnn.Layout],
             cache_file_name: str,
-            mesh_mapper: Optional[ttnn.TensorToMesh],
+            mesh_mapper: Optional[ttnn.CppTensorToMesh],
         ):
             tensor = torch_to_ttnn(tensor, dtype, layout, device, memory_config, mesh_mapper)
             logger.debug(
