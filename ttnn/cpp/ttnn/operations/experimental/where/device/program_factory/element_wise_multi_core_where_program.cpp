@@ -40,8 +40,10 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
         "Mismatched data types: 'condition_tensor' and 'output' tensor must have the same dtype.");
 
     TT_ASSERT(
-        args.condition_tensor.get_dtype() == DataType::BFLOAT16,
-        "Invalid data type: expected BFLOAT16 for 'condition_tensor'.");
+        args.condition_tensor.get_dtype() == DataType::BFLOAT16 ||
+            args.condition_tensor.get_dtype() == DataType::FLOAT32 ||
+            args.condition_tensor.get_dtype() == DataType::BFLOAT8_B,
+        "Invalid data type: expected BFLOAT16 or FLOAT32 or BFLOAT8_B for 'condition_tensor'.");
 
     Program program{};
     const auto& all_device_cores = operation_attributes.worker_grid;

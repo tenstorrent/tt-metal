@@ -37,10 +37,8 @@ void bind_where(pybind11::module& pymodule) {
 
                * - Dtypes
                  - Layouts
-                 - Ranks
-               * - BFLOAT16
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
                  - TILE
-                 - 2, 3, 4
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 

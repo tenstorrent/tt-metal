@@ -101,7 +101,7 @@ def test_ttt_where_int_types(device, tt_dtype):
     _ttt_where_test_impl(device, DEFAULT_SHAPE, tt_dtype=tt_dtype)
 
 
-@pytest.mark.xfail(reason="ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat4_b data types are not yet supported.")
+@pytest.mark.xfail(reason="ttnn.bfloat4_b data type is not yet supported.")
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat4_b])
 def test_ttt_where_float_types(device, tt_dtype):
     _ttt_where_test_impl(device, DEFAULT_SHAPE, tt_dtype=tt_dtype)
