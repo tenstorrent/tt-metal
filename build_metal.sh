@@ -41,6 +41,7 @@ show_help() {
     echo "  --configure-only                 Only configure the project, do not build."
     echo "  --enable-coverage                Instrument the binaries for code coverage."
     echo "  --enable-distributed             Enable distributed compute support (OpenMPI)."
+    echo "  --enable-tcmalloc                Build with TCMalloc enabled as the default memory allocator. Provides better performance for host-intensive applications."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
 }
 
@@ -86,6 +87,7 @@ fi
 configure_only="OFF"
 enable_coverage="OFF"
 enable_distributed="ON"
+enable_tcmalloc="OFF"
 with_python_bindings="ON"
 
 declare -a cmake_args
@@ -123,6 +125,7 @@ toolchain-path:
 configure-only
 enable-coverage
 enable-distributed
+enable-tcmalloc
 without-python-bindings
 "
 
@@ -153,6 +156,8 @@ while true; do
             enable_coverage="ON";;
         --enable-distributed)
             enable_distributed="ON";;
+        --enable-tcmalloc)
+            enable_tcmalloc="ON";;
 	--build-dir)
             build_dir="$2";shift;;
         -b|--build-type)
@@ -259,6 +264,7 @@ echo "INFO: Enable Unity builds: $unity_builds"
 echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
 echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
+echo "INFO: Enable TCMalloc: $enable_tcmalloc"
 echo "INFO: With python bindings: $with_python_bindings"
 
 # Prepare cmake arguments
@@ -377,6 +383,12 @@ if [ "$enable_distributed" = "ON" ]; then
     cmake_args+=("-DENABLE_DISTRIBUTED=ON")
 else
     cmake_args+=("-DENABLE_DISTRIBUTED=OFF")
+fi
+
+if [ "$enable_tcmalloc" = "ON" ]; then
+    cmake_args+=("-DENABLE_TCMALLOC=ON")
+else
+    cmake_args+=("-DENABLE_TCMALLOC=OFF")
 fi
 
 # toolchain and cxx_compiler settings would conflict with eachother

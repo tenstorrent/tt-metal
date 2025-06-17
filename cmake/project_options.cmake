@@ -23,6 +23,7 @@ option(ENABLE_DISTRIBUTED "Enable multihost distributed compute support (OpenMPI
 option(TT_UMD_BUILD_SIMULATION "Force UMD to include its simulation harnessing" ON)
 option(TT_INSTALL "Define installation rules" ON)
 option(TT_USE_SYSTEM_SFPI "Use system path for SFPI. SFPI is used to compile firmware." OFF)
+option(ENABLE_TCMALLOC "Enable TCMalloc memory allocator" OFF)
 
 ###########################################################################################
 
