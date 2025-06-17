@@ -49,6 +49,7 @@ void MAIN {
     constexpr bool tilize_q = get_compile_time_arg_val(23) == 1;
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * DHt;
+    constexpr bool untilize_output = tilize_q;
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;  // reuse it also for reduce input o
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
@@ -277,12 +278,16 @@ void MAIN {
             mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, DHt);
             pack_reconfig_data_format(cb_out_final);
 
-            pack_untilize_init_short<out_chunk_tiles>(cb_out_accumulate_im, cb_out_final);
-            cb_wait_front(cb_out_accumulate_im, out_chunk_tiles);
-            cb_reserve_back(cb_out_final, out_chunk_tiles);
-            pack_untilize_block<out_chunk_tiles>(cb_out_accumulate_im, 1, cb_out_final);
-            cb_pop_front(cb_out_accumulate_im, out_chunk_tiles);
-            cb_push_back(cb_out_final, out_chunk_tiles);
+            if constexpr (untilize_output) {
+                pack_untilize_init_short<out_chunk_tiles>(cb_out_accumulate_im, cb_out_final);
+                cb_wait_front(cb_out_accumulate_im, out_chunk_tiles);
+                cb_reserve_back(cb_out_final, out_chunk_tiles);
+                pack_untilize_block<out_chunk_tiles>(cb_out_accumulate_im, 1, cb_out_final);
+                cb_pop_front(cb_out_accumulate_im, out_chunk_tiles);
+                cb_push_back(cb_out_final, out_chunk_tiles);
+            } else {
+                copy_block(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
+            }
 
             // free up cb_prev_max after K chunks
             cb_pop_front(cb_prev_max, Sq_chunk_t);
