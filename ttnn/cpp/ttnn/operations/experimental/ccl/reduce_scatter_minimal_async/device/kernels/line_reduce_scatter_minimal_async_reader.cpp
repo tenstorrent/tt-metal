@@ -75,23 +75,7 @@ void kernel_main() {
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     uint32_t link = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t fwd_bwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-
-    DPRINT << (is_forward ? "FWD" : "BWD") << " READER: initial val of fwd_bwd_sem_addr: "
-           << (uint32_t)(*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr)) << "\n";
-
-    // DPRINT all uint32_t args
-    DPRINT << "my_chip_id: " << my_chip_id << "\n";
-    DPRINT << "tile_granularity: " << tile_granularity << "\n";
-    DPRINT << "input_tensor_Wt: " << input_tensor_Wt << "\n";
-    DPRINT << "input_tensor_page_size: " << input_tensor_page_size << "\n";
-    DPRINT << "batch_slice_num_pages: " << batch_slice_num_pages << "\n";
-    DPRINT << "ring_size: " << ring_size << "\n";
-    DPRINT << "num_batches: " << num_batches << "\n";
-    DPRINT << "link: " << link << "\n";
-    DPRINT << "num_links: " << num_links << "\n";
-    DPRINT << (is_forward ? "FWD" : "BWD")
-           << " READER: sync_with_other_direction: " << (uint32_t)sync_with_other_direction << "\n";
+    uint32_t fwd_bwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
     ReduceScatterOpReceiver matmul_receiver;
     if constexpr (fuse_op) {
@@ -133,10 +117,6 @@ void kernel_main() {
         // If this device has both FWD and BWD neighbors, the FWD reader will do final reduction first
         // and then signal the BWD reader to do its final reduction.
         for (uint32_t iter = 0; iter < num_targets_in_direction; ++iter) {
-            // DPRINT << (is_forward ? "FWD" : "BWD") << " READER: iter: " << iter << "\n";
-            // const bool do_reduce = !is_first_device_in_direction;
-            // uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
-
             uint32_t input_tile_id_start = slice_idx * slice_Wt + batch_offset;
             uint32_t intermediate_tile_id_start = slice_idx * slice_Wt;
             uint32_t stride_Wt = input_tensor_Wt;
@@ -147,12 +127,6 @@ void kernel_main() {
             uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
             uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
 
-            // DPRINT << "READER: for link " << link << ", tiles_read: " << tiles_read
-            //        << ", tiles_to_read: " << tiles_to_read << ", "
-            //        << "pages_read_in_row: " << pages_read_in_row << ", row_offset: " << row_offset
-            //        << ", slice_Wt: " << slice_Wt << ", stride_Wt: " << stride_Wt << ", batch_offset: " <<
-            //        batch_offset
-            //        << "\n";
             if constexpr (is_first_device_in_direction) {
                 // We have no incoming slices, so forward directly to writer.
                 uint32_t cb_in0 = cb_reader_output_id;
@@ -178,7 +152,7 @@ void kernel_main() {
                 // I have incoming slices, so write my output to compute kernel and read intermediate input
                 uint32_t cb_in0 = cb_input_id;
                 // Wait on output semaphore
-                while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem) <= iter);
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), iter + 1);
 
                 while (tiles_read < tiles_to_read) {
                     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
@@ -227,8 +201,6 @@ void kernel_main() {
 
         // Do the final reduction. Synchronize with other direction.
         if constexpr (do_final_reduction) {
-            DPRINT << (is_forward ? "FWD" : "BWD") << " READER: final reduction\n";
-
             bool accumulate_output =
                 false;  // If true, output += intermediate. Otherwise, output = input + intermediate
             auto reduction_input_addrgen = input_tensor_addrgen;
@@ -241,13 +213,8 @@ void kernel_main() {
                 accumulate_output = true;
                 reduction_input_addrgen = output_tensor_addrgen;
                 // Wait for FWD writer to signal that it has done its final reduction
-                while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr) < 1);
-                DPRINT << (is_forward ? "FWD" : "BWD") << " READER: got signal from local FWD" << "\n";
-                DPRINT << (is_forward ? "FWD" : "BWD") << " READER: after signal val of fwd_bwd_sem_addr: "
-                       << *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr) << "\n";
-
-                // // Reset the semaphore to 0
-                // *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr) = 0;
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), 1);
+                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), 0);
             }
 
             /**
@@ -284,13 +251,14 @@ void kernel_main() {
             uint32_t cb_in0 = cb_input_id;
 
             if (accumulate_output) {
-                input_tile_id_start = batch_offset;
+                input_tile_id_start = b * batch_slice_num_pages;  // output batch offset
                 pages_read_in_row = (link * batch_slice_num_pages / num_links) % slice_Wt;
                 row_offset = (link * batch_slice_num_pages / num_links);
                 stride_Wt = slice_Wt;
             }
             // Wait on output semaphore
-            while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem) <= num_targets_in_direction);
+            noc_semaphore_wait_min(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), num_targets_in_direction + 1);
 
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
@@ -328,6 +296,8 @@ void kernel_main() {
                 cb_push_back(cb_intermediate_id, tile_granularity);
             }
         }
+
+        // Reset my output ready semaphore
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
     }
-    DPRINT << (is_forward ? "FWD" : "BWD") << " READER: Done\n";
 }
