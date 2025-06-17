@@ -376,6 +376,7 @@ Result conv2d_DRAM(
             sliced_output_tensor = ttnn::untilize(sliced_output_tensor);
         }
         if (sliced_output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
+            // slice_write expects the output tensor to be correctly shaped when its in interleaved memory layout.
             sliced_output_tensor = ttnn::reshape(
                 sliced_output_tensor,
                 ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
