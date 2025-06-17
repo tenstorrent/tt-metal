@@ -323,8 +323,45 @@ Tensor Tanhshrink::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::TANHSHRINK;
-
     return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
+Tensor Deg2Rad::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    constexpr float DEG_TO_RAD = 0.017453292519943295f;  // pi/180
+    return binary::BinaryOperation<operations::binary::BinaryOpType::MUL>::invoke(
+        queue_id,
+        input_tensor,
+        DEG_TO_RAD,
+        input_tensor.dtype(),
+        memory_config,
+        optional_output_tensor,
+        {},
+        {},
+        {},
+        std::nullopt);
+}
+
+Tensor Rad2Deg::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    constexpr float RAD_TO_DEG = 57.29577951308232f;  // 180/pi
+    return binary::BinaryOperation<operations::binary::BinaryOpType::MUL>::invoke(
+        queue_id,
+        input_tensor,
+        RAD_TO_DEG,
+        input_tensor.dtype(),
+        memory_config,
+        optional_output_tensor,
+        {},
+        {},
+        {},
+        std::nullopt);
 }
 
 template <UnaryOpType unary_op_type, typename T>
