@@ -194,8 +194,9 @@ void get_optimal_noc_for_edm(
     }
     log_debug(
         tt::LogTest,
-        "device {} edm_builder1 {} {} is connecting to edm_builder2 {} {} num links {}",
-        edm_builder1.my_chip_id,
+        "Fabric MeshId {} ChipId {} edm_builder1 {} {} is connecting to edm_builder2 {} {} num links {}",
+        *(edm_builder1.local_fabric_node_id.mesh_id),
+        edm_builder1.local_fabric_node_id.chip_id,
         edm_builder1.my_noc_x,
         edm_builder1.my_noc_y,
         edm_builder2.my_noc_x,
