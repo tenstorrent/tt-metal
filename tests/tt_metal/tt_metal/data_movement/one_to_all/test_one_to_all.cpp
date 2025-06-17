@@ -59,7 +59,8 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;
     const size_t total_size_bytes = bytes_per_transaction * test_config.num_of_transactions;
 
-    if (test_config.loopback && (total_size_bytes > 1024 * 1024 / 2)) {  // FIX the 1024 1024 number here
+    if (test_config.loopback &&
+        (total_size_bytes > 1024 * 1024 / 2)) {  // FIX the 1024 1024 number here // Could we just enforce this before?
         log_error(tt::LogTest, "Not enough memory for master core using loopback");
         return false;
     }
@@ -131,7 +132,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
                                             (uint32_t)test_config.test_id,
                                             (uint32_t)num_subordinates,
                                             (uint32_t)sem_id};
-    std::string sender_kernel_path;
+    std::string sender_kernel_path = "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/";
 
     if (test_config.is_multicast) {  // Multicast Sender Kernel
         sender_compile_args.insert(
@@ -142,9 +143,9 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
              (uint32_t)sub_worker_start_coord.y,
              (uint32_t)sub_worker_end_coord.x,
              (uint32_t)sub_worker_end_coord.y});
-        sender_kernel_path = "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/sender_multicast.cpp";
+        sender_kernel_path += "sender_multicast.cpp";
     } else {  // Unicast Sender Kernel
-        sender_kernel_path = "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/sender.cpp";
+        sender_kernel_path += "sender.cpp";
     }
 
     auto sender_kernel = CreateKernel(
@@ -238,9 +239,13 @@ void directed_ideal_test(
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
+    if (loopback) {
+        max_pages_reservable /= 2;  // Loopback uses half of the memory
+    }
+
     // Adjustable Parameters (Ideal: Less transactions, more data per transaction)
-    uint32_t num_of_transactions = 32;     // 64;
-    uint32_t pages_per_transaction = 256;  // max_pages_reservable / num_of_transactions;
+    uint32_t pages_per_transaction = 256;
+    uint32_t num_of_transactions = max_pages_reservable / pages_per_transaction;
 
     unit_tests::dm::core_to_all::OneToAllConfig test_config = {
         .test_id = test_case_id,
@@ -288,7 +293,7 @@ void packet_sizes_test(
             continue;  // Loopback is not applicable for multicast
         }
         if (loopback) {
-            max_transactions /= 2;
+            max_pages_reservable /= 2;
         }
 
         for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
