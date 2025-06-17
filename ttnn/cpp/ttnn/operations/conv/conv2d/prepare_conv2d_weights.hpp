@@ -80,7 +80,7 @@ ttnn::Tensor prepare_conv_weights(
     uint32_t groups,
     T* device,
     DataType input_dtype,
-    DataType output_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
@@ -102,7 +102,7 @@ ttnn::Tensor prepare_conv_bias(
     uint32_t groups,
     T* device,
     DataType input_dtype,
-    DataType output_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 

@@ -128,7 +128,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     uint32_t groups,
     T* device,
     DataType input_dtype,
-    DataType output_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     bool mirror_kernel) {
@@ -178,7 +178,7 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     uint32_t groups,
     T* device,
     DataType input_dtype,
-    DataType output_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
     return prepare_conv_bias(
@@ -220,7 +220,7 @@ template ttnn::Tensor prepare_conv_transpose2d_weights(
     uint32_t groups,
     IDevice* device,
     DataType input_dtype,
-    DataType output_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     bool mirror_kernel);
@@ -243,7 +243,7 @@ template ttnn::Tensor prepare_conv_transpose2d_weights(
     uint32_t groups,
     tt::tt_metal::distributed::MeshDevice* device,
     DataType input_dtype,
-    DataType output_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     bool mirror_kernel);
@@ -264,7 +264,7 @@ template ttnn::Tensor prepare_conv_transpose2d_bias(
     uint32_t groups,
     IDevice* device,
     DataType input_dtype,
-    DataType output_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
@@ -284,7 +284,7 @@ template ttnn::Tensor prepare_conv_transpose2d_bias(
     uint32_t groups,
     tt::tt_metal::distributed::MeshDevice* device,
     DataType input_dtype,
-    DataType output_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
