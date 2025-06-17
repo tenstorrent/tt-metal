@@ -13,6 +13,8 @@ run_tg_llama3_tests() {
   for llama_dir in "$llama70b"; do
     LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/demo_decode.py -k "full" --timeout 1000; fail+=$?;
     LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "repeat" --timeout 1000; fail+=$?;
+    HF_HOME=/mnt/MLPerf/tt_dnn-models HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "repeat" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "repeat" --timeout 1000; fail+=$?;
     LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "long-context-batch32" --timeout 1000; fail+=$?;
     LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "long-context-32k" --timeout 1000; fail+=$?;
 
