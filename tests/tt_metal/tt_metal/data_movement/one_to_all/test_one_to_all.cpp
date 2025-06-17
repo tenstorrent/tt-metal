@@ -110,6 +110,9 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
             return false;
         }
     }
+    // Assigns an L1 local address for the master and subordinate cores
+    // An offset if needed for the subordinate L1 base address if loopback is enabled,
+    // as both blocks must be distinct in that case to avoid overwriting data
     uint32_t mst_l1_base_address = mst_l1_info.base_address;
     uint32_t sub_l1_base_address =
         test_config.loopback ? mst_l1_base_address : mst_l1_base_address + (bytes_per_transaction);

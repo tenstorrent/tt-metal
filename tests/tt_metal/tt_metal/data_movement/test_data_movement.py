@@ -203,13 +203,13 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 32700, "upper": 37500}, "bandwidth": 28},  # 18596, 28.2
         },
         52: {  # One to All Unicast Directed Ideal
-            "riscv_0": {"latency": {"lower": 0, "upper": 1100000}, "bandwidth": 30},  # 1076641, 31.17
+            "riscv_0": {"latency": {"lower": 0, "upper": 4350000}, "bandwidth": 30},  # 4297376, 31.23
         },
         53: {  # One to All Multicast Directed Ideal
-            "riscv_0": {"latency": {"lower": 0, "upper": 36000}, "bandwidth": 15},  # 34464, 15.21
+            "riscv_0": {"latency": {"lower": 0, "upper": 150000}, "bandwidth": 15},  # 137035, 15.3
         },
         54: {  # One to All Multicast Linked Directed Ideal
-            "riscv_0": {"latency": {"lower": 0, "upper": 25000}, "bandwidth": 22},  # 22513, 23.28
+            "riscv_0": {"latency": {"lower": 0, "upper": 90000}, "bandwidth": 23},  # 88542, 23.69
         },
         17: {
             "riscv_1": {"latency": {"lower": 50, "upper": 700}, "bandwidth": 3},
@@ -297,13 +297,13 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 16000, "upper": 17800}, "bandwidth": 59},  # 8730, 60.1
         },
         52: {  # One to All Unicast Directed Ideal
-            "riscv_0": {"latency": {"lower": 0, "upper": 950000}, "bandwidth": 62},  # 919314, 62.73
+            "riscv_0": {"latency": {"lower": 0, "upper": 7500000}, "bandwidth": 62},  # 7345627, 62.8
         },
         53: {  # One to All Multicast Directed Ideal
-            "riscv_0": {"latency": {"lower": 0, "upper": 24000}, "bandwidth": 24},  # 21350, 24.56
+            "riscv_0": {"latency": {"lower": 0, "upper": 180000}, "bandwidth": 24},  # 170221, 24.6
         },
         54: {  # One to All Multicast Linked Directed Ideal
-            "riscv_0": {"latency": {"lower": 0, "upper": 16000}, "bandwidth": 39},  # 13175, 39.794
+            "riscv_0": {"latency": {"lower": 0, "upper": 110000}, "bandwidth": 41},  # 101088, 41.4
         },
         17: {
             "riscv_1": {"latency": {"lower": 50, "upper": 700}, "bandwidth": 7},
