@@ -135,7 +135,6 @@ def gen_tensors(
     input_tokens = gen_tokens(batch, hidden_size, mesh_shape, devices, scheme, dtype)
     expert_mapping = gen_expert_mapping(experts, devices, scheme)
     expert_indices = get_expert_indices(batch, experts, selected_experts_k, mesh_shape, scheme)
-    logger.info(f"expert_indices {expert_indices}")
 
     output_tensor = get_output_tensor(input_tokens, expert_indices, expert_mapping, mesh_shape, dtype)
     metadata_tensor = get_metadata_tensor(expert_indices, expert_mapping, mesh_shape)
@@ -205,6 +204,7 @@ def run_all_to_all_dispatch_test(
 ):
     mesh_device.enable_program_cache()
     devices = mesh_shape[0] * mesh_shape[1]
+
     # input, output, interm core range set
     compute_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     subdevice_shard_cores_grid = ttnn.CoreRangeSet(
@@ -219,6 +219,10 @@ def run_all_to_all_dispatch_test(
     expert_indices_tensors = []
     expert_mapping_tensors = []
     input_tensors = []
+    output_tensors = []
+    metadata_tensors = []
+
+    torch_expert_mappings = []
 
     output_tensor_goldens_list = []
     output_metadata_goldens_list = []
@@ -234,6 +238,9 @@ def run_all_to_all_dispatch_test(
             scheme=scheme,
             dtype=tt_to_torch_dtype(dtype),
         )
+        preallocated_output_tensor = torch.zeros((devices, batch, 1, hidden_size), dtype=tt_to_torch_dtype(dtype))
+        preallocated_metadata_tensor = torch.zeros((devices, batch, 1, select_experts_k), dtype=torch.int32)
+
         if iter == 0:
             logger.info(f"input_tokens shape: {input_tokens.shape}")
             logger.info(f"expert_indices shape: {expert_indices.shape}")
@@ -243,6 +250,7 @@ def run_all_to_all_dispatch_test(
 
         output_tensor_goldens_list.append(sparse_output_token_tensor)
         output_metadata_goldens_list.append(metadata_tensor)
+        torch_expert_mappings.append(expert_mapping)
 
         tt_input = ttnn.from_torch(
             input_tokens,
@@ -271,6 +279,24 @@ def run_all_to_all_dispatch_test(
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
         )
 
+        tt_output_tensor = ttnn.from_torch(
+            preallocated_output_tensor,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dtype,
+            memory_config=output_memory_config,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+
+        tt_metadata_tensor = ttnn.from_torch(
+            preallocated_metadata_tensor,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint16,
+            memory_config=output_memory_config,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+
         if iter == 0:
             logger.info(f"tt_input shape: {tt_input.shape}")
             logger.info(f"tt_expert_indices shape: {tt_expert_indices.shape}")
@@ -279,8 +305,9 @@ def run_all_to_all_dispatch_test(
         input_tensors.append(tt_input)
         expert_indices_tensors.append(tt_expert_indices)
         expert_mapping_tensors.append(tt_expert_mapping)
+        output_tensors.append(tt_output_tensor)
+        metadata_tensors.append(tt_metadata_tensor)
 
-    ttnn.synchronize_device(mesh_device)
     ccl_sub_device_crs = subdevice_shard_cores_grid
     worker_sub_device = ttnn.SubDevice(
         [
@@ -304,7 +331,7 @@ def run_all_to_all_dispatch_test(
 
         for i in range(n_iters):
             buffer_index = 0 if trace_mode else i
-            tt_out_tensor, tt_metadata = ttnn.all_to_all_dispatch(
+            ttnn.all_to_all_dispatch(
                 input_tensors[buffer_index],
                 expert_indices_tensors[buffer_index],
                 expert_mapping_tensors[buffer_index],
@@ -314,7 +341,11 @@ def run_all_to_all_dispatch_test(
                 memory_config=output_memory_config,
                 global_semaphore=ccl_semaphore_handles[buffer_index],
                 subdevice_id=worker_sub_device_id,
+                output_tensors=[output_tensors[buffer_index], metadata_tensors[buffer_index]],
             )
+
+            tt_out_tensor = output_tensors[buffer_index]
+            tt_metadata = metadata_tensors[buffer_index]
 
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
@@ -395,20 +426,20 @@ def run_all_to_all_dispatch_test(
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
         )
 
-        logger.info(f"golden_output_tensor shape: {output_tensor_goldens_list[tensor_index].shape}")
-        logger.info(f"golden_output_tensor {output_tensor_goldens_list[tensor_index]}")
-        logger.info(f"tt_torch_tensor shape: {tt_torch_tensor.shape}")
-        logger.info(f"tt_torch_tensor {tt_torch_tensor}")
+        # logger.info(f"golden_output_tensor shape: {output_tensor_goldens_list[tensor_index].shape}")
+        # logger.info(f"golden_output_tensor {output_tensor_goldens_list[tensor_index]}")
+        # logger.info(f"tt_torch_tensor shape: {tt_torch_tensor.shape}")
+        # logger.info(f"tt_torch_tensor {tt_torch_tensor}")
 
         tt_metadata_tensor = ttnn.to_torch(
             tt_metadata_list[tensor_index],
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
         )
 
-        logger.info(f"golden_metadata_tensor shape: {output_metadata_goldens_list[tensor_index].shape}")
-        logger.info(f"golden_metadata_tensor {output_metadata_goldens_list[tensor_index]}")
-        logger.info(f"tt_metadata_tensor shape: {tt_metadata_tensor.shape}")
-        logger.info(f"tt_metadata_tensor {tt_metadata_tensor}")
+        # logger.info(f"golden_metadata_tensor shape: {output_metadata_goldens_list[tensor_index].shape}")
+        # logger.info(f"golden_metadata_tensor {output_metadata_goldens_list[tensor_index]}")
+        # logger.info(f"tt_metadata_tensor shape: {tt_metadata_tensor.shape}")
+        # logger.info(f"tt_metadata_tensor {tt_metadata_tensor}")
 
         batch = tt_torch_tensor.shape[1]
         devices = tt_metadata_tensor.shape[0]
@@ -425,7 +456,7 @@ def run_all_to_all_dispatch_test(
             for k in range(selected_experts_k):
                 expert_id = tt_metadata_tensor[0, b, 0, k]
                 for d in range(devices):
-                    if expert_mapping[0, 0, expert_id, d] == 1:
+                    if torch_expert_mappings[tensor_index][0, 0, expert_id, d] == 1:
                         eq, output_results = comp_pcc(
                             tt_torch_tensor[d, b, 0, :],
                             output_tensor_goldens_list[tensor_index][d, b, 0, :],
