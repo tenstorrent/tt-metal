@@ -62,7 +62,7 @@ bool run_dm(IDevice* device, const OneFromAllConfig& test_config) {
         }
     }
     // Check if the L1 size is sufficient for the test configuration
-    if (master_l1_info.size < total_size_bytes) {
+    if (master_l1_info.size < transaction_size_bytes) {
         log_error(tt::LogTest, "Insufficient L1 size for the test configuration");
         return false;
     }
@@ -106,24 +106,25 @@ bool run_dm(IDevice* device, const OneFromAllConfig& test_config) {
 
     // Input
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -100.0f, 100.0f, total_size_bytes / bfloat16::SIZEOF, chrono::system_clock::now().time_since_epoch().count());
+        -100.0f,
+        100.0f,
+        transaction_size_bytes / bfloat16::SIZEOF,
+        chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
     vector<uint32_t> packed_golden = packed_input;
 
     // Launch program and record outputs
     for (size_t i = 0; i < total_subordinate_cores; i++) {
-        auto begin = packed_input.data() + i * subordinate_size_bytes / sizeof(uint32_t);
-        auto end = packed_input.data() + (i + 1) * subordinate_size_bytes / sizeof(uint32_t);
-        vector<uint32_t> partial_input(begin, end);
-        detail::WriteToDeviceL1(device, sub_core_list[i], l1_base_address, partial_input);
+        detail::WriteToDeviceL1(device, sub_core_list[i], l1_base_address, packed_input);
     }
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     detail::LaunchProgram(device, program);
 
     vector<uint32_t> packed_output;
-    detail::ReadFromDeviceL1(device, test_config.master_core_coord, l1_base_address, total_size_bytes, packed_output);
+    detail::ReadFromDeviceL1(
+        device, test_config.master_core_coord, l1_base_address, transaction_size_bytes, packed_output);
 
     // Results comparison
     bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
@@ -149,8 +150,8 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
 
     // Parameters
     uint32_t max_transactions = 256;
-    uint32_t max_transaction_size_pages = 64;
-
+    uint32_t max_transaction_size_pages =
+        arch_ == tt::ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
     // Cores
     CoreCoord master_core_coord = {0, 0};
     CoreRangeSet subordinate_core_set = {CoreRange(CoreCoord(1, 1), CoreCoord(4, 4))};
@@ -159,7 +160,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
              transaction_size_pages *= 2) {
-            if (num_of_transactions * transaction_size_pages * total_subordinate_cores > max_transmittable_pages) {
+            if (transaction_size_pages > max_transmittable_pages) {
                 continue;
             }
 
