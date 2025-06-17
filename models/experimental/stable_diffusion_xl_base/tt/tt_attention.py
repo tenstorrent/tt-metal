@@ -92,8 +92,8 @@ class TtAttention(nn.Module):
         if self.is_self_attention:
             if hidden_states.shape[-1] == 640:
                 memory_config = ttnn.create_sharded_memory_config(
-                    shape=(1, 1, 4096 // 8, 1920 // 6),
-                    core_grid=ttnn.CoreGrid(y=8, x=6),
+                    shape=(1, 1, 512, 256),
+                    core_grid=ttnn.CoreGrid(y=8, x=8),
                     strategy=ttnn.ShardStrategy.BLOCK,
                     use_height_and_width_as_shard_shape=True,
                 )
