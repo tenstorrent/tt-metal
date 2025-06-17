@@ -31,7 +31,7 @@ add_custom_target(
         profiler_examples
         ${PROGRAMMING_EXAMPLES_TEST_TARGETS}
 )
-# cmake-format: sortable
+
 install(
     DIRECTORY
         add_2_integers_in_compute
@@ -55,7 +55,7 @@ install(
     "/kernels/"
         EXCLUDE
 )
-# cmake-format: sortable
+
 install(
     DIRECTORY
         add_2_integers_in_compute

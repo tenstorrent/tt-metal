@@ -73,12 +73,24 @@ jobs:
                 echo "::group::${example_name} - run"
                 # Find and run the built executable
                 exec_path=$(find . -maxdepth 1 -type f -executable -not -name "*.so")
-                [ "$(echo "$exec_path" | wc -l)" -eq 1 ] || {
-                  echo "Expected exactly one executable, found: $(echo "$exec_path" | wc -l)" >&2
-                  echo "$exec_path" >&2
-                  exit 1
-                }
-                "$exec_path"
+                if [ "$(echo "$exec_path" | wc -l)" -eq 1 ]; then
+                  # Single executable case - run it directly
+                  "$exec_path"
+                else
+                  # Multiple executables case - run each one
+                  echo "Found multiple executables, running them in sequence:"
+                  echo "$exec_path"
+                  echo "----------------------------------------"
+                  for exe in $exec_path; do
+                    echo "Running: $exe"
+                    "$exe"
+                    if [ $? -ne 0 ]; then
+                      echo "Error: $exe failed with exit code $?"
+                      exit 1
+                    fi
+                    echo "----------------------------------------"
+                  done
+                fi
                 echo "::endgroup::"
               done
             else
@@ -94,12 +106,24 @@ jobs:
               echo "::group::${example_name} - run"
               # Find and run the built executable
               exec_path=$(find . -maxdepth 1 -type f -executable -not -name "*.so")
-              [ "$(echo "$exec_path" | wc -l)" -eq 1 ] || {
-                echo "Expected exactly one executable, found: $(echo "$exec_path" | wc -l)" >&2
-                echo "$exec_path" >&2
-                exit 1
-              }
-              "$exec_path"
+              if [ "$(echo "$exec_path" | wc -l)" -eq 1 ]; then
+                # Single executable case - run it directly
+                "$exec_path"
+              else
+                # Multiple executables case - run each one
+                echo "Found multiple executables, running them in sequence:"
+                echo "$exec_path"
+                echo "----------------------------------------"
+                for exe in $exec_path; do
+                  echo "Running: $exe"
+                  "$exe"
+                  if [ $? -ne 0 ]; then
+                    echo "Error: $exe failed with exit code $?"
+                    exit 1
+                  fi
+                  echo "----------------------------------------"
+                done
+              fi
               echo "::endgroup::"
             fi
           done

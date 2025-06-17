@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.22...3.30)
 project(metal_example_matmul)
 
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+
 find_package(TT-Metalium REQUIRED)
 
 add_executable(metal_example_matmul_single_core)
