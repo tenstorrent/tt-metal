@@ -9,17 +9,20 @@
 #include "debug/dprint.h"
 
 void kernel_main() {
+    // same arg indices as in reader_binary_diff_lengths for compat
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
     uint32_t src1_addr = get_arg_val<uint32_t>(1);
     uint32_t Mt = get_arg_val<uint32_t>(2);
     uint32_t Kt = get_arg_val<uint32_t>(3);
     uint32_t Nt = get_arg_val<uint32_t>(4);
-    uint32_t output_tile_start_id = get_arg_val<uint32_t>(5);
-    uint32_t num_output_tiles = get_arg_val<uint32_t>(6);
+    uint32_t output_tile_start_id = get_arg_val<uint32_t>(5);  // starting tile ID for output tiles
+    uint32_t num_output_tiles = get_arg_val<uint32_t>(6);      // number of output tiles to read
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
 
+    // Declare address in which we stored the source matrices. We have set the exact same format between CBs and DRAM
+    // buffers in the host code, so we can use the same address for both DRAM and CBs.
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
     const DataFormat in0_data_format = get_dataformat(cb_id_in0);
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
@@ -41,8 +44,8 @@ void kernel_main() {
 
         // Read all K tiles for this output position
         for (uint32_t k = 0; k < Kt; k++) {
-            // Read A tile at (out_row, k)
-            uint32_t tile_A = out_row * Kt + k;
+            // Read A's tile at (out_row, k)
+            uint32_t tile_A = out_row * Kt + k;  // A is MK, so we stride by Kt
             {
                 cb_reserve_back(cb_id_in0, 1);
                 uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
@@ -51,8 +54,8 @@ void kernel_main() {
                 cb_push_back(cb_id_in0, 1);
             }
 
-            // Read B tile at (k, out_col)
-            uint32_t tile_B = k * Nt + out_col;
+            // Read B's tile at (k, out_col)
+            uint32_t tile_B = k * Nt + out_col;  // B is KN, so we stride by Nt
             {
                 cb_reserve_back(cb_id_in1, 1);
                 uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);

@@ -17,6 +17,8 @@ Building the example can be done by adding a ``--build-programming-examples`` fl
     ./build_metal.sh --build-programming-examples
     ./build/programming_examples/matmul_single_core
 
+.. _mm_single_core_device_initialization:
+
 Device Initialization & Program Setup
 -------------------------------------
 
@@ -342,6 +344,8 @@ The writer kernel consumes tiles from the output circular buffer ``cb_id_out0`` 
         }
     }
 
+.. _mm_single_core_kernel_execution:
+
 Kernel exexution and result verification
 ----------------------------------------
 
@@ -394,3 +398,5 @@ This single-core matrix multiplication example highlights several key architectu
 * **Separation of data movement and compute**: By using dedicated RISC-V processors for data movement (reader/writer kernels) and the matrix engine for computation, complex data orchestration patterns do not sacrifice compute throughput. The data movement processors can handle complex access patterns while the compute units remain fully utilized.
 * **Tiled operations**: The hardware is optimized for tiled operations, making tile-based algorithms essential for achieving peak performance. All matrices are processed in tile units, matching the natural granularity of the underlying hardware accelerators.
 * **Pipelined data movement**: The circular buffer architecture with double buffering enables overlapped execution - while the compute kernel processes current tiles, the data movement kernels can simultaneously fetch the next set of tiles. This pipelining ensures efficient utilization of compute resources by minimizing idle time.
+
+Next we will explore the :ref:`MatMul_Multi_Core example <MatMul_Multi_Core example>`, which extends these concepts to a multi-core setup, demonstrating how to scale matrix multiplication across multiple Tensix cores for even greater performance.

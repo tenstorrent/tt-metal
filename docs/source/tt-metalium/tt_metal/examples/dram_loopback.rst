@@ -45,6 +45,7 @@ Create buffers in DRAM and L1 (SRAM)
 Next, we need to declare buffers that will hold the actual data and an intermediate buffer on chip,
 
 There's in total 3 buffers to be created:
+
 * An L1 (SRAM) buffer within the core itself that will act as temporary storage
 * A DRAM buffer that will house input data
 * A DRAM buffer that will be written to with output data

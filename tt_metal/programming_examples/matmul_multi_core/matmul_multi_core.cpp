@@ -106,7 +106,7 @@ void matmul_multi_core(
     Program program{};
 
     // Get the compute grid size to determine how many cores are available
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto core_grid = device->compute_with_storage_grid_size();
     auto num_output_tiles_total = (M * N) / TILE_HW;
 
     // Use the split_work_to_cores utility function to distribute matrix multiplication work
@@ -118,7 +118,7 @@ void matmul_multi_core(
     // The secondary group is empty if the work can be evenly distributed across all cores. This
     // approach minimizes workload imbalance between cores for optimal performance.
     auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core1, work_per_core2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
+        split_work_to_cores(core_grid, num_output_tiles_total);
 
     // Extracting Matrix dimensions from input/output vectors and converting to tile coordinates.
     // The accelerator works with 32x32 tiles, so we need to convert from element dimensions
@@ -210,8 +210,8 @@ void matmul_multi_core(
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = {}});
 
     // Set Runtime Arguments for Kernels
-    // Each core needs to know which portion of the work it's responsible for.  We are parallelizing across output
-    // iles - each core computes different output tiles. Runtime arguments can be changed between program executions
+    // Each core needs to know which portion of the work it's responsible for. We are parallelizing across output
+    // tiles - each core computes different output tiles. Runtime arguments can be changed between program executions
     // without recompilation.
     uint32_t work_offset = 0;
     std::array<std::pair<CoreRangeSet, uint32_t>, 2> work_groups = {
