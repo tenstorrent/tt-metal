@@ -274,12 +274,9 @@ void packet_sizes_test(
     /* Running the Test */
 
     uint32_t max_transactions = 256;
-    uint32_t max_pages_reservable_per_transaction = 64;
+    uint32_t max_pages_reservable_per_transaction = arch_ == tt::ARCH::BLACKHOLE ? 1024 : 2048; // Max total transaction size == 64 KB
 
     for (bool loopback : {true, false}) {
-        if (!loopback && is_multicast) {
-            continue;  // Loopback is not applicable for multicast
-        }
         if (loopback) {
             max_pages_reservable /= 2;
         }
