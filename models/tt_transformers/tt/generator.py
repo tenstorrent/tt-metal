@@ -577,23 +577,22 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
     ):
-        batch_size = tokens.shape[0]
-        max_batch_size_per_model, batch_size_per_model = self._get_batch_size_per_model(batch_size)
-
-        tokens = torch.split(tokens, batch_size_per_model)
-        start_pos = torch.split(start_pos, batch_size_per_model)
-
+        B = tokens.shape[0]
+        data_parallel = min(B, self.data_parallel)
+        batch_per_device = B // data_parallel
+        tokens = torch.chunk(tokens, self.data_parallel, 0)
+        start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         cross_attention_masks = [
-            cross_attention_masks[i * max_batch_size_per_model : (i + 1) * max_batch_size_per_model]
-            for i in range(self.data_parallel)
+            cross_attention_masks[i * batch_per_device : (i + 1) * batch_per_device] for i in range(data_parallel)
         ]
         full_text_row_masked_out_mask = [
-            full_text_row_masked_out_mask[i * max_batch_size_per_model : (i + 1) * max_batch_size_per_model]
-            for i in range(self.data_parallel)
+            full_text_row_masked_out_mask[i * batch_per_device : (i + 1) * batch_per_device]
+            for i in range(data_parallel)
         ]
-
-        page_table = torch.split(page_table, batch_size_per_model) if page_table is not None else None
-        cross_page_table = torch.split(cross_page_table, batch_size_per_model) if cross_page_table is not None else None
+        page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
+        cross_page_table = (
+            torch.chunk(cross_page_table, self.data_parallel, 0) if cross_page_table is not None else None
+        )
 
         decode_kwargs = {
             "position_id": start_pos,
@@ -611,7 +610,7 @@ class Generator:
             tt_logits = self._decode_forward_no_trace(**decode_kwargs)
 
         if read_from_device:
-            to_host = self.read_decode_output(tt_logits, batch_size)
+            to_host = self.read_decode_output(tt_logits, B)
             return to_host
         else:
             return tt_logits
