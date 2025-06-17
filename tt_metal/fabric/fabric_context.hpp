@@ -69,6 +69,8 @@ private:
     std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> dateline_router_config_ = nullptr;
     std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> dateline_upstream_router_config_ = nullptr;
     std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> dateline_upstream_adjcent_router_config_ = nullptr;
+    std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> dateline_upstream_adjcent_upstream_router_config_ =
+        nullptr;
 
     // Using vectors. Use Device IDs as indices
     size_t num_devices = 0;

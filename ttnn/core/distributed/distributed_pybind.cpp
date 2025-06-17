@@ -49,22 +49,23 @@ void py_module_types(py::module& module) {
 }
 
 void py_module(py::module& module) {
-    // TODO: #17477 - Remove overloads that accept 'row' and 'col'. Instead, use generic ND terms.
     static_cast<py::class_<MeshShape>>(module.attr("MeshShape"))
         .def(
-            py::init([](size_t num_rows, size_t num_cols) { return MeshShape(num_rows, num_cols); }),
-            "Constructor with the specified number of rows and columns.",
-            py::arg("num_rows"),
-            py::arg("num_cols"))
+            py::init([](size_t s0, size_t s1) { return MeshShape(s0, s1); }),
+            "Constructor with the specified 2D shape. The value s0 is assumed to be the outer dimension.",
+            py::arg("s0"),
+            py::arg("s1"))
         .def(
-            py::init([](size_t x, size_t y, size_t z) { return MeshShape(x, y, z); }),
-            "Constructor with the specified 3D shape.",
-            py::arg("x"),
-            py::arg("y"),
-            py::arg("z"))
+            py::init([](size_t s0, size_t s1, size_t s2) { return MeshShape(s0, s1, s2); }),
+            "Constructor with the specified 3D shape. The values s0...s2 are assumed to be supplied in row-major order "
+            "(from outer dim to inner dim).",
+            py::arg("s0"),
+            py::arg("s1"),
+            py::arg("s2"))
         .def(
             py::init([](const std::vector<uint32_t>& shape) { return MeshShape(shape); }),
-            "Constructor with the specified ND shape.",
+            "Constructor with the specified ND shape. The values s0...sn are assumed to be supplied in row-major order "
+            "(from outer dim to inner dim).",
             py::arg("shape"))
         .def(
             "__repr__",
@@ -79,19 +80,21 @@ void py_module(py::module& module) {
             py::keep_alive<0, 1>());
     static_cast<py::class_<MeshCoordinate>>(module.attr("MeshCoordinate"))
         .def(
-            py::init([](size_t row, size_t col) { return MeshCoordinate(row, col); }),
-            "Constructor with specified row and column offsets.",
-            py::arg("row"),
-            py::arg("col"))
+            py::init([](size_t c0, size_t c1) { return MeshCoordinate(c0, c1); }),
+            "Constructor with the specified 2D coordinate. The value c0 is assumed to be the outer dimension.",
+            py::arg("c0"),
+            py::arg("c1"))
         .def(
-            py::init([](size_t x, size_t y, size_t z) { return MeshCoordinate(x, y, z); }),
-            "Constructor with the specified 3D coordinate.",
-            py::arg("x"),
-            py::arg("y"),
-            py::arg("z"))
+            py::init([](size_t c0, size_t c1, size_t c2) { return MeshCoordinate(c0, c1, c2); }),
+            "Constructor with the specified 3D coordinate. The values c0...c2 are assumed to be supplied in row-major "
+            "order (from outer dim to inner dim).",
+            py::arg("c0"),
+            py::arg("c1"),
+            py::arg("c2"))
         .def(
             py::init([](const std::vector<uint32_t>& coords) { return MeshCoordinate(coords); }),
-            "Constructor with the specified ND coordinate.",
+            "Constructor with the specified ND coordinate. The values c0...cn are assumed to be supplied in row-major "
+            "order (from outer dim to inner dim).",
             py::arg("coords"))
         .def(
             "__repr__",
