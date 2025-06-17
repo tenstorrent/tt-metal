@@ -2399,3 +2399,16 @@ def test_binary_mixed_add(dtype_pt_a, dtype_tt_a, dtype_pt_b, dtype_tt_b, device
     out_pt = golden_fn(a_pt, b_pt)
 
     assert compare_pcc([out_tt], [out_pt])
+
+
+def test_add_1m(device):
+    torch.manual_seed(0)
+    a = torch.ones(1, 1) * 1_000_000
+    b = torch.ones(32, 32)
+    c = a + b
+
+    ta = ttnn.from_torch(a, device=device, layout=ttnn.TILE_LAYOUT)
+    tb = ttnn.from_torch(b, device=device, layout=ttnn.TILE_LAYOUT)
+    tc = ttnn.add(ta, tb)
+
+    assert torch.allclose(c, ttnn.to_torch(tc)), f"{c} != {ttnn.to_torch(tc)}"

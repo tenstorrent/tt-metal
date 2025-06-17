@@ -181,7 +181,8 @@ inline auto any_row_broadcasted(const Tensor& a, const auto& b) {
         const auto& a_shape = a.get_logical_shape();
         const auto& b_shape = b.get_logical_shape();
 
-        return (a_shape[-2] == 1 and b_shape[-2] > 1) or (b_shape[-2] == 1 and a_shape[-2] > 1);
+        return (a_shape[-2] == 1 and b_shape[-2] > 1 and a_shape[-1] > 1) or
+               (b_shape[-2] == 1 and a_shape[-2] > 1 and b_shape[-1] > 1);
     }
 
     return false;
