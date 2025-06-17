@@ -74,6 +74,7 @@ def select_torch_dtype(ttnn_dtype):
 )
 def test_scatter_normal(input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, device):
     torch.manual_seed(22052025)
+    device.enable_program_cache()
     torch_dtype = select_torch_dtype(input_dtype)
     torch_index_dtype = select_torch_dtype(index_dtype)
     ##
