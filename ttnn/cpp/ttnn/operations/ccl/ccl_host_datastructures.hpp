@@ -250,7 +250,8 @@ public:
     }
 
     [[nodiscard]]
-    std::vector<uint32_t> get_compile_time_args() const {
+    std::vector<uint32_t> get_compile_time_args(uint32_t risc_id) const {
+        // TODO: use risc_id accordingly
         return std::vector<uint32_t>{
             static_cast<uint32_t>(this->enable_sender ? 1 : 0),
             static_cast<uint32_t>(this->enable_receiver ? 1 : 0),

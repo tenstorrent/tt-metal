@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,8 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
@@ -177,7 +178,7 @@ void kernel_main() {
 
         noc_semaphore_set(stats_set_semaphore_addr_ptr, VALID);
         noc_semaphore_set_multicast_loopback_src(
-            stats_set_semaphore_addr, stats_set_semaphore_noc_addr, num_blocks, false, false);
+            stats_set_semaphore_addr, stats_set_semaphore_noc_addr, num_blocks, false);
         noc_async_write_barrier();
         fabric_connection.close_finish();  // Includes a noc async write barrier
     } else {

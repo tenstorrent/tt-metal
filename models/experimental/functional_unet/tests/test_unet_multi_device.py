@@ -43,7 +43,14 @@ def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, 
     total_batch = num_devices * batch
     logger.info(f"Using {num_devices} devices for this test")
     torch_input, ttnn_input = create_unet_input_tensors(
-        total_batch, groups, channel_order="first", pad=False, fold=False, mesh_mapper=inputs_mesh_mapper
+        total_batch,
+        groups,
+        channel_order="first",
+        pad=False,
+        fold=True,
+        device=mesh_device,
+        memory_config=unet_shallow_ttnn.UNet.input_sharded_memory_config,
+        mesh_mapper=inputs_mesh_mapper,
     )
     logger.info(f"Created reference input tensors: {list(torch_input.shape)}")
     logger.info(
@@ -51,7 +58,7 @@ def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, 
     )
 
     torch_output_tensor = model(torch_input)
-    output_tensor = ttnn_model(ttnn_input)
+    output_tensor = ttnn_model(ttnn_input, move_input_tensor_to_device=False)
 
     B, C, H, W = torch_output_tensor.shape
     ttnn_output_tensor = ttnn.to_torch(output_tensor, mesh_composer=output_mesh_composer).reshape(B, C, H, W)

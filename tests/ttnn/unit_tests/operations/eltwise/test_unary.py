@@ -8,9 +8,33 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp
+from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+    data_gen_with_range,
+    data_gen_with_range_dtype,
+    compare_pcc,
+)
 from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
+
+
+def create_full_range_tensor(input_shapes, dtype):
+    num_elements = torch.prod(torch.tensor(input_shapes)).item()
+
+    large_negatives = torch.linspace(-3.3e38, -1e30, steps=num_elements // 5, dtype=dtype)
+    medium_negatives = torch.linspace(-1e5, -1e-3, steps=num_elements // 5, dtype=dtype)
+    near_zero = torch.linspace(-1e-5, 1e-5, steps=num_elements // 5, dtype=dtype)
+    medium_positives = torch.linspace(1e-3, 1e5, steps=num_elements // 5, dtype=dtype)
+    large_positives = torch.linspace(1e30, 3.3e38, steps=num_elements // 5, dtype=dtype)
+
+    in_data = torch.cat([large_negatives, medium_negatives, near_zero, medium_positives, large_positives])
+
+    corner_cases = torch.tensor([0.0], dtype=dtype)
+    in_data = torch.cat([in_data, corner_cases])
+
+    in_data = in_data[:num_elements]
+    in_data = in_data.reshape(input_shapes)
+
+    return in_data
 
 
 def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
@@ -611,6 +635,11 @@ def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
     assert pcc == 1
 
 
+def is_int32_overflow(tensor, scalar):
+    result = tensor.to(torch.int64) - scalar
+    return (result < -(2**31) + 1) | (result > 2**31 - 1)
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -623,7 +652,7 @@ def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
     ),
 )
 @pytest.mark.parametrize("scalar", [-100, -54, -1, 0, 1, 13, 29])
-@pytest.mark.parametrize("ttnn_op", [ttnn.ne, ttnn.eq])
+@pytest.mark.parametrize("ttnn_op", [ttnn.ne, ttnn.eq, ttnn.gt, ttnn.lt])
 @pytest.mark.parametrize("use_legacy", [True, False])
 def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
     torch.manual_seed(213919)
@@ -637,7 +666,7 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
 
     in_data = in_data[-num_elements:].reshape(input_shapes)
 
-    if is_wormhole_b0() and use_legacy == False and ((in_data - scalar) < -2147483647).any():
+    if use_legacy == False and is_int32_overflow(in_data, scalar).any():
         pytest.xfail("Overflow occurs as in case of binary_ng, sub_tile is called")
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -649,3 +678,62 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(golden_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_tanhshrink_ttnn(input_shapes, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
+    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+    cq_id = 0
+
+    ttnn.tanhshrink(input_tensor1, queue_id=cq_id, output_tensor=output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.tanhshrink)
+    golden_tensor = golden_function(in_data1)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 5, 512, 1024])),),
+)
+@pytest.mark.parametrize("ttnn_function", [ttnn.tanhshrink, ttnn.rad2deg, ttnn.deg2rad])
+def test_unary_edge_case_ttnn(input_shapes, ttnn_function, device):
+    in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    golden_tensor = golden_function(in_data)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("ttnn_function", [ttnn.rad2deg, ttnn.deg2rad])
+def test_unary_angle_conversion_ttnn(input_shapes, device, ttnn_dtype, ttnn_function):
+    in_data1, input_tensor1 = data_gen_with_range_dtype(input_shapes, -100, 100, device, ttnn_dtype=ttnn_dtype)
+
+    output_tensor = ttnn_function(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    golden_tensor = golden_function(in_data1)
+    output = ttnn.to_torch(output_tensor)
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass and assert_with_ulp(golden_tensor, output)

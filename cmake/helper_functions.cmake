@@ -19,6 +19,7 @@ function(CREATE_EAGER_TEST_EXE TESTLIST)
             PUBLIC
                 test_eager_common_libs
                 ttnn
+                Python3::Python
         )
         target_include_directories(
             ${TEST_TARGET}

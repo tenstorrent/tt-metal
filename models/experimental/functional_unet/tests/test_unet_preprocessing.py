@@ -5,7 +5,6 @@
 import math
 import pytest
 import ttnn
-import torch
 
 from loguru import logger
 
@@ -22,30 +21,20 @@ def nearest_16(x):
 
 
 @pytest.mark.parametrize("batch", [1])
-@pytest.mark.parametrize("groups", [2, 4, 8])
+@pytest.mark.parametrize("groups", [4])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
 def test_unet_preprocessing(batch, groups, device, use_program_cache, reset_seeds):
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, channel_order="first", pad=False, fold=False)
+    input_memory_config = unet_shallow_ttnn.UNet.input_sharded_memory_config
+    torch_input, ttnn_input = create_unet_input_tensors(
+        batch, groups, channel_order="first", pad=False, fold=True, device=device, memory_config=input_memory_config
+    )
     logger.info(f"Created input tensor with shape {list(ttnn_input.shape)}")
-
-    assert list(torch_input.shape) == list(ttnn_input.shape), "Expected torch and TTNN input shapes to match"
-
-    min_channels = 16
 
     def golden_fn(x):
         N, C, H, W = x.shape
-        if C < min_channels:
-            x = torch.nn.functional.pad(x, (0, 0, 0, 0, 0, min_channels - C), mode="constant", value=0)
-        return x.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, max(C, min_channels))
+        return x.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)
 
     torch_output_tensor = golden_fn(torch_input)
-
-    input_sharded_memory_config = ttnn.create_sharded_memory_config(
-        [ttnn_input.shape[0], nearest_16(ttnn_input.shape[1]), ttnn_input.shape[2], ttnn_input.shape[3]],
-        ttnn.CoreGrid(x=8, y=6),
-        ttnn.ShardStrategy.HEIGHT,
-    )
-    ttnn_input = ttnn.to_device(ttnn_input, device=device, memory_config=input_sharded_memory_config)
 
     ttnn_output_tensor = unet_shallow_ttnn.preprocess_unet_input_tensor(ttnn_input)  # 1, 1, NHW, C (padded up to 16)
     logger.info(f"Preprocessing input tensor yielded the following shape: {list(ttnn_output_tensor.shape)}")

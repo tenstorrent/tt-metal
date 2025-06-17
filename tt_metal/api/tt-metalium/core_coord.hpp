@@ -33,7 +33,7 @@ struct to_json_t;
 
 using CoreCoord = tt_xy_pair;
 
-struct CoreRangeSet;
+class CoreRangeSet;
 
 template <>
 struct fmt::formatter<CoreCoord> {
@@ -59,7 +59,8 @@ constexpr inline bool operator!=(const RelativeCoreCoord& a, const RelativeCoreC
 
 CoreCoord get_core_coord_from_relative(const RelativeCoreCoord& in, const CoreCoord& grid_size);
 
-struct CoreRange {
+class CoreRange {
+public:
     CoreCoord start_coord;
     CoreCoord end_coord;
     CoreRange(const CoreCoord& point);
@@ -259,7 +260,7 @@ struct hash<CoreRangeSet> {
 
 }  // namespace std
 
-namespace tt::stl::json {
+namespace ttsl::json {
 
 template <>
 struct to_json_t<CoreCoord> {
@@ -301,4 +302,4 @@ struct from_json_t<CoreRangeSet> {
     CoreRangeSet operator()(const nlohmann::json& json) noexcept;
 };
 
-}  // namespace tt::stl::json
+}  // namespace ttsl::json

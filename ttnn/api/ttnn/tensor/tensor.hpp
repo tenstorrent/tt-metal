@@ -85,7 +85,7 @@ public:
     // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
     // elements have to match `spec`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
     //
-    // The data in the buffer is copied into a tensor with an owned storage.
+    // The data in the buffer is copied into a tensor with host storage.
     template <typename T>
     static Tensor from_span(
         tt::stl::Span<const T> buffer,
@@ -194,7 +194,7 @@ public:
     [[deprecated("Use padded_shape() instead")]] const ttnn::Shape& get_padded_shape() const;
     [[deprecated("Use tensor_spec() instead")]] const TensorSpec& get_tensor_spec() const;
     [[deprecated("Use logical_volume() instead")]] uint64_t get_logical_volume() const;
-    [[deprecated("Use padded_volume() instead")]] uint32_t volume() const;
+    [[deprecated("Use physical_volume() instead")]] uint32_t volume() const;
     [[deprecated("Use distributed_tensor_config() instead")]] const DistributedTensorConfig&
     get_distributed_tensor_config() const;
 
@@ -206,10 +206,13 @@ public:
     const ttnn::Shape& padded_shape() const;
     const TensorSpec& tensor_spec() const;
     uint64_t logical_volume() const;
-    uint64_t padded_volume() const;
+    uint64_t physical_volume() const;
     const DistributedTensorConfig& distributed_tensor_config() const;
     const MemoryConfig& memory_config() const;
+
+    // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
     const std::optional<ShardSpec>& shard_spec() const;
+    const std::optional<NdShardSpec>& nd_shard_spec() const;
 
     // ======================================================================================
     //                                      Extra Helper Functions
@@ -239,8 +242,6 @@ public:
     // Returns the device the tensor is allocated on.
     // Throws if the tensor is not allocated on a device.
     IDevice* device() const;
-
-    std::vector<IDevice*> active_physical_devices() const;
 
     bool is_sharded() const;
 

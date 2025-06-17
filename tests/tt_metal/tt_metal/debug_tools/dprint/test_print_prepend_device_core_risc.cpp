@@ -20,7 +20,7 @@
 #include "debug_tools_test_utils.hpp"
 #include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "umd/device/types/xy_pair.h"
@@ -111,10 +111,6 @@ TEST_F(DPrintFixture, TensixTestPrintPrependDeviceCoreRisc) {
 }
 
 TEST_F(DPrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
-    if (this->arch_ == ARCH::BLACKHOLE) {  // TODO: Re-enable when this is supported on BH
-        log_info(tt::LogTest, "DPrint on BH active eth not yet supported");
-        GTEST_SKIP();
-    }
     tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
     for (IDevice* device : this->devices_) {

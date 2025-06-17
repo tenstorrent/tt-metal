@@ -15,6 +15,7 @@
 #include <variant>
 
 #include "buffer.hpp"
+#include "cq_shared_state.hpp"
 #include "command_queue.hpp"
 #include "command_queue_interface.hpp"
 #include "core_coord.hpp"
@@ -22,16 +23,17 @@
 #include "event.hpp"
 #include "host_runtime_commands.hpp"
 #include "launch_message_ring_buffer_state.hpp"
-#include "multi_producer_single_consumer_queue.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
 #include "sub_device_types.hpp"
-#include "trace_buffer.hpp"
-#include "tt_metal/impl/buffers/dispatch.hpp"
+#include "trace/trace_buffer.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"
+#include "tt_metal/impl/buffers/dispatch.hpp"
+#include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
+#include "ringbuffer_cache.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -48,7 +50,7 @@ class HWCommandQueue : public CommandQueue {
 public:
     HWCommandQueue(
         IDevice* device,
-        std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>>& worker_launch_message_buffer_state,
+        std::shared_ptr<CQSharedState> cq_shared_state,
         uint32_t id,
         NOC noc_index,
         uint32_t completion_queue_reader_core = 0);
@@ -130,7 +132,7 @@ private:
     std::vector<TraceNode> trace_nodes_;
 
     // Shared across all CommandQueue instances for a Device.
-    std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>> worker_launch_message_buffer_state_;
+    std::shared_ptr<CQSharedState> cq_shared_state_;
 
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
     // Expected value of DISPATCH_MESSAGE_ADDR in dispatch core L1
@@ -165,6 +167,21 @@ private:
     CoreCoord completion_queue_writer_core_;
     NOC noc_index_;
 
+    const uint32_t prefetcher_dram_aligned_block_size_;
+    const uint64_t prefetcher_cache_sizeB_;
+    const uint32_t prefetcher_dram_aligned_num_blocks_;
+    const uint32_t prefetcher_cache_manager_size_;
+    // The prefetcher cache manager is used to track the state of the prefetcher cache.
+    std::unique_ptr<RingbufferCacheManager> prefetcher_cache_manager_;
+
+    // The backup prefetcher cache manager is used to stash away the prefetcher cache state during trace recording.
+    // Trace recording will change the state of the host side cache manager, without actually enqueueing the
+    // corresponding commands, which would cause the bookkeeping to go out of sync from the prefetcher cache. Hence we
+    // will use the following variable to swap out the cache manager into a backup variable before starting trace
+    // recording. At the end of the recording, we will reset the cache manager, and swap it with the backup.
+    std::unique_ptr<RingbufferCacheManager> dummy_prefetcher_cache_manager_;
+
+    void allocate_trace_programs();
     void read_completion_queue();
 
     // sub_device_ids only needs to be passed when blocking and there are specific sub_devices to wait on
@@ -173,6 +190,12 @@ private:
 
     void increment_num_entries_in_completion_q();
     void set_exit_condition();
+
+    std::pair<bool, size_t> query_prefetcher_cache(uint64_t pgm_id, uint32_t lengthB);
+
+    void reset_prefetcher_cache_manager();
+
+    int get_prefetcher_cache_sizeB() const;
 };
 
 }  // namespace tt::tt_metal

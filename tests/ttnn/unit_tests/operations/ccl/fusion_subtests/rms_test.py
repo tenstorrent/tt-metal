@@ -34,6 +34,7 @@ def run_rms_trace(
     layout=ttnn.TILE_LAYOUT,
     epsilon=1e-05,
     warmup_iters=0,
+    trace_mode=False,
     use_new_version=True,
     profiler=BenchmarkProfiler(),
 ):
@@ -165,14 +166,14 @@ def run_rms_trace(
             1,
             mesh_device,
             ccl_semaphore_handles,
-            dtype=ttnn.bfloat8_b,
-            memory_config=output_memory_config,
-            residual_input_tensor=residual_tensor,
             topology=all_gather_topology,
+            memory_config=output_memory_config,
             epsilon=epsilon,
             weight=gamma_tensor,
+            residual_input_tensor=residual_tensor,
             stats=tt_stats,
         )
+        ttnn.synchronize_device(mesh_device)
 
         logger.info("Capturing trace")
         if warmup_iters > 0:
@@ -184,16 +185,15 @@ def run_rms_trace(
                     1,
                     mesh_device,
                     ccl_semaphore_handles,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=output_memory_config,
                     topology=all_gather_topology,
-                    residual_input_tensor=residual_tensor,
+                    memory_config=output_memory_config,
                     epsilon=epsilon,
                     weight=gamma_tensor,
+                    residual_input_tensor=residual_tensor,
                     stats=tt_stats,
                 )
+                tt_out.deallocate(True)
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
-            logger.info("Done warmup")
             ttnn.synchronize_device(mesh_device)
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for _ in range(num_iters):
@@ -203,14 +203,14 @@ def run_rms_trace(
                 1,
                 mesh_device,
                 ccl_semaphore_handles,
-                dtype=ttnn.bfloat8_b,
                 topology=all_gather_topology,
                 memory_config=output_memory_config,
-                residual_input_tensor=residual_tensor,
                 epsilon=epsilon,
                 weight=gamma_tensor,
+                residual_input_tensor=residual_tensor,
                 stats=tt_stats,
             )
+            tt_out.deallocate(True)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     else:
         tt_stats = ttnn.rms_norm_pre_all_gather(
@@ -263,7 +263,6 @@ def run_rms_trace(
                 )
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
             logger.info("Done warmup")
-            ttnn.synchronize_device(mesh_device)
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for _ in range(num_iters):
             tt_stats = ttnn.rms_norm_pre_all_gather(

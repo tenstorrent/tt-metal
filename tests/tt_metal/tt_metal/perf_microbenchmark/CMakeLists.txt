@@ -19,6 +19,7 @@ set(PERF_MICROBENCH_TESTS_SRCS
     routing/test_tt_fabric_multi_hop_sanity.cpp
     routing/test_tt_fabric_socket_sanity.cpp
     noc/test_noc_unicast_vs_multicast_to_single_core_latency.cpp
+    tensix/test_gathering.cpp
     old/matmul/matmul_global_l1.cpp
     old/matmul/matmul_local_l1.cpp
     old/noc/test_noc_read_global_l1.cpp
@@ -62,14 +63,7 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     string(REPLACE "wormhole" "wormhole_b0" TEST_TARGET ${TEST_TARGET})
 
     add_executable(${TEST_TARGET} ${TEST_SRC})
-    target_link_libraries(
-        ${TEST_TARGET}
-        PUBLIC
-            test_metal_common_libs
-        PRIVATE
-            yaml-cpp::yaml-cpp
-            fabric
-    )
+    target_link_libraries(${TEST_TARGET} PRIVATE test_metal_common_libs)
     if(${TEST_SRC} STREQUAL "dispatch/test_pgm_dispatch.cpp")
         target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
     endif()

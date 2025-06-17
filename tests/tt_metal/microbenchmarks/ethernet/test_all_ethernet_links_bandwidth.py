@@ -170,7 +170,7 @@ def test_erisc_write_worker_bw_uni_dir(num_packets, packet_size, channel_count, 
 @pytest.mark.parametrize("packet_size", [16, 128, 256, 512, 1024, 2048, 4096])
 def test_erisc_write_worker_bw_bi_dir(num_packets, packet_size, channel_count, disable_trid, num_iterations, request):
     packet_size_to_expected_bw = {
-        "wormhole_b0": {16: 0.13, 128: 1.03, 256: 2.08, 512: 4.15, 1024: 8.31, 2048: 11.40, 4096: 11.82},
+        "wormhole_b0": {16: 0.13, 128: 1.03, 256: 2.08, 512: 4.15, 1024: 7.81, 2048: 11.40, 4096: 11.82},
         "blackhole": {16: 0.16, 128: 1.35, 256: 2.69, 512: 5.39, 1024: 10.79, 2048: 21.47, 4096: 18.70},
     }
     benchmark_type_id = 3

@@ -76,7 +76,7 @@ class Generator:
                 user_id = group_user_id + model_id * batch_per_device
 
                 logger.info(f"Prefilling User {user_id + 1}")
-                seq_len = prompt_lens[user_id]
+                seq_len = int(prompt_lens[user_id])
                 last_token_idx = seq_len - 1
 
                 prefill_seq_len = get_padded_prefill_len(seq_len)
@@ -104,7 +104,7 @@ class Generator:
             group_user_id = idx // self.data_parallel
             user_id = group_user_id + model_id * batch_per_device
 
-            seq_len = prompt_lens[user_id]
+            seq_len = int(prompt_lens[user_id])
             last_token_idx = seq_len - 1
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
@@ -504,7 +504,7 @@ class Generator:
                 user_id = group_user_id + model_id * batch_per_device
 
                 logger.info(f"Prefilling User {user_id + 1}")
-                seq_len = prompt_lens[user_id]
+                seq_len = int(prompt_lens[user_id])
                 user_page_table = page_table[model_id] if page_table is not None else None
                 user_kv_cache = kv_cache[model_id] if kv_cache is not None else None
                 user_cross_page_table = cross_page_table[model_id] if kv_cache is not None else None
@@ -603,13 +603,14 @@ class Generator:
         """
         Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
-        batch_per_dp = unpadded_batch // self.data_parallel
         logits = []
         for i in range(self.data_parallel):
-            logits_i = self.model[i].process_output_decode(tt_out[i], B=batch_per_dp, S=1, is_tokens=is_tokens)
+            logits_i = self.model[i].process_output_decode(
+                tt_out[i], B=self.model_args[i].max_batch_size, S=1, is_tokens=is_tokens
+            )
             logits.append(logits_i)
         logits = torch.cat(logits, 0)
-        return logits
+        return logits[:unpadded_batch]
 
     def _decode_forward_no_trace(
         self,

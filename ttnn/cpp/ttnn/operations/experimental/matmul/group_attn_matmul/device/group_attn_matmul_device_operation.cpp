@@ -20,7 +20,7 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     TT_FATAL(
-        (input_tensor_a.get_layout() == Layout::TILE && input_tensor_b.get_layout() == Layout::TILE),
+        (input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE),
         "Inputs to matmul must be tilized");
 
     // TODO: Uplift to support BFLOAT8_B and mixed precision
@@ -32,8 +32,8 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
-    const auto ashape = input_tensor_a.get_padded_shape();
-    const auto bshape = input_tensor_b.get_padded_shape();
+    const auto ashape = input_tensor_a.padded_shape();
+    const auto bshape = input_tensor_b.padded_shape();
     TT_FATAL((ashape[0] == 1), "Input q_len must be 1!");
     TT_FATAL((ashape[1] % bshape[1] == 0), "Number of q_heads must be divisible by kv_heads!");
     TT_FATAL((ashape[2] == bshape[0]), "Num of users must match!");
@@ -128,8 +128,8 @@ std::vector<ttnn::TensorSpec> GroupAttnMatmulDeviceOperation::compute_output_spe
     // output: [q_len, q_heads, batch, kv_len]
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    const auto ashape = input_tensor_a.get_padded_shape();
-    const auto bshape = input_tensor_b.get_padded_shape();
+    const auto ashape = input_tensor_a.padded_shape();
+    const auto bshape = input_tensor_b.padded_shape();
 
     uint32_t N = bshape[3];
     if (this->transpose_hw.value_or(false)) {
@@ -199,12 +199,12 @@ operation::Hash GroupAttnMatmulDeviceOperation::compute_program_hash(const std::
         this->output_mem_config.buffer_type(),
         this->output_dtype,
         this->row_major,
-        std::get<DeviceStorage>(input_tensor_a.storage()).memory_config().memory_layout(),
-        std::get<DeviceStorage>(input_tensor_a.storage()).memory_config().buffer_type(),
+        input_tensor_a.memory_config().memory_layout(),
+        input_tensor_a.memory_config().buffer_type(),
         input_tensor_a.dtype(),
         input_tensor_a.device()->id(),
-        std::get<DeviceStorage>(input_tensor_b.storage()).memory_config().memory_layout(),
-        std::get<DeviceStorage>(input_tensor_b.storage()).memory_config().buffer_type(),
+        input_tensor_b.memory_config().memory_layout(),
+        input_tensor_b.memory_config().buffer_type(),
         input_tensor_b.dtype(),
         input_tensor_b.device()->id());
 }

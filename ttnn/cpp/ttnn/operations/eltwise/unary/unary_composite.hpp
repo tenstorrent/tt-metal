@@ -167,16 +167,6 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
     })
 
 constexpr auto rdiv = ttnn::register_operation<"ttnn::rdiv", operations::unary::ExecuteRdiv>();
-
-constexpr auto tanhshrink = ttnn::register_operation<
-    "ttnn::tanhshrink",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::TANHSHRINK>>();
-constexpr auto deg2rad = ttnn::register_operation<
-    "ttnn::deg2rad",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DEG2RAD>>();
-constexpr auto rad2deg = ttnn::register_operation<
-    "ttnn::rad2deg",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::RAD2DEG>>();
 constexpr auto acosh = ttnn::register_operation<
     "ttnn::acosh",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::ACOSH>>();

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2024 Tenstorrent, Inc. All rights reserved.
 
-set -ex
+set -e
 
 usage()
 {
@@ -12,6 +12,7 @@ usage()
     echo "[--help, -h]                List this help"
     echo "[--validate, -v]            Validate that required packages are installed"
     echo "[--docker, -d]              Specialize execution for docker"
+    echo "[--no-distributed]          Don't install distributed compute dependencies (OpenMPI)"
     echo "[--mode, -m <mode>]         Select installation mode: runtime, build, baremetal"
     exit 1
 }
@@ -36,6 +37,7 @@ fi
 
 validate=0
 docker=0
+distributed=1
 mode="baremetal"
 
 while [ $# -gt 0 ]; do
@@ -49,6 +51,10 @@ while [ $# -gt 0 ]; do
             ;;
         --docker|-d)
             docker=1
+            shift
+            ;;
+        --no-distributed)
+            distributed=0
             shift
             ;;
 	--mode|-m)
@@ -85,8 +91,11 @@ ub_runtime_packages()
      libc++-17-dev \
      libc++abi-17-dev \
      libstdc++6 \
-     openmpi-bin \
     )
+
+    if [ "$distributed" -eq 1 ]; then
+        UB_RUNTIME_LIST+=(openmpi-bin)
+    fi
 }
 
 ub_buildtime_packages()
@@ -104,8 +113,15 @@ ub_buildtime_packages()
      libc++abi-17-dev \
      build-essential \
      xz-utils \
-     libopenmpi-dev \
+     pandoc \
+     libtbb-dev \
+     libcapstone-dev \
+     pkg-config \
     )
+
+    if [ "$distributed" -eq 1 ]; then
+        UB_BUILDTIME_LIST+=(libopenmpi-dev)
+    fi
 }
 
 # Packages needed to setup a baremetal machine to build from source and run
@@ -226,28 +242,59 @@ install_sfpi() {
 	    exit 1
 	fi
     fi
+    # determine packaging system
+    local pkg
+    if dpkg-query -f '${Version}' -W libc-bin >/dev/null 2>&1 ; then
+	pkg=deb
+    elif rpm -q --qf '%{VERSION}' glibc >/dev/null 2>&1 ; then
+	pkg=rpm
+    else
+	echo "Unknown packaging system" >&2
+	exit 1
+    fi
     local $(grep -v '^#' $version_file)
     local sfpi_arch_os=$(uname -m)_$(uname -s)
-    local sfpi_deb_md5=$(eval echo "\$sfpi_${sfpi_arch_os}_deb_md5")
-    if [ -z "$sfpi_deb_md5" ] ; then
-	echo "SFPI debian package for ${sfpi_arch_os} is not available" >&2
+    local sfpi_pkg_md5=$(eval echo "\$sfpi_${sfpi_arch_os}_${pkg}_md5")
+    if [ -z $(eval echo "$sfpi_${pkg}_md5") ] ; then
+	echo "SFPI $pkg package for ${sfpi_arch_os} is not available" >&2
 	exit 1
     fi
     local TEMP_DIR=$(mktemp -d)
-    wget -P $TEMP_DIR "$sfpi_url/$sfpi_version/sfpi-${sfpi_arch_os}.deb"
-    if [ $(md5sum -b "${TEMP_DIR}/sfpi-${sfpi_arch_os}.deb" | cut -d' ' -f1) \
-	     != "$sfpi_deb_md5" ] ; then
-	echo "SFPI sfpi-${sfpi_arch_os}.deb md5 mismatch" >&2
+    wget -P $TEMP_DIR "$sfpi_url/$sfpi_version/sfpi-${sfpi_arch_os}.${pkg}"
+    if [ $(md5sum -b "${TEMP_DIR}/sfpi-${sfpi_arch_os}.${pkg}" | cut -d' ' -f1) \
+	     != "$sfpi_pkg_md5" ] ; then
+	echo "SFPI sfpi-${sfpi_arch_os}.${pkg} md5 mismatch" >&2
 	rm -rf $TEMP_DIR
 	exit 1
     fi
     # we must select exactly this version
-    apt-get install -y --allow-downgrades $TEMP_DIR/sfpi-${sfpi_arch_os}.deb
+    case "$pkg" in
+	deb)
+	    apt-get install -y --allow-downgrades $TEMP_DIR/sfpi-${sfpi_arch_os}.deb
+	    ;;
+	rpm)
+	    rpm --upgrade --force $TEMP_DIR/sfpi-${sfpi_arch_os}.rpm
+	    ;;
+    esac
     rm -rf $TEMP_DIR
 }
 
-install_mpi_uflm(){
-    DEB_URL="https://github.com/dmakoviichuk-tt/mpi-ulfm/releases/download/v5.0.7-ulfm/openmpi-ulfm_5.0.7-1_amd64.deb"
+install_mpi_ulfm(){
+    # Only install if distributed flag is set
+    if [ "$distributed" -ne 1 ]; then
+        echo "→ Skipping MPI ULFM installation (distributed mode not enabled)"
+        return
+    fi
+
+    # Only install MPI ULFM for Ubuntu 24.04 or older
+    local VERSION_NUM=$(echo "$VERSION" | sed 's/\.//')
+
+    if [ "$VERSION_NUM" -gt "2404" ]; then
+        echo "→ Skipping MPI ULFM installation for Ubuntu $VERSION (only needed for 24.04 or older)"
+        return
+    fi
+
+    DEB_URL="https://github.com/tenstorrent/ompi/releases/download/v5.0.7/openmpi-ulfm_5.0.7-1_amd64.deb"
     DEB_FILE="$(basename "$DEB_URL")"
 
     # 1. Create temp workspace
@@ -287,13 +334,13 @@ install() {
             runtime)
                 prep_ubuntu_runtime
                 install_sfpi
-                install_mpi_uflm
+                install_mpi_ulfm
                 ;;
             build)
                 prep_ubuntu_build
                 install_llvm
                 install_gcc
-                install_mpi_uflm
+                install_mpi_ulfm
                 ;;
             baremetal)
                 prep_ubuntu_runtime
@@ -302,7 +349,7 @@ install() {
                 install_llvm
                 install_gcc
                 configure_hugepages
-                install_mpi_uflm
+                install_mpi_ulfm
                 ;;
         esac
 

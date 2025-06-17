@@ -10,18 +10,40 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_feedforward import TtFee
 
 class TtBasicTransformerBlock(nn.Module):
     def __init__(
-        self, device, state_dict, module_path, query_dim, num_attn_heads, out_dim, weights_dtype=ttnn.bfloat16
+        self,
+        device,
+        state_dict,
+        module_path,
+        model_config,
+        query_dim,
+        num_attn_heads,
+        out_dim,
+        weights_dtype=ttnn.bfloat16,
     ):
         super().__init__()
 
         self.attn1 = TtAttention(
-            device, state_dict, f"{module_path}.attn1", query_dim, num_attn_heads, out_dim, weights_dtype=weights_dtype
+            device,
+            state_dict,
+            f"{module_path}.attn1",
+            model_config,
+            query_dim,
+            num_attn_heads,
+            out_dim,
+            weights_dtype=weights_dtype,
         )
         self.attn2 = TtAttention(
-            device, state_dict, f"{module_path}.attn2", query_dim, num_attn_heads, out_dim, weights_dtype=weights_dtype
+            device,
+            state_dict,
+            f"{module_path}.attn2",
+            model_config,
+            query_dim,
+            num_attn_heads,
+            out_dim,
+            weights_dtype=weights_dtype,
         )
 
-        self.ff = TtFeedForward(device, state_dict, f"{module_path}.ff", weights_dtype=weights_dtype)
+        self.ff = TtFeedForward(device, state_dict, f"{module_path}.ff", model_config, weights_dtype=weights_dtype)
 
         norm1_weights = state_dict[f"{module_path}.norm1.weight"]
         norm1_bias = state_dict[f"{module_path}.norm1.bias"]
@@ -52,16 +74,43 @@ class TtBasicTransformerBlock(nn.Module):
             else None
         )
 
-    def forward(self, hidden_states, attention_mask=None, encoder_hidden_states=None):
-        attn_hidden_states = ttnn.layer_norm(hidden_states, weight=self.tt_norm1_weights, bias=self.tt_norm1_bias)
-        attn_hidden_states = self.attn1(attn_hidden_states, attention_mask, None)
-        hidden_states = ttnn.add(hidden_states, attn_hidden_states)
+        self.ln_eps = 1e-5
+        self.ln_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
-        attn_hidden_states = ttnn.layer_norm(hidden_states, weight=self.tt_norm2_weights, bias=self.tt_norm2_bias)
+    def forward(self, input_tensor, attention_mask=None, encoder_hidden_states=None):
+        attn_hidden_states = ttnn.layer_norm(
+            input_tensor,
+            weight=self.tt_norm1_weights,
+            bias=self.tt_norm1_bias,
+            epsilon=self.ln_eps,
+            compute_kernel_config=self.ln_compute_kernel_config,
+        )
+        attn_hidden_states = self.attn1(attn_hidden_states, attention_mask, None)
+        hidden_states = ttnn.add(input_tensor, attn_hidden_states)
+        ttnn.deallocate(input_tensor)
+
+        attn_hidden_states = ttnn.layer_norm(
+            hidden_states,
+            weight=self.tt_norm2_weights,
+            bias=self.tt_norm2_bias,
+            epsilon=self.ln_eps,
+            compute_kernel_config=self.ln_compute_kernel_config,
+        )
         attn_hidden_states = self.attn2(attn_hidden_states, attention_mask, encoder_hidden_states)
         hidden_states = ttnn.add(hidden_states, attn_hidden_states)
 
-        attn_hidden_states = ttnn.layer_norm(hidden_states, weight=self.tt_norm3_weights, bias=self.tt_norm3_bias)
+        attn_hidden_states = ttnn.layer_norm(
+            hidden_states,
+            weight=self.tt_norm3_weights,
+            bias=self.tt_norm3_bias,
+            epsilon=self.ln_eps,
+            compute_kernel_config=self.ln_compute_kernel_config,
+        )
         attn_hidden_states = self.ff(attn_hidden_states)
         hidden_states = ttnn.add(hidden_states, attn_hidden_states)
 

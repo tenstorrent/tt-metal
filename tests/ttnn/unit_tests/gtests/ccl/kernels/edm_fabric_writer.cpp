@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
 #include <cstdint>
 #include <cstddef>
@@ -14,7 +15,7 @@ static constexpr bool enable_start_synchronization = get_compile_time_arg_val(0)
 static constexpr bool enable_finish_synchronization = get_compile_time_arg_val(1) != 0;
 static constexpr bool enable_any_synchronization = enable_start_synchronization || enable_finish_synchronization;
 
-FORCE_INLINE void line_sync(
+void line_sync(
     FabricConnectionManager& fabric_connection,
     bool sync_forward,
     bool sync_backward,
@@ -347,7 +348,7 @@ void kernel_main() {
     fabric_connection.open();
 
     cb_reserve_back(source_l1_cb_index, 1);
-    cb_reserve_back(packet_header_cb, packet_header_size_in_headers);
+    cb_reserve_back(packet_header_cb, 1);
     const auto source_l1_buffer_address = get_write_ptr(source_l1_cb_index);
     const auto packet_header_buffer_address = get_write_ptr(packet_header_cb);
 

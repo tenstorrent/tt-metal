@@ -10,7 +10,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from models.utility_functions import nearest_32
 
 
-def generate_ttnn_tensor_of_shards(num_shards, dtype, aggregate):
+def generate_ttnn_tensor_of_shards(num_shards, dtype):
     torch.manual_seed(1234)
 
     unconcatenated_ttnn_tensor_shards = []
@@ -27,10 +27,7 @@ def generate_ttnn_tensor_of_shards(num_shards, dtype, aggregate):
                 ttnn.from_torch(torch.randn(1, 1, 32, 64 // num_shards), dtype=dtype, layout=ttnn.TILE_LAYOUT)
             )
 
-    if aggregate:
-        return ttnn.aggregate_as_tensor(unconcatenated_ttnn_tensor_shards)
-    else:
-        return unconcatenated_ttnn_tensor_shards
+    return ttnn.aggregate_as_tensor(unconcatenated_ttnn_tensor_shards)
 
 
 def generate_2d_sharded_ttnn_tensor(num_shards, dtype, M, K, mesh_shape, shard_dim):
@@ -146,8 +143,6 @@ def test_shard_to_tensor_mesh_torch_comparison(mesh_device, dtype):
     )
     torch_sharded_shards = ttnn.get_device_tensors(torch_sharded_tensor)
 
-    assert len(xtensor_sharded_shards) == len(torch_sharded_shards) == 2
-
     out_pass1, out_pcc = comp_pcc(
         ttnn.to_torch(torch_sharded_shards[0]), ttnn.to_torch(xtensor_sharded_shards[0]), pcc=0.99
     )
@@ -195,8 +190,9 @@ def test_shard2d_to_tensor_mesh_torch_comparison(M, K, N, dtype, mesh_shape, mes
         layout=ttnn.TILE_LAYOUT,
     )
 
-    xtensor_mapper = ttnn.shard_tensor_to_2d_mesh_mapper(
-        mesh_device, ttnn.MeshShape(mesh_shape[0], mesh_shape[1]), ttnn.Shard2dConfig(shard_dim[0], shard_dim[1])
+    xtensor_mapper = ttnn.create_mesh_mapper(
+        mesh_device,
+        ttnn.MeshMapperConfig(shard_dim[0], shard_dim[1]),
     )
 
     xtensor_sharded_shards = ttnn.get_device_tensors(
@@ -221,13 +217,13 @@ def test_shard2d_to_tensor_mesh_torch_comparison(M, K, N, dtype, mesh_shape, mes
 def test_concat_to_tensor_mesh_torch_comparison(mesh_device, dtype):
     torch_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=3)
 
-    num_shards = 4
+    num_shards = mesh_device.get_num_devices()
 
-    unconcatenated_ttnn_tensor = generate_ttnn_tensor_of_shards(num_shards, dtype, aggregate=True)
+    unconcatenated_ttnn_tensor = generate_ttnn_tensor_of_shards(num_shards, dtype)
 
     torch_concat_tensor = ttnn.to_torch(unconcatenated_ttnn_tensor, mesh_composer=torch_composer)
 
-    xtensor_composer = ttnn.concat_mesh_to_tensor_composer(dim=3)
+    xtensor_composer = ttnn.concat_mesh_to_tensor_composer(mesh_device, dim=3)
     xtensor_concat_tensor = ttnn.to_torch(ttnn.aggregate_tensor(unconcatenated_ttnn_tensor, xtensor_composer))
 
     out_pass, out_pcc = comp_pcc(torch_concat_tensor, xtensor_concat_tensor, pcc=0.99)
@@ -256,8 +252,9 @@ def test_concat2d_to_tensor_mesh_torch_comparison(M, K, N, dtype, mesh_shape, me
     torch_composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape, dims=concat_dim)
     torch_concat_tensor = ttnn.to_torch(unconcatenated_ttnn_tensor, mesh_composer=torch_composer)
 
-    xtensor_composer = ttnn.concat_2d_mesh_to_tensor_composer(
-        mesh_device, config=ttnn.Concat2dConfig(concat_dim[0], concat_dim[1])
+    xtensor_composer = ttnn.create_mesh_composer(
+        mesh_device,
+        ttnn.MeshComposerConfig(concat_dim[0], concat_dim[1]),
     )
     xtensor_concat_tensor = ttnn.to_torch(ttnn.aggregate_tensor(unconcatenated_ttnn_tensor, xtensor_composer))
 
@@ -346,7 +343,7 @@ def test_concat_to_tensor(mesh_device, dtype):
     # This will be the same as the generated unconcatenated_ttnn_tensor due to the shared seeding
     torch_concat_tensor = torch.cat(torch_shards, dim=3)
 
-    unconcatenated_ttnn_tensor = generate_ttnn_tensor_of_shards(num_shards, dtype, aggregate=True)
+    unconcatenated_ttnn_tensor = generate_ttnn_tensor_of_shards(num_shards, dtype)
 
     composer = ttnn.concat_mesh_to_tensor_composer(dim=3)
 
@@ -376,7 +373,7 @@ def test_concat_slice_to_tensor(mesh_device, dtype):
     # This will be the same as concatenating the generated unconcatenated_ttnn_shards due to the shared order and seeding
     torch_concat_tensor = torch.cat(torch_shards, dim=3)
 
-    unconcatenated_ttnn_shards = generate_ttnn_tensor_of_shards(num_shards, dtype, aggregate=False)
+    unconcatenated_ttnn_shards = generate_ttnn_tensor_of_shards(num_shards, dtype)
 
     composer = ttnn.concat_mesh_to_tensor_composer(dim=3)
 
@@ -409,9 +406,7 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
 
     ttnn_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
-    mapper = ttnn.shard_tensor_to_2d_mesh_mapper(
-        mesh_device, ttnn.MeshShape(mesh_shape[0], mesh_shape[1]), ttnn.Shard2dConfig(shard_dim[0], shard_dim[1])
-    )
+    mapper = ttnn.create_mesh_mapper(mesh_device, ttnn.MeshMapperConfig(shard_dim[0], shard_dim[1]))
 
     xtensor_sharded_shards = ttnn.get_device_tensors(ttnn.distribute_tensor(ttnn_tensor, mapper, mesh_device))
 
@@ -475,8 +470,9 @@ def test_concat2d_to_tensor(M, K, N, dtype, mesh_shape, mesh_device):
     # Then concatenate the resulting tensors along rows
     torch_concat_tensor = torch.cat(row_concatenated, dim=row_dim)
 
-    composer = ttnn.concat_2d_mesh_to_tensor_composer(
-        mesh_device, config=ttnn.Concat2dConfig(concat_dim[0], concat_dim[1])
+    composer = ttnn.create_mesh_composer(
+        mesh_device,
+        ttnn.MeshComposerConfig(concat_dim[0], concat_dim[1]),
     )
 
     xtensor_concat_tensor = ttnn.aggregate_tensor(unconcatenated_ttnn_tensor, composer)

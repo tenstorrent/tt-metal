@@ -3,12 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/distributed/distributed_pybind.hpp"
-#include <pybind11/cast.h>
+
 #include <cstddef>
 #include <memory>
-#include <pybind11/pytypes.h>
-
+#include <optional>
 #include <ostream>
+#include <vector>
+
+#include <pybind11/pybind11.h>
+#include <pybind11/cast.h>
+#include <pybind11/pytypes.h>
 
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/hal.hpp>
@@ -33,8 +37,8 @@ void py_module_types(py::module& module) {
     py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>(module, "CppMeshToTensor");
     py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>(module, "CppTensorToMesh");
 
-    py::class_<Shard2dConfig>(module, "Shard2dConfig");
-    py::class_<Concat2dConfig>(module, "Concat2dConfig");
+    py::class_<MeshMapperConfig>(module, "MeshMapperConfig");
+    py::class_<MeshComposerConfig>(module, "MeshComposerConfig");
 
     py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
     py::class_<MeshShape>(module, "MeshShape", "Shape of a mesh device.");
@@ -45,22 +49,23 @@ void py_module_types(py::module& module) {
 }
 
 void py_module(py::module& module) {
-    // TODO: #17477 - Remove overloads that accept 'row' and 'col'. Instead, use generic ND terms.
     static_cast<py::class_<MeshShape>>(module.attr("MeshShape"))
         .def(
-            py::init([](size_t num_rows, size_t num_cols) { return MeshShape(num_rows, num_cols); }),
-            "Constructor with the specified number of rows and columns.",
-            py::arg("num_rows"),
-            py::arg("num_cols"))
+            py::init([](size_t s0, size_t s1) { return MeshShape(s0, s1); }),
+            "Constructor with the specified 2D shape. The value s0 is assumed to be the outer dimension.",
+            py::arg("s0"),
+            py::arg("s1"))
         .def(
-            py::init([](size_t x, size_t y, size_t z) { return MeshShape(x, y, z); }),
-            "Constructor with the specified 3D shape.",
-            py::arg("x"),
-            py::arg("y"),
-            py::arg("z"))
+            py::init([](size_t s0, size_t s1, size_t s2) { return MeshShape(s0, s1, s2); }),
+            "Constructor with the specified 3D shape. The values s0...s2 are assumed to be supplied in row-major order "
+            "(from outer dim to inner dim).",
+            py::arg("s0"),
+            py::arg("s1"),
+            py::arg("s2"))
         .def(
             py::init([](const std::vector<uint32_t>& shape) { return MeshShape(shape); }),
-            "Constructor with the specified ND shape.",
+            "Constructor with the specified ND shape. The values s0...sn are assumed to be supplied in row-major order "
+            "(from outer dim to inner dim).",
             py::arg("shape"))
         .def(
             "__repr__",
@@ -75,19 +80,21 @@ void py_module(py::module& module) {
             py::keep_alive<0, 1>());
     static_cast<py::class_<MeshCoordinate>>(module.attr("MeshCoordinate"))
         .def(
-            py::init([](size_t row, size_t col) { return MeshCoordinate(row, col); }),
-            "Constructor with specified row and column offsets.",
-            py::arg("row"),
-            py::arg("col"))
+            py::init([](size_t c0, size_t c1) { return MeshCoordinate(c0, c1); }),
+            "Constructor with the specified 2D coordinate. The value c0 is assumed to be the outer dimension.",
+            py::arg("c0"),
+            py::arg("c1"))
         .def(
-            py::init([](size_t x, size_t y, size_t z) { return MeshCoordinate(x, y, z); }),
-            "Constructor with the specified 3D coordinate.",
-            py::arg("x"),
-            py::arg("y"),
-            py::arg("z"))
+            py::init([](size_t c0, size_t c1, size_t c2) { return MeshCoordinate(c0, c1, c2); }),
+            "Constructor with the specified 3D coordinate. The values c0...c2 are assumed to be supplied in row-major "
+            "order (from outer dim to inner dim).",
+            py::arg("c0"),
+            py::arg("c1"),
+            py::arg("c2"))
         .def(
             py::init([](const std::vector<uint32_t>& coords) { return MeshCoordinate(coords); }),
-            "Constructor with the specified ND coordinate.",
+            "Constructor with the specified ND coordinate. The values c0...cn are assumed to be supplied in row-major "
+            "order (from outer dim to inner dim).",
             py::arg("coords"))
         .def(
             "__repr__",
@@ -189,6 +196,15 @@ void py_module(py::module& module) {
             &MeshDevice::create_submeshes,
             py::arg("submesh_shape"),
             py::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevices are alive
+        .def(
+            "get_submeshes",
+            &MeshDevice::get_submeshes,
+            R"doc(
+              Get the submeshes created on this MeshDevice.
+
+                Returns:
+                    List[MeshDevice]: The submeshes created on this MeshDevice.
+        )doc")
         .def(
             "compute_with_storage_grid_size",
             &MeshDevice::compute_with_storage_grid_size,
@@ -406,14 +422,24 @@ void py_module(py::module& module) {
         py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());
 
-    auto py_shard2d_config = static_cast<py::class_<Shard2dConfig>>(module.attr("Shard2dConfig"));
-    py_shard2d_config.def(py::init<int, int>(), py::arg("row_dim"), py::arg("col_dim"))
-        .def_readwrite("row_dim", &Shard2dConfig::row_dim)
-        .def_readwrite("col_dim", &Shard2dConfig::col_dim);
-    auto py_concat2d_config = static_cast<py::class_<Concat2dConfig>>(module.attr("Concat2dConfig"));
-    py_concat2d_config.def(py::init<int, int>(), py::arg("row_dim"), py::arg("col_dim"))
-        .def_readwrite("row_dim", &Concat2dConfig::row_dim)
-        .def_readwrite("col_dim", &Concat2dConfig::col_dim);
+    // TODO: #22258 - make this more flexible and useful.
+    auto py_mesh_mapper_config = static_cast<py::class_<MeshMapperConfig>>(module.attr("MeshMapperConfig"));
+    py_mesh_mapper_config.def(
+        py::init([](size_t row_dim, size_t col_dim) {
+            MeshMapperConfig config;
+            config.placements.push_back(MeshMapperConfig::Shard{row_dim});
+            config.placements.push_back(MeshMapperConfig::Shard{col_dim});
+            return config;
+        }),
+        py::arg("row_dim"),
+        py::arg("col_dim"));
+    auto py_mesh_composer_config = static_cast<py::class_<MeshComposerConfig>>(module.attr("MeshComposerConfig"));
+    py_mesh_composer_config.def(py::init([](size_t row_dim, size_t col_dim) {
+        MeshComposerConfig config;
+        config.dims.push_back(row_dim);
+        config.dims.push_back(col_dim);
+        return config;
+    }));
 
     module.def(
         "get_device_tensors",
@@ -463,43 +489,49 @@ void py_module(py::module& module) {
            TensorToMesh: A mapper providing the desired sharding.
    )doc");
     module.def(
-        "shard_tensor_to_2d_mesh_mapper",
+        "create_mesh_mapper",
         [](MeshDevice& mesh_device,
-           const MeshShape& mesh_shape,
-           const Shard2dConfig& config) -> std::unique_ptr<TensorToMesh> {
-            return shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape, config);
+           const MeshMapperConfig& config,
+           const std::optional<MeshShape>& mesh_shape = std::nullopt) -> std::unique_ptr<TensorToMesh> {
+            return create_mesh_mapper(mesh_device, config, mesh_shape);
         },
         py::arg("mesh_device"),
-        py::arg("mesh_shape"),
         py::arg("config"),
+        py::arg("mesh_shape") = std::nullopt,
         R"doc(
-       Returns a mapper sharding a tensor over the given dimension for the given mesh.
+       Returns an ND mapper for sharding and replicating a tensor over the given dimensions for the given mesh.
 
        Args:
            mesh_device (MeshDevice): The mesh to create the mapper for.
-           mesh_shape (MeshShape): The shape of the 2D mesh as (num_rows, num_cols).
-           config (Shard2dConfig): A config object representing the row and column to shard over.
+           config (MeshMapperConfig): A config object representing a set of placements.
+           mesh_shape (MeshShape): If provided, provides overrides the logical shape for the mapper.
+            Useful for distributing a tensor over ND shape that exceeds the number of physical dimensions
+            in the mesh device.
 
        Returns:
            TensorToMesh: A mapper providing the desired sharding.
    )doc");
     module.def(
         "concat_mesh_to_tensor_composer",
-        [](int dim) -> std::unique_ptr<MeshToTensor> { return concat_mesh_to_tensor_composer(dim); },
-        py::arg("dim"));
-    module.def(
-        "concat_2d_mesh_to_tensor_composer",
-        [](MeshDevice& mesh_device, const Concat2dConfig& config) -> std::unique_ptr<MeshToTensor> {
-            return concat_2d_mesh_to_tensor_composer(mesh_device, config);
+        [](MeshDevice& mesh_device, int dim) -> std::unique_ptr<MeshToTensor> {
+            return concat_mesh_to_tensor_composer(mesh_device, dim);
         },
         py::arg("mesh_device"),
+        py::arg("dim"));
+    module.def(
+        "create_mesh_composer",
+        [](MeshDevice& mesh_device, const MeshComposerConfig& config, const std::optional<MeshShape>& shape)
+            -> std::unique_ptr<MeshToTensor> { return create_mesh_composer(mesh_device, config, shape); },
+        py::arg("mesh_device"),
         py::arg("config"),
+        py::arg("shape") = std::nullopt,
         R"doc(
-            Returns a Concat2dMeshToTensor composer with the given mesh device and dimensions.
+            Returns an ND composer that concatenates a tensor across the given dimensions.
 
             Args:
                 mesh_device (MeshDevice): The mesh device to create the composer for.
-                config (Concat2dConfig): A config object representing the row and column to concat over.
+                config (MeshComposerConfig): A config object representing the dimensions to concat over.
+                shape (MeshShape): If provided, overrides the logical shape of the mesh.
 
             Returns:
                 TensorToMesh: A composer providing the desired concatenation.
@@ -541,25 +573,6 @@ void py_module(py::module& module) {
                 Tensor: The aggregated tensor.
             )doc");
     module.def(
-        "aggregate_tensor",
-        [](const std::vector<Tensor>& tensors, const MeshToTensor& composer) -> Tensor {
-            Tensor aggregated_tensor = aggregate_as_tensor(tensors, AllGatherTensor{});
-
-            return aggregate_tensor(aggregated_tensor, composer);
-        },
-        py::arg("tensor"),
-        py::arg("composer"),
-        R"doc(
-            Aggregates a set of shard tensors into a single host tensor using the provided composer.
-
-            Args:
-                tensor (Tensor): The tensor to aggregate.
-                composer (MeshToTensor): The composer to use for aggregation.
-
-            Returns:
-                Tensor: The aggregated tensor.
-            )doc");
-    module.def(
         "aggregate_as_tensor",
         [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors, AllGatherTensor{}); },
         py::arg("tensors"),
@@ -572,6 +585,20 @@ void py_module(py::module& module) {
 
             Returns:
                 Tensor: The aggregated tensor.
+            )doc");
+    module.def(
+        "combine_device_tensors",
+        [](const std::vector<Tensor>& tensors) -> Tensor { return combine_device_tensors(tensors); },
+        py::arg("tensors"),
+        py::kw_only(),
+        R"doc(
+            Combines tensor shards allocated on individual devices into a single multi-device tensor. All tensors shards must be allocated on the same mesh buffer.
+
+            Args:
+                tensors (List[Tensor]): The tensor shards to combine.
+
+            Returns:
+                Tensor: The combined tensor.
             )doc");
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
 }

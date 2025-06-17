@@ -43,6 +43,8 @@ run-name: ${{ inputs.description }}
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type }}
@@ -50,6 +52,8 @@ jobs:
       version: "22.04"
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     if: ${{ inputs.build-with-tracy }}
     with:

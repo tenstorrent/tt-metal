@@ -57,7 +57,7 @@ struct Conv2dConfig {
     std::optional<CoreRangeSet> core_grid = std::nullopt;
 
     // used only if override_sharding_config is true and shard_layout is set to BLOCK_SHARDED
-    bool transpose_shards = true;
+    bool transpose_shards = false;
 
     // Useful when output is BFLOAT16.
     // BFLOAT8 is always Tile layout.
@@ -74,7 +74,8 @@ struct Conv2dConfig {
     // Increased perf, but increased L1 usage.
     bool enable_act_double_buffer = false;
 
-    // Used on for block sharded convolutions
+    // Doubles the size of the CBs for weights.
+    // Increased perf, but increased L1 usage.
     bool enable_weights_double_buffer = false;
 
     // Only for height sharding.
@@ -119,7 +120,7 @@ struct Conv2dConfig {
         "enable_subblock_padding",
         "in_place",
         "enable_kernel_stride_folding");
-    const auto attribute_values() const {
+    auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->dtype),
             std::cref(this->weights_dtype),
@@ -280,7 +281,7 @@ struct OptimizedConvNew {
         "enable_weights_double_buffer",
         "enable_split_reader",
         "enable_subblock_padding");
-    const auto attribute_values() const {
+    auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->parallelization_config),
             std::cref(this->block_config),
@@ -342,6 +343,7 @@ conv_op_l1_usage calculate_L1_usage(
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config,
+    const tt::tt_metal::DataType input_datatype,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     bool enable_bias,
     bool is_1d_depthwise_conv);

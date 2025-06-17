@@ -8,6 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_pybind.hpp"
+#include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_pybind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/argmax/argmax_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/cumprod/cumprod_pybind.hpp"
@@ -44,10 +45,13 @@
 #include "ttnn/operations/experimental/reshape/view_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_pybind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
+#include "ttnn/operations/experimental/scatter/scatter_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/sort/sort_pybind.hpp"
 #include "ttnn/operations/experimental/gather/gather_pybind.hpp"
 #include "ttnn/operations/experimental/gather/tosa/gather_tosa_pybind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_pybind.hpp"
+
+namespace py = pybind11;
 
 namespace ttnn::operations::experimental {
 
@@ -83,6 +87,7 @@ void py_module(py::module& module) {
     ssm::detail::bind_hc_sum_reduce(module);
 
     cnn::detail::bind_convert_to_chw(module);
+    cnn::detail::bind_convert_to_hwc(module);
 
     ttnn::operations::experimental::conv3d::detail::py_bind_conv3d(module);
     ttnn::operations::experimental::reduction::cumprod::detail::bind_cumprod_operation(module);
@@ -99,6 +104,8 @@ void py_module(py::module& module) {
     reshape::detail::py_bind_view(module);
 
     gelu_backward::detail::bind_experimental_gelu_backward_operation(module);
+
+    scatter::detail::bind_scatter_operation(module);
 
     reduction::sort::detail::bind_reduction_sort_operation(module);
 

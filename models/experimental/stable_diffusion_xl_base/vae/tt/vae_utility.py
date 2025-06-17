@@ -42,8 +42,12 @@ def get_DRAM_GN_config(module_path, idx):
 
 def get_DRAM_conv_config(module_path, idx):
     if module_path is None:
-        slice_type = None
-        num_slices = 1
+        if idx == 1:
+            slice_type = None
+            num_slices = 1
+        else:
+            slice_type = ttnn.Conv2dSliceWidth
+            num_slices = 16
     elif "mid_block" in module_path:
         slice_type = None
         num_slices = 1

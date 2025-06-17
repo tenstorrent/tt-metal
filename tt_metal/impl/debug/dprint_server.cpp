@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <math.h>
 #include <pthread.h>
 #include <tt-metalium/blockfloat_common.hpp>
@@ -149,7 +149,7 @@ struct HartKeyComparator {
 struct DebugPrintServerContext {
     // only one instance is allowed at the moment
     static DebugPrintServerContext* inst;
-    static bool ProfilerIsRunning;
+    static std::atomic<bool> ProfilerIsRunning;
 
     // Constructor/destructor, reads dprint options from RTOptions.
     DebugPrintServerContext();
@@ -522,12 +522,14 @@ DebugPrintServerContext::DebugPrintServerContext() {
     // specified just in case.
     if (file_name != "" && one_file_per_risc) {
         log_warning(
+            tt::LogMetal,
             "Both TT_METAL_DPRINT_FILE_NAME and TT_METAL_DPRINT_ONE_FILE_PER_RISC are specified. "
             "TT_METAL_DPRINT_FILE_NAME will be ignored.");
     }
 
     if (prepend_device_core_risc && one_file_per_risc) {
         log_warning(
+            tt::LogMetal,
             "Both TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC and TT_METAL_DPRINT_ONE_FILE_PER_RISC are specified. "
             "TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC will be disabled.");
         rtoptions.set_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint, false);
@@ -557,7 +559,7 @@ DebugPrintServerContext::~DebugPrintServerContext() {
     // Wait for the thread to end, with a timeout
     auto future = std::async(std::launch::async, &std::thread::join, print_server_thread_);
     if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
-        tt::log_fatal("Timed out waiting on debug print thread to terminate.");
+        log_fatal(tt::LogMetal, "Timed out waiting on debug print thread to terminate.");
     }
     delete print_server_thread_;
     print_server_thread_ = nullptr;
@@ -613,7 +615,7 @@ void DebugPrintServerContext::AttachDevice(chip_id_t device_id) {
         CoreCoord virtual_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 device_id, logical_core.coord, logical_core.type);
-        for (int risc_index = 0; risc_index < tt::tt_metal::GetNumRiscs(logical_core); risc_index++) {
+        for (int risc_index = 0; risc_index < tt::tt_metal::GetNumRiscs(device_id, logical_core); risc_index++) {
             WriteInitMagic(device_id, virtual_core, risc_index, false);
         }
     }
@@ -720,7 +722,7 @@ void DebugPrintServerContext::AttachDevice(chip_id_t device_id) {
         CoreCoord virtual_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 device_id, logical_core.coord, logical_core.type);
-        for (int risc_index = 0; risc_index < tt::tt_metal::GetNumRiscs(logical_core); risc_index++) {
+        for (int risc_index = 0; risc_index < tt::tt_metal::GetNumRiscs(device_id, logical_core); risc_index++) {
             if (RiscEnabled(logical_core, risc_index)) {
                 WriteInitMagic(device_id, virtual_core, risc_index, true);
             }
@@ -770,7 +772,7 @@ void DebugPrintServerContext::DetachDevice(chip_id_t device_id) {
             CoreCoord virtual_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                     device_id, logical_core.coord, logical_core.type);
-            for (int risc_id = 0; risc_id < tt::tt_metal::GetNumRiscs(logical_core); risc_id++) {
+            for (int risc_id = 0; risc_id < tt::tt_metal::GetNumRiscs(device_id, logical_core); risc_id++) {
                 if (RiscEnabled(logical_core, risc_id)) {
                     // No need to check if risc is not dprint-enabled.
                     if (!CheckInitMagicCleared(device_id, virtual_core, risc_id)) {
@@ -834,7 +836,7 @@ void DebugPrintServerContext::DetachDevice(chip_id_t device_id) {
         CoreCoord virtual_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 device_id, logical_core.coord, logical_core.type);
-        for (int risc_index = 0; risc_index < tt::tt_metal::GetNumRiscs(logical_core); risc_index++) {
+        for (int risc_index = 0; risc_index < tt::tt_metal::GetNumRiscs(device_id, logical_core); risc_index++) {
             WriteInitMagic(device_id, virtual_core, risc_index, false);
         }
     }
@@ -1202,7 +1204,7 @@ void DebugPrintServerContext::PollPrintData() {
             }
             device_intermediate_streams_force_flush_lock_.unlock();
             for (auto& logical_core : device_and_cores.second) {
-                int risc_count = tt::tt_metal::GetNumRiscs(logical_core);
+                int risc_count = tt::tt_metal::GetNumRiscs(device_id, logical_core);
                 for (int risc_index = 0; risc_index < risc_count; risc_index++) {
                     if (RiscEnabled(logical_core, risc_index)) {
                         try {
@@ -1313,7 +1315,7 @@ ostream* DebugPrintServerContext::GetOutputStream(const HartKey& risc_key) {
 }  // GetOutputStream
 
 DebugPrintServerContext* DebugPrintServerContext::inst = nullptr;
-bool DebugPrintServerContext::ProfilerIsRunning = false;
+std::atomic<bool> DebugPrintServerContext::ProfilerIsRunning = false;
 
 }  // namespace
 
@@ -1332,6 +1334,7 @@ void DprintServerAttach(chip_id_t device_id) {
     // If no server is running, create one
     if (!DprintServerIsRunning()) {
         DebugPrintServerContext* ctx = new DebugPrintServerContext();
+        tt::tt_metal::MetalContext::instance().rtoptions().set_disable_dma_ops(true);
     }
 
     // Add this device to the server
@@ -1346,6 +1349,7 @@ void DprintServerDetach(chip_id_t device_id) {
         if (DebugPrintServerContext::inst->GetNumAttachedDevices() == 0) {
             delete DebugPrintServerContext::inst;
             DebugPrintServerContext::inst = nullptr;
+            tt::tt_metal::MetalContext::instance().rtoptions().set_disable_dma_ops(false);
         }
     }
 }

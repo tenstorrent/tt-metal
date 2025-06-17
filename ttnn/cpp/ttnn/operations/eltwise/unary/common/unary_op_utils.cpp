@@ -240,14 +240,26 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             }
             break;
         case UnaryOpType::UNARY_GT:
-            op_init_and_name = {
-                "unary_gt_tile_init();",
-                fmt::format("unary_gt_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
+                op_init_and_name = {"unary_gt_tile_init();", fmt::format("unary_gt_tile_int32({}, {});", idst, param0)};
+            } else {
+                op_init_and_name = {
+                    "unary_gt_tile_init();",
+                    fmt::format("unary_gt_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
             break;
         case UnaryOpType::UNARY_LT:
-            op_init_and_name = {
-                "unary_lt_tile_init();",
-                fmt::format("unary_lt_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
+                op_init_and_name = {"unary_lt_tile_init();", fmt::format("unary_lt_tile_int32({}, {});", idst, param0)};
+            } else {
+                op_init_and_name = {
+                    "unary_lt_tile_init();",
+                    fmt::format("unary_lt_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
             break;
         case UnaryOpType::SOFTPLUS: {
             TT_ASSERT(params.size() == 2, "Expected softplus to take 2 parameters");
@@ -324,7 +336,12 @@ std::pair<string, string> get_op_init_and_func_default(
             break;
         case UnaryOpType::ISNAN: op_init_and_name = {"isnan_tile_init();", fmt::format("isnan_tile({});", idst)}; break;
         case UnaryOpType::LOGICAL_NOT_UNARY:
-            op_init_and_name = {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile({});", idst)};
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {
+                    "logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_int32({});", idst)};
+            } else {
+                op_init_and_name = {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile({});", idst)};
+            }
             break;
         case UnaryOpType::I0: op_init_and_name = {"i0_tile_init();", fmt::format("i0_tile({});", idst)}; break;
         case UnaryOpType::I1: op_init_and_name = {"i1_tile_init();", fmt::format("i1_tile({});", idst)}; break;
@@ -450,6 +467,7 @@ std::pair<string, string> get_op_init_and_func_default(
             op_init_and_name = {"alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
             break;
         case UnaryOpType::MISH: op_init_and_name = {}; break;
+        case UnaryOpType::TANHSHRINK: op_init_and_name = {}; break;
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
     return op_init_and_name;
@@ -569,6 +587,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 std::string get_compute_kernel_path(UnaryOpType op_type, const std::string& compute_root) {
     switch (op_type) {
         case UnaryOpType::MISH: return fmt::format("{}/{}", compute_root, "mish_kernel.cpp");
+        case UnaryOpType::TANHSHRINK: return fmt::format("{}/{}", compute_root, "tanhshrink_kernel.cpp");
         default: return fmt::format("{}/{}", compute_root, "eltwise_sfpu.cpp");
     }
 }

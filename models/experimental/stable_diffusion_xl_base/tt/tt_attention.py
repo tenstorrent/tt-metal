@@ -15,6 +15,7 @@ class TtAttention(nn.Module):
         device,
         state_dict,
         module_path,
+        model_config,
         query_dim: int,
         heads: int = 8,
         out_dim: int = None,
@@ -39,13 +40,6 @@ class TtAttention(nn.Module):
             exp_approx_mode=False,
         )
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
-
         q_weights = state_dict[f"{module_path}.to_q.weight"].unsqueeze(0).unsqueeze(0)
         k_weights = state_dict[f"{module_path}.to_k.weight"].unsqueeze(0).unsqueeze(0)
         v_weights = state_dict[f"{module_path}.to_v.weight"].unsqueeze(0).unsqueeze(0)
@@ -57,7 +51,16 @@ class TtAttention(nn.Module):
             q_weights.shape[-1] == k_weights.shape[-1] and q_weights.shape[-1] == v_weights.shape[-1]
         )
 
+        self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
         if self.is_self_attention == True:
+            self.sdpa_program_config.q_chunk_size = 128
+            self.sdpa_program_config.k_chunk_size = 1024
             fused_qkv_weights = torch.cat(
                 [
                     torch.transpose(q_weights, -2, -1),
@@ -75,6 +78,9 @@ class TtAttention(nn.Module):
             self.tt_v_weights, _ = prepare_linear_params(device, v_weights, None, weights_dtype)
 
         self.tt_out_weights, self.tt_out_bias = prepare_linear_params(device, out_weights, out_bias, weights_dtype)
+        self.dense_out_program_config = model_config.get_matmul_config(module_path + ".dense_out")
+        self.default_compute_kernel_config = model_config.get_mm_compute_config(module_path)
+        assert self.dense_out_program_config is not None, "dense_out_program_config should not be None"
 
     def forward(self, hidden_states, attention_mask, encoder_hidden_states=None):
         if encoder_hidden_states is None:
@@ -110,17 +116,26 @@ class TtAttention(nn.Module):
                 bias=None,
             )
 
-            inner_dim = list(k_heads.shape)[-1]
-            head_dim = inner_dim // self.heads
+            q_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+                q_heads,
+                num_heads=self.heads,
+                num_kv_heads=0,
+                transpose_k_heads=False,
+            )
 
-            q_heads = ttnn.reshape(q_heads, [B, -1, self.heads, head_dim])
-            q_heads = ttnn.transpose(q_heads, 1, 2)
+            v_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+                v_heads,
+                num_heads=self.heads,
+                num_kv_heads=0,
+                transpose_k_heads=False,
+            )
 
-            k_heads = ttnn.reshape(k_heads, [B, -1, self.heads, head_dim])
-            k_heads = ttnn.transpose(k_heads, 1, 2)
-
-            v_heads = ttnn.reshape(v_heads, [B, -1, self.heads, head_dim])
-            v_heads = ttnn.transpose(v_heads, 1, 2)
+            k_heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+                k_heads,
+                num_heads=self.heads,
+                num_kv_heads=0,
+                transpose_k_heads=False,
+            )
 
         hidden_states = ttnn.transformer.scaled_dot_product_attention(
             q_heads,
@@ -129,7 +144,7 @@ class TtAttention(nn.Module):
             is_causal=False,
             attn_mask=attention_mask,
             program_config=self.sdpa_program_config,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
         )
 
         hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states)
@@ -138,6 +153,8 @@ class TtAttention(nn.Module):
             hidden_states,
             self.tt_out_weights,
             bias=self.tt_out_bias,
+            program_config=self.dense_out_program_config,
+            compute_kernel_config=self.default_compute_kernel_config,
         )
 
         return hidden_states

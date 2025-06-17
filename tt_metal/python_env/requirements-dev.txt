@@ -61,7 +61,7 @@ timm==0.6.13
 ultralytics==8.3.107
 opencv-python-headless==4.8.1.78
 diffusers==0.32.2
-accelerate==0.27.2
+accelerate==1.7.0
 ftfy==6.1.1
 gitpython==3.1.41
 einops==0.6.1
@@ -81,6 +81,7 @@ pydantic==2.9.2 # Required for Superset benchmarking
 fiftyone==0.25.2 # Required for Yolo benchmarking
 jiwer==3.0.5 # Required for speech recognition evaluation
 toolz==0.12.0 # Required for Save environment data step
+open_clip_torch==2.32.0 # Required for SDXL accuracy evaluation
 
 # Suff that used to be in pyproject.toml
 # Needed for various tests

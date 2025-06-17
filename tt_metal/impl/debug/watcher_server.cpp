@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <condition_variable>
 #include <filesystem>
 #include <functional>
 #include <initializer_list>
@@ -29,7 +30,7 @@
 #include "debug_helpers.hpp"
 #include "hal_types.hpp"
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
@@ -58,6 +59,8 @@ static std::atomic<bool> enabled = false;
 static std::atomic<bool> server_running = false;
 static std::atomic<int> dump_count = 0;
 static std::mutex watch_mutex;
+static std::condition_variable enabled_cv;
+
 static std::map<chip_id_t, watcher::WatcherDeviceReader> devices;
 static string logfile_path = "generated/watcher/";
 static string logfile_name = "watcher.log";
@@ -172,7 +175,7 @@ static void __attribute__((noinline)) dump(FILE* f) {
     }
 }
 
-static void watcher_loop(int sleep_usecs) {
+static void watcher_loop(std::chrono::microseconds sleep_duration) {
     TT_ASSERT(watcher::server_running == false);
     watcher::server_running = true;
     watcher::dump_count = 1;
@@ -192,20 +195,11 @@ static void watcher_loop(int sleep_usecs) {
     log_info(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
 
     while (true) {
-        // Delay the amount of time specified by the user. Don't include watcher polling time to avoid the case where
-        // watcher dominates the communication links due to heavy traffic.
-        double last_elapsed_time = watcher::get_elapsed_secs();
-        while ((watcher::get_elapsed_secs() - last_elapsed_time) < ((double)sleep_usecs) / 1000000.) {
-            // Odds are this thread will be killed during the usleep, the kill signal is
-            // watcher::enabled = false from the main thread.
-            if (!watcher::enabled) {
-                break;
-            }
-            usleep(1);
+        std::unique_lock<std::mutex> lock(watch_mutex);
+        if (enabled_cv.wait_for(lock, sleep_duration, [&] { return !watcher::enabled.load(); })) {
+            // Watcher has been disabled
+            break;
         }
-
-        {
-            const std::lock_guard<std::mutex> lock(watch_mutex);
 
             // If all devices are detached, we can turn off the server, it will be turned back on
             // when a new device is attached.
@@ -227,6 +221,7 @@ static void watcher_loop(int sleep_usecs) {
                 if (rtoptions.get_test_mode_enabled()) {
                     watcher::watcher_killed_due_to_error = true;
                     watcher::enabled = false;
+                    enabled_cv.notify_all();
                     break;
                 } else {
                     throw e;
@@ -234,9 +229,8 @@ static void watcher_loop(int sleep_usecs) {
             }
 
             fprintf(logfile, "Dump #%d completed at %.3lfs\n", watcher::dump_count.load(), watcher::get_elapsed_secs());
-        }
-        fflush(logfile);
-        watcher::dump_count++;
+            fflush(logfile);
+            watcher::dump_count++;
     }
 
     log_info(LogLLRuntime, "Watcher thread stopped watching...");
@@ -433,7 +427,7 @@ void watcher_init(chip_id_t device_id) {
 
 void watcher_attach(chip_id_t device_id) {
     const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
-    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
 
     if (!watcher::enabled && rtoptions.get_watcher_enabled()) {
         watcher::create_log_file();
@@ -444,9 +438,12 @@ void watcher_attach(chip_id_t device_id) {
         watcher::set_watcher_exception_message("");
 
         watcher::enabled = true;
+        watcher::enabled_cv.notify_all();
 
-        int sleep_usecs = rtoptions.get_watcher_interval() * 1000;
-        std::thread watcher_thread = std::thread(&watcher::watcher_loop, sleep_usecs);
+        rtoptions.set_disable_dma_ops(true);
+
+        auto sleep_duration = std::chrono::milliseconds(rtoptions.get_watcher_interval());
+        std::thread watcher_thread = std::thread(&watcher::watcher_loop, sleep_duration);
         watcher_thread.detach();
     }
 
@@ -479,6 +476,7 @@ void watcher_detach(chip_id_t device_id) {
         if (watcher::enabled && watcher::devices.empty()) {
             // If no devices remain, shut down the watcher server.
             watcher::enabled = false;
+            watcher::enabled_cv.notify_all();
             if (watcher::logfile != nullptr) {
                 std::fclose(watcher::logfile);
                 watcher::logfile = nullptr;
@@ -496,6 +494,8 @@ void watcher_detach(chip_id_t device_id) {
         while (watcher::server_running) {
             ;
         }
+
+        tt::tt_metal::MetalContext::instance().rtoptions().set_disable_dma_ops(false);
     }
 }
 

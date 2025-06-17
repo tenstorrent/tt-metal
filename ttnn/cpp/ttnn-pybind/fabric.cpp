@@ -12,7 +12,7 @@
 
 namespace ttnn::fabric {
 
-void py_bind_fabric_api(pybind11::module& module) {
+void py_bind_fabric_api(py::module& module) {
     py::enum_<tt::tt_metal::FabricConfig>(module, "FabricConfig")
         .value("DISABLED", tt::tt_metal::FabricConfig::DISABLED)
         .value("FABRIC_1D", tt::tt_metal::FabricConfig::FABRIC_1D)
@@ -20,7 +20,11 @@ void py_bind_fabric_api(pybind11::module& module) {
         .value("FABRIC_2D", tt::tt_metal::FabricConfig::FABRIC_2D)
         .value("CUSTOM", tt::tt_metal::FabricConfig::CUSTOM);  // DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4
 
-    module.def("initialize_fabric_config", &tt::tt_metal::detail::InitializeFabricConfig, py::arg("config"));
+    module.def(
+        "set_fabric_config",
+        &tt::tt_metal::detail::SetFabricConfig,
+        py::arg("config"),
+        py::arg("num_planes") = std::nullopt);
 }
 
 }  // namespace ttnn::fabric

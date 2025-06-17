@@ -51,6 +51,8 @@ run-name: ${{ inputs.description }}
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       version: 22.04
@@ -58,6 +60,8 @@ jobs:
       build-wheel: true
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
     secrets: inherit
     with:
       version: 22.04
