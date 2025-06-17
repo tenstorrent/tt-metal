@@ -508,6 +508,8 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
+    bool no_activations = lhs_activations.empty() and rhs_activations.empty() and post_activations.empty();
+
     if (use_legacy ? *use_legacy
                    : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
                          (not detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
@@ -516,6 +518,9 @@ Tensor RelationalBinary<binary_op_type>::invoke(
         }
     }
 
+    if (no_activations) {
+        return detail::binary_impl(DefaultQueueId, binary_op_type, lhs, rhs, dtype, memory_config, output);
+    }
     return detail::invoke_binary_ng(
         lhs,
         rhs,
