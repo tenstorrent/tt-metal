@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <algorithm>
 
 #include "dataflow_api.h"
 #include "utils/bfloat16.h"
@@ -64,7 +65,7 @@ inline void find_argmax_for_core(
                 max_val = val;
             } else if (val == max_val) {
                 auto full_idx = outer_idx * inner_dim_units * red_dim_units + j * red_dim_units + i;
-                max_idx = reduce_all ? min(max_idx, full_idx) : min(max_idx, i);
+                max_idx = reduce_all ? std::min(max_idx, full_idx) : std::min(max_idx, i);
             }
         }
 
