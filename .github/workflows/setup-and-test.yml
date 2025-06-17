@@ -48,7 +48,6 @@ jobs:
       - name: Run tests
         shell: bash
         env:
-          LLK_HOME: ${{ github.workspace }}
           TEST_GROUPS: ${{ inputs.test_group }}
         run: |
           CHIP_ARCH=unknown
