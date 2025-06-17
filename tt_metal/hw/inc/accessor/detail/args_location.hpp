@@ -176,6 +176,7 @@ struct ArgsOffsets {
 
     /**
      * @brief Calculates the number of common runtime arguments used when building a DistributionSpec.
+     * Evaluated at compile time if rank and num_banks are compile-time.
      *
      * @return constexpr size_t     Number of common runtime arguments used by the DistributionSpec.
      */

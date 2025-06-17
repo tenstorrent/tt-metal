@@ -68,8 +68,8 @@ using DevSpan = std::array<uint32_t, Size>;
 // If inputs are passed as constexpr arrays, we can use this style to directly create the structs
 // Example:
 //    constexpr std::array<uint32_t, 3> tensor_shape_array_1 = {1, 2, 3};
-//    USING_STRUCT_FROM_ARRAY_WRAPPER(ArrayWrapper, tensor_shape_1, tensor_shape_array);
-//    static_assert(std::is_same_v<tensor_shape_1, ArrayWrapper<1, 2, 3>>);
+//    USING_STRUCT_FROM_ARRAY_WRAPPER(ArrayWrapperU32, tensor_shape_1, tensor_shape_array);
+//    static_assert(std::is_same_v<tensor_shape_1, ArrayWrapperU32<1, 2, 3>>);
 template <template <size_t...> class Wrapper, typename F, size_t... Is>
 constexpr auto make_struct_from_array_wrapper(F, std::index_sequence<Is...>) -> Wrapper<F{}()[Is]...>;
 
@@ -331,7 +331,6 @@ TEST(ShardedAccessorTestsCRTA, RuntimeTensorRuntimeShardShapeCompileTimeBanks) {
     std::array<uint32_t, crta_params::rank> tensor_shape_array = {2, 3};
     std::array<uint32_t, crta_params::rank> shard_shape_array = {1, 2};
 
-    // print<dspec_t::Shape, dspec_t::BankCoords> _;
     auto dspec_val = dspec_t(tensor_shape_array, shard_shape_array);
     auto sharded_accessor = nd_sharding::ShardedAccessor<dspec_t>(std::move(dspec_val), 0);
 

@@ -13,10 +13,9 @@ void kernel_main() {
     constexpr uint32_t base_idx_cta = 0;
     constexpr uint32_t base_idx_crta = 1;
 
-    // using input_dspec = nd_sharding::distribution_spec_t<base_idx_cta, base_idx_crta>;
     auto args = nd_sharding::make_args<base_idx_cta, base_idx_crta>();
     constexpr uint32_t new_base_idx_cta = base_idx_cta + args.compile_time_args_skip();
-    uint32_t new_base_idx_crta = base_idx_crta + args.runtime_args_skip();
+    constexpr uint32_t new_base_idx_crta = base_idx_crta + args.runtime_args_skip();
 
     constexpr uint32_t cb_id = get_compile_time_arg_val(new_base_idx_cta);
     // TODO: Expose generic interface to get page size for cb operand
