@@ -58,9 +58,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     // Parameters
     const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;
 
-    if (test_config.loopback &&
-        (bytes_per_transaction >
-         1024 * 1024 / 2)) {  // FIX the 1024 1024 number here // Could we just enforce this before?
+    if (test_config.loopback && (bytes_per_transaction > 1024 * 1024 / 2)) {
         log_error(tt::LogTest, "Not enough memory for master core using loopback");
         return false;
     }
