@@ -91,6 +91,13 @@ def main():
         help="Exit the run and do not attempt post processing if the test command fails",
         default=False,
     )
+    parser.add_option(
+        "--device-analysis-types",
+        dest="device_analysis_types",
+        action="append",
+        help="List of device analysis types",
+        default=[],
+    )
 
     if not sys.argv[1:]:
         parser.print_usage()
@@ -227,7 +234,13 @@ def main():
 
             try:
                 captureProcess.communicate(timeout=15)
-                generate_report(outputFolder, options.name_append, options.child_functions, options.collect_noc_traces)
+                generate_report(
+                    outputFolder,
+                    options.name_append,
+                    options.child_functions,
+                    options.collect_noc_traces,
+                    options.device_analysis_types,
+                )
             except subprocess.TimeoutExpired as e:
                 captureProcess.terminate()
                 captureProcess.communicate()
