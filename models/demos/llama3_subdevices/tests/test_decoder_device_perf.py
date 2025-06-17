@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import pytest
@@ -23,9 +23,6 @@ from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
 is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
-DECODER_OP_START_INDEX = 4
-DECODER_OP_END_INDEX = -21
-
 DECODER_PREFIX = "model"
 MODEL_TAIL_PREFIX = "model_tail"
 KERNEL_MEASUREMENT_TYPE = "kernel"
@@ -34,6 +31,183 @@ DISPATCH_MEASUREMENT_TYPE = "dispatch"
 AVG_TYPE = "avg"
 MIN_TYPE = "min"
 MAX_TYPE = "max"
+
+DECODER_OP_START_INDEX = 4
+DECODER_OP_END_INDEX = -20
+
+perf_targets = {
+    "RMSAllGather_0": {
+        "op_name": "RMS_0",
+        "kernel_duration": 18530.621527777777,
+        "op_to_op": 839.6666666666666,
+        "non-overlapped-dispatch-time": 8380,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.2,
+    },
+    "RMSAllGather_1": {
+        "op_name": "RMS_1",
+        "kernel_duration": 18100.121527777777,
+        "op_to_op": 816.2222222222222,
+        "non-overlapped-dispatch-time": 8139.7,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.2,
+    },
+    "AllGatherConcat_0": {
+        "op_name": "AllGatherConcat",
+        "kernel_duration": 12419.194444444445,
+        "op_to_op": 796.8888888888889,
+        "non-overlapped-dispatch-time": 12541.7,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.5,
+    },
+    "AllGatherAsync_0": {
+        "op_name": "AllGatherAsync_Binary_Mult",
+        "kernel_duration": 10607.277777777777,
+        "op_to_op": 959.5555,
+        "non-overlapped-dispatch-time": 4351.1,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.2,
+    },
+    "Matmul_0": {
+        "op_name": "QKV_MM",
+        "kernel_duration": 8556.222222222223,
+        "op_to_op": 716.4444444444445,
+        "non-overlapped-dispatch-time": 6102.0,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "Matmul_1": {
+        "op_name": "DO_MM",
+        "kernel_duration": 8902,
+        "op_to_op": 723.0,
+        "non-overlapped-dispatch-time": 5760.2,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "Matmul_2": {
+        "op_name": "FF1_MM",
+        "kernel_duration": 9483.888888888889,
+        "op_to_op": 711.8888888888889,
+        "non-overlapped-dispatch-time": 5380.6,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "Matmul_3": {
+        "op_name": "FF3_MM",
+        "kernel_duration": 9435.333333333334,
+        "op_to_op": 688.7777777777778,
+        "non-overlapped-dispatch-time": 6144.8,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.15,
+    },
+    "Matmul_4": {
+        "op_name": "FF2_MM",
+        "kernel_duration": 15891.0,
+        "op_to_op": 658.7777777777778,
+        "non-overlapped-dispatch-time": 6770.3,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "AllReduceCreateQkvHeads_0": {
+        "op_name": "AllReduce_Fuse_Createheads",
+        "kernel_duration": 14541.059027777777,
+        "op_to_op": 966.0,
+        "non-overlapped-dispatch-time": 7932.2,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.4,
+        "dispatch_duration_relative_margin": 0.2,
+    },
+    "AllReduceAsync_0": {
+        "op_name": "AllReduceAsync_DO",
+        "kernel_duration": 21736.76736111111,
+        "op_to_op": 626.5555555555555,
+        "non-overlapped-dispatch-time": 8510.2,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3,
+    },
+    "AllReduceAsync_1": {
+        "op_name": "AllReduceAsync_FF2",
+        "kernel_duration": 22341.23263888889,
+        "op_to_op": 637.1111111111111,
+        "non-overlapped-dispatch-time": 7252.4,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.2,
+    },
+    "LlamaReduceScatterDeviceOperation_0": {
+        "op_name": "ReduceScatter_FF1",
+        "kernel_duration": 9952.402777777777,
+        "op_to_op": 708.1111111111111,
+        "non-overlapped-dispatch-time": 8058.9,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3,
+    },
+    "LlamaReduceScatterDeviceOperation_1": {
+        "op_name": "ReduceScatter_FF3",
+        "kernel_duration": 9817.020833333334,
+        "op_to_op": 812.1111111111111,
+        "non-overlapped-dispatch-time": 7359.9,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3,
+    },
+    "RotaryEmbeddingLlamaFusedQK_0": {
+        "op_name": "RotaryEmbeddingLlamaFusedQK",
+        "kernel_duration": 4296,
+        "op_to_op": 606.1111111111111,
+        "non-overlapped-dispatch-time": 2844.3,
+        "kernel_duration_relative_margin": 0.1,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.35,
+    },
+    "PagedUpdateCacheDeviceOperation_0": {
+        "op_name": "PagedUpdateCache",
+        "kernel_duration": 5963,
+        "op_to_op": 860.2222222222222,
+        "non-overlapped-dispatch-time": 5890.0,
+        "kernel_duration_relative_margin": 0.2,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.2,
+    },
+    "ScaledDotProductAttentionDecode_0": {
+        "op_name": "SDPA",
+        "kernel_duration": 13338,
+        "op_to_op": 652.6666666666666,
+        "non-overlapped-dispatch-time": 9741.5,
+        "kernel_duration_relative_margin": 0.07,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3,
+    },
+    "BinaryDeviceOperation_0": {
+        "op_name": "Binary_Mult_Silu",
+        "kernel_duration": 2923.5555555555557,
+        "op_to_op": 661.0,
+        "non-overlapped-dispatch-time": 6111.2,
+        "kernel_duration_relative_margin": 0.1,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.2,
+    },
+    "Untilize_0": {
+        "op_name": "Untilize",
+        "kernel_duration": 1517.3333333333335,
+        "op_to_op": 800,
+        "non-overlapped-dispatch-time": 3113.6,
+        "kernel_duration_relative_margin": 0.2,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.5,
+    },
+}
 
 
 @pytest.mark.parametrize(
@@ -416,6 +590,10 @@ def test_llama_TG_perf_device(
     df_layers_compilation = df_model_compilation[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     df_layers_trace = df_model_trace[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     # Use layers 2-9 for verifying against targets for more stability
+
+    print("Total ops:", len(df_model_compilation))
+    print("Sliced layers:", len(df_layers_compilation))
+
     assert len(df_layers_compilation) % num_layers == 0
 
     # first decoder layer
@@ -427,6 +605,10 @@ def test_llama_TG_perf_device(
     # model tail ops (lm head + sampling)
     df_model_tail_compilation = df_model_compilation[DECODER_OP_END_INDEX:]
     df_model_tail_trace = df_model_trace[DECODER_OP_END_INDEX:]
+
+    for op in df_model_tail_trace["OP CODE"].unique():
+        print(op)
+
     # Get first layer compilation and trace measurements
     avg_kernel_duration_first_layer_compilation, _, _, _, _, _, _, _, _ = process_measurements(
         df_first_layer_compilation, 1
@@ -798,6 +980,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df_model = df[int(len(df) / 3 * 2) :]
 
     df_layers = df_model[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
+
     assert len(df_layers) % num_layers == 0
     df_layers = df_layers[int(len(df_layers) / num_layers) :]  # Exclude first layer
 
