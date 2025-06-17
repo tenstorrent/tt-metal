@@ -244,16 +244,17 @@ CPMAddPackage(
         "TF_BUILD_TESTS OFF"
         "TF_BUILD_EXAMPLES OFF"
 )
+if(TARGET Taskflow::Taskflow)
+    message(FATAL_ERROR "Target Taskflow::Taskflow already exists")
+endif()
 if(Taskflow_ADDED)
-    add_library(taskflow INTERFACE)
-    add_library(Taskflow::Taskflow ALIAS taskflow)
-    target_include_directories(taskflow INTERFACE ${Taskflow_SOURCE_DIR})
     target_compile_options(
-        taskflow
+        Taskflow
         INTERFACE
             -isystem
             ${Taskflow_SOURCE_DIR}
     )
+    add_library(Taskflow::Taskflow ALIAS Taskflow)
 endif()
 
 ############################################################################################################################
