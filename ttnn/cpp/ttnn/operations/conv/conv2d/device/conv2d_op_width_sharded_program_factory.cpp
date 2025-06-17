@@ -31,8 +31,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     const Tensor& b,
     const ttnn::Shape& ashape,
     std::optional<const Tensor> bias,
-    const std::optional<const Tensor>& conv_reader_indices,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
+    const sliding_window::ParallelConfig& parallel_config,
+    const std::vector<uint32_t>& op_trace_metadata,
+    const std::vector<sliding_window::ShardBoundary>& shard_boundaries,
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
@@ -674,14 +676,31 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         2 * act_block_w_ntiles,
         act_tile_size);
 
-    auto conv_reader_indices_storage = conv_reader_indices.value().device_storage();
+    std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
+        ttnn::operations::sliding_window::generate_sliding_window_op_config(
+            op_trace_metadata, shard_boundaries, stride_w, true, act_block_h_datums, 0);
+
+    // create sharded ttnn config tensors
+    optimized_conv_op_utils::DataType indices_tt_dtype = optimized_conv_op_utils::DataType::UINT16;
+    // For 2d convs, each core in a column or row share the same specs
+    CoreCoord grid_size = parallel_config.grid.bounding_box().grid_size();
+
+    bool is_block_sharded =
+        a.memory_config().memory_layout() == optimized_conv_op_utils::TensorMemoryLayout::BLOCK_SHARDED;
+    Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
+        conv_sharded_input_top_left_indices, parallel_config);
+    conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
+        conv_reader_indices_tensor, parallel_config, is_block_sharded, a.device());
+
+    const optimized_conv_op_utils::DeviceStorage& conv_reader_indices_storage =
+        conv_reader_indices_tensor.device_storage();
 
     cb_indices.cb_for_reader_indices = cb_indices.get_next_cb_index();
     tt::tt_metal::create_cb(
         cb_indices.cb_for_reader_indices,
         program,
         all_cores,
-        out_block_h_datums * 2,
+        conv_sharded_input_top_left_indices[0].size(),
         1,
         tt::DataFormat::Float16_b,
         conv_reader_indices_storage.get_buffer());
@@ -793,7 +812,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     };
 
     activation_kernel_compile_args = {
-        (uint32_t)stride_h,
         (uint32_t)stride_w,
         (uint32_t)dilation_h,
         (uint32_t)dilation_w,
@@ -816,7 +834,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         (uint32_t)output_num_cores,
         (uint32_t)all_reader_cores.size(),
         (uint32_t)cb_indices.act_cb,
-        (uint32_t)cb_indices.weight_cb,
         (uint32_t)cb_indices.sharded_act_cb,
         (uint32_t)cb_indices.cb_for_reader_indices,
         (uint32_t)cb_indices.cb_for_l1_array,

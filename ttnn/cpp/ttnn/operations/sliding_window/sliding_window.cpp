@@ -1085,7 +1085,10 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
-    bool pad_tile,
+    uint32_t stride_w,
+    bool is_conv,
+    uint32_t reader0_datums,
+    uint32_t reader1_datums,
     bool pad_cores) {
     std::vector<std::vector<uint16_t>> sharded_input_top_left_indices;
     for (const auto& item : shard_boundaries) {
@@ -1095,28 +1098,65 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
         // sanity check
         if (output_shard_start >= op_trace_metadata.size()) {
             // this core has no output
+            sharded_input_top_left_indices.push_back(local_top_left_indices);
             continue;
         }
         TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);
+        uint32_t datums_remaining = 0;
+        uint32_t last_relative_index = 0;
+        uint32_t num_segments = 0;
+        bool start_new_block = true;
+        uint32_t num_segments_ind = 0;
+        bool use_reader0 = true;
+        bool split_reader = reader1_datums > 0;
+
         for (size_t i = output_shard_start; i < output_shard_end + 1; i++) {
-            local_top_left_indices.push_back(op_trace_metadata[i] - op_trace_metadata[output_shard_start]);
+            const uint32_t relative_index = op_trace_metadata[i] - op_trace_metadata[output_shard_start];
+            if (start_new_block) {
+                if (!split_reader) {
+                    datums_remaining = reader0_datums;
+                } else {
+                    datums_remaining = use_reader0 ? reader0_datums : reader1_datums;
+                }
+                local_top_left_indices.push_back(0);  // number of segments, going to be replaced later
+                num_segments_ind = local_top_left_indices.size() - 1;
+                local_top_left_indices.push_back(0);  // empty value, used for 32B alignment
+                local_top_left_indices.push_back(relative_index);
+                start_new_block = false;
+            } else {
+                if (relative_index != last_relative_index + stride_w) {
+                    local_top_left_indices.push_back(last_relative_index);
+                    num_segments++;
+                    local_top_left_indices.push_back(relative_index);
+                }
+            }
+            datums_remaining--;
+            last_relative_index = relative_index;
+
+            if (!datums_remaining || i == output_shard_end) {  // end of block
+                local_top_left_indices.push_back(last_relative_index);
+                num_segments++;
+                local_top_left_indices[num_segments_ind] = num_segments;
+                num_segments = 0;
+                if (is_conv) {
+                    start_new_block = true;
+                }
+                use_reader0 = !use_reader0;
+            }
         }
         sharded_input_top_left_indices.push_back(local_top_left_indices);
     }
-    if (pad_tile) {
-        // Pad indices to tile-multiple
-        for (size_t i = 0; i < sharded_input_top_left_indices.size(); i++) {
-            uint32_t extend_with_zeroes = (32 - sharded_input_top_left_indices[i].size() % 32) % 32;
-            if (extend_with_zeroes > 0) {
-                std::vector<uint16_t> extend_v(extend_with_zeroes, 0);
-                sharded_input_top_left_indices[i].insert(
-                    sharded_input_top_left_indices[i].end(), extend_v.begin(), extend_v.end());
-            }
+
+    uint32_t indices_length_per_core = sharded_input_top_left_indices[0].size();
+    for (uint32_t core_idx = 1; core_idx < shard_boundaries.size(); core_idx++) {
+        const auto& [output_shard_start, output_shard_end] = shard_boundaries[core_idx].output_range;
+        if (sharded_input_top_left_indices[core_idx].size() > indices_length_per_core) {
+            indices_length_per_core = sharded_input_top_left_indices[core_idx].size();
         }
     }
     if (pad_cores) {
-        uint32_t indices_length_per_core = sharded_input_top_left_indices[0].size();
         for (uint32_t core_idx = 0; core_idx < shard_boundaries.size(); core_idx++) {
+            const auto& [output_shard_start, output_shard_end] = shard_boundaries[core_idx].output_range;
             // Pad indices for this core if not equal to other cores
             if (sharded_input_top_left_indices.size() == core_idx) {
                 sharded_input_top_left_indices.push_back(std::vector<uint16_t>());
