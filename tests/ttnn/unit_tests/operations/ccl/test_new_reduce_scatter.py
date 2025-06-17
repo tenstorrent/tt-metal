@@ -201,13 +201,6 @@ def run_reduce_scatter_impl(
             eq, output = comp_pcc(tt_rs_out, torch_rs_out)
 
         logger.info(f"{output}, iteration {i}")
-        print("torch_rs_out", torch_rs_out)
-        print("tt_rs_out", tt_rs_out)
-
-        # tt_intermed = ttnn.to_torch(persistent_intermediate_buffers[i], mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))
-        breakpoint()
-        # if not torch.allclose(tt_intermed, torch_rs_out):
-        #     breakpoint()
         assert eq, f"{i} FAILED ag: {output}"
 
     t3k_mesh_device.reset_sub_device_stall_group()
