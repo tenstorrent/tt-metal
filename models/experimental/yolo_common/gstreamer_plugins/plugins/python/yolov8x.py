@@ -43,13 +43,13 @@ class Yolov8x(GstBase.BaseTransform):
         "sink",
         Gst.PadDirection.SINK,
         Gst.PadPresence.ALWAYS,
-        Gst.Caps.from_string("video/x-raw,format=BGRx,width=(int)640,height=(int)640,framerate=(fraction)30/1"),
+        Gst.Caps.from_string("video/x-raw,format=BGRx,width=(int)640,height=(int)640,framerate=(fraction)0/1"),
     )
     _src_template = Gst.PadTemplate.new(
         "src",
         Gst.PadDirection.SRC,
         Gst.PadPresence.ALWAYS,
-        Gst.Caps.from_string("video/x-raw,format=BGRx,width=(int)640,height=(int)640,framerate=(fraction)30/1"),
+        Gst.Caps.from_string("video/x-raw,format=BGRx,width=(int)640,height=(int)640,framerate=(fraction)0/1"),
     )
     __gsttemplates__ = (_src_template, _sink_template)  # Order can matter for some tools
     __gproperties__ = {
@@ -164,6 +164,8 @@ class Yolov8x(GstBase.BaseTransform):
             # print("######################A2")
             te = time.time()
 
+            print("Inference time", te - ts)
+
             names = load_coco_class_names()
             # print("TASK", self.model_task)
             # results = obj_postprocess(preds[0], torch_frame_data, frame_data, [1], names)[0]
@@ -176,7 +178,7 @@ class Yolov8x(GstBase.BaseTransform):
 
             # results = postprocess(out, torch_frame_data, frame_data, names=names)[0]
             # outImage = save_yolo_predictions_by_model(results, model_name="tt_model", orig_image=frame_data)
-            outImage = cv2.cvtColor(outImage, cv2.COLOR_BGR2BGRA)
+            outImage = cv2.cvtColor(outImage, cv2.COLOR_BGR2RGBA)
 
             inbuf.unmap(in_map_info)
 
