@@ -186,15 +186,20 @@ BufferCorePageMapping::Iterator::Range BufferCorePageMapping::Iterator::next_ran
 
 BufferPageMapping::Iterator& BufferPageMapping::Iterator::operator++() {
     host_page_index_++;
-    if (host_page_index_ ==
-        page_mapping_->core_page_mappings[core_id_][page_mapping_index_].host_ranges[host_range_index_].num_pages) {
-        host_page_index_ = 0;
-        host_range_index_++;
+
+    auto& core_page_mapping = page_mapping_->core_page_mappings[core_id_][page_mapping_index_];
+    if (host_page_index_ < core_page_mapping.host_ranges[host_range_index_].num_pages) {
+        return *this;
     }
-    if (host_range_index_ == page_mapping_->core_page_mappings[core_id_][page_mapping_index_].host_ranges.size()) {
-        host_range_index_ = 0;
-        page_mapping_index_++;
+    host_page_index_ = 0;
+    host_range_index_++;
+
+    if (host_range_index_ < core_page_mapping.host_ranges.size()) {
+        return *this;
     }
+    host_range_index_ = 0;
+    page_mapping_index_++;
+
     while (core_id_ < page_mapping_->all_cores.size() &&
            page_mapping_index_ == page_mapping_->core_page_mappings[core_id_].size()) {
         page_mapping_index_ = 0;

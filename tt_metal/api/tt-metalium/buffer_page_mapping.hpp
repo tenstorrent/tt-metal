@@ -14,12 +14,15 @@
 namespace tt::tt_metal {
 
 struct UncompressedBufferPageMapping {
+    // Represents a page on device which doesn't match any host page within core_host_page_indices.
     static constexpr uint32_t PADDING = std::numeric_limits<uint32_t>::max();
 
     std::vector<CoreCoord> all_cores;
+    // For each core, a vector of host page indices (or PADDING if there's no corresponding host page).
     std::vector<std::vector<uint32_t>> core_host_page_indices;
 };
 
+// Represents a contiguous range of device pages for a single core.
 struct BufferCorePageMapping {
     struct ContiguousHostPages {
         uint32_t device_page_offset = 0;
@@ -29,8 +32,10 @@ struct BufferCorePageMapping {
 
     uint32_t device_start_page = 0;
     uint32_t num_pages = 0;
+    // Vector of contiguous host page ranges within this contiguous range of device pages.
     std::vector<ContiguousHostPages> host_ranges;
 
+    // Iterator over host pages within this contiguous range of device pages.
     struct Iterator {
         using iterator_category = std::forward_iterator_tag;
         using difference_type = std::ptrdiff_t;
@@ -69,6 +74,7 @@ struct BufferCorePageMapping {
     Iterator end() const { return Iterator(this, num_pages, host_ranges.size()); }
 };
 
+// Represents a mapping between host pages and device pages for a given buffer.
 struct BufferPageMapping {
     BufferPageMapping() = default;
     BufferPageMapping(const UncompressedBufferPageMapping& page_mapping);
@@ -77,8 +83,10 @@ struct BufferPageMapping {
 
     std::vector<CoreCoord> all_cores;
     std::unordered_map<CoreCoord, uint32_t> core_to_core_id;
+    // For each core, a vector of BufferCorePageMapping, representing contiguous range of device pages.
     std::vector<std::vector<BufferCorePageMapping>> core_page_mappings;
 
+    // Iterator over all host <-> device page mapping pairs.
     struct Iterator {
         struct MappedPage {
             uint32_t core_id = 0;
