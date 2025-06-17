@@ -22,9 +22,7 @@ def select_torch_dtype(ttnn_dtype):
 
 @pytest.mark.parametrize(
     "N, K, W, C, input_dtype, index_dtype, input_layout",
-    [
-        (32, 32, 32, 32, ttnn.bfloat16, ttnn.uint16, ttnn.Layout.ROW_MAJOR)
-    ]
+    [(32, 32, 32, 32, ttnn.bfloat16, ttnn.uint32, ttnn.Layout.ROW_MAJOR)],
 )
 def test_tosa_scatter_normal(N, K, W, C, input_dtype, index_dtype, input_layout, device):
     input_torch_dtype = select_torch_dtype(input_dtype)
@@ -39,13 +37,13 @@ def test_tosa_scatter_normal(N, K, W, C, input_dtype, index_dtype, input_layout,
     ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=input_layout, device=device)
     torch_source = torch.randn(source_shape, dtype=input_torch_dtype)
     ttnn_source = ttnn.from_torch(torch_source, dtype=input_dtype, layout=input_layout, device=device)
+    dim = 1
 
     # adapt torch_index (expand [N, W] into [N, W, C])
-    dim = 1
     torch_index = torch_index.unsqueeze(-1).expand([N, W, C])
+
     torch_output = torch.scatter(torch_input, dim=dim, index=torch_index, src=torch_source)
     ttnn_output = ttnn.experimental.tosa_scatter(ttnn_input, ttnn_index, ttnn_source)
     assert ttnn_output.shape == ttnn_input.shape
     assert ttnn_output.dtype == ttnn_input.dtype
     torch.testing.assert_close(ttnn.to_torch(ttnn_output), torch_output)
-

@@ -12,6 +12,7 @@
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 
 namespace ttnn::operations::experimental {
 namespace {
@@ -34,7 +35,8 @@ Tensor expand_tensor(const Tensor& tensor, const uint32_t& N, const uint32_t& K,
         }
 
         case InputTensorType::INDEX: {
-            return ttnn::unsqueeze_to_4D(ttnn::expand(ttnn::reshape(tensor, Shape{N, W, 1}), SmallVector<int32_t>{N, W, C}, tensor.memory_config()));
+            return ttnn::unsqueeze_to_4D(
+                ttnn::expand(ttnn::unsqueeze(tensor, -1), SmallVector<int32_t>{N, W, C}, tensor.memory_config()));
         }
 
         case InputTensorType::SOURCE: {

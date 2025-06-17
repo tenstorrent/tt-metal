@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::experimental::tosa_scatter::detail {
 
-void bind_scatter_operation(py::module& module) {
+void bind_tosa_scatter_operation(py::module& module) {
     auto doc =
         R"doc(
             Scatters the source tensor's values along a given dimension according
