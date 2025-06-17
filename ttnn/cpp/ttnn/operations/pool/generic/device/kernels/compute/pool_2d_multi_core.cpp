@@ -70,9 +70,10 @@ void MAIN {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
 
-    constexpr bool is_partial_tile = in_c < 32;
+    constexpr bool last_tile_is_partial = in_c % 32 != 0;
     // static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
-    constexpr uint32_t num_faces_in_tile = window_size_hw > 16 ? 4 : (is_partial_tile ? 1 : 2);
+    constexpr uint32_t num_faces_in_tile =
+        window_size_hw > 16 ? 4 : ((last_tile_is_partial && in_ntiles_c == 1) ? 1 : 2);
     constexpr uint32_t num_out_rows = 1;
 
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
@@ -118,7 +119,7 @@ void MAIN {
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; ++b_i) {
             reduce_h_fused<
                 max_tiles_per_iter,
-                is_partial_tile,
+                false,
                 split_reader,
                 face_r_dim,
                 num_faces_in_tile,
@@ -133,10 +134,10 @@ void MAIN {
         // perform the reduction over the either whole or partial chunk N
         reduce_h_fused<
             partial_iter_output_tiles,
-            is_partial_tile,
+            last_tile_is_partial,
             split_reader,
             face_r_dim,
-            num_faces_in_tile,
+            last_tile_is_partial ? 1 : 2,
             neginf_srca_maxpool,
             zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, out_cb_id);
         if constexpr (!one_scalar_per_core) {
