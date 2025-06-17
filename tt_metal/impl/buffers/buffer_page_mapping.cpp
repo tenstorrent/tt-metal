@@ -29,11 +29,11 @@ std::vector<BufferCorePageMapping::ContiguousHostPages> to_host_page_ranges(
     for (size_t i = 0; i < host_page_indices.size(); i++) {
         uint32_t host_page = host_page_indices[i];
         if (!is_processing_range) {
-            if (host_page != BufferPageMapping::PADDING) {
+            if (host_page != UncompressedBufferPageMapping::PADDING) {
                 start_host_page_idx = i;
                 is_processing_range = true;
             }
-        } else if (host_page == BufferPageMapping::PADDING) {
+        } else if (host_page == UncompressedBufferPageMapping::PADDING) {
             add_page(i);
             start_host_page_idx = i + 1;
             is_processing_range = false;
@@ -52,7 +52,7 @@ std::vector<BufferCorePageMapping::ContiguousHostPages> to_host_page_ranges(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-CompressedBufferPageMapping::CompressedBufferPageMapping(const BufferPageMapping& page_mapping) :
+BufferPageMapping::BufferPageMapping(const UncompressedBufferPageMapping& page_mapping) :
     all_cores(page_mapping.all_cores) {
     for (size_t i = 0; i < all_cores.size(); i++) {
         core_to_core_id[all_cores[i]] = i;
@@ -78,9 +78,8 @@ CompressedBufferPageMapping::CompressedBufferPageMapping(const BufferPageMapping
     }
 }
 
-CompressedBufferPageMapping CompressedBufferPageMapping::filter_by_host_range(
-    uint32_t start_host_page, uint32_t end_host_page) const {
-    CompressedBufferPageMapping result;
+BufferPageMapping BufferPageMapping::filter_by_host_range(uint32_t start_host_page, uint32_t end_host_page) const {
+    BufferPageMapping result;
     result.all_cores = all_cores;
     result.core_to_core_id = core_to_core_id;
     result.core_page_mappings.resize(all_cores.size());
@@ -139,6 +138,92 @@ CompressedBufferPageMapping CompressedBufferPageMapping::filter_by_host_range(
     }
 
     return result;
+}
+
+BufferCorePageMapping::Iterator& BufferCorePageMapping::Iterator::operator++() {
+    device_page_offset_++;
+    if (range_index_ >= mapping_->host_ranges.size()) {
+        return *this;
+    }
+    const auto& host_range = mapping_->host_ranges[range_index_];
+    if (device_page_offset_ == host_range.device_page_offset + host_range.num_pages) {
+        range_index_++;
+    }
+    return *this;
+}
+
+std::optional<uint32_t> BufferCorePageMapping::Iterator::operator*() const {
+    if (range_index_ >= mapping_->host_ranges.size()) {
+        return std::nullopt;
+    }
+    const auto& host_range = mapping_->host_ranges[range_index_];
+    if (device_page_offset_ < host_range.device_page_offset) {
+        return std::nullopt;
+    }
+    return host_range.host_page_start + device_page_offset_ - host_range.device_page_offset;
+}
+
+BufferCorePageMapping::Iterator::Range BufferCorePageMapping::Iterator::next_range(uint32_t end_device_page_offset) {
+    Range result;
+    if (range_index_ >= mapping_->host_ranges.size() || device_page_offset_ >= end_device_page_offset) {
+        return result;
+    }
+    const auto& host_range = mapping_->host_ranges[range_index_];
+    uint32_t num_pages_left = host_range.num_pages - (device_page_offset_ - host_range.device_page_offset);
+    uint32_t num_pages = std::min(num_pages_left, end_device_page_offset - device_page_offset_);
+    result = Range{
+        .device_page_offset = device_page_offset_,
+        .host_page_start = host_range.host_page_start + device_page_offset_ - host_range.device_page_offset,
+        .num_pages = num_pages,
+    };
+    device_page_offset_ += num_pages;
+    if (device_page_offset_ == host_range.device_page_offset + host_range.num_pages) {
+        range_index_++;
+    }
+
+    return result;
+}
+
+BufferPageMapping::Iterator& BufferPageMapping::Iterator::operator++() {
+    host_page_index_++;
+    if (host_page_index_ ==
+        page_mapping_->core_page_mappings[core_id_][page_mapping_index_].host_ranges[host_range_index_].num_pages) {
+        host_page_index_ = 0;
+        host_range_index_++;
+    }
+    if (host_range_index_ == page_mapping_->core_page_mappings[core_id_][page_mapping_index_].host_ranges.size()) {
+        host_range_index_ = 0;
+        page_mapping_index_++;
+    }
+    while (core_id_ < page_mapping_->all_cores.size() &&
+           page_mapping_index_ == page_mapping_->core_page_mappings[core_id_].size()) {
+        page_mapping_index_ = 0;
+        core_id_++;
+    }
+    return *this;
+}
+
+BufferPageMapping::Iterator::MappedPage BufferPageMapping::Iterator::operator*() const {
+    const auto& core_page_mapping = page_mapping_->core_page_mappings[core_id_][page_mapping_index_];
+    const auto& host_range = core_page_mapping.host_ranges[host_range_index_];
+    return MappedPage{
+        .core_id = core_id_,
+        .device_page = core_page_mapping.device_start_page + host_range.device_page_offset + host_page_index_,
+        .host_page = host_range.host_page_start + host_page_index_,
+    };
+}
+
+BufferPageMapping::Iterator BufferPageMapping::begin() const {
+    for (uint32_t core_id = 0; core_id < all_cores.size(); core_id++) {
+        if (!core_page_mappings[core_id].empty()) {
+            return BufferPageMapping::Iterator(this, core_id, 0, 0, 0);
+        }
+    }
+    return end();
+}
+
+BufferPageMapping::Iterator BufferPageMapping::end() const {
+    return BufferPageMapping::Iterator(this, all_cores.size(), 0, 0, 0);
 }
 
 }  // namespace tt::tt_metal

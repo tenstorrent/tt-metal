@@ -24,18 +24,9 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
     const auto& input_buffer_page_mapping = *input_buffer->get_buffer_page_mapping();
 
     std::vector<std::pair<CoreCoord, uint32_t>> host_page_to_input_core_mapping(input_buffer->num_pages());
-    for (size_t input_core_idx = 0; input_core_idx < input_buffer_page_mapping.all_cores.size(); input_core_idx++) {
-        auto input_core = input_buffer_page_mapping.all_cores[input_core_idx];
-        for (const auto& core_page_mapping : input_buffer_page_mapping.core_page_mappings[input_core_idx]) {
-            for (const auto& host_range : core_page_mapping.host_ranges) {
-                for (uint32_t page_idx = 0; page_idx < host_range.num_pages; page_idx++) {
-                    uint32_t host_page = host_range.host_page_start + page_idx;
-                    uint32_t input_core_page =
-                        core_page_mapping.device_start_page + host_range.device_page_offset + page_idx;
-                    host_page_to_input_core_mapping[host_page] = {input_core, input_core_page};
-                }
-            }
-        }
+    for (auto mapped_page : input_buffer_page_mapping) {
+        auto core = input_buffer_page_mapping.all_cores[mapped_page.core_id];
+        host_page_to_input_core_mapping[mapped_page.host_page] = {core, mapped_page.device_page};
     }
 
     auto output_cores = output_buffer_page_mapping.all_cores;
@@ -43,23 +34,13 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
     std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page(
         output_cores.size());
 
-    for (size_t output_core_idx = 0; output_core_idx < output_cores.size(); output_core_idx++) {
-        auto output_core = output_cores[output_core_idx];
-        auto& cur_output_core_to_vector_input_core_page = output_core_to_vector_input_core_page[output_core_idx];
-        for (const auto& core_page_mapping : output_buffer_page_mapping.core_page_mappings[output_core_idx]) {
-            for (const auto& host_range : core_page_mapping.host_ranges) {
-                for (uint32_t page_idx = 0; page_idx < host_range.num_pages; page_idx++) {
-                    uint32_t host_page = host_range.host_page_start + page_idx;
-                    auto output_core_page =
-                        core_page_mapping.device_start_page + host_range.device_page_offset + page_idx;
-                    auto [input_core, input_core_page] = host_page_to_input_core_mapping[host_page];
-                    if (cur_output_core_to_vector_input_core_page.size() <= output_core_page) {
-                        cur_output_core_to_vector_input_core_page.resize(output_core_page + 1);
-                    }
-                    cur_output_core_to_vector_input_core_page[output_core_page] = {input_core, input_core_page};
-                }
-            }
+    for (auto mapped_page : output_buffer_page_mapping) {
+        auto& cur_output_core_to_vector_input_core_page = output_core_to_vector_input_core_page[mapped_page.core_id];
+        auto [input_core, input_core_page] = host_page_to_input_core_mapping[mapped_page.host_page];
+        if (cur_output_core_to_vector_input_core_page.size() <= mapped_page.device_page) {
+            cur_output_core_to_vector_input_core_page.resize(mapped_page.device_page + 1);
         }
+        cur_output_core_to_vector_input_core_page[mapped_page.device_page] = {input_core, input_core_page};
     }
 
     // now compress to output_core to vector<pair<input_core, input_page_range> (num_page_ranges_in_output)

@@ -13,7 +13,7 @@
 
 namespace tt::tt_metal {
 
-struct BufferPageMapping {
+struct UncompressedBufferPageMapping {
     static constexpr uint32_t PADDING = std::numeric_limits<uint32_t>::max();
 
     std::vector<CoreCoord> all_cores;
@@ -30,79 +30,100 @@ struct BufferCorePageMapping {
     uint32_t device_start_page = 0;
     uint32_t num_pages = 0;
     std::vector<ContiguousHostPages> host_ranges;
+
+    struct Iterator {
+        using iterator_category = std::forward_iterator_tag;
+        using difference_type = std::ptrdiff_t;
+        using value_type = std::optional<uint32_t>;
+
+        Iterator() = default;
+        Iterator(const BufferCorePageMapping* mapping, uint32_t device_page_offset, uint32_t range_index) :
+            mapping_(mapping), device_page_offset_(device_page_offset), range_index_(range_index) {}
+
+        Iterator& operator++();
+        Iterator operator++(int) {
+            Iterator tmp = *this;
+            ++(*this);
+            return tmp;
+        }
+        value_type operator*() const;
+        uint32_t device_page_offset() const { return device_page_offset_; }
+
+        bool operator==(const Iterator& other) const { return device_page_offset_ == other.device_page_offset_; }
+        bool operator!=(const Iterator& other) const { return device_page_offset_ != other.device_page_offset_; }
+
+        struct Range {
+            uint32_t device_page_offset = 0;
+            uint32_t host_page_start = 0;
+            uint32_t num_pages = 0;
+        };
+        Range next_range(uint32_t end_device_page_offset);
+
+    private:
+        const BufferCorePageMapping* mapping_ = nullptr;
+        uint32_t device_page_offset_ = 0;
+        uint32_t range_index_ = 0;
+    };
+
+    Iterator begin() const { return Iterator(this, 0, 0); }
+    Iterator end() const { return Iterator(this, num_pages, host_ranges.size()); }
 };
 
-struct CompressedBufferPageMapping {
-    CompressedBufferPageMapping() = default;
-    CompressedBufferPageMapping(const BufferPageMapping& page_mapping);
+struct BufferPageMapping {
+    BufferPageMapping() = default;
+    BufferPageMapping(const UncompressedBufferPageMapping& page_mapping);
 
-    CompressedBufferPageMapping filter_by_host_range(uint32_t start_host_page, uint32_t end_host_page) const;
+    BufferPageMapping filter_by_host_range(uint32_t start_host_page, uint32_t end_host_page) const;
 
     std::vector<CoreCoord> all_cores;
     std::unordered_map<CoreCoord, uint32_t> core_to_core_id;
     std::vector<std::vector<BufferCorePageMapping>> core_page_mappings;
-};
 
-class BufferCorePageMappingIterator {
-public:
-    BufferCorePageMappingIterator() = default;
-    BufferCorePageMappingIterator(const BufferCorePageMapping* mapping) : mapping_(mapping) {}
-
-    uint32_t device_page_offset() const { return device_page_offset_; }
-
-    BufferCorePageMappingIterator& operator++() {
-        device_page_offset_++;
-        if (range_index_ >= mapping_->host_ranges.size()) {
-            return *this;
-        }
-        const auto& host_range = mapping_->host_ranges[range_index_];
-        if (device_page_offset_ == host_range.device_page_offset + host_range.num_pages) {
-            range_index_++;
-        }
-        return *this;
-    }
-
-    std::optional<uint32_t> operator*() const {
-        if (range_index_ >= mapping_->host_ranges.size()) {
-            return std::nullopt;
-        }
-        const auto& host_range = mapping_->host_ranges[range_index_];
-        if (device_page_offset_ < host_range.device_page_offset) {
-            return std::nullopt;
-        }
-        return host_range.host_page_start + device_page_offset_ - host_range.device_page_offset;
-    }
-
-    struct Range {
-        uint32_t device_page_offset = 0;
-        uint32_t host_page_start = 0;
-        uint32_t num_pages = 0;
-    };
-    Range next_range(uint32_t end_device_page_offset) {
-        Range result;
-        if (range_index_ >= mapping_->host_ranges.size() || device_page_offset_ >= end_device_page_offset) {
-            return result;
-        }
-        const auto& host_range = mapping_->host_ranges[range_index_];
-        uint32_t num_pages_left = host_range.num_pages - (device_page_offset_ - host_range.device_page_offset);
-        uint32_t num_pages = std::min(num_pages_left, end_device_page_offset - device_page_offset_);
-        result = Range{
-            .device_page_offset = device_page_offset_,
-            .host_page_start = host_range.host_page_start + device_page_offset_ - host_range.device_page_offset,
-            .num_pages = num_pages,
+    struct Iterator {
+        struct MappedPage {
+            uint32_t core_id = 0;
+            uint32_t device_page = 0;
+            uint32_t host_page = 0;
         };
-        device_page_offset_ += num_pages;
-        if (device_page_offset_ == host_range.device_page_offset + host_range.num_pages) {
-            range_index_++;
+
+        using iterator_category = std::forward_iterator_tag;
+        using difference_type = std::ptrdiff_t;
+        using value_type = MappedPage;
+
+        Iterator() = default;
+        Iterator(
+            const BufferPageMapping* page_mapping,
+            size_t core_id,
+            size_t page_mapping_index,
+            size_t host_range_index,
+            size_t host_page_index) :
+            page_mapping_(page_mapping),
+            core_id_(core_id),
+            page_mapping_index_(page_mapping_index),
+            host_range_index_(host_range_index),
+            host_page_index_(host_page_index) {}
+
+        Iterator& operator++();
+        Iterator operator++(int) {
+            Iterator tmp = *this;
+            ++(*this);
+            return tmp;
         }
+        value_type operator*() const;
 
-        return result;
-    }
+        bool operator==(const Iterator& other) const = default;
+        bool operator!=(const Iterator& other) const = default;
 
-private:
-    const BufferCorePageMapping* mapping_ = nullptr;
-    uint32_t device_page_offset_ = 0;
-    uint32_t range_index_ = 0;
+    private:
+        const BufferPageMapping* page_mapping_ = nullptr;
+        uint32_t core_id_ = 0;
+        uint32_t page_mapping_index_ = 0;
+        uint32_t host_range_index_ = 0;
+        uint32_t host_page_index_ = 0;
+    };
+
+    Iterator begin() const;
+    Iterator end() const;
 };
 
 }  // namespace tt::tt_metal

@@ -11,7 +11,7 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 struct PageMappingIntermData {
-    BufferPageMapping* page_mapping = nullptr;
+    UncompressedBufferPageMapping* page_mapping = nullptr;
 
     const size_t num_cores = 0;
     const size_t num_shards_per_core = 0;
@@ -151,8 +151,8 @@ size_t BufferDistributionSpec::num_dev_pages_per_core() const {
     return num_shards_per_core() * shard_shape_in_pages_.volume();
 }
 
-BufferPageMapping BufferDistributionSpec::compute_page_mapping() const {
-    BufferPageMapping page_mapping;
+UncompressedBufferPageMapping BufferDistributionSpec::compute_page_mapping() const {
+    UncompressedBufferPageMapping page_mapping;
     page_mapping.all_cores = cores_;
 
     if (tensor_shape_in_pages_.volume() == 0) {
@@ -166,7 +166,8 @@ BufferPageMapping BufferDistributionSpec::compute_page_mapping() const {
 
     page_mapping.core_host_page_indices.resize(cores_.size());
     for (size_t i = 0; i < cores_.size(); i++) {
-        page_mapping.core_host_page_indices[i].resize(num_shards_per_core * shard_pages, BufferPageMapping::PADDING);
+        page_mapping.core_host_page_indices[i].resize(
+            num_shards_per_core * shard_pages, UncompressedBufferPageMapping::PADDING);
     }
 
     tt::stl::SmallVector<uint32_t> shard_grid(tensor_shape_in_pages_.rank());

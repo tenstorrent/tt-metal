@@ -14,7 +14,7 @@
 
 namespace distribution_spec_tests {
 using tt::tt_metal::BufferDistributionSpec;
-constexpr uint32_t PADDING = tt::tt_metal::BufferPageMapping::PADDING;
+constexpr uint32_t PADDING = tt::tt_metal::UncompressedBufferPageMapping::PADDING;
 
 struct BufferDistributionSpecInputs {
     tt::tt_metal::Shape physical_tensor_shape;
@@ -302,7 +302,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
              empty_core_idx++) {
             EXPECT_EQ(
                 page_mapping[empty_core_idx],
-                std::vector<uint32_t>(page_mapping[empty_core_idx].size(), BufferPageMapping::PADDING));
+                std::vector<uint32_t>(page_mapping[empty_core_idx].size(), UncompressedBufferPageMapping::PADDING));
         }
 
         for (size_t i = 0; i < cores.size(); i++) {
@@ -316,7 +316,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
 
             const auto* result_per_core_ptr = reinterpret_cast<const uint8_t*>(result_per_core.data());
             for (size_t core_page = 0; core_page < page_mapping[i].size(); core_page++) {
-                if (page_mapping[i][core_page] == BufferPageMapping::PADDING) {
+                if (page_mapping[i][core_page] == UncompressedBufferPageMapping::PADDING) {
                     continue;
                 }
                 const auto host_page = page_mapping[i][core_page];

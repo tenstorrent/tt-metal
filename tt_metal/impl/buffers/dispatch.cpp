@@ -246,8 +246,8 @@ private:
 
 // Parameters specific to sharded buffers
 struct ShardedBufferWriteDispatchParams : BufferWriteDispatchParams {
-    std::shared_ptr<const CompressedBufferPageMapping> buffer_page_mapping = nullptr;
-    BufferCorePageMappingIterator core_page_mapping_it;
+    std::shared_ptr<const BufferPageMapping> buffer_page_mapping = nullptr;
+    BufferCorePageMapping::Iterator core_page_mapping_it;
     CoreCoord core;
 };
 
@@ -568,7 +568,7 @@ void write_sharded_buffer_to_core(
             BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
     }
 
-    dispatch_params.core_page_mapping_it = BufferCorePageMappingIterator(&core_page_mapping);
+    dispatch_params.core_page_mapping_it = core_page_mapping.begin();
 
     while (num_pages != 0) {
         // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
@@ -874,7 +874,10 @@ void copy_completion_queue_data_into_user_space(
 
     uint32_t pad_size_bytes = padded_page_size - page_size;
 
-    BufferCorePageMappingIterator core_page_mapping_it(core_page_mapping);
+    BufferCorePageMapping::Iterator core_page_mapping_it;
+    if (core_page_mapping) {
+        core_page_mapping_it = core_page_mapping->begin();
+    }
 
     while (remaining_bytes_to_read != 0) {
         uint32_t completion_queue_write_ptr_and_toggle =

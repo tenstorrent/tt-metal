@@ -462,34 +462,27 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     TT_ASSERT(page_size == 0 ? buffer.size() == 0 : buffer.size() % page_size == 0);
 
     auto device = buffer.device();
+    const auto& allocator = device->allocator();
 
     std::vector<uint32_t> page;
     page.resize(page_size / sizeof(uint32_t));
 
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
-    for (size_t core_id = 0; core_id < buffer_page_mapping.all_cores.size(); core_id++) {
-        auto core = buffer_page_mapping.all_cores[core_id];
-        auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
-        auto bank_offset = device->allocator()->get_bank_offset(buffer.buffer_type(), bank_id);
-        for (const auto& core_mapping : buffer_page_mapping.core_page_mappings[core_id]) {
-            for (const auto& host_range : core_mapping.host_ranges) {
-                for (uint32_t page_idx = 0; page_idx < host_range.num_pages; page_idx++) {
-                    auto host_page_id = host_range.host_page_start + page_idx;
-                    auto core_page_id = core_mapping.device_start_page + host_range.device_page_offset + page_idx;
-                    auto data_index = host_page_id * page_size;
-                    std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
-                    if (buffer.is_l1()) {
-                        auto absolute_address =
-                            buffer.address() + bank_offset + core_page_id * buffer.aligned_page_size();
-                        auto core_coordinates = device->worker_core_from_logical_core(
-                            buffer.allocator()->get_logical_core_from_bank_id(bank_id));
-                        llrt::write_hex_vec_to_core(device->id(), core_coordinates, page, absolute_address);
-                    } else {
-                        auto bank_local_address = buffer.address() + core_page_id * buffer.aligned_page_size();
-                        WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
-                    }
-                }
-            }
+    for (auto mapped_page : buffer_page_mapping) {
+        auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
+        auto bank_id = allocator->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
+        auto bank_offset = allocator->get_bank_offset(buffer.buffer_type(), bank_id);
+        auto data_index = mapped_page.host_page * page_size;
+        std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
+        if (buffer.is_l1()) {
+            auto absolute_address =
+                buffer.address() + bank_offset + mapped_page.device_page * buffer.aligned_page_size();
+            auto core_coordinates =
+                device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
+            llrt::write_hex_vec_to_core(device->id(), core_coordinates, page, absolute_address);
+        } else {
+            auto bank_local_address = buffer.address() + mapped_page.device_page * buffer.aligned_page_size();
+            WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
         }
     }
 }
@@ -638,19 +631,11 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer) {
     uint32_t page_size = buffer.page_size();
 
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
-    for (size_t core_id = 0; core_id < buffer_page_mapping.all_cores.size(); core_id++) {
-        auto core = buffer_page_mapping.all_cores[core_id];
+    for (auto mapped_page : buffer_page_mapping) {
+        auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
         auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
-        for (const auto& core_mapping : buffer_page_mapping.core_page_mappings[core_id]) {
-            for (const auto& host_range : core_mapping.host_ranges) {
-                for (uint32_t page_idx = 0; page_idx < host_range.num_pages; page_idx++) {
-                    auto host_page_id = host_range.host_page_start + page_idx;
-                    auto core_page_id = core_mapping.device_start_page + host_range.device_page_offset + page_idx;
-                    read_pages_to_host_helper(
-                        device, buffer, host_buffer, page_size, host_page_id, core_page_id, bank_id);
-                }
-            }
-        }
+        read_pages_to_host_helper(
+            device, buffer, host_buffer, page_size, mapped_page.host_page, mapped_page.device_page, bank_id);
     }
 }
 
@@ -697,24 +682,23 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
 
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     auto core = buffer_page_mapping.all_cores[core_id];
+    auto core_page_mappings = buffer_page_mapping.core_page_mappings[core_id];
     auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
 
-    if (buffer_page_mapping.core_page_mappings[core_id].empty()) {
+    if (core_page_mappings.empty()) {
         return;
     }
-    if (buffer_page_mapping.core_page_mappings[core_id][0].host_ranges.empty()) {
-        return;
-    }
-    size_t shard_offset = buffer_page_mapping.core_page_mappings[core_id][0].host_ranges[0].host_page_start;
+    size_t shard_offset = core_page_mappings[0].host_ranges[0].host_page_start;
 
-    for (const auto& core_mapping : buffer_page_mapping.core_page_mappings[core_id]) {
-        for (const auto& host_range : core_mapping.host_ranges) {
-            for (uint32_t page_idx = 0; page_idx < host_range.num_pages; page_idx++) {
-                auto host_page_id = host_range.host_page_start - shard_offset + page_idx;
-                auto core_page_id = core_mapping.device_start_page + host_range.device_page_offset + page_idx;
-                read_pages_to_host_helper(
-                    device, buffer, host_buffer, buffer.page_size(), host_page_id, core_page_id, bank_id);
+    for (const auto& core_mapping : core_page_mappings) {
+        for (auto host_page_it = core_mapping.begin(); host_page_it != core_mapping.end(); host_page_it++) {
+            if (!*host_page_it) {
+                continue;
             }
+            auto host_page_id = **host_page_it - shard_offset;
+            auto core_page_id = core_mapping.device_start_page + host_page_it.device_page_offset();
+            read_pages_to_host_helper(
+                device, buffer, host_buffer, buffer.page_size(), host_page_id, core_page_id, bank_id);
         }
     }
 }

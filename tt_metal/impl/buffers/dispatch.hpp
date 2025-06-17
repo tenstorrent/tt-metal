@@ -32,7 +32,7 @@ namespace tt::tt_metal {
 struct ReadBufferDescriptor {
     uint32_t page_size;
     uint32_t padded_page_size;
-    std::shared_ptr<const CompressedBufferPageMapping> buffer_page_mapping;
+    std::shared_ptr<const BufferPageMapping> buffer_page_mapping;
     const BufferCorePageMapping* core_page_mapping;
     void* dst;
     uint32_t dst_offset;
@@ -44,7 +44,7 @@ struct ReadBufferDescriptor {
         void* dst,
         uint32_t dst_offset,
         uint32_t num_pages_read,
-        const std::shared_ptr<const CompressedBufferPageMapping>& buffer_page_mapping = nullptr,
+        const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping = nullptr,
         const BufferCorePageMapping* core_page_mapping = nullptr) :
         page_size(page_size),
         padded_page_size(padded_page_size),
@@ -103,7 +103,7 @@ struct BufferReadLargePageDispatchParams : BufferReadDispatchParams {
 using BufferReadDispatchParamsVariant = std::variant<BufferReadDispatchParams, BufferReadLargePageDispatchParams>;
 
 struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
-    std::shared_ptr<const CompressedBufferPageMapping> buffer_page_mapping = nullptr;
+    std::shared_ptr<const BufferPageMapping> buffer_page_mapping = nullptr;
     const BufferCorePageMapping* core_page_mapping = nullptr;
     uint32_t total_pages_read = 0;
     CoreCoord core;

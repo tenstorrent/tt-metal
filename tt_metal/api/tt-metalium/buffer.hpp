@@ -257,7 +257,7 @@ public:
     ShardSpecBuffer shard_spec() const;
     void set_shard_spec(const ShardSpecBuffer& shard_spec);
     std::optional<uint32_t> num_cores() const;
-    const std::shared_ptr<const CompressedBufferPageMapping>& get_buffer_page_mapping();
+    const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
 
     std::shared_ptr<Buffer> root_buffer();
     BufferRegion root_buffer_region() const { return BufferRegion(root_buffer_offset_, size_); }
@@ -315,7 +315,7 @@ private:
     // These members must be only accessed on the device worker thread
     DeviceAddr page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     std::optional<ShardSpecBuffer> shard_parameters_;
-    std::shared_ptr<const CompressedBufferPageMapping> buffer_page_mapping_;
+    std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
 
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
 
@@ -326,7 +326,7 @@ private:
     static std::atomic<size_t> next_unique_id;
 };
 
-BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer);
+UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer);
 
 using HostDataType = std::variant<
     const std::shared_ptr<std::vector<uint8_t>>,

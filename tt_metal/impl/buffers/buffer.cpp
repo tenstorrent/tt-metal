@@ -205,8 +205,8 @@ bool is_sharded(const TensorMemoryLayout& layout) {
         layout == TensorMemoryLayout::BLOCK_SHARDED);
 }
 
-BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
-    BufferPageMapping buffer_page_mapping;
+UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
+    UncompressedBufferPageMapping buffer_page_mapping;
 
     if (buffer.size() == 0) {
         return buffer_page_mapping;
@@ -243,7 +243,7 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     for (uint32_t core_index = 0; core_index < core_host_page_indices.size(); core_index++) {
         uint32_t valid_shard_page = 0;
         buffer_page_mapping.core_host_page_indices[core_index].resize(
-            shard_spec.num_pages(), BufferPageMapping::PADDING);
+            shard_spec.num_pages(), UncompressedBufferPageMapping::PADDING);
         for (uint32_t shard_page_x = 0; shard_page_x < shape_in_pages[0]; shard_page_x++) {
             for (uint32_t shard_page_y = 0; shard_page_y < shape_in_pages[1]; shard_page_y++) {
                 if (shard_page_x < shard_shape[core_index][0] && shard_page_y < shard_shape[core_index][1]) {
@@ -415,11 +415,10 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
         bottom_up_,
         sub_device_id_);
 
-    std::shared_ptr<const CompressedBufferPageMapping> new_page_mapping;
+    std::shared_ptr<const BufferPageMapping> new_page_mapping;
     if (is_sharded(buffer_layout_)) {
-        new_page_mapping =
-            std::make_shared<const CompressedBufferPageMapping>(get_buffer_page_mapping()->filter_by_host_range(
-                region.offset / page_size(), (region.offset + region.size) / page_size()));
+        new_page_mapping = std::make_shared<const BufferPageMapping>(get_buffer_page_mapping()->filter_by_host_range(
+            region.offset / page_size(), (region.offset + region.size) / page_size()));
     }
 
     std::shared_ptr<Buffer> new_root_buffer;
@@ -618,11 +617,10 @@ DeviceAddr Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) con
     return base_page_address + offset;
 }
 
-const std::shared_ptr<const CompressedBufferPageMapping>& Buffer::get_buffer_page_mapping() {
+const std::shared_ptr<const BufferPageMapping>& Buffer::get_buffer_page_mapping() {
     TT_FATAL(is_sharded(this->buffer_layout_), "Buffer not sharded");
     if (!this->buffer_page_mapping_) {
-        this->buffer_page_mapping_ =
-            std::make_shared<const CompressedBufferPageMapping>(generate_buffer_page_mapping(*this));
+        this->buffer_page_mapping_ = std::make_shared<const BufferPageMapping>(generate_buffer_page_mapping(*this));
     }
     return this->buffer_page_mapping_;
 }
