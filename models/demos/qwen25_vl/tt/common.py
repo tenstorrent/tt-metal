@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import torch
 import os
+
+import torch
 from loguru import logger
+
 import ttnn
 from models.tt_transformers.tt.load_checkpoints import convert_rope_style_hf_to_meta
 
@@ -110,7 +112,7 @@ def multimodal_rope_from_hf(
     max_seq_len = model_args.max_seq_len
     padded_inputs = torch.nn.functional.pad(
         inputs.input_ids, (0, max_seq_len - inputs.input_ids.shape[-1]), value=pad_token_id
-    )  # FIXME?: padding with 0 was done by HF
+    )  # [INFO] padding with 0 was done by HF but it makes better sense to pad with the pad_token_id
 
     # Create a mask that is all 1s for the full max_seq_len, ensuring RoPE calculations cover all positions.
     # The original inputs.attention_mask might have 0s for padding within its original length,
