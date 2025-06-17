@@ -67,9 +67,8 @@ def run_slice_rm_sharded(device, n, c, h, w):
 @pytest.mark.parametrize(
     "dims, begins, ends",
     [
-        # [[16, 256, 256, 64], [0, 0, 0, 0], [1, 1, 256, 64]],
-        # [[1, 256, 128, 64], [0, 128, 0, 0], [1, 256, 128, 64]],
-        [[1, 46, 46, 2904], [0, 0, 0, 0], [1, 46, 2, 2904]]
+        [[16, 256, 256, 64], [0, 0, 0, 0], [1, 1, 256, 64]],
+        [[1, 256, 128, 64], [0, 128, 0, 0], [1, 256, 128, 64]],
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
@@ -99,10 +98,7 @@ def test_slice_write_four_dim(dims, begins, ends, layout, device):
 
 @pytest.mark.parametrize(
     "dims, slice_dim, slice_size",
-    [
-        [[2, 256, 256, 64], 1, 128],
-        [[2, 256, 128, 32], 2, 16],
-    ],
+    [[[2, 256, 256, 64], 1, 128], [[2, 256, 128, 32], 2, 16], [[1, 46, 46, 2904], 2, 23]],
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
 def test_slice_write_copy(device, dims, slice_dim, slice_size, layout):
