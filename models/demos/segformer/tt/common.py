@@ -43,7 +43,6 @@ class Conv:
             weights_dtype=ttnn.bfloat16,
             activation=self.activation,
             shard_layout=self.shard_layout,
-            transpose_shards=False,
             reshard_if_not_optimal=self.reshard,
             deallocate_activation=self.deallocate,
             reallocate_halo_output=True,

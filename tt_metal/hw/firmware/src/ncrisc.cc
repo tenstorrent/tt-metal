@@ -61,7 +61,7 @@ namespace kernel_profiler {
 #endif
 
 #ifdef ARCH_WORMHOLE
-extern "C" uint32_t notify_brisc_and_halt_to_iram(uint32_t status, uint32_t first_argument);
+extern "C" uint32_t wh_iram_trampoline(uint32_t status, uint32_t first_argument);
 #endif
 
 inline __attribute__((always_inline)) void notify_brisc_and_wait() {
@@ -109,6 +109,8 @@ int main(int argc, char *argv[]) {
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
+    signal_ncrisc_completion();
+
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
         WAYPOINT("W");
@@ -149,8 +151,7 @@ int main(int argc, char *argv[]) {
         // brisc to reset the ncrisc to the IRAM address
         uint32_t kernel_vma = MEM_NCRISC_KERNEL_BASE;
         mailboxes->ncrisc_halt.resume_addr = kernel_vma;
-        auto stack_free = notify_brisc_and_halt_to_iram(RUN_SYNC_MSG_WAITING_FOR_RESET,
-                                                        kernel_lma - kernel_vma);
+        auto stack_free = wh_iram_trampoline(RUN_SYNC_MSG_WAITING_FOR_RESET, kernel_lma - kernel_vma);
 #else
         while (*ncrisc_run != RUN_SYNC_MSG_GO) {
             invalidate_l1_cache();

@@ -165,6 +165,11 @@ class TtResnetBlock2D(nn.Module):
             else None
         )
 
+        mm_path = f"{module_path}.linear"
+        self.linear_program_config = model_config.get_matmul_config(matmul_path=f"{module_path}.linear")
+        assert self.linear_program_config is not None, "linear_program_config should not be None"
+        self.default_compute_config = model_config.get_mm_compute_config(mm_path)
+
     def forward(self, input_tensor, temb, input_shape):
         B, C, H, W = input_shape
         hidden_states = input_tensor
@@ -188,7 +193,7 @@ class TtResnetBlock2D(nn.Module):
             grid_coord = ttnn.CoreCoord(self.norm_core_grid_1.x - 1, self.norm_core_grid_1.y - 1)
             shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
             shard_shape = B * H * W // self.norm_core_grid_1.x, C // self.norm_core_grid_1.y
-            shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+            shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
             sharded_mem_config = ttnn.MemoryConfig(
                 ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
             )
@@ -253,11 +258,15 @@ class TtResnetBlock2D(nn.Module):
             C = self.conv1_params["output_channels"]
 
         temb = ttnn.silu(temb)
+
         temb = ttnn.linear(
             temb,
             self.tt_time_emb_weights,
             bias=self.tt_time_emb_bias,
+            program_config=self.linear_program_config,
+            compute_kernel_config=self.default_compute_config,
         )
+
         temb = ttnn.unsqueeze_to_4D(temb)
         temb = ttnn.repeat(temb, (1, 1, H * W, 1))
 
@@ -268,7 +277,7 @@ class TtResnetBlock2D(nn.Module):
         grid_coord = ttnn.CoreCoord(self.norm_core_grid_2.x - 1, self.norm_core_grid_2.y - 1)
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
         shard_shape = B * H * W // self.norm_core_grid_2.x, C // self.norm_core_grid_2.y
-        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         sharded_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
@@ -312,6 +321,7 @@ class TtResnetBlock2D(nn.Module):
         C = self.conv2_params["output_channels"]
 
         if self.tt_conv3_weights is not None:
+            input_tensor_pre_conv = input_tensor
             [input_tensor, [H, W], [self.tt_conv3_weights, self.tt_conv3_bias]] = ttnn.conv2d(
                 input_tensor=input_tensor,
                 weight_tensor=self.tt_conv3_weights,
@@ -333,6 +343,7 @@ class TtResnetBlock2D(nn.Module):
                 return_output_dim=True,
                 return_weights_and_bias=True,
             )
+            ttnn.deallocate(input_tensor_pre_conv)
             C = self.conv3_params["output_channels"]
             if input_tensor.is_sharded():
                 input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)

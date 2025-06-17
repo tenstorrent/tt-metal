@@ -40,7 +40,7 @@ MAX_TYPE = "max"
     "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
     [
         (  # 10 layers for devive perf measurements
-            "random",
+            "instruct",
             10,
             "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
             True,  # instruct mode
@@ -186,7 +186,7 @@ def merge_device_rows(df):
         if not blocks:
             break
 
-        if "AllGather" in op_name or "ReduceScatter" in op_name or "AllReduce" in op_name:
+        if "AllGather" in op_name or "ReduceScatter" in op_name or "AllReduce" or "Matmul_RS" in op_name:
             # For collective ops, take the average duration over all rows within a block
             device_kernel_durations = [
                 d["DEVICE KERNEL DURATION [ns]"]
@@ -274,7 +274,7 @@ def print_dict(input_dict, dict_name):
 
 
 def is_collective_op(op_code):
-    return any(x in op_code for x in ("AllGather", "ReduceScatter", "AllReduce"))
+    return any(x in op_code for x in ("AllGather", "ReduceScatter", "AllReduce", "Matmul_RS"))
 
 
 def process_measurements(df, num_layers):

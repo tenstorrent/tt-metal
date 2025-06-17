@@ -15,10 +15,13 @@ on:
       per-test-timeout:
         required: false
         type: string
-        default: 3.5
+        default: 4.0 # TODO: Drop back to 3.5 when https://github.com/tenstorrent/github-ci-infra/issues/876 is resolved.
+      product:
+        required: true
+        type: string # tt-metalium or tt-nn
 
 jobs:
-  metalium-smoke:
+  smoke:
     runs-on: >-
       ${{
         ((inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox') && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner))
@@ -47,7 +50,8 @@ jobs:
 
       - name: Install packages
         run: |
-          apt install ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-validation_*.deb
+          # Ideally only ${{ inputs.product }}-validation, but APT doesn't resolve dependencies from files on disk without being told about them.
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb
 
       - name: Run a test
         id: test
@@ -59,9 +63,10 @@ jobs:
           TT_METAL_WATCHER: 5
           TT_METAL_WATCHER_TEST_MODE: 1
         run: |
-          /usr/bin/tt-metalium-validation-smoke
+          /usr/bin/${{ inputs.product }}-validation-smoke
 
       - name: workaround
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         run: |
           # The test-reporting action runs git ls-files with no way to opt-out.
           # Give it a dummy repo so it doesn't fail.
@@ -72,7 +77,7 @@ jobs:
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         uses: phoenix-actions/test-reporting@f957cd93fc2d848d556fa0d03c57bc79127b6b5e # v15
         with:
-          name: Metalium ${{ inputs.runner }} smoke tests (${{ github.workflow }}, attempt ${{ github.run_attempt }})
+          name: ${{ inputs.product }} ${{ inputs.runner }} smoke tests (${{ github.workflow }}, attempt ${{ github.run_attempt }})
           path: /work/test-reports/*.xml
           reporter: jest-junit
           working-directory: /work

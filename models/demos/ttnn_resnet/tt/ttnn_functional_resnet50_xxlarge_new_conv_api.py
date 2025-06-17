@@ -181,7 +181,6 @@ class resnet50Bottleneck:
                     deallocate_activation=True,
                     reallocate_halo_output=True,
                     reshard_if_not_optimal=reshard_if_not_optimal,
-                    transpose_shards=height_sharding,
                 ),
             }
 
@@ -260,7 +259,6 @@ class resnet50Bottleneck:
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
-                transpose_shards=height_sharding,
             ),
         }
 
@@ -394,7 +392,6 @@ class resnet50Bottleneck:
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
-                transpose_shards=height_sharding,
             ),
         }
 
@@ -450,7 +447,6 @@ class resnet50Bottleneck:
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
-                transpose_shards=height_sharding,
             ),
         }
         if not ttnn.is_tensor_storage_on_device(self.conv3_weight_tensor):

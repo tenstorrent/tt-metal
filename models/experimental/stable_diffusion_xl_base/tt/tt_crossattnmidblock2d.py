@@ -33,6 +33,7 @@ class TtUNetMidBlock2DCrossAttn(nn.Module):
                     device,
                     state_dict,
                     f"{module_path}.attentions.{i}",
+                    model_config,
                     query_dim,
                     num_attn_heads,
                     out_dim,

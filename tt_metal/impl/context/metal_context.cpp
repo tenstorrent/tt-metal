@@ -256,7 +256,7 @@ void MetalContext::set_custom_control_plane_mesh_graph(
 
     global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
         mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
-    this->initialize_fabric_config(fabric_config_);
+    this->set_fabric_config(fabric_config_);
 }
 
 void MetalContext::set_default_control_plane_mesh_graph() {
@@ -264,23 +264,72 @@ void MetalContext::set_default_control_plane_mesh_graph() {
         !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
         "Modifying control plane requires no devices to be active");
     global_control_plane_.reset();
-    this->initialize_fabric_config(fabric_config_);
+    this->set_fabric_config(fabric_config_);
 }
 
-void MetalContext::initialize_fabric_config(tt_metal::FabricConfig fabric_config) {
-    fabric_config_ = fabric_config;
-    cluster_->configure_ethernet_cores_for_fabric_routers(fabric_config);
+void MetalContext::teardown_fabric_config() {
+    this->cluster_->configure_ethernet_cores_for_fabric_routers(tt_metal::FabricConfig::DISABLED);
+    this->get_control_plane().clear_fabric_context();
+}
 
-    // Initialize fabric context in control plane if fabric is enabled
-    if (fabric_config != tt_metal::FabricConfig::DISABLED) {
-        if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
-            this->get_control_plane().initialize_fabric_context(fabric_config);
-        }
+void MetalContext::set_fabric_config(
+    const tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes) {
+    if (this->fabric_config_ == tt_metal::FabricConfig::DISABLED || fabric_config == tt_metal::FabricConfig::DISABLED) {
+        this->fabric_config_ = fabric_config;
     } else {
-        this->get_control_plane().clear_fabric_context();
+        TT_FATAL(
+            this->fabric_config_ == fabric_config,
+            "Tried to override previous value of fabric config: {}, with: {}",
+            this->fabric_config_,
+            fabric_config);
     }
 
-    this->get_control_plane().configure_routing_tables_for_fabric_ethernet_channels();
+    if (this->fabric_config_ == tt_metal::FabricConfig::DISABLED) {
+        if (num_routing_planes.has_value()) {
+            log_warning(
+                tt::LogMetal,
+                "Got num_routing_planes while disabling fabric, ignoring it and disabling all active routing planes");
+        }
+
+        this->teardown_fabric_config();
+        return;
+    }
+
+    if (num_routing_planes.has_value() && num_routing_planes.value() < this->num_fabric_active_routing_planes_) {
+        log_warning(
+            tt::LogMetal,
+            "Got num_routing_planes: {}, which is less than current value: {}, ignoring the override",
+            num_routing_planes.value(),
+            this->num_fabric_active_routing_planes_);
+        return;
+    }
+
+    // if num_routing_planes is not specified, use max available number of routing planes
+    // ideally the highest value should be the maximum number of eth cores in a direction across all chips
+    const auto new_val = std::max(
+        this->num_fabric_active_routing_planes_, num_routing_planes.value_or(std::numeric_limits<uint8_t>::max()));
+    if (new_val != this->num_fabric_active_routing_planes_ && this->num_fabric_active_routing_planes_ > 0) {
+        log_info(
+            tt::LogMetal,
+            "Overriding the number of routing planes to activate from {} to {}",
+            this->num_fabric_active_routing_planes_,
+            new_val);
+    }
+    this->num_fabric_active_routing_planes_ = new_val;
+}
+
+void MetalContext::initialize_fabric_config() {
+    if (this->fabric_config_ == tt_metal::FabricConfig::DISABLED) {
+        return;
+    }
+
+    this->cluster_->configure_ethernet_cores_for_fabric_routers(
+        this->fabric_config_, this->num_fabric_active_routing_planes_);
+    auto& control_plane = this->get_control_plane();
+    if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
+        control_plane.initialize_fabric_context(this->fabric_config_);
+    }
+    control_plane.configure_routing_tables_for_fabric_ethernet_channels();
 }
 
 tt_metal::FabricConfig MetalContext::get_fabric_config() const {
