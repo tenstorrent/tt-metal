@@ -31,6 +31,8 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     const auto& padded_input_shape = input_tensor.padded_shape();
     const auto& padded_output_shape = output_tensor.padded_shape();
 
+    log_info(tt::LogOp, "Slice Write Begin : {}, End : {}", begins, ends);
+
     TT_FATAL(padded_input_shape.rank() == 4, "Input tensor must have rank 4");
     TT_FATAL(padded_output_shape.rank() == 4, "Output tensor must have rank 4");
 
