@@ -110,7 +110,7 @@ def get_output_tensor(input_tokens, expert_indices, expert_mapping, mesh_shape, 
     hidden_size = input_tokens.shape[3]
     selected_experts_k = expert_indices.shape[3]
 
-    output_tensor = torch.zeros(devices, batch, 1, hidden_size, dtype=dtype)
+    output_tensor = 7 * torch.ones(devices, batch, 1, hidden_size, dtype=dtype)
 
     for b in range(batch):
         for k in range(selected_experts_k):
@@ -280,6 +280,7 @@ def run_all_to_all_dispatch_test(
         expert_indices_tensors.append(tt_expert_indices)
         expert_mapping_tensors.append(tt_expert_mapping)
 
+    ttnn.synchronize_device(mesh_device)
     ccl_sub_device_crs = subdevice_shard_cores_grid
     worker_sub_device = ttnn.SubDevice(
         [
@@ -333,10 +334,15 @@ def run_all_to_all_dispatch_test(
         logger.info("Capturing Warmup")
 
         if warmup_iters > 0:
+            logger.info(f"Capturing Warmup {warmup_iters} iterations")
             trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            logger.info(f"Trace capture started")
             run_op(warmup_iters, store_all_results=False)
+            logger.info(f"Op run for {warmup_iters} iterations completed")
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
+            logger.info(f"Warmup trace capture completed")
             ttnn.synchronize_device(mesh_device)
+            logger.info(f"Device synchronized")
 
         logger.info("Capturing Trace")
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -439,17 +445,25 @@ def run_all_to_all_dispatch_test(
                             first_failed_tensor_index = tensor_index
                             first_failed_batch_index = b
                             failed_indices = torch.where(
-                                tt_torch_tensor[d, b, 0, :] - output_tensor_goldens_list[tensor_index][d, b, 0, :]
-                                > 1e-2
+                                tt_torch_tensor[d, b, 0, :] != output_tensor_goldens_list[tensor_index][d, b, 0, :]
+                            )
+                            first_10_fail_idx = failed_indices[0][:10]
+                            logger.info(f"First 10 failing indices: {first_10_fail_idx}")
+                            logger.info(
+                                f"Failing tt_torch_tensor tensor (first 10) {tt_torch_tensor[d, b, 0, first_10_fail_idx]}"
+                            )
+                            logger.info(
+                                f"Relevant output_tensor_goldens_list tensor (first 10) {output_tensor_goldens_list[tensor_index][d, b, 0, first_10_fail_idx]}"
                             )
                             first_failed_expert_index = expert_id
                             first_failed_device_index = d
+
                             break
                 if not passed:
                     break
             if not passed:
                 break
-
+        torch.set_printoptions(threshold=1000)
     logger.info(f"Device has {mesh_device.num_program_cache_entries()} program cache entries")
     assert (
         mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
@@ -481,8 +495,57 @@ def test_all_to_all_dispatch_no_trace(mesh_device, trace_mode, mesh_shape):
     experts = 8 * devices
     select_experts_k = 8
     hidden_size = 7000
-    num_iters = 1
+    num_iters = 10
     warmup_iters = 0
+    trace_mode = trace_mode
+    input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    num_links = 1
+    topology = ttnn.Topology.Linear
+    dtype = ttnn.bfloat16
+
+    run_all_to_all_dispatch_test(
+        mesh_device,
+        mesh_shape,
+        batch,
+        experts,
+        select_experts_k,
+        hidden_size,
+        num_iters,
+        warmup_iters,
+        trace_mode,
+        num_links=num_links,
+        scheme="random",
+        topology=topology,
+        input_memory_config=input_memory_config,
+        output_memory_config=output_memory_config,
+        dtype=dtype,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "trace_region_size": 500000,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+def test_all_to_all_dispatch_trace(mesh_device, trace_mode, mesh_shape):
+    devices = mesh_shape[0] * mesh_shape[1]
+    batch = 8 * mesh_shape[1]
+    experts = 8 * devices
+    select_experts_k = 8
+    hidden_size = 7000
+    num_iters = 30
+    warmup_iters = 1
     trace_mode = trace_mode
     input_memory_config = ttnn.DRAM_MEMORY_CONFIG
     output_memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -513,7 +576,6 @@ def test_all_to_all_dispatch_no_trace(mesh_device, trace_mode, mesh_shape):
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
 def test_simple_tensor_gen(mesh_device, mesh_shape):
-    torch.set_printoptions(threshold=10000)
     devices = mesh_shape[0] * mesh_shape[1]
     sequence_length = 1
     batch = 8 * mesh_shape[1]
