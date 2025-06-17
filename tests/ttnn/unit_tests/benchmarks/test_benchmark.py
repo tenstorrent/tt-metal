@@ -82,57 +82,59 @@ def get_device_freq():
     return freq
 
 
+# These configs are all based on a 1x1 compute grid, and will be scaled by the benchmark according to the max grid size
+# M will be scaled by Y (num cols), N and K will be scaled by X (num rows)
 matmul_shapes_bfloat16 = [
-    (512, 512, 512, True, True, 1, 1, 1),
-    (512, 1024, 1024, True, True, 1, 1, 1),
-    (512, 1024, 2048, True, True, 1, 1, 1),
-    (1024, 1024, 1024, True, True, 1, 1, 1),
-    (1024, 1024, 2048, True, True, 1, 1, 1),
-    (1024, 2048, 2048, True, True, 1, 1, 1),
-    (2048, 2048, 2048, True, True, 1, 1, 1),
-    (2048, 2048, 3072, True, True, 1, 1, 1),
-    (2048, 3072, 3072, True, True, 2, 1, 1),
-    (3072, 3072, 3072, True, True, 4, 1, 1),
-    (3072, 3072, 4096, False, False, 2, 1, 1),
-    (3072, 4096, 4096, False, False, 2, 1, 1),
-    (4096, 4096, 4096, False, False, 1, 2, 2),
-    (8192, 8192, 8192, False, False, 2, 4, 4),
-    (16384, 16384, 16384, False, False, 4, 8, 8),
+    (64, 64, 64, True, True, 1, 1, 1),
+    (64, 128, 128, True, True, 1, 1, 1),
+    (64, 128, 256, True, True, 1, 1, 1),
+    (128, 128, 128, True, True, 1, 1, 1),
+    (128, 128, 256, True, True, 1, 1, 1),
+    (128, 256, 256, True, True, 1, 1, 1),
+    (256, 256, 256, True, True, 1, 1, 1),
+    (256, 256, 384, True, True, 1, 1, 1),
+    (256, 384, 384, True, True, 2, 1, 1),
+    (384, 384, 384, True, True, 4, 1, 1),
+    (384, 384, 512, False, False, 2, 1, 1),
+    (384, 512, 512, False, False, 2, 1, 1),
+    (512, 512, 512, False, False, 1, 2, 2),
+    (1024, 1024, 1024, False, False, 2, 4, 4),
+    (2048, 2048, 2048, False, False, 4, 8, 8),
 ]
 
 matmul_shapes_bfloat8_b = [
-    (512, 512, 512, True, True, 1, 1, 1),
-    (512, 1024, 1024, True, True, 1, 1, 1),
-    (512, 1024, 2048, True, True, 1, 1, 1),
-    (1024, 1024, 1024, True, True, 1, 1, 1),
-    (1024, 1024, 2048, True, True, 1, 1, 1),
-    (1024, 2048, 2048, True, True, 1, 1, 1),
-    (2048, 2048, 2048, True, True, 1, 1, 1),
-    (2048, 2048, 3072, True, True, 1, 1, 1),
-    (2048, 3072, 3072, True, True, 1, 1, 1),
-    (3072, 3072, 3072, True, True, 2, 1, 1),
-    (3072, 3072, 4096, True, True, 2, 1, 1),
-    (4096, 4096, 4096, False, False, 1, 2, 2),
-    (8192, 8192, 8192, False, False, 2, 4, 4),
-    (16384, 16384, 16384, False, False, 4, 8, 8),
+    (64, 64, 64, True, True, 1, 1, 1),
+    (64, 128, 128, True, True, 1, 1, 1),
+    (64, 128, 256, True, True, 1, 1, 1),
+    (128, 128, 128, True, True, 1, 1, 1),
+    (128, 128, 256, True, True, 1, 1, 1),
+    (128, 256, 256, True, True, 1, 1, 1),
+    (256, 256, 256, True, True, 1, 1, 1),
+    (256, 256, 384, True, True, 1, 1, 1),
+    (256, 384, 384, True, True, 1, 1, 1),
+    (384, 384, 384, True, True, 2, 1, 1),
+    (384, 384, 512, True, True, 2, 1, 1),
+    (512, 512, 512, False, False, 1, 2, 2),
+    (1024, 1024, 1024, False, False, 2, 4, 4),
+    (2048, 2048, 2048, False, False, 4, 8, 8),
 ]
 
 matmul_shapes_bfloat4_b = [
-    (512, 512, 512, True, True, 1, 1, 1),
-    (512, 1024, 1024, True, True, 1, 1, 1),
-    (512, 1024, 2048, True, True, 1, 1, 1),
-    (1024, 1024, 1024, True, True, 1, 1, 1),
-    (1024, 1024, 2048, True, True, 1, 1, 1),
-    (1024, 2048, 2048, True, True, 1, 1, 1),
-    (2048, 2048, 2048, True, True, 1, 1, 1),
-    (2048, 2048, 3072, True, True, 1, 1, 1),
-    (2048, 3072, 3072, True, True, 1, 1, 1),
-    (3072, 3072, 3072, True, True, 1, 1, 1),
-    (3072, 3072, 4096, True, True, 1, 1, 1),
-    (3072, 4096, 4096, True, True, 2, 1, 1),
-    (4096, 4096, 4096, True, True, 2, 1, 1),
-    (8192, 8192, 8192, False, False, 2, 2, 2),
-    (16384, 16384, 16384, False, False, 4, 4, 4),
+    (64, 64, 64, True, True, 1, 1, 1),
+    (64, 128, 128, True, True, 1, 1, 1),
+    (64, 128, 256, True, True, 1, 1, 1),
+    (128, 128, 128, True, True, 1, 1, 1),
+    (128, 128, 256, True, True, 1, 1, 1),
+    (128, 256, 256, True, True, 1, 1, 1),
+    (256, 256, 256, True, True, 1, 1, 1),
+    (256, 256, 384, True, True, 1, 1, 1),
+    (256, 384, 384, True, True, 1, 1, 1),
+    (384, 384, 384, True, True, 1, 1, 1),
+    (384, 384, 512, True, True, 1, 1, 1),
+    (384, 512, 512, True, True, 2, 1, 1),
+    (512, 512, 512, True, True, 2, 1, 1),
+    (1024, 1024, 1024, False, False, 2, 2, 2),
+    (2048, 2048, 2048, False, False, 4, 4, 4),
 ]
 
 matmul_configs = [
@@ -151,14 +153,12 @@ matmul_configs = [
 
 @pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
-@pytest.mark.parametrize("grid_size", [(8, 8)])
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("num_warmup_iterations", [5])
 @pytest.mark.parametrize("num_measurement_iterations", [100])
 def test_matmul_2d_host_perf(
     device,
-    grid_size,
     tile_h,
     tile_w,
     num_warmup_iterations,
@@ -171,10 +171,8 @@ def test_matmul_2d_host_perf(
     FILE_NAME = ARTIFACTS_DIR / "matmul_2d_host_perf_report.csv"
 
     compute_grid_size = device.compute_with_storage_grid_size()
-    if compute_grid_size.y < grid_size[1] or compute_grid_size.x < grid_size[0]:
-        pytest.skip(
-            f"Skipping test as requested compute grid size {grid_size} exceeds available compute grid {compute_grid_size}"
-        )
+    grid_size = (compute_grid_size.x, compute_grid_size.y)
+
     LoFi_cycle = 16
     HiFi2_cycle = LoFi_cycle * 2
     HiFi3_cycle = LoFi_cycle * 3
@@ -211,6 +209,11 @@ def test_matmul_2d_host_perf(
             elif dtype == ttnn.bfloat4_b:
                 matmul_shapes = matmul_shapes_bfloat4_b
             for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
+                # Scale the input shapes by the grid size
+                m = m * grid_size[1]
+                k = k * grid_size[0]
+                n = n * grid_size[0]
+
                 profiler.clear()
 
                 in0_shape = [1, 1, m, k]
@@ -407,19 +410,19 @@ def test_matmul_2d_host_perf(
 
 
 matmul_shapes_oob = [
+    (64, 64, 64),
+    (64, 128, 128),
+    (64, 128, 256),
+    (128, 128, 128),
+    (128, 128, 256),
+    (128, 256, 256),
+    (256, 256, 256),
+    (256, 256, 384),
+    (256, 384, 384),
+    (384, 384, 384),
+    (384, 384, 512),
+    (384, 512, 512),
     (512, 512, 512),
-    (512, 1024, 1024),
-    (512, 1024, 2048),
-    (1024, 1024, 1024),
-    (1024, 1024, 2048),
-    (1024, 2048, 2048),
-    (2048, 2048, 2048),
-    (2048, 2048, 3072),
-    (2048, 3072, 3072),
-    (3072, 3072, 3072),
-    (3072, 3072, 4096),
-    (3072, 4096, 4096),
-    (4096, 4096, 4096),
 ]
 
 matmul_configs_oob = [
@@ -434,14 +437,12 @@ matmul_configs_oob = [
 
 @pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
-@pytest.mark.parametrize("grid_size", [(8, 8)])
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("num_warmup_iterations", [5])
 @pytest.mark.parametrize("num_measurement_iterations", [100])
 def test_matmul_2d_host_perf_out_of_box(
     device,
-    grid_size,
     tile_h,
     tile_w,
     num_warmup_iterations,
@@ -454,10 +455,7 @@ def test_matmul_2d_host_perf_out_of_box(
     FILE_NAME = ARTIFACTS_DIR / "matmul_2d_host_perf_out_of_box_report.csv"
 
     compute_grid_size = device.compute_with_storage_grid_size()
-    if compute_grid_size.y < grid_size[1] or compute_grid_size.x < grid_size[0]:
-        pytest.skip(
-            f"Skipping test as requested compute grid size {grid_size} exceeds available compute grid {compute_grid_size}"
-        )
+    grid_size = (compute_grid_size.x, compute_grid_size.y)
     LoFi_cycle = 16
     HiFi2_cycle = LoFi_cycle * 2
     HiFi3_cycle = LoFi_cycle * 3
@@ -493,6 +491,11 @@ def test_matmul_2d_host_perf_out_of_box(
             elif dtype == ttnn.bfloat4_b:
                 math_fidelity = ttnn.MathFidelity.LoFi
             for m, k, n in matmul_shapes:
+                # Scale the input shapes by the grid size
+                m = m * grid_size[1]
+                k = k * grid_size[0]
+                n = n * grid_size[0]
+
                 profiler.clear()
 
                 in0_shape = [1, 1, m, k]
