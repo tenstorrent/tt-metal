@@ -10,7 +10,7 @@
 #include <typeinfo>
 #include <utility>
 
-namespace tt::stl {
+namespace ttsl {
 
 // Most types are not typically aligned more than the size of a pointer. If in the future there is a special case to
 // accommodate, these can be parameterized then.
@@ -970,4 +970,10 @@ using AnySizedRandomAccessRangeFor = AnyRangeFor<TReference, sized_random_access
         using __VA_ARGS__::BasicAnyRange; \
     }
 
-}  // namespace tt::stl
+}  // namespace ttsl
+
+namespace tt {
+namespace [[deprecated("Use ttsl namespace instead")]] stl {
+using namespace ::ttsl;
+}  // namespace stl
+}  // namespace tt
