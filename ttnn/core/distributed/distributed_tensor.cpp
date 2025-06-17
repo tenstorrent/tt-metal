@@ -513,48 +513,42 @@ Tensor create_distributed_tensor(
 }
 
 // Explicit instantiation of `create_distributed_tensor` for supported data types.
-template <>
-Tensor create_distributed_tensor<bfloat16>(
+template Tensor create_distributed_tensor<bfloat16>(
     tt::stl::Span<const bfloat16> buffer,
     const TensorSpec& spec,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     ttnn::QueueId cq_id,
     bfloat16 pad_value);
-template <>
-Tensor create_distributed_tensor<float>(
+template Tensor create_distributed_tensor<float>(
     tt::stl::Span<const float> buffer,
     const TensorSpec& spec,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     ttnn::QueueId cq_id,
     float pad_value);
-template <>
-Tensor create_distributed_tensor<int32_t>(
+template Tensor create_distributed_tensor<int32_t>(
     tt::stl::Span<const int32_t> buffer,
     const TensorSpec& spec,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     ttnn::QueueId cq_id,
     int32_t pad_value);
-template <>
-Tensor create_distributed_tensor<uint8_t>(
+template Tensor create_distributed_tensor<uint8_t>(
     tt::stl::Span<const uint8_t> buffer,
     const TensorSpec& spec,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     ttnn::QueueId cq_id,
     uint8_t pad_value);
-template <>
-Tensor create_distributed_tensor<uint16_t>(
+template Tensor create_distributed_tensor<uint16_t>(
     tt::stl::Span<const uint16_t> buffer,
     const TensorSpec& spec,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     ttnn::QueueId cq_id,
     uint16_t pad_value);
-template <>
-Tensor create_distributed_tensor<uint32_t>(
+template Tensor create_distributed_tensor<uint32_t>(
     tt::stl::Span<const uint32_t> buffer,
     const TensorSpec& spec,
     const TensorToMesh& mapper,
