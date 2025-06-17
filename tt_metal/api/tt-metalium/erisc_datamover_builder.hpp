@@ -346,7 +346,7 @@ public:
     void teardown_from_host(
         tt::tt_metal::IDevice* d,
         tt::tt_fabric::TerminationSignal termination_signal =
-            tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
+            tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE) const;
 
     void set_firmware_context_switch_interval(size_t interval);
     void set_wait_for_host_signal(bool wait_for_host_signal);
