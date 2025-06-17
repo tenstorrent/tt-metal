@@ -421,18 +421,8 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
             region.offset / page_size(), (region.offset + region.size) / page_size()));
     }
 
-    std::shared_ptr<Buffer> new_root_buffer;
-    size_t new_root_buffer_offset = 0;
-    if (root_buffer_) {
-        new_root_buffer = root_buffer_;
-        new_root_buffer_offset = root_buffer_offset_ + region.offset;
-    } else {
-        new_root_buffer = shared_from_this();
-        new_root_buffer_offset = region.offset;
-    }
-
-    buffer->root_buffer_ = new_root_buffer;
-    buffer->root_buffer_offset_ = new_root_buffer_offset;
+    buffer->root_buffer_ = root_buffer();
+    buffer->root_buffer_offset_ = root_buffer_offset_ + region.offset;
     buffer->buffer_page_mapping_ = new_page_mapping;
 
     return buffer;
