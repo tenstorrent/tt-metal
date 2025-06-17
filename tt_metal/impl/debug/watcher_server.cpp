@@ -574,4 +574,6 @@ std::string get_watcher_exception_message() {
     return watcher::watcher_exception_message();
 }
 
+std::unique_lock<std::mutex> watcher_get_lock() { return std::unique_lock<std::mutex>(watcher::watch_mutex); }
+
 }  // namespace tt

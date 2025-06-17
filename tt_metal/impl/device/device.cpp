@@ -354,6 +354,10 @@ void Device::init_command_queue_device() {
     const auto& storage_only_cores = tt::get_logical_storage_cores(
         id_, num_hw_cqs_, MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config());
     auto storage_only_cores_set = std::unordered_set<CoreCoord>(storage_only_cores.begin(), storage_only_cores.end());
+    std::optional<std::unique_lock<std::mutex>> watcher_lock;
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
+        watcher_lock = watcher_get_lock();
+    }
     for (uint32_t y = 0; y < logical_grid_size().y; y++) {
         for (uint32_t x = 0; x < logical_grid_size().x; x++) {
             CoreCoord logical_core(x, y);
@@ -367,6 +371,9 @@ void Device::init_command_queue_device() {
     }
     for (const auto& logical_core : this->get_inactive_ethernet_cores()) {
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
+    }
+    if (watcher_lock) {
+        watcher_lock.value().unlock();
     }
 
     // TODO: should get a const ref
