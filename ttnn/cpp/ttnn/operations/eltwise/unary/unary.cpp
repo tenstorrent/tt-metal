@@ -271,11 +271,7 @@ Tensor Selu::invoke(
     UnaryOpType op_type = UnaryOpType::SELU;
 
     return detail::unary_impl(
-        queue_id,
-        input_tensor,
-        {UnaryWithParam{op_type, {static_cast<float>(scale), static_cast<float>(alpha)}}},
-        memory_config,
-        optional_output_tensor);
+        queue_id, input_tensor, {UnaryWithParam{op_type, {scale, alpha}}}, memory_config, optional_output_tensor);
 }
 
 Tensor Softplus::invoke(

@@ -7,7 +7,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-#include "noc_nonblocking_api.h"
 #include "sfpu/ckernel_sfpu_exp.h"
 
 using namespace sfpi;
@@ -15,27 +14,24 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_selu(uint param0, uint param1) {
     vFloat scale = Converter::as_float(param0);
     vFloat alpha = Converter::as_float(param1);
-#pragma GCC unroll 0
+#pragma GCC unroll 8
 
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
-        vFloat result_term2 = (_calculate_exponential_body_<APPROXIMATION_MODE>(v) - 1.0) * alpha;
-        v_if(result_term2 > 0.0f) { result_term2 = 0.0; }
+        vFloat exp_calc = (_calculate_exponential_body_<APPROXIMATION_MODE>(v) - 1.0) * alpha;
+        v_if(exp_calc > 0.0f) { exp_calc = 0.0; }
         v_endif;
         v_if(v < 0.0f) { v = 0.0; }
         v_endif;
-        vFloat sum_max_term2 = v + result_term2;
-        dst_reg[0] = sum_max_term2 * scale;
+        vFloat sum_max = v + exp_calc;
+        dst_reg[0] = sum_max * scale;
         dst_reg++;
     }
 }
-
-// template <bool APPROXIMATION_MODE>
-// void selu_init() {}
 
 }  // namespace sfpu
 }  // namespace ckernel
