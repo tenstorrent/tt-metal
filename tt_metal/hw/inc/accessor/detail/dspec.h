@@ -47,9 +47,9 @@ struct DistributionSpec {
     static constexpr uint32_t num_banks_ct = NumBanksCT;
 
     using ShapeDynamic = Span<uint32_t>;
-    using BankCoordsDynamic = Span<uint32_t>;
+    using BankCoordsDynamic = Span<uint16_t>;
     using ShapeStatic = std::array<uint32_t, rank_ct>;
-    using BankCoordsStatic = std::array<uint32_t, num_banks_ct>;
+    using BankCoordsStatic = std::array<uint16_t, num_banks_ct>;
 
     using Shape = std::conditional_t<has_static_rank, ShapeStatic, ShapeDynamic>;
     using BankCoords = std::conditional_t<has_static_num_banks, BankCoordsStatic, BankCoordsDynamic>;
@@ -249,7 +249,7 @@ auto build_dspec(
     uint32_t num_banks_rt = 0,
     uint32_t* tensor_shape_ptr = nullptr,
     uint32_t* shard_shape_ptr = nullptr,
-    uint32_t* bank_coords_ptr = nullptr) {
+    uint16_t* bank_coords_ptr = nullptr) {
     using DSpec = DistributionSpec<RankCT, NumBanksCT, TensorShapeWrapper_, ShardShapeWrapper_, BankCoordsWrapper_>;
     constexpr bool RankStatic = RankCT != 0;
     constexpr bool NumBanksStatic = NumBanksCT != 0;
@@ -265,10 +265,10 @@ auto build_dspec(
     // BankCoords = std::array<uint32_t, NumBanksCT> if static, otherwise Span<uint32_t>
     typename DSpec::BankCoords bank_coord_array;
 
-    auto span_from_pointer = [](auto& arr, uint32_t* ptr, size_t size) { arr = Span<uint32_t>(ptr, size); };
+    auto span_from_pointer = []<typename T>(auto& arr, T* ptr, size_t size) { arr = Span<T>(ptr, size); };
 
-    auto array_from_pointer = [](auto& arr, uint32_t* ptr, size_t size) {
-        std::memcpy(arr.data(), ptr, sizeof(uint32_t) * size);
+    auto array_from_pointer = []<typename T>(auto& arr, T* ptr, size_t size) {
+        std::memcpy(arr.data(), ptr, sizeof(T) * size);
         return arr;
     };
 
@@ -325,15 +325,15 @@ auto build_dspec_from_args(const ArgsOffsets& args_offsets) {
     using Loc = typename ArgsOffsets::ArgsLoc;
 
     // Dispatch to the appropriate ShapeWrapper and BankCoordsWrapper types based on the "staticness"
-    using TensorShapeType = typename ArrayWrapperTypeSelector<
+    using TensorShapeType = typename ArrayWrapperTypeSelectorU32<
         Loc::TensorShapeStatic,
         ArgsOffsets::TensorShapeCTAOffset,
         ArgsOffsets::RankCT>::type;
-    using ShardShapeType = typename ArrayWrapperTypeSelector<
+    using ShardShapeType = typename ArrayWrapperTypeSelectorU32<
         Loc::ShardShapeStatic,
         ArgsOffsets::ShardShapeCTAOffset,
         ArgsOffsets::RankCT>::type;
-    using BankCoordsType = typename ArrayWrapperTypeSelector<
+    using BankCoordsType = typename ArrayWrapperTypeSelectorPackedU16<
         Loc::BankCoordsStatic,
         ArgsOffsets::BankCoordsCTAOffset,
         ArgsOffsets::NumBanksCT>::type;
@@ -357,7 +357,7 @@ auto build_dspec_from_args(const ArgsOffsets& args_offsets) {
         num_banks,
         Loc::TensorShapeCRTA ? (uint32_t*)get_common_arg_addr(args_offsets.tensor_shape_crta_offset()) : nullptr,
         Loc::ShardShapeCRTA ? (uint32_t*)get_common_arg_addr(args_offsets.shard_shape_crta_offset()) : nullptr,
-        Loc::BankCoordsCRTA ? (uint32_t*)get_common_arg_addr(args_offsets.bank_coords_crta_offset()) : nullptr);
+        Loc::BankCoordsCRTA ? (uint16_t*)get_common_arg_addr(args_offsets.bank_coords_crta_offset()) : nullptr);
 }
 
 }  // namespace detail

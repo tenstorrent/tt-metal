@@ -109,6 +109,7 @@ constexpr ArgsConfig operator|(ArgConfig a, ArgsConfig b) noexcept { return Args
 struct ShardedAccessorArgs {
     uint32_t get_rank() const;
     uint32_t get_num_banks() const;
+    uint32_t get_physical_num_banks() const;
     tt::stl::Span<const uint32_t> get_tensor_shape() const;
     tt::stl::Span<const uint32_t> get_shard_shape() const;
     tt::stl::Span<const uint32_t> get_bank_coords() const;

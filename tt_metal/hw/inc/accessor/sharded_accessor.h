@@ -15,9 +15,9 @@
 
 namespace nd_sharding {
 using detail::ArrayDynamicWrapper;
-using detail::ArrayStaticWrapper;
+using detail::ArrayStaticWrapperU32;
 template <size_t StartIdx, uint32_t Size>
-using array_cta_sequence_wrapper_t = detail::struct_cta_sequence_wrapper_t<ArrayStaticWrapper, StartIdx, Size>;
+using array_cta_sequence_wrapper_t = detail::struct_cta_sequence_wrapper_t<ArrayStaticWrapperU32, StartIdx, Size>;
 
 /**
  * @brief Accessor that encapsulates the logic for accessing sharded tensors pages.
@@ -63,8 +63,8 @@ public:
         const auto [bank_id, bank_offset] = this->get_bank_and_offset(page_id);
         const auto& packed_xy_coords = get_dspec().get_packed_xy_coords();
         return NOC_XY_ADDR(
-            DYNAMIC_NOC_X(noc, (packed_xy_coords[bank_id] >> 16) & 0xFFFF),
-            DYNAMIC_NOC_Y(noc, packed_xy_coords[bank_id] & 0xFFFF),
+            DYNAMIC_NOC_X(noc, (packed_xy_coords[bank_id] >> 8) & 0xFFFF),
+            DYNAMIC_NOC_Y(noc, packed_xy_coords[bank_id] & 0xFF),
             bank_base_address + bank_offset * page_size + offset);
     }
 
@@ -165,7 +165,7 @@ FORCE_INLINE auto make_dspec(
     uint32_t num_banks_rt = 0,
     uint32_t* tensor_shape_ptr = nullptr,
     uint32_t* shard_shape_ptr = nullptr,
-    uint32_t* bank_coords_ptr = nullptr) {
+    uint16_t* bank_coords_ptr = nullptr) {
     return detail::build_dspec<RankCT, NumBanksCT, TensorShapeWrapper_, ShardShapeWrapper_, BankCoordsWrapper_>(
         rank_rt, num_banks_rt, tensor_shape_ptr, shard_shape_ptr, bank_coords_ptr);
 }

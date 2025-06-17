@@ -100,6 +100,8 @@ struct ArgsOffsets {
         ArgsLoc::RankCRTA ? 0 : get_compile_time_arg_val(ArgsLoc::RankCRTA ? CTA_OFFSET : RankCTAOffset);
     static constexpr uint32_t NumBanksCT =
         ArgsLoc::NumBanksCRTA ? 0 : get_compile_time_arg_val(ArgsLoc::NumBanksCRTA ? CTA_OFFSET : NumBanksCTAOffset);
+    static constexpr uint32_t PhysicalNumBanksCT = (NumBanksCT - 1) / 2 + 1;  // Size of bank copordinates array (2
+                                                                              // coordinates packed in one uint32_t)
 
     static_assert(!ArgsLoc::RankStatic or RankCT > 0, "Rank must be greater than 0!");
     static_assert(
@@ -110,7 +112,7 @@ struct ArgsOffsets {
     static constexpr uint32_t ShardShapeCTAOffset = TensorShapeCTAOffset + (ArgsLoc::TensorShapeCRTA ? 0 : RankCT);
     static constexpr uint32_t BankCoordsCTAOffset = ShardShapeCTAOffset + (ArgsLoc::ShardShapeCRTA ? 0 : RankCT);
 
-    static constexpr uint32_t NumArgsCT = BankCoordsCTAOffset + (ArgsLoc::BankCoordsCRTA ? 0 : NumBanksCT) -
+    static constexpr uint32_t NumArgsCT = BankCoordsCTAOffset + (ArgsLoc::BankCoordsCRTA ? 0 : PhysicalNumBanksCT) -
                                           CTA_OFFSET;  // Number of compile-time arguments
 
     uint32_t crta_offset_rt = CRTA_OFFSET;  // Default CRTA offset
@@ -149,6 +151,11 @@ struct ArgsOffsets {
         }
     }
 
+    constexpr uint32_t fetch_physical_num_banks() const {
+        // 2 coordinates are packed in one uint32_t
+        return (fetch_num_banks() - 1) / 2 + 1;
+    }
+
     constexpr uint32_t tensor_shape_crta_offset() const { return num_banks_crta_offset() + ArgsLoc::NumBanksCRTA; }
 
     constexpr uint32_t shard_shape_crta_offset() const {
@@ -173,7 +180,8 @@ struct ArgsOffsets {
      * @return constexpr size_t     Number of common runtime arguments used by the DistributionSpec.
      */
     constexpr uint32_t runtime_args_skip() const {
-        return bank_coords_crta_offset() + (ArgsLoc::BankCoordsCRTA ? fetch_num_banks() : 0) - get_crta_offset();
+        return bank_coords_crta_offset() + (ArgsLoc::BankCoordsCRTA ? fetch_physical_num_banks() : 0) -
+               get_crta_offset();
     }
 };
 

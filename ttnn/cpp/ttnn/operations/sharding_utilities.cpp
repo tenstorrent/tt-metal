@@ -771,6 +771,11 @@ uint32_t ShardedAccessorArgs::get_num_banks() const {
     }
 }
 
+uint32_t ShardedAccessorArgs::get_physical_num_banks() const {
+    // 2 coordinates are packed in one uint32_t
+    return (get_num_banks() - 1) / 2 + 1;
+}
+
 tt::stl::Span<const uint32_t> ShardedAccessorArgs::get_tensor_shape() const {
     // if tensor_shape is runtime time
     auto rank = get_rank();
@@ -807,10 +812,10 @@ tt::stl::Span<const uint32_t> ShardedAccessorArgs::get_bank_coords() const {
     bool shard_shape_crta = args_config.test(ArgConfig::ShardShapeCRTA);
     if (args_config.test(ArgConfig::BankCoordsCRTA)) {
         size_t offset = rank_crta + num_banks_crta + rank * (tensor_shape_crta + shard_shape_crta);
-        return tt::stl::Span<const uint32_t>(runtime_args.data() + offset, get_num_banks());
+        return tt::stl::Span<const uint32_t>(runtime_args.data() + offset, get_physical_num_banks());
     } else {
         size_t offset = 1 + !rank_crta + !num_banks_crta + rank * (!tensor_shape_crta + !shard_shape_crta);
-        return tt::stl::Span<const uint32_t>(compile_time_args.data() + offset, get_num_banks());
+        return tt::stl::Span<const uint32_t>(compile_time_args.data() + offset, get_physical_num_banks());
     }
 }
 
@@ -856,9 +861,19 @@ ShardedAccessorArgs get_sharded_accessor_args(
     tensor_shape_args.insert(tensor_shape_args.end(), tensor_shape.cbegin(), tensor_shape.cend());
     shard_shape_args.insert(shard_shape_args.end(), shard_shape.cbegin(), shard_shape.cend());
 
-    for (const auto& bank_coord : bank_coords) {
-        const auto virtual_coord = mesh_device.virtual_core_from_logical_core(bank_coord, bank_type);
-        bank_coords_args.push_back((virtual_coord.x << 16) | (virtual_coord.y & 0xFFFF));
+    for (size_t i = 0; i < bank_coords.size(); i += 2) {
+        const auto virtual_coord1 = mesh_device.virtual_core_from_logical_core(bank_coords[i], bank_type);
+
+        if (i + 1 < bank_coords.size()) {
+            // Pack two coordinates into one uint32_t if we have a pair
+            const auto virtual_coord2 = mesh_device.virtual_core_from_logical_core(bank_coords[i + 1], bank_type);
+            bank_coords_args.push_back(
+                ((virtual_coord2.x & 0xFF) << 24) | ((virtual_coord2.y & 0xFF) << 16) |
+                ((virtual_coord1.x & 0xFF) << 8) | (virtual_coord1.y & 0xFF));
+        } else {
+            // Handle odd number of coordinates by setting the second coordinate to zero
+            bank_coords_args.push_back(((virtual_coord1.x & 0xFF) << 8) | (virtual_coord1.y & 0xFF));
+        }
     }
 
     return {.compile_time_args = compile_time_args, .runtime_args = runtime_args, .args_config = args_config};
