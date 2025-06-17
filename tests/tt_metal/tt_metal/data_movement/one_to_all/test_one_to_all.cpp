@@ -55,8 +55,11 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 
     assert((test_config.is_multicast && test_config.loopback) || (!test_config.is_multicast && !test_config.is_linked));
 
-    if (test_config.loopback && (test_config.num_of_transactions * transaction_size_bytes >
-                                 1024 * 1024 / 2)) {  // FIX the 1024 1024 number here
+    // Parameters
+    const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;
+    const size_t total_size_bytes = bytes_per_transaction * test_config.num_of_transactions;
+
+    if (test_config.loopback && (total_size_bytes > 1024 * 1024 / 2)) {  // FIX the 1024 1024 number here
         log_error(tt::LogTest, "Not enough memory for master core using loopback");
         return false;
     }
@@ -91,10 +94,6 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     }
 
     // L1 Space Allocation
-
-    // Parameters
-    const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;
-    const size_t total_size_bytes = bytes_per_transaction * test_config.num_of_transactions;
 
     // Obtain L1 Address for Storing Data
     L1AddressInfo mst_l1_info =
