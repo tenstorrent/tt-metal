@@ -140,8 +140,7 @@ def verify_perf(
         "decode_t/s": True,
         "decode_t/s/u": True,
     }
-    expected_measurements_default.update(expected_measurements if expected_measurements else {})
-    expected_measurements = expected_measurements_default
+    expected_measurements = expected_measurements_default if expected_measurements is None else expected_measurements
 
     # Default metrics where lower is better
     lower_is_better_metrics_default = {

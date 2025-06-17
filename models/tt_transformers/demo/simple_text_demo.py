@@ -998,7 +998,7 @@ def test_demo_text(
         # Only call verify_perf if the model_device_key exists in the targets
         ci_targets = {}
         if model_device_key in ci_target_ttft:
-            ci_targets["prefill_time_to_token"] = ci_target_ttft[model_device_key]
+            ci_targets["prefill_time_to_token"] = ci_target_ttft[model_device_key] / 1000  # convert to seconds
         if model_device_key in ci_target_decode_tok_s_u:
             ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
             # calculate from per-user rate
