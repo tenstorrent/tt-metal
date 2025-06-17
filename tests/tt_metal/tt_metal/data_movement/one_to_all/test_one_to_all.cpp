@@ -58,7 +58,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 
     const uint32_t transaction_size_bytes = test_config.transaction_size_pages * test_config.page_size_bytes;
 
-    if (test_config.loopback && (test_config.num_of_transactions * transaction_size_bytes > 1024 * 1024 / 2)) {
+    if (test_config.loopback && (transaction_size_bytes > 1024 * 1024 / 2)) {
         log_error(tt::LogTest, "Not enough memory for master core using loopback");
         return false;
     }
@@ -93,15 +93,14 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
         }
     }
     // Check if the L1 size is sufficient for the test configuration
-    if (master_l1_info.size < test_config.num_of_transactions * transaction_size_bytes) {
+    if (master_l1_info.size < transaction_size_bytes) {
         log_error(tt::LogTest, "Insufficient L1 size for the test configuration");
         return false;
     }
 
     uint32_t subordinate_l1_byte_address = master_l1_info.base_address;
     uint32_t master_l1_byte_address =
-        test_config.loopback ? subordinate_l1_byte_address + (test_config.num_of_transactions * transaction_size_bytes)
-                             : subordinate_l1_byte_address;
+        test_config.loopback ? subordinate_l1_byte_address + transaction_size_bytes : subordinate_l1_byte_address;
 
     // Compile-time arguments for kernels
     vector<uint32_t> sender_compile_args = {
@@ -200,9 +199,6 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAll2x2PacketSizes) {
     NOC noc_id = NOC::NOC_0;
     for (uint32_t l = 0; l < 2; l++) {
         bool loopback = (l == 1);  // fully test loopback = false, then loopback = true
-        if (loopback) {
-            max_transactions /= 2;
-        }
         for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
             for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
                  transaction_size_pages *= 2) {
@@ -241,9 +237,6 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAll4x4PacketSizes) {
     NOC noc_id = NOC::NOC_0;
     for (uint32_t l = 0; l < 2; l++) {
         bool loopback = (l == 1);  // fully test loopback = false, then loopback = true
-        if (loopback) {
-            max_transactions /= 2;
-        }
         for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
             for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
                  transaction_size_pages *= 2) {
@@ -292,9 +285,6 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAll10x10PacketSizes) {
     }
     for (uint32_t l = 0; l < 2; l++) {
         bool loopback = (l == 1);  // fully test loopback = false, then loopback = true
-        if (loopback) {
-            max_transactions /= 2;
-        }
         for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
             for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
                  transaction_size_pages *= 2) {
@@ -567,8 +557,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllDirectedIdeal) {
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
     // Parameters
-    // Ideal: Less transactions, more data per transaction
-    uint32_t num_of_transactions = 32;
+    uint32_t num_of_transactions = 256;
     uint32_t transaction_size_pages = 256;
 
     CoreCoord master_core_coord = {0, 0};
@@ -582,81 +571,6 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllDirectedIdeal) {
         uint32_t smaller_dim = grid_size.x > grid_size.y ? grid_size.y : grid_size.x;
         grid_size = {smaller_dim, smaller_dim};
     }
-
-    unit_tests::dm::core_to_all::OneToAllConfig test_config = {
-        .test_id = test_id,
-        .master_core_coord = master_core_coord,
-        .grid_size = grid_size,
-        .num_of_transactions = num_of_transactions,
-        .transaction_size_pages = transaction_size_pages,
-        .page_size_bytes = page_size_bytes,
-        .l1_data_format = DataFormat::Float16_b,
-        .loopback = true,
-        .noc_id = noc_id,
-        .is_multicast = true,
-        .is_linked = is_linked,
-    };
-
-    // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-    }
-}
-
-/* ========== Test case for one to all multicast data movement; ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAll2x2DirectedIdeal) {
-    uint32_t test_id = 53;  // Arbitrary test id
-
-    // Physical Constraints
-    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
-
-    // Parameters
-    uint32_t num_of_transactions = 32;
-    uint32_t transaction_size_pages = 256;
-
-    CoreCoord master_core_coord = {0, 0};
-    CoreCoord grid_size = {2, 2};
-    NOC noc_id = NOC::NOC_0;
-    bool is_linked = true;
-
-    unit_tests::dm::core_to_all::OneToAllConfig test_config = {
-        .test_id = test_id,
-        .master_core_coord = master_core_coord,
-        .grid_size = grid_size,
-        .num_of_transactions = num_of_transactions,
-        .transaction_size_pages = transaction_size_pages,
-        .page_size_bytes = page_size_bytes,
-        .l1_data_format = DataFormat::Float16_b,
-        .loopback = true,
-        .noc_id = noc_id,
-        .is_multicast = true,
-        .is_linked = is_linked,
-    };
-
-    // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-    }
-}
-
-/* ========== Test case for one to all multicast data movement; ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAll4x4DirectedIdeal) {
-    uint32_t test_id = 54;  // Arbitrary test id
-
-    // Physical Constraints
-    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
-
-    // Parameters
-    // Ideal: Less transactions, more data per transaction
-    uint32_t num_of_transactions = 32;
-    uint32_t transaction_size_pages = 256;
-
-    CoreCoord master_core_coord = {0, 0};
-    CoreCoord grid_size = {4, 4};
-    NOC noc_id = NOC::NOC_0;
-    bool is_linked = true;
 
     unit_tests::dm::core_to_all::OneToAllConfig test_config = {
         .test_id = test_id,
