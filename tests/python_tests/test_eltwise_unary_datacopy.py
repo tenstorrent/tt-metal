@@ -12,6 +12,7 @@ from helpers.device import (
 )
 from helpers.format_arg_mapping import DestAccumulation, format_dict
 from helpers.format_config import DataFormat
+from helpers.golden_generators import DataCopyGolden, get_golden_generator
 from helpers.param_config import (
     clean_params,
     generate_param_ids,
@@ -21,11 +22,6 @@ from helpers.param_config import (
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import generate_make_command
 from helpers.utils import passed_test, run_shell_command
-
-
-def generate_golden(operand1, format):
-    return operand1
-
 
 # SUPPORTED FORMATS FOR TEST
 supported_formats = [
@@ -67,7 +63,8 @@ def test_unary_datacopy(testname, formats, dest_acc):
 
     src_A, src_B = generate_stimuli(formats.input_format, formats.input_format)
 
-    golden = generate_golden(src_A, formats.output_format)
+    generate_golden = get_golden_generator(DataCopyGolden)
+    golden_tensor = generate_golden(src_A, formats.output_format)
     write_stimuli_to_l1(src_A, src_B, formats.input_format, formats.input_format)
 
     unpack_to_dest = formats.input_format.is_32_bit()
@@ -85,12 +82,9 @@ def test_unary_datacopy(testname, formats, dest_acc):
 
     wait_for_tensix_operations_finished()
     res_from_L1 = collect_results(formats, tensor_size=len(src_A))
-    assert len(res_from_L1) == len(golden)
+    assert len(res_from_L1) == len(golden_tensor)
 
-    torch_format = format_dict.get(
-        formats.output_format, format_dict[DataFormat.Float16_b]
-    )
-    golden_tensor = torch.tensor(golden, dtype=(torch_format))
-    res_tensor = torch.tensor(res_from_L1, dtype=(torch_format))
+    torch_format = format_dict[formats.output_format]
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(golden_tensor, res_tensor, formats.output_format)

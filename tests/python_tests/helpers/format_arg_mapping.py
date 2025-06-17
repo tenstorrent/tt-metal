@@ -11,6 +11,7 @@ format_dict = {
     DataFormat.Float32: torch.float32,
     DataFormat.Float16: torch.float16,
     DataFormat.Float16_b: torch.bfloat16,
+    DataFormat.Bfp8_b: torch.bfloat16,  # BFP8 not native to PyTorch, is represented as bfloat16
     DataFormat.Int32: torch.int32,
     DataFormat.UInt32: torch.int64,
     DataFormat.UInt16: torch.int32,
