@@ -133,6 +133,11 @@ public:
         ttnn::TTNNFixtureWithDevice(/*trace_region_size=*/65536, /*l1_small_size=*/200000) {}
 };
 
+// Benchmark is not intended to be run or instantiated as part of CI.
+// Uncomment the define and comment out the GTEST_SKIP to run locally.
+// #define MM_BENCHMARK_INSTANTIATION
+
+#ifdef MM_BENCHMARK_INSTANTIATION
 TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     GTEST_SKIP() << "Benchmark is not intended to be run as part of CI and can be manually run locally";
 
@@ -786,3 +791,4 @@ INSTANTIATE_TEST_SUITE_P(
              /*in0_block_w_div=*/4,
              /*num_out_blocks_h=*/4,
              /*num_out_blocks_w=*/4}})));
+#endif
