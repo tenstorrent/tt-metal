@@ -31,7 +31,8 @@ struct CBIndices {
     uint32_t out_cb_id = 32;
 
     // Additional CBs for sharded data kernel configs
-    uint32_t padding_config = 32;
+    uint32_t padding_config0 = 32;
+    uint32_t padding_config1 = 32;
     uint32_t gather_config0 = 32;
     uint32_t gather_config1 = 32;
     uint32_t untilize_out_cb_id0 = 32;
@@ -61,7 +62,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     const uint32_t pad_val,
     const uint32_t ncores_nhw,
     const uint32_t max_out_nsticks_per_core,
-    const Tensor& padding_config,
+    const Tensor& padding_config0,
+    const Tensor& padding_config1,
     const Tensor& gather_config0,
     const Tensor& gather_config1,
     const std::vector<uint16_t>& number_of_blocks_per_core,
@@ -174,23 +176,36 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         }
     }
 
-    TT_ASSERT(padding_config.dtype() == DataType::UINT16);
+    TT_ASSERT(padding_config0.dtype() == DataType::UINT16);
+    TT_ASSERT(padding_config1.dtype() == DataType::UINT16);
     TT_ASSERT(gather_config0.dtype() == DataType::UINT16);
     TT_ASSERT(gather_config1.dtype() == DataType::UINT16);
 
     const uint32_t num_cores = all_cores.num_cores();
 
-    auto padding_config_storage = padding_config.device_storage();
-    auto padding_config_buffer = padding_config_storage.get_buffer();
-    cb_indices.padding_config = cb_indices.get_next_cb_id();
-    auto padding_config_cb = create_circular_buffer(
+    auto padding_config0_storage = padding_config0.device_storage();
+    auto padding_config0_buffer = padding_config0_storage.get_buffer();
+    cb_indices.padding_config0 = cb_indices.get_next_cb_id();
+    auto padding_config_cb0 = create_circular_buffer(
         program,
         all_cores,
-        cb_indices.padding_config,
+        cb_indices.padding_config0,
         kernel_config_df,
         1,
-        padding_config_buffer->size() / num_cores,
-        padding_config_buffer);
+        padding_config0_buffer->size() / num_cores,
+        padding_config0_buffer);
+
+    auto padding_config1_storage = padding_config1.device_storage();
+    auto padding_config1_buffer = padding_config1_storage.get_buffer();
+    cb_indices.padding_config1 = cb_indices.get_next_cb_id();
+    auto padding_config_cb1 = create_circular_buffer(
+        program,
+        all_cores,
+        cb_indices.padding_config0,
+        kernel_config_df,
+        1,
+        padding_config1_buffer->size() / num_cores,
+        padding_config1_buffer);
 
     auto gather_config_storage0 = gather_config0.device_storage();
     auto gather_config_buffer0 = gather_config_storage0.get_buffer();
@@ -228,8 +243,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     const std::string reader_kernel_name =
         "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp";
     std::vector<uint32_t> reader_ct_args = {
-        0,  // padding_config_cb_id
-        0,  // gather_config_cb_id
+        0,  // padding config cb
+        0,  // gather config cb
         cb_indices.src_cb_id,
         input_to_writer_cb_id0,
         cb_indices.out_cb_id,
@@ -249,7 +264,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         block_stride  // Block stride
     };
 
-    reader_ct_args[0] = 0;
+    reader_ct_args[0] = cb_indices.padding_config0;
     reader_ct_args[1] = cb_indices.gather_config0;
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
@@ -258,7 +273,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
-    reader_ct_args[0] = cb_indices.padding_config;
+    reader_ct_args[0] = cb_indices.padding_config1;
     reader_ct_args[1] = cb_indices.gather_config1;
     reader_ct_args[3] = input_to_writer_cb_id1;
     reader_ct_args[17] = 1;  // Block start offset
@@ -271,16 +286,19 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
 
     // Capture padding_config_buffer, local_config_buffer, remote_config_buffer to cache this with the program
     if (!capture_buffers) {
-        padding_config_storage = {};
+        padding_config_storage0 = {};
+        padding_config_storage1 = {};
         gather_config_storage0 = {};
         gather_config_storage1 = {};
     }
     auto override_runtime_arguments_callback = [src_cb,
                                                 out_cb,
-                                                padding_config_cb,
+                                                padding_config_cb0,
+                                                padding_config_cb1,
                                                 gather_config_cb0,
                                                 gather_config_cb1,
-                                                padding_config_storage,
+                                                padding_config_storage0,
+                                                padding_config_storage1,
                                                 gather_config_storage0,
                                                 gather_config_storage1](
                                                    const void* operation,
