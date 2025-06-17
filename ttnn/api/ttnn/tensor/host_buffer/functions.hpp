@@ -15,7 +15,7 @@ namespace host_buffer {
 
 template <typename T>
 void validate_datatype(const Tensor& tensor) {
-    using BaseType = std::remove_const_t<T>;
+    using BaseType = std::remove_cvref_t<T>;
     if constexpr (std::is_same_v<BaseType, uint32_t>) {
         TT_FATAL(
             tensor.dtype() == DataType::UINT32 or tensor.dtype() == DataType::BFLOAT8_B or

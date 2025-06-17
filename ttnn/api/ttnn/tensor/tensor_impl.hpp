@@ -160,7 +160,10 @@ std::vector<T> encode_tensor_data(tt::stl::Span<const T> logical_data, const Ten
 template <typename T>
 std::vector<T> decode_tensor_data(tt::stl::Span<const T> physical_data, const TensorSpec& tensor_spec);
 
-// Returns true if the logical tensor data matches the physical tensor data. Used for optimizing conversion operations.
+// Returns true if the logical tensor data matches the physical tensor data:
+// 1. Row major layout is used.
+// 2. Logical 2D shape matches physical shape.
+// Used for optimizing conversion operations.
 bool logical_matches_physical(const TensorSpec& tensor_spec);
 
 // ===============================================================================================================================================
