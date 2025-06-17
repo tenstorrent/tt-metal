@@ -81,7 +81,8 @@ def get_device_freq():
     freq = deviceData["deviceInfo"]["freq"]
     return freq
 
-#These configs are all based on a 1x1 compute grid, and will be scaled by the benchmark according to the max grid size 
+
+# These configs are all based on a 1x1 compute grid, and will be scaled by the benchmark according to the max grid size
 # M will be scaled by Y (num cols), N and K will be scaled by X (num rows)
 matmul_shapes_bfloat16 = [
     (64, 64, 64, True, True, 1, 1, 1),
@@ -208,11 +209,11 @@ def test_matmul_2d_host_perf(
             elif dtype == ttnn.bfloat4_b:
                 matmul_shapes = matmul_shapes_bfloat4_b
             for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
-                #Scale the input shapes by the grid size
+                # Scale the input shapes by the grid size
                 m = m * grid_size[1]
                 k = k * grid_size[0]
                 n = n * grid_size[0]
-                
+
                 profiler.clear()
 
                 in0_shape = [1, 1, m, k]
@@ -490,7 +491,7 @@ def test_matmul_2d_host_perf_out_of_box(
             elif dtype == ttnn.bfloat4_b:
                 math_fidelity = ttnn.MathFidelity.LoFi
             for m, k, n in matmul_shapes:
-                #Scale the input shapes by the grid size
+                # Scale the input shapes by the grid size
                 m = m * grid_size[1]
                 k = k * grid_size[0]
                 n = n * grid_size[0]
