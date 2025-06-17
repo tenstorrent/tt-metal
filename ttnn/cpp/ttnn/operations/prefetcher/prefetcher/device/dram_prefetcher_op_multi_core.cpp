@@ -131,6 +131,14 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     auto reader_cb = CreateCircularBuffer(program, reader_core_range, reader_cb_config);
 
+    uint32_t sync_cb_index = tt::CBIndex::c_3;
+    uint32_t sync_cb_page_size = hal::get_l1_alignment();
+    CircularBufferConfig sync_cb_confg =
+        CircularBufferConfig(sync_cb_page_size, {{sync_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(sync_cb_index, sync_cb_page_size);
+
+    auto sync_cb = CreateCircularBuffer(program, reader_core_range, sync_cb_confg);
+
     /* tensor addresses cb setup */
     uint32_t tensor_addrs_single_tile_size = sizeof(uint32_t);
     uint32_t tensor_addrs_cb_num_tiles =
@@ -169,6 +177,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         max_block_size_per_reader_core,
         reader_cb_index,
         tensor_addrs_cb_index,
+        sync_cb_index,
     };
 
     // Configs to enable for performance mode
@@ -181,7 +190,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = reader_ct_args});
 
     // Writer kernel
@@ -193,6 +202,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         max_block_tiles,
         reader_cb_index,
         remote_cb_index,
+        sync_cb_index,
     };
 
     // Configs to enable for performance mode
@@ -205,7 +215,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = writer_ct_args});
 
     /* Runtime args */
@@ -215,15 +225,17 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     std::vector<uint32_t> coalesced_page_sizes;
     std::vector<uint32_t> coalesced_num_pages;
 
+    uint32_t max_page_size = 8192;
+
     for (uint32_t t = 0; t < num_tensors; t++) {
         auto [page_size, num_pages] = get_max_page_size_and_num_pages(
-            max_tile_size, tensor_block_num_tiles[t], tt::tt_metal::detail::TileSize(tensor_data_formats[t]));
+            max_page_size, tensor_block_num_tiles[t], tt::tt_metal::detail::TileSize(tensor_data_formats[t]));
         page_sizes.push_back(page_size);
         block_num_pages.push_back(num_pages);
 
         uint32_t block_width_in_tiles = tensor_shapes[t][1];
         auto [coalesced_page_size, coalesced_num_page] = get_max_page_size_and_num_pages(
-            max_tile_size,
+            max_page_size,
             block_width_in_tiles / num_receivers_per_reader,
             tt::tt_metal::detail::TileSize(tensor_data_formats[t]));
         coalesced_page_sizes.push_back(coalesced_page_size);
