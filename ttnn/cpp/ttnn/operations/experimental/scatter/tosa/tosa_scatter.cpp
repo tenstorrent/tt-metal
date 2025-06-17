@@ -19,6 +19,9 @@ namespace {
 
 constexpr int32_t LAST_DIMENSION = -1;
 constexpr int32_t W_DIMENSION = -2;
+constexpr int32_t INPUT_RANK_CONSTRAINT = 3;
+constexpr int32_t INDEX_RANK_CONSTRAINT = 2;
+constexpr int32_t SOURCE_RANK_CONSTRAINT = 3;
 
 enum class InputTensorType : uint8_t {
     INPUT,
@@ -28,38 +31,30 @@ enum class InputTensorType : uint8_t {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-Tensor expand_tensor(const Tensor& tensor, const uint32_t& N, const uint32_t& K, const uint32_t& W, const uint32_t& C, const InputTensorType& input_tensor_type) {
-    switch (input_tensor_type) {
-        case InputTensorType::INPUT: {
-            return ttnn::unsqueeze_to_4D(tensor);
-        }
-
-        case InputTensorType::INDEX: {
-            return ttnn::unsqueeze_to_4D(
-                ttnn::expand(ttnn::unsqueeze(tensor, -1), SmallVector<int32_t>{N, W, C}, tensor.memory_config()));
-        }
-
-        case InputTensorType::SOURCE: {
-            return ttnn::unsqueeze_to_4D(tensor);
-        }
-
-        default: return tensor;
-    }
-}
-
 Tensor pre_tosa_scatter_transform_tensor(const Tensor& tensor, const uint32_t& N, const uint32_t& K, const uint32_t& W, const uint32_t& C, const InputTensorType& input_tensor_type) {
     if (tensor.logical_shape() == ttnn::Shape{1} || tensor.logical_shape() == ttnn::Shape{0}) {
         return tensor;
     }
 
-    Tensor processed_tensor = expand_tensor(tensor, N, K, W, C, input_tensor_type);
+    Tensor processed_tensor = tensor;
+    if (input_tensor_type == InputTensorType::INDEX) {
+        processed_tensor =
+            ttnn::expand(ttnn::unsqueeze(tensor, -1), SmallVector<int32_t>{N, W, C}, tensor.memory_config());
+        // WARNING: the rest of this if statement is to be removed after fixing the int32 transpose issue (PR: #23415)
+        auto device = processed_tensor.device();
+        processed_tensor = processed_tensor.cpu();
+        processed_tensor = ttnn::to_dtype(processed_tensor, DataType::UINT16);
+        processed_tensor = processed_tensor.to_device(device);
+    }
+
+    // processed_tensor = expand_tensor(processed_tensor, N, K, W, C, input_tensor_type);
     processed_tensor = ttnn::transpose(processed_tensor, W_DIMENSION, LAST_DIMENSION);
     if (processed_tensor.layout() != Layout::ROW_MAJOR) {
         processed_tensor =
             ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, processed_tensor.device());
     }
 
-    return processed_tensor;
+    return ttnn::unsqueeze_to_4D(processed_tensor);
 }
 
 Tensor post_tosa_scatter_transform_tensor(
@@ -79,22 +74,22 @@ void validate_tensors(
     const Shape& source_shape
 ) {
     TT_FATAL(
-        input_shape.rank() == 3,
-        "According to TOSA specification, input tensor must be of rank 3, it is {} instead.",
-        input_shape.rank()
-    );
+        input_shape.rank() == INPUT_RANK_CONSTRAINT,
+        "According to TOSA specification, input tensor must be of rank {}, it is {} instead.",
+        INPUT_RANK_CONSTRAINT,
+        input_shape.rank());
 
     TT_FATAL(
-        index_shape.rank() == 2,
-        "According to TOSA specification, index tensor must be of rank 2, it is {} instead.",
-        input_shape.rank()
-    );
+        index_shape.rank() == INDEX_RANK_CONSTRAINT,
+        "According to TOSA specification, index tensor must be of rank {}, it is {} instead.",
+        INDEX_RANK_CONSTRAINT,
+        input_shape.rank());
 
     TT_FATAL(
-        source_shape.rank() == 3,
-        "According to TOSA specification, source tensor must be of rank 3, it is {} instead.",
-        input_shape.rank()
-    );
+        source_shape.rank() == SOURCE_RANK_CONSTRAINT,
+        "According to TOSA specification, source tensor must be of rank {}, it is {} instead.",
+        SOURCE_RANK_CONSTRAINT,
+        input_shape.rank());
 
     TT_FATAL(
         input_shape[0] == source_shape[0],
@@ -126,9 +121,9 @@ Tensor TOSAScatterOperation::invoke(
     const Tensor& input_tensor,
     const Tensor& index_tensor,
     const Tensor& source_tensor,
-    const std::optional<MemoryConfig>& output_memory_config,
-    std::optional<Tensor>& opt_output) {
+    const std::optional<MemoryConfig>& output_memory_config) {
     CMAKE_UNIQUE_NAMESPACE::validate_tensors(input_tensor.get_logical_shape(), index_tensor.get_logical_shape(), source_tensor.get_logical_shape());
+
     const ttnn::Shape original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.padded_shape().rank();
 
@@ -138,24 +133,22 @@ Tensor TOSAScatterOperation::invoke(
     }
 
     const auto& input_shape{input_tensor.get_logical_shape()};
-    const auto& index_shape{input_tensor.get_logical_shape()};
+    const auto& index_shape{index_tensor.get_logical_shape()};
 
     const uint32_t N = input_shape[0];
     const uint32_t K = input_shape[1];
     const uint32_t W = index_shape[1];
     const uint32_t C = input_shape[2];
 
+    Tensor processed_input_tensor =
+        CMAKE_UNIQUE_NAMESPACE::pre_tosa_scatter_transform_tensor(input_tensor, N, K, W, C, InputTensorType::INPUT);
+
     Tensor processed_index_tensor = CMAKE_UNIQUE_NAMESPACE::pre_tosa_scatter_transform_tensor(index_tensor, N, K, W, C, InputTensorType::INDEX);
 
     Tensor processed_source_tensor = CMAKE_UNIQUE_NAMESPACE::pre_tosa_scatter_transform_tensor(source_tensor, N, K, W, C, InputTensorType::SOURCE);
 
-    Tensor processed_input_tensor = CMAKE_UNIQUE_NAMESPACE::pre_tosa_scatter_transform_tensor(input_tensor, N, K, W, C, InputTensorType::INPUT);
-
     const MemoryConfig final_memory_config{
-        output_memory_config.has_value()
-            ? output_memory_config.value()
-            : (opt_output.has_value() ? opt_output.value().memory_config()
-                                                        : input_tensor.memory_config())};
+        output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
 
     Tensor output = ttnn::prim::scatter(
         processed_input_tensor,

@@ -18,8 +18,7 @@ struct TOSAScatterOperation {
         const Tensor& input_tensor,
         const Tensor& index_tensor,
         const Tensor& source_tensor,
-        const std::optional<MemoryConfig>& opt_out_memory_config,
-        std::optional<Tensor>& opt_output);
+        const std::optional<MemoryConfig>& opt_out_memory_config);
 };
 
 }  // namespace operations::experimental
