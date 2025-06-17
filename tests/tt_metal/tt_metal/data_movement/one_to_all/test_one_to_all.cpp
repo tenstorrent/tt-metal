@@ -56,7 +56,6 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
         assert(!test_config.is_linked);
     }
 
-    // Sharded L1 buffers
     const uint32_t transaction_size_bytes = test_config.transaction_size_pages * test_config.page_size_bytes;
 
     if (test_config.loopback && (test_config.num_of_transactions * transaction_size_bytes > 1024 * 1024 / 2)) {
@@ -76,22 +75,6 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     uint32_t num_subordinates = subordinate_core_set.num_cores();
     uint32_t total_sender_size_bytes =
         test_config.transaction_size_pages * test_config.page_size_bytes * num_subordinates;
-    /*
-    auto master_shard_parameters = ShardSpecBuffer(
-        master_core_set,
-        {1, transaction_size_bytes / 2},
-        ShardOrientation::ROW_MAJOR,
-        {1, test_config.page_size_bytes / 2},
-        {1, test_config.transaction_size_pages});
-    auto master_l1_buffer = CreateBuffer(ShardedBufferConfig{
-        .device = device,
-        .size = transaction_size_bytes,
-        .page_size = test_config.page_size_bytes,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-        .shard_parameters = std::move(master_shard_parameters),
-    });
-    */
 
     // Obtain L1 Address for Storing Data
     // NOTE: We don't know if the whole block of memory is actually available.
@@ -119,23 +102,6 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     uint32_t master_l1_byte_address =
         test_config.loopback ? subordinate_l1_byte_address + (test_config.num_of_transactions * transaction_size_bytes)
                              : subordinate_l1_byte_address;
-
-    /*
-    auto subordinate_shard_parameters = ShardSpecBuffer(
-        subordinate_core_set,
-        {1, transaction_size_bytes / 2},
-        ShardOrientation::ROW_MAJOR,
-        {1, test_config.page_size_bytes / 2},
-        {1, total_sender_size_pages});
-    auto subordinate_l1_buffer = CreateBuffer(ShardedBufferConfig{
-        .device = device,
-        .size = total_sender_size_bytes,
-        .page_size = test_config.page_size_bytes,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-        .shard_parameters = std::move(subordinate_shard_parameters),
-    });
-    */
 
     // Compile-time arguments for kernels
     vector<uint32_t> sender_compile_args = {
@@ -198,11 +164,6 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 
     // Golden output
     vector<uint32_t> packed_golden = packed_input;
-    /*
-    for (uint32_t i = 1; i < num_subordinates; i++) {
-        packed_golden.insert(packed_golden.end(), packed_input.begin(), packed_input.end());
-    }
-        */
 
     // Launch program and record outputs
     detail::WriteToDeviceL1(device, test_config.master_core_coord, master_l1_byte_address, packed_input);
