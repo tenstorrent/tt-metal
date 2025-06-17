@@ -2,35 +2,45 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * @file logging.cpp
- * @brief Implementation of Metal logging initialization
- *
- * This file contains the initialization code for the Metal logging system.
- * It creates a static instance of the TT LoggerInitializer with specific
- * environment variable names for Metal logging configuration.
- */
-
-#include <tt-logger/tt-logger-initializer.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal::logging {
 
-constexpr auto file_env_var = "TT_METAL_LOGGER_FILE";
-constexpr auto level_env_var = "TT_METAL_LOGGER_LEVEL";
-constexpr auto log_pattern = "[%Y-%m-%d %H:%M:%S.%e] [%l] [%s:%#] %v";
+// TODO: Figure out how to expose this set_level API to consumers.
+// The idea here is to allow clients to set log level without using environment variables.
+// For instance, they may not want to see info messages at all, but only CRITICAL errors
 
 /**
- * @brief Static instance of LoggerInitializer for Metal logging
+ * @brief Logging severity levels
  *
- * This static instance initializes the logging system with Metal-specific
- * environment variables:
- * - TT_METAL_LOGGER_FILE: Controls the log file path for Metal logging
- * - TT_METAL_LOGGER_LEVEL: Controls the log level for Metal logging
- *
- * The logger will be initialized when this translation unit is loaded,
- * setting up either file-based or console-based logging depending on
- * the environment variable configuration.
+ * Defines the different severity levels for logging messages, from most
+ * verbose (trace) to most severe (critical), with an option to disable
+ * logging completely (off).
  */
-static tt::LoggerInitializer loggerInitializer(file_env_var, level_env_var, log_pattern);
+enum class level {
+    trace,     ///< Most detailed logging level, for tracing program execution
+    debug,     ///< Debugging information, useful during development
+    info,      ///< General informational messages about program operation
+    warn,      ///< Warning messages for potentially harmful situations
+    error,     ///< Error messages for serious problems
+    critical,  ///< Critical errors that may lead to program termination
+    off        ///< Disables all logging
+};
+
+/// Map our internal enum to spdlog's level enum.
+spdlog::level::level_enum to_spdlog_level(level lvl) {
+    switch (lvl) {
+        case level::trace: return spdlog::level::trace;
+        case level::debug: return spdlog::level::debug;
+        case level::info: return spdlog::level::info;
+        case level::warn: return spdlog::level::warn;
+        case level::error: return spdlog::level::err;
+        case level::critical: return spdlog::level::critical;
+        case level::off: return spdlog::level::off;
+    }
+    return spdlog::level::info;  // fallback
+}
+
+void set_level(level lvl) { ::tt::LoggerRegistry::instance().set_level(to_spdlog_level(lvl)); }
 
 }  // namespace tt::tt_metal::logging
