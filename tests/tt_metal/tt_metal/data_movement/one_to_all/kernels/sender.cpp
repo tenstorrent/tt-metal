@@ -35,8 +35,6 @@ void kernel_main() {
 
                 noc_async_write(mst_base_addr, dst_noc_addr, bytes_per_transaction);
             }
-            mst_base_addr += bytes_per_transaction;
-            sub_base_addr += bytes_per_transaction;
         }
 
         noc_async_write_barrier();

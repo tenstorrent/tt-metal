@@ -36,16 +36,6 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_of_transactions - 1; i++) {
             noc_async_write_multicast_loopback_src(
                 mst_base_addr, dst_noc_addr_multicast, bytes_per_transaction, num_subordinates, is_linked);
-
-            mst_base_addr += bytes_per_transaction;
-            sub_base_addr += bytes_per_transaction;
-
-            dst_noc_addr_multicast = get_noc_multicast_addr(
-                start_x,
-                start_y,
-                end_x,
-                end_y,
-                sub_base_addr);  // Update the multicast address for the next transaction
         }
 
         // Last packet is sent separately to unlink the transaction,

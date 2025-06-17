@@ -57,10 +57,10 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 
     // Parameters
     const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;
-    const size_t total_size_bytes = bytes_per_transaction * test_config.num_of_transactions;
 
     if (test_config.loopback &&
-        (total_size_bytes > 1024 * 1024 / 2)) {  // FIX the 1024 1024 number here // Could we just enforce this before?
+        (bytes_per_transaction >
+         1024 * 1024 / 2)) {  // FIX the 1024 1024 number here // Could we just enforce this before?
         log_error(tt::LogTest, "Not enough memory for master core using loopback");
         return false;
     }
@@ -100,7 +100,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     L1AddressInfo mst_l1_info =
         tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.mst_core_coord);
     // Check if the L1 size is sufficient for the test configuration
-    if (mst_l1_info.size < total_size_bytes) {
+    if (mst_l1_info.size < bytes_per_transaction) {
         log_error(tt::LogTest, "Insufficient L1 size for the test configuration");
         return false;
     }
@@ -114,7 +114,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     }
     uint32_t mst_l1_base_address = mst_l1_info.base_address;
     uint32_t sub_l1_base_address =
-        test_config.loopback ? mst_l1_base_address : mst_l1_base_address + (total_size_bytes);
+        test_config.loopback ? mst_l1_base_address : mst_l1_base_address + (bytes_per_transaction);
 
     // Semaphores
     const uint32_t sem_id = CreateSemaphore(program, sub_logical_core_set, 0);
@@ -183,7 +183,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 
     // Setup Input and Golden Output
     size_t element_size_bytes = bfloat16::SIZEOF;
-    uint32_t num_elements = total_size_bytes / element_size_bytes;
+    uint32_t num_elements = bytes_per_transaction / element_size_bytes;
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, num_elements, chrono::system_clock::now().time_since_epoch().count());
     vector<uint32_t> packed_golden = packed_input;
@@ -200,7 +200,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 
     for (auto& sub_logical_core : sub_core_list) {
         tt_metal::detail::ReadFromDeviceL1(
-            device, sub_logical_core, sub_l1_base_address, total_size_bytes, packed_output);
+            device, sub_logical_core, sub_l1_base_address, bytes_per_transaction, packed_output);
 
         // Results comparison
         bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
@@ -245,7 +245,7 @@ void directed_ideal_test(
 
     // Adjustable Parameters (Ideal: Less transactions, more data per transaction)
     uint32_t pages_per_transaction = 256;
-    uint32_t num_of_transactions = max_pages_reservable / pages_per_transaction;
+    uint32_t num_of_transactions = 256;
 
     unit_tests::dm::core_to_all::OneToAllConfig test_config = {
         .test_id = test_case_id,
