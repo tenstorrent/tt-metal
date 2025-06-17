@@ -1238,7 +1238,8 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         uint32_t weight_block_h_ntiles = act_block_w_ntiles;
 
         uint32_t tilized_act_block_cb_size = act_block_h_ntiles * act_block_w_ntiles * output_tile_size;
-        uint32_t row_major_act_cb_size = act_block_h_ntiles * act_block_w_ntiles * input_tile_size;
+        const uint32_t row_major_act_cb_size =
+            conv_input_dtype != conv_config.dtype ? act_block_h_ntiles * act_block_w_ntiles * input_tile_size : 0;
 
         uint32_t output_block_ntiles = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles;
 
