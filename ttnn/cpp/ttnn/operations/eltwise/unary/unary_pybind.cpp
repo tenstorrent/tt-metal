@@ -1979,6 +1979,18 @@ void py_module(py::module& module) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|tanhshrink|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation(
+        module,
+        ttnn::deg2rad,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|deg2rad|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation(
+        module,
+        ttnn::rad2deg,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|rad2deg|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
 
     //  Unaries with fast_and_approximate_mode
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp, R"doc(BFLOAT16, BFLOAT8_B)doc");
@@ -2096,18 +2108,6 @@ void py_module(py::module& module) {
     bind_identity(module, ttnn::identity);
 
     // unary composite imported into ttnn
-    bind_unary_composite(
-        module,
-        ttnn::deg2rad,
-        R"doc(Performs deg2rad function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_composite(
-        module,
-        ttnn::rad2deg,
-        R"doc(Performs rad2deg function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_composite(
         module,
         ttnn::acosh,
