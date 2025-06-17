@@ -78,6 +78,9 @@ void help(std::string_view program_name) {
     exit(0);
 }
 
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
 int main(int argc, char** argv) {
     int seed = std::random_device{}();
     int device_id = 0;
@@ -140,17 +143,17 @@ int main(int argc, char** argv) {
     // output buffer C.
     auto reader = CreateKernel(
         program,
-        "tt_metal/programming_examples/contributed/vecadd/kernels/interleaved_tile_read.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/interleaved_tile_read.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     auto writer = CreateKernel(
         program,
-        "tt_metal/programming_examples/contributed/vecadd/kernels/tile_write.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/tile_write.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     auto compute = CreateKernel(
         program,
-        "tt_metal/programming_examples/contributed/vecadd/kernels/add.cpp",
+        OVERRIDE_KERNEL_PREFIX "contributed/vecadd/kernels/add.cpp",
         core,
         ComputeConfig{.math_approx_mode = false, .compile_args = {}, .defines = {}});
 
