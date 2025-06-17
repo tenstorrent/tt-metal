@@ -16,8 +16,8 @@ void run_kernel()
 {
     // measure length of zones of different sizes
 
-    // start with i = 10 because for i < 10, overhead is not consistent
-    for (uint32_t i = 10; i < 40; i++)
+    // start with i = 8 because for i < 8, overhead is not consistent
+    for (uint32_t i = 8; i < 40; i++)
     {
         uint32_t cnt = i;
         {

@@ -38,13 +38,20 @@ def test_profiler_overhead():
     # filter out all zones that dont have marker "OVERHEAD"
     overhead_zones = [x for x in runtime.unpack if x.full_marker.marker == "OVERHEAD"]
     assert (
-        len(overhead_zones) == 30
+        len(overhead_zones) == 32
     ), f"Expected 32 overhead zones, got {len(overhead_zones)}"
 
-    for loop_iterations, zone in enumerate(overhead_zones, 10):
-        calculated_duration = 10 * loop_iterations
+    # the first iteration is inconsistent, because code is not in icache
+    overhead_zones.pop(0)
+
+    for i, zone in enumerate(
+        overhead_zones, 9
+    ):  # enumerate from 9 because the first iteration is ignored
+        calculated_duration = 10 * i
         overhead = zone.duration - calculated_duration
 
-        assert overhead == pytest.approx(
-            get_expected_overhead(), abs=5
-        ), f"iterations: {loop_iterations}, runtime: {zone.duration}/{calculated_duration} (actual/calculated), overhead {overhead}/{EXPECTED_OVERHEAD} (actual/expected) "
+        expected_overhead = get_expected_overhead()
+        assert overhead == pytest.approx(expected_overhead, abs=5), (
+            f"iterations: {i}, runtime: {zone.duration}/{i * 10} "
+            f"(actual/calculated), overhead {overhead}/{expected_overhead} (actual/expected)"
+        )
