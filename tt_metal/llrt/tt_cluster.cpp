@@ -344,10 +344,6 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
             for (auto& chip_id : temp_cluster_desc->get_chips_grouped_by_closest_mmio().at(desired_logical_id)) {
                 chips_set.emplace(chip_id);
             }
-        } else {
-            for (auto& [logical_id, pci_id] : temp_cluster_desc->get_chips_with_mmio()) {
-                chips_set.insert(pci_id);
-            }
         }
         // Adding this check is a workaround for current UMD bug that only uses this getter to populate private metadata
         // that is later expected to be populated by unrelated APIs
@@ -360,7 +356,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .num_host_mem_ch_per_mmio_device = num_host_mem_ch_per_mmio_device,
             .sdesc_path = get_soc_description_file(this->arch_, this->target_type_),
-            .pci_target_devices = chips_set,
+            .target_devices = chips_set,
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
