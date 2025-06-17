@@ -86,6 +86,27 @@ public:
 
     void clear_fabric_context();
 
+    // Check if ANY managed chip supports intermesh links
+    bool contains_intermesh_links() const;
+
+    // Check if a specific chip has intermesh links configured
+    bool has_intermesh_links(chip_id_t chip_id) const;
+
+    // Get intermesh ethernet links for a specific chip
+    // Returns: vector of (eth_core, channel)
+    const std::vector<std::pair<CoreCoord, uint32_t>>& get_intermesh_eth_links(chip_id_t chip_id) const;
+
+    // Get all intermesh ethernet links in the system
+    // Returns: map of chip_id -> vector of (eth_core, channel)
+    const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, uint32_t>>>& get_all_intermesh_eth_links()
+        const;
+
+    // Check if a specific ethernet core is an intermesh link
+    bool is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) const;
+
+    // If the ethernet core is an intermesh link, probe to see if it is trained
+    bool is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord eth_core) const;
+
 private:
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane
@@ -100,6 +121,8 @@ private:
         intra_mesh_routing_tables_;  // table that will be written to each ethernet core
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
+    // map[phys_chip_id] has a vector of (eth_core, channel) pairs used for intermesh routing
+    std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, uint32_t>>> intermesh_eth_links_;
 
     // custom logic to order eth channels
     void order_ethernet_channels();
@@ -133,6 +156,12 @@ private:
     void convert_fabric_routing_table_to_chip_routing_table();
 
     void write_routing_tables_to_chip(MeshId mesh_id, chip_id_t chip_id) const;
+
+    // Initialize internal map of physical chip_id to intermesh ethernet links
+    void initialize_intermesh_eth_links();
+
+    // Check if intermesh links are available by reading SPI ROM config from first chip
+    bool is_intermesh_enabled() const;
 
     std::unique_ptr<FabricContext> fabric_context_;
 };

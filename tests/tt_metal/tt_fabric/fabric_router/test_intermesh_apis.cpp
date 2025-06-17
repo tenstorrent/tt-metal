@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <tt-metalium/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 #include <iomanip>
 #include <sstream>
@@ -13,17 +14,18 @@ namespace intermesh_api_tests {
 
 TEST(IntermeshAPIs, BasicQueries) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Test that cluster supports intermesh links
-    bool supports_intermesh = cluster.contains_intermesh_links();
+    bool supports_intermesh = control_plane.contains_intermesh_links();
 
     // Get all intermesh links
-    auto all_links = cluster.get_all_intermesh_eth_links();
+    auto all_links = control_plane.get_all_intermesh_eth_links();
 
     // Test per-chip queries
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
-        bool has_links = cluster.has_intermesh_links(chip_id);
-        auto chip_links = cluster.get_intermesh_eth_links(chip_id);
+        bool has_links = control_plane.has_intermesh_links(chip_id);
+        auto chip_links = control_plane.get_intermesh_eth_links(chip_id);
 
         // Verify consistency
         if (has_links) {
@@ -34,7 +36,7 @@ TEST(IntermeshAPIs, BasicQueries) {
 
         // Test is_intermesh_eth_link for each link
         for (const auto& [eth_core, channel] : chip_links) {
-            bool is_intermesh = cluster.is_intermesh_eth_link(chip_id, eth_core);
+            bool is_intermesh = control_plane.is_intermesh_eth_link(chip_id, eth_core);
             EXPECT_TRUE(is_intermesh) << "Eth core " << eth_core.str() << " on chip " << chip_id
                                      << " was returned by get_intermesh_eth_links but is_intermesh_eth_link returned false";
         }
@@ -48,13 +50,14 @@ TEST(IntermeshAPIs, BasicQueries) {
 
 TEST(IntermeshAPIs, ConsistencyChecks) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Get all links via get_all_intermesh_eth_links
-    auto all_links = cluster.get_all_intermesh_eth_links();
+    auto all_links = control_plane.get_all_intermesh_eth_links();
 
     // Verify it matches individual chip queries
     for (const auto& [chip_id, expected_links] : all_links) {
-        auto actual_links = cluster.get_intermesh_eth_links(chip_id);
+        auto actual_links = control_plane.get_intermesh_eth_links(chip_id);
 
         EXPECT_EQ(expected_links.size(), actual_links.size())
             << "Mismatch in link count for chip " << chip_id;
@@ -70,15 +73,16 @@ TEST(IntermeshAPIs, ConsistencyChecks) {
 
 TEST(IntermeshAPIs, IntermeshLinksAreDistinctFromEthernetLinks) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
-    if (!cluster.contains_intermesh_links()) {
+    if (!control_plane.contains_intermesh_links()) {
         GTEST_SKIP() << "Cluster does not support intermesh links";
     }
 
     log_info(tt::LogTest, "=== Verifying Intermesh Links are Distinct from Ethernet Links ===");
 
     // This test documents that intermesh links are a distinct category from regular ethernet links
-    auto all_intermesh_links = cluster.get_all_intermesh_eth_links();
+    auto all_intermesh_links = control_plane.get_all_intermesh_eth_links();
 
     for (const auto& [chip_id, intermesh_links] : all_intermesh_links) {
         auto active_eth_cores = cluster.get_active_ethernet_cores(chip_id);

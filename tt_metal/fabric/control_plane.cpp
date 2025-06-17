@@ -41,6 +41,37 @@
 
 namespace tt::tt_fabric {
 
+namespace intermesh_constants {
+
+// Constants for multi-mesh configuration
+constexpr uint32_t MULTI_MESH_CONFIG_ADDR = 0x104C;
+constexpr uint32_t MULTI_MESH_LINK_STATUS_ADDR = 0x1104;
+constexpr uint32_t MULTI_MESH_ENABLED_VALUE = 0x2;
+constexpr uint32_t LINK_CONNECTED_VALUE = 0x1;
+constexpr uint32_t MULTI_MESH_MODE_MASK = 0xFF;
+constexpr uint32_t INTERMESH_ETH_LINK_BITS_SHIFT = 8;
+constexpr uint32_t INTERMESH_ETH_LINK_BITS_MASK = 0xFFFF;
+constexpr uint32_t MAX_ETH_LINKS = 16;
+
+}  // namespace intermesh_constants
+
+namespace {
+
+// Helper to extract intermesh ports from config value
+std::vector<uint32_t> extract_intermesh_eth_links(uint32_t config_value) {
+    std::vector<uint32_t> intermesh_eth_links;
+    uint32_t intermesh_eth_links_bits = (config_value >> intermesh_constants::INTERMESH_ETH_LINK_BITS_SHIFT) &
+                                        intermesh_constants::INTERMESH_ETH_LINK_BITS_MASK;
+    for (uint32_t link = 0; link < intermesh_constants::MAX_ETH_LINKS; ++link) {
+        if (intermesh_eth_links_bits & (1 << link)) {
+            intermesh_eth_links.push_back(link);
+        }
+    }
+    return intermesh_eth_links;
+}
+
+}  // namespace
+
 // Get the physical chip ids for a mesh
 std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(chip_id_t chip_id) {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(chip_id);
@@ -97,6 +128,8 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     const auto& logical_mesh_chip_id_to_physical_chip_id_mapping =
         this->get_physical_chip_mapping_from_mesh_graph_desc_file(mesh_graph_desc_file);
     this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping);
+    // Query and generate intermesh ethernet links per physical chip
+    this->initialize_intermesh_eth_links();
 }
 
 ControlPlane::ControlPlane(
@@ -110,6 +143,8 @@ ControlPlane::ControlPlane(
 
     // Initialize the control plane routers based on mesh graph
     this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping);
+    // Query and generate intermesh ethernet links per physical chip
+    this->initialize_intermesh_eth_links();
 }
 
 void ControlPlane::load_physical_chip_mapping(
@@ -1141,6 +1176,101 @@ FabricContext& ControlPlane::get_fabric_context() const {
 }
 
 void ControlPlane::clear_fabric_context() { this->fabric_context_.reset(nullptr); }
+
+void ControlPlane::initialize_intermesh_eth_links() {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    // If intermesh links are not enabled, set all intermesh_eth_links_ to empty
+    if (not this->is_intermesh_enabled()) {
+        for (const auto& chip_id : cluster.all_chip_ids()) {
+            intermesh_eth_links_[chip_id] = {};
+        }
+        return;
+    }
+
+    // Iterate over all chips in the cluster and populate the intermesh_eth_links
+    for (const auto& chip_id : cluster.all_chip_ids()) {
+        const auto& soc_desc = cluster.get_soc_desc(chip_id);
+        if (soc_desc.logical_eth_core_to_chan_map.empty()) {
+            intermesh_eth_links_[chip_id] = {};
+            continue;
+        }
+
+        // Read multi-mesh configuration from the first available eth core
+        auto first_eth_core = soc_desc.logical_eth_core_to_chan_map.begin()->first;
+        tt_cxy_pair virtual_eth_core(
+            chip_id, cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, first_eth_core, CoreType::ETH));
+
+        std::vector<uint32_t> config_data(1, 0);
+        cluster.read_core(config_data, sizeof(uint32_t), virtual_eth_core, intermesh_constants::MULTI_MESH_CONFIG_ADDR);
+        std::vector<std::pair<CoreCoord, uint32_t>> intermesh_eth_links;
+        for (auto link : extract_intermesh_eth_links(config_data[0])) {
+            // Find the CoreCoord for this channel
+            for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
+                if (channel == link) {
+                    intermesh_eth_links.push_back({core_coord, link});
+                    break;
+                }
+            }
+        }
+
+        intermesh_eth_links_[chip_id] = intermesh_eth_links;
+    }
+}
+
+bool ControlPlane::is_intermesh_enabled() const {
+    std::vector<uint32_t> config_data(1, 0);
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto first_chip_id = *(cluster.all_pci_chip_ids().begin());
+    auto first_eth_core = cluster.get_soc_desc(first_chip_id).logical_eth_core_to_chan_map.begin()->first;
+    tt_cxy_pair virtual_eth_core(
+        first_chip_id,
+        cluster.get_virtual_coordinate_from_logical_coordinates(first_chip_id, first_eth_core, CoreType::ETH));
+    cluster.read_core(config_data, sizeof(uint32_t), virtual_eth_core, intermesh_constants::MULTI_MESH_CONFIG_ADDR);
+    bool intermesh_enabled =
+        (config_data[0] & intermesh_constants::MULTI_MESH_MODE_MASK) == intermesh_constants::MULTI_MESH_ENABLED_VALUE;
+    return intermesh_enabled;
+}
+
+bool ControlPlane::contains_intermesh_links() const { return !this->get_all_intermesh_eth_links().empty(); }
+
+bool ControlPlane::has_intermesh_links(chip_id_t chip_id) const {
+    return !this->get_intermesh_eth_links(chip_id).empty();
+}
+
+bool ControlPlane::is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) const {
+    for (const auto& [link_eth_core, channel] : this->get_intermesh_eth_links(chip_id)) {
+        if (link_eth_core == eth_core) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ControlPlane::is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord eth_core) const {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    if (!this->is_intermesh_eth_link(chip_id, eth_core)) {
+        return false;
+    }
+
+    // Read the link status from designated L1 address
+    tt_cxy_pair virtual_eth_core(
+        chip_id, cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
+    std::vector<uint32_t> status_data(1, 0);
+    cluster.read_core(
+        status_data, sizeof(uint32_t), virtual_eth_core, intermesh_constants::MULTI_MESH_LINK_STATUS_ADDR);
+
+    // Check if the link is trained
+    return (status_data[0] & intermesh_constants::LINK_CONNECTED_VALUE) == intermesh_constants::LINK_CONNECTED_VALUE;
+}
+
+const std::vector<std::pair<CoreCoord, uint32_t>>& ControlPlane::get_intermesh_eth_links(chip_id_t chip_id) const {
+    return this->intermesh_eth_links_.at(chip_id);
+}
+
+const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, uint32_t>>>&
+ControlPlane::get_all_intermesh_eth_links() const {
+    return intermesh_eth_links_;
+}
 
 ControlPlane::~ControlPlane() = default;
 

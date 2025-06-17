@@ -12,6 +12,7 @@
 #include <utility>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
@@ -72,9 +73,10 @@ bool is_chip_on_corner_of_mesh(chip_id_t physical_chip_id, tt::ClusterType clust
 
 TEST(Cluster, ReportIntermeshLinks) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     // Check if cluster supports intermesh links
-    if (!cluster.contains_intermesh_links()) {
+    if (!control_plane.contains_intermesh_links()) {
         log_info(tt::LogTest, "Cluster does not support intermesh links");
         return;
     }
@@ -83,7 +85,7 @@ TEST(Cluster, ReportIntermeshLinks) {
     log_info(tt::LogTest, "===================================");
 
     // Get all intermesh links in the system
-    auto all_intermesh_links = cluster.get_all_intermesh_eth_links();
+    auto all_intermesh_links = control_plane.get_all_intermesh_eth_links();
 
     // Summary
     size_t total_links = 0;
@@ -97,8 +99,8 @@ TEST(Cluster, ReportIntermeshLinks) {
 
     // Detailed information per chip
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
-        if (cluster.has_intermesh_links(chip_id)) {
-            auto links = cluster.get_intermesh_eth_links(chip_id);
+        if (control_plane.has_intermesh_links(chip_id)) {
+            auto links = control_plane.get_intermesh_eth_links(chip_id);
             log_info(tt::LogTest, "Chip {}: {} inter-mesh ethernet links", chip_id, links.size());
 
             for (const auto& [eth_core, channel] : links) {
