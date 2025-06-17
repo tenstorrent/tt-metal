@@ -22,8 +22,7 @@ struct ScatterOperation {
         const Tensor& index_tensor,
         const Tensor& source_tensor,
         const std::optional<MemoryConfig>& opt_out_memory_config,
-        const std::optional<scatter::ScatterReductionType>& opt_reduction,
-        std::optional<Tensor>& opt_output);
+        const std::optional<scatter::ScatterReductionType>& opt_reduction);
 };
 
 }  // namespace operations::experimental

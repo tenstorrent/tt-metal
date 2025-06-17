@@ -45,7 +45,6 @@ struct ScatterDeviceOperation {
         const Tensor& source_tensor,
         const MemoryConfig& output_memory_config,
         const std::optional<ScatterReductionType>& opt_reduction,
-        std::optional<Tensor>& opt_output,
         const QueueId& queue_id = DefaultQueueId);
 };
 

@@ -27,7 +27,6 @@ void bind_scatter_operation(py::module& module) {
             Keyword Arguments:
                 * `reduce` (ScatterReductionType, optional): currently not supported - this is the option to reduce numbers going to the same destination in output with a function like `amax`, `amin`, `sum`, etc.
                 * `memory_config` (MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
-                * `out` (Tensor, optional): Preallocated output tensor where scatter result should go to (should be the same shape as the input tensor). Defaults to `None`.
 
             Additional info:
                 * Up until this time, no reductions have been implemented.
@@ -69,7 +68,6 @@ void bind_scatter_operation(py::module& module) {
                const ttnn::Tensor& source_tensor,
                const std::optional<tt::tt_metal::MemoryConfig>& opt_out_memory_config,
                const std::optional<experimental::scatter::ScatterReductionType>& opt_reduction,
-               std::optional<ttnn::Tensor>& opt_output,
                const QueueId& queue_id = DefaultQueueId) -> Tensor {
                 return self(
                     queue_id,
@@ -78,8 +76,7 @@ void bind_scatter_operation(py::module& module) {
                     index_tensor,
                     source_tensor,
                     opt_out_memory_config,
-                    opt_reduction,
-                    opt_output);
+                    opt_reduction);
             },
             py::arg("input").noconvert(),
             py::arg("dim"),
@@ -88,7 +85,6 @@ void bind_scatter_operation(py::module& module) {
             py::kw_only(),
             py::arg("reduce") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("out") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
 
