@@ -25,7 +25,7 @@ inline void tilizeA_B_binary_init(
 
 inline void add_tiles_math(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     MATH((llk_math_eltwise_binary<ELWADD, NONE, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
-        icb0, icb1, idst)));
+        icb0, icb1, idst, true)));
 }
 
 namespace NAMESPACE {
