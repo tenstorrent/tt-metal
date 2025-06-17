@@ -33,7 +33,7 @@ parameters = {
         # [1, 1536, 8, 8, 3, 3, 1, 1, 1, 1, False, False],
         # [1, 24, 56, 56, 2, 2, 2, 2, 0, 0, False, True],
         # [1, 384, 35, 35, 3, 3, 1, 1, 1, 1, False, False],
-        [1, 40, 4, 4, 2, 2, 2, 2, 0, 0, False, True],
+        [1, 288, 4, 4, 2, 2, 2, 2, 0, 0, False, True],
         # [1, 80, 14, 14, 2, 2, 2, 2, 0, 0, False, True],
     ],
     "failing_parameters": [
