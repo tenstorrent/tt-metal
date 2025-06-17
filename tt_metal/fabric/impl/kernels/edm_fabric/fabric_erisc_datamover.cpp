@@ -1044,8 +1044,11 @@ void run_receiver_channel_step_impl(
             can_send_to_all_local_chip_receivers =
                 can_forward_packet_completely(cached_routing_fields, downstream_edm_interface[receiver_channel]);
         }
-        bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-        if (can_send_to_all_local_chip_receivers && trid_flushed) {
+        if constexpr (enable_trid_flush_check_on_noc_txn) {
+            bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+            can_send_to_all_local_chip_receivers &= trid_flushed;
+        }
+        if (can_send_to_all_local_chip_receivers) {
             did_something = true;
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                 receiver_buffer_index);
@@ -1194,11 +1197,6 @@ void run_fabric_edm_main_loop(
 
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         invalidate_l1_cache();
-        bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
-        if (got_graceful_termination) {
-            DPRINT << "EDM Graceful termination\n";
-            return;
-        }
         did_something = false;
         for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
             // Capture these to see if we made progress
@@ -1258,7 +1256,7 @@ void run_fabric_edm_main_loop(
                     channel_connection_established,
                     local_sender_channel_free_slots_stream_ids_ordered);
             }
-            if constexpr (enable_ring_support && !dateline_connection) {
+            if constexpr (enable_ring_support && !dateline_connection && !skip_sender_vc1_channel_connection) {
                 run_sender_channel_step<enable_packet_header_recording, VC1_RECEIVER_CHANNEL, NUM_SENDER_CHANNELS - 1>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
@@ -1282,7 +1280,6 @@ void run_fabric_edm_main_loop(
             }
         }
     }
-    DPRINT << "EDM Terminating\n";
 }
 
 template <typename EdmChannelWorkerIFs>
@@ -2064,6 +2061,5 @@ void kernel_main() {
 
     *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
 
-    DPRINT << "EDM DONE\n";
     WAYPOINT("DONE");
 }
