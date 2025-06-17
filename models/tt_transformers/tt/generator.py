@@ -1190,6 +1190,8 @@ class Generator:
         """
         max_batch_size_per_model = (batch_size + self.data_parallel - 1) // self.data_parallel
 
+        # The logic ensures that the total batch size is divided as evenly as possible
+        # among the models, with any remainder distributed to the earlier models in the list.
         return max_batch_size_per_model, [
             max(min(max_batch_size_per_model, batch_size - i * max_batch_size_per_model), 0)
             for i in range(self.data_parallel)
