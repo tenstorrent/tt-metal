@@ -55,10 +55,10 @@ void bind_scatter_operation(py::module& module) {
                 another_output = ttnn.experimental.scatter_(input_ttnn, dim, index_ttnn, source_ttnn, out=output_preallocated)
         )doc";
 
-    using OperationType = decltype(ttnn::experimental::scatter_);
+    using OperationType = decltype(ttnn::experimental::scatter);
     bind_registered_operation(
         module,
-        ttnn::experimental::scatter_,
+        ttnn::experimental::scatter,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,

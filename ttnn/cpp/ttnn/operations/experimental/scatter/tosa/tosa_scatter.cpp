@@ -155,15 +155,13 @@ Tensor TOSAScatterOperation::invoke(
             : (opt_output.has_value() ? opt_output.value().memory_config()
                                                         : input_tensor.memory_config())};
 
-    Tensor output = ttnn::prim::scatter_(
+    Tensor output = ttnn::prim::scatter(
         processed_input_tensor,
         LAST_DIMENSION,
         processed_index_tensor,
         processed_source_tensor,
         final_memory_config,
         std::nullopt,
-        opt_output,
-        false,
         queue_id);
     return CMAKE_UNIQUE_NAMESPACE::post_tosa_scatter_transform_tensor(output, N, K, W, C, input_tensor.layout());
 }

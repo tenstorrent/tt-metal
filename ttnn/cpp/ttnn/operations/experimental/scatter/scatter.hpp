@@ -29,7 +29,7 @@ struct ScatterOperation {
 
 namespace experimental {
 constexpr auto scatter_ =
-    ttnn::register_operation<"ttnn::experimental::scatter_", ttnn::operations::experimental::ScatterOperation>();
+    ttnn::register_operation<"ttnn::experimental::scatter", ttnn::operations::experimental::ScatterOperation>();
 }  // namespace experimental
 
 }  // namespace ttnn
