@@ -267,9 +267,6 @@ class TtResnetBlock2D(nn.Module):
             compute_kernel_config=self.default_compute_config,
         )
 
-        temb = ttnn.unsqueeze_to_4D(temb)
-        temb = ttnn.repeat(temb, (1, 1, H * W, 1))
-
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         hidden_states = ttnn.add(hidden_states, temb)
 
