@@ -5,12 +5,14 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <magic_enum/magic_enum.hpp>
+#include <iomanip>
 #include <map>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
@@ -65,6 +67,46 @@ bool is_chip_on_corner_of_mesh(chip_id_t physical_chip_id, tt::ClusterType clust
             "is_chip_on_corner_of_mesh not implemented for {} cluster type",
             magic_enum::enum_name(cluster_type));
         return false;
+    }
+}
+
+
+TEST(Cluster, ReportIntermeshLinks) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // Check if cluster supports intermesh links
+    if (!control_plane.system_has_intermesh_links()) {
+        log_info(tt::LogTest, "Cluster does not support intermesh links");
+        return;
+    }
+
+    log_info(tt::LogTest, "Intermesh Link Configuration Report");
+    log_info(tt::LogTest, "===================================");
+
+    // Get all intermesh links in the system
+    auto all_intermesh_links = control_plane.get_all_intermesh_eth_links();
+
+    // Summary
+    size_t total_links = 0;
+    for (const auto& [chip_id, links] : all_intermesh_links) {
+        total_links += links.size();
+    }
+
+    log_info(tt::LogTest, "Total chips with intermesh links: {}", all_intermesh_links.size());
+    log_info(tt::LogTest, "Total intermesh links: {}", total_links);
+    log_info(tt::LogTest, "");
+
+    // Detailed information per chip
+    for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
+        if (control_plane.has_intermesh_links(chip_id)) {
+            auto links = control_plane.get_intermesh_eth_links(chip_id);
+            log_info(tt::LogTest, "Chip {}: {} inter-mesh ethernet links", chip_id, links.size());
+
+            for (const auto& [eth_core, channel] : links) {
+                log_info(tt::LogTest, "  Channel {} at {}", channel, eth_core.str());
+            }
+        }
     }
 }
 
