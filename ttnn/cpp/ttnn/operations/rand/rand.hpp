@@ -12,7 +12,7 @@ struct Rand {
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
         const DataType dtype = DataType::BFLOAT16,
         const Layout layout = Layout::TILE,
-        const std::optional<MemoryConfig>& memory_config = types::DRAM_MEMORY_CONFIG);
+        const MemoryConfig& memory_config = types::DRAM_MEMORY_CONFIG);
 };
 }  // namespace ttnn::operations::rand
 
