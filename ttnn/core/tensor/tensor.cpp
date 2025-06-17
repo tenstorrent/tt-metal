@@ -13,6 +13,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt_stl/overloaded.hpp>
+#include "tt_stl/span.hpp"
 #include "ttnn/tensor/storage.hpp"
 
 #include "tt-metalium/mesh_device_view.hpp"
@@ -39,17 +40,25 @@ namespace tt::tt_metal {
 namespace {
 
 template <typename T>
-Tensor create_owned_tensor_from_row_major_data(
-    std::vector<T>&& data, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id, T pad_value) {
-    auto physical_data = tensor_impl::encode_tensor_data(std::move(data), spec, pad_value);
+HostBuffer create_host_buffer_from_row_major_data(tt::stl::Span<const T> data, const TensorSpec& spec, T pad_value) {
+    return tensor_impl::logical_matches_physical(spec)
+               ? HostBuffer(std::vector<T>(data.begin(), data.end()))
+               : HostBuffer(tensor_impl::encode_tensor_data(data, spec, pad_value));
+}
 
-    Tensor output(HostBuffer(std::move(physical_data)), spec);
+template <typename T>
+HostBuffer create_host_buffer_from_row_major_data(std::vector<T>&& data, const TensorSpec& spec, T pad_value) {
+    return tensor_impl::logical_matches_physical(spec)
+               ? HostBuffer(std::move(data))
+               : HostBuffer(tensor_impl::encode_tensor_data(tt::stl::make_const_span(data), spec, pad_value));
+}
 
-    if (device != nullptr) {
-        output = output.to_device(device, spec.memory_config(), cq_id);
-    }
+template <typename T>
+Tensor create_tensor_from_row_major_data(
+    auto&& data, const TensorSpec& spec, distributed::MeshDevice* device, ttnn::QueueId cq_id, T pad_value) {
+    Tensor tensor(create_host_buffer_from_row_major_data(std::forward<decltype(data)>(data), spec, pad_value), spec);
 
-    return output;
+    return (device != nullptr) ? tensor.to_device(device, spec.memory_config(), cq_id) : tensor;
 }
 
 }  // namespace
@@ -190,11 +199,9 @@ Tensor Tensor::from_span<float>(
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
     switch (spec.data_type()) {
-        case DataType::FLOAT32:
-            return create_owned_tensor_from_row_major_data(
-                std::vector<float>(buffer.begin(), buffer.end()), spec, device, cq_id, pad_value);
+        case DataType::FLOAT32: return create_tensor_from_row_major_data(buffer, spec, device, cq_id, pad_value);
         case DataType::BFLOAT16: {
-            return create_owned_tensor_from_row_major_data(
+            return create_tensor_from_row_major_data(
                 std::vector<bfloat16>(buffer.begin(), buffer.end()),
                 spec,
                 device,
@@ -210,8 +217,7 @@ Tensor Tensor::from_span<float>(
             // TODO: Implement `encode_tensor_data` in terms of a Span, avoid tilizing the data, as pack_fp32_vec_as_*
             // support row-major input.
             const auto& tile = spec.tensor_layout().get_page_config().get_tile();
-            auto physical_data =
-                tensor_impl::encode_tensor_data(std::vector<float>(buffer.begin(), buffer.end()), spec, pad_value);
+            auto physical_data = tensor_impl::encode_tensor_data(buffer, spec, pad_value);
             std::vector<uint32_t> packed_block_floats =
                 spec.data_type() == DataType::BFLOAT8_B
                     ? pack_fp32_vec_as_bfp8_tiles(physical_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile)
@@ -245,8 +251,7 @@ Tensor Tensor::from_span(
         "Unsupported data type: got {}, expected: {}",
         spec.data_type(),
         convert_to_data_type<T>());
-    return create_owned_tensor_from_row_major_data(
-        std::vector<T>(buffer.begin(), buffer.end()), spec, device, cq_id, pad_value);
+    return create_tensor_from_row_major_data(buffer, spec, device, cq_id, pad_value);
 }
 
 template <typename T>
@@ -276,10 +281,9 @@ Tensor Tensor::from_vector<float>(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
     if (spec.data_type() == DataType::FLOAT32) {
         // User `buffer` directly, when no type conversion is needed.
-        return create_owned_tensor_from_row_major_data(std::move(buffer), spec, device, cq_id, pad_value);
-    } else {
-        return from_span(tt::stl::Span<const float>(buffer.data(), buffer.size()), spec, device, cq_id, pad_value);
+        return create_tensor_from_row_major_data(std::move(buffer), spec, device, cq_id, pad_value);
     }
+    return from_span(tt::stl::Span<const float>(buffer.data(), buffer.size()), spec, device, cq_id, pad_value);
 }
 
 template <typename T>
@@ -298,7 +302,7 @@ Tensor Tensor::from_vector(
         "Unsupported data type: got {}, expected: {}",
         spec.data_type(),
         convert_to_data_type<T>());
-    return create_owned_tensor_from_row_major_data(std::move(buffer), spec, device, cq_id, pad_value);
+    return create_tensor_from_row_major_data(std::move(buffer), spec, device, cq_id, pad_value);
 }
 
 template <>
@@ -313,26 +317,24 @@ std::vector<float> Tensor::to_vector<float>(ttnn::QueueId cq_id) const {
             std::transform(buffer.begin(), buffer.end(), std::back_inserter(physical_data), [](bfloat16 val) {
                 return val.to_float();
             });
-            return tensor_impl::decode_tensor_data(std::move(physical_data), cpu_tensor.tensor_spec());
+            if (tensor_impl::logical_matches_physical(cpu_tensor.tensor_spec())) {
+                return physical_data;
+            }
+            return tensor_impl::decode_tensor_data(tt::stl::make_const_span(physical_data), cpu_tensor.tensor_spec());
         }
         case DataType::FLOAT32: {
-            auto buffer = host_buffer::get_as<float>(cpu_tensor);
-            auto physical_data = std::vector<float>(buffer.begin(), buffer.end());
-            return tensor_impl::decode_tensor_data(std::move(physical_data), cpu_tensor.tensor_spec());
+            auto buffer = host_buffer::get_as<const float>(cpu_tensor);
+            return tensor_impl::decode_tensor_data(buffer, cpu_tensor.tensor_spec());
         }
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
             const auto& tile = cpu_tensor.tensor_spec().tile();
-            auto buffer = host_buffer::get_as<uint32_t>(cpu_tensor);
-            auto packed_data = std::vector<uint32_t>(buffer.begin(), buffer.end());
+            auto buffer = host_buffer::get_as<const uint32_t>(cpu_tensor);
             std::vector<float> unpacked_data =
                 cpu_tensor.tensor_spec().data_type() == DataType::BFLOAT8_B
-                    ? unpack_bfp8_tiles_into_float_vec(
-                          packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
-                    : unpack_bfp4_tiles_into_float_vec(
-                          packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-
-            return tensor_impl::decode_tensor_data(std::move(unpacked_data), cpu_tensor.tensor_spec());
+                    ? unpack_bfp8_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
+                    : unpack_bfp4_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+            return tensor_impl::decode_tensor_data(tt::stl::make_const_span(unpacked_data), cpu_tensor.tensor_spec());
         }
         default: {
             TT_THROW("Cannot convert tensor to vector for data type: {}", cpu_tensor.dtype());
@@ -349,9 +351,11 @@ std::vector<T> Tensor::to_vector(ttnn::QueueId cq_id) const {
         this->dtype(),
         convert_to_data_type<T>());
     auto cpu_tensor = this->cpu(/*blocking=*/true, cq_id);
-    auto data = host_buffer::get_as<T>(cpu_tensor);
-    auto physical_data = std::vector<T>(data.begin(), data.end());
-    return tensor_impl::decode_tensor_data(std::move(physical_data), cpu_tensor.tensor_spec());
+    auto data = host_buffer::get_as<const T>(cpu_tensor);
+    if (tensor_impl::logical_matches_physical(cpu_tensor.tensor_spec())) {
+        return std::vector<T>(data.begin(), data.end());
+    }
+    return tensor_impl::decode_tensor_data(data, cpu_tensor.tensor_spec());
 }
 
 // Instantiate explicitly for the supported types.
