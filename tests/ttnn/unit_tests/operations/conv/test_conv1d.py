@@ -415,7 +415,6 @@ def test_with_prepare_weights(
             groups=1,
             device=device,
             input_dtype=ttnn.bfloat16,
-            output_dtype=ttnn.bfloat16,
         )
 
     conv_config = ttnn.Conv1dConfig(

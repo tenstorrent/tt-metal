@@ -210,7 +210,6 @@ class resnet50Bottleneck:
                     has_bias=True,
                     **conv_kwargs,
                     input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
-                    output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 )
 
                 self.ds_conv_bias_tensor = ttnn.prepare_conv_bias(
@@ -302,7 +301,6 @@ class resnet50Bottleneck:
                 has_bias=True,
                 **conv_kwargs_1,
                 input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
-                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
             self.conv1_bias_tensor = ttnn.prepare_conv_bias(
                 bias_tensor=self.conv1_bias_tensor,
@@ -446,7 +444,6 @@ class resnet50Bottleneck:
                 has_bias=True,
                 **conv_kwargs_2,
                 input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
-                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
             self.conv2_bias_tensor = ttnn.prepare_conv_bias(
                 bias_tensor=self.conv2_bias_tensor,
@@ -517,7 +514,6 @@ class resnet50Bottleneck:
                 has_bias=True,
                 **conv_kwargs_3,
                 input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
-                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
             self.conv3_bias_tensor = ttnn.prepare_conv_bias(
                 bias_tensor=self.conv3_bias_tensor,
@@ -883,7 +879,6 @@ class resnet50:
                 has_bias=True,
                 **conv_kwargs,
                 input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
-                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
 
             self.conv1_bias_tensor = ttnn.prepare_conv_bias(
