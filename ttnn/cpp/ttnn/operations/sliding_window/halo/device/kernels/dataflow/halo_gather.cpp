@@ -16,12 +16,40 @@
 
 constexpr uint16_t TILE_SIZE = 32;
 
-static inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(begin_addr);
-    for (uint32_t i = 0; i < n; ++i) {
-        ptr[i] = val;
+template <uint32_t PaddingConfigCBId, uint32_t OutCBId, uint32_t StickNBytes, uint32_t MaxChunkSize = MEM_ZEROS_SIZE>
+FORCE_INLINE void copy_padding(uint16_t my_noc_x, uint16_t my_noc_y) {
+    const uint32_t padding_config_l1_addr = get_read_ptr(PaddingConfigCBId);
+    volatile tt_l1_ptr uint16_t* config_data = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(padding_config_l1_addr);
+
+    const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, MEM_ZEROS_BASE);
+    const uint32_t dst_base_addr = get_write_ptr(OutCBId);
+
+    uint16_t nsticks = 1;
+    for (uint16_t j = 0; nsticks; j += 2) {
+        uint16_t dst_local_idx = config_data[j + 0];
+        nsticks = config_data[j + 1];
+        uint64_t dst_addr = dst_base_addr + (dst_local_idx * StickNBytes);
+        if constexpr (StickNBytes <= MaxChunkSize) {
+            for (uint16_t k = 0; k < nsticks; ++k) {
+                noc_async_read(padding_l1_addr, dst_addr, StickNBytes);
+                dst_addr += StickNBytes;
+            }
+        } else {
+            constexpr uint32_t num_full_chunks = StickNBytes / MaxChunkSize;
+            constexpr uint32_t remainder_bytes = StickNBytes % MaxChunkSize;
+            for (uint16_t k = 0; k < nsticks; ++k) {
+                uint64_t current_dst_addr = dst_addr;
+                for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
+                    noc_async_read(padding_l1_addr, current_dst_addr, MaxChunkSize);
+                    current_dst_addr += MaxChunkSize;
+                }
+                if constexpr (remainder_bytes > 0) {
+                    noc_async_read(padding_l1_addr, current_dst_addr, remainder_bytes);
+                }
+                dst_addr += StickNBytes;
+            }
+        }
     }
-    return true;
 }
 
 template <bool IsBlockSharded, bool IsWidthSharded, bool IsColumnMajor>
@@ -185,39 +213,8 @@ void kernel_main() {
         cb_push_back(src_cb_id, in_nsticks);
     }
 
-    if constexpr (padding_config_cb_id) {
-        uint32_t padding_config_l1_addr = get_read_ptr(padding_config_cb_id);
-        volatile tt_l1_ptr uint16_t* config_data =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(padding_config_l1_addr);
-
-        const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, MEM_ZEROS_BASE);
-        const uint32_t dst_base_addr = get_write_ptr(out_cb_id);
-
-        constexpr uint32_t zeros_chunk_size = MEM_ZEROS_SIZE;
-        uint16_t nsticks = 1;
-        for (uint16_t j = 0; nsticks; j += 2) {
-            uint16_t dst_local_idx = config_data[j + 0];
-            nsticks = config_data[j + 1];
-            uint64_t dst_addr = dst_base_addr + (dst_local_idx * stick_nbytes);
-
-            for (uint16_t k = 0; k < nsticks; ++k) {
-                if constexpr (stick_nbytes <= zeros_chunk_size) {
-                    // Stick fits in single chunk - copy directly
-                    noc_async_read(padding_l1_addr, dst_addr, stick_nbytes);
-                } else {
-                    // Stick is larger than zeros buffer - copy in chunks
-                    uint32_t bytes_remaining = stick_nbytes;
-                    uint64_t current_dst_addr = dst_addr;
-                    while (bytes_remaining > 0) {
-                        uint32_t chunk_size = (bytes_remaining > zeros_chunk_size) ? zeros_chunk_size : bytes_remaining;
-                        noc_async_read(padding_l1_addr, current_dst_addr, chunk_size);
-                        current_dst_addr += chunk_size;
-                        bytes_remaining -= chunk_size;
-                    }
-                }
-                dst_addr += stick_nbytes;
-            }
-        }
+    if constexpr (padding_config_cb_id != 0) {
+        copy_padding<padding_config_cb_id, out_cb_id, stick_nbytes>(my_noc_x, my_noc_y);
     }
 
     if constexpr (skip_untilize) {
