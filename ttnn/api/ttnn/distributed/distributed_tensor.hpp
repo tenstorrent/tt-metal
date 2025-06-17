@@ -43,20 +43,34 @@ struct MeshMapperConfig {
     //
     // Distributed Tensor on Mesh (placements = {Replicate{}, Shard{1}}):
     //
-    // +-------------------------------------+---------------------------------------+
-    // |  (0,0)                              |  (0,1)                                |
-    // | +---+---+---+---+---+---+----+----+ | +---+---+---+---+----+----+----+----+ |
-    // | | 0 | 1 | 2 | 3 | 8 | 9 | 10 | 11 | | | 4 | 5 | 6 | 7 | 12 | 13 | 14 | 15 | |
-    // | +---+---+---+---+---+---+----+----+ | +---+---+---+---+----+----+----+----+ |
-    // +-------------------------------------+---------------------------------------+
-    // |  (1,0)                              |  (1,1)                                |
-    // | +---+---+---+---+---+---+----+----+ | +---+---+---+---+----+----+----+----+ |
-    // | | 0 | 1 | 2 | 3 | 8 | 9 | 10 | 11 | | | 4 | 5 | 6 | 7 | 12 | 13 | 14 | 15 | |
-    // | +---+---+---+---+---+---+----+----+ | +---+---+---+---+----+----+----+----+ |
-    // +-------------------------------------+---------------------------------------+
+    // +-----------------------------+-----------------------------+
+    // |     (0,0)                   |     (0,1)                   |
+    // |    +----+----+----+----+    |    +----+----+----+----+    |
+    // |    |  0 |  1 |  2 |  3 |    |    |  4 |  5 |  6 |  7 |    |
+    // |    +----+----+----+----+    |    +----+----+----+----+    |
+    // |    |  8 |  9 | 10 | 11 |    |    | 12 | 13 | 14 | 15 |    |
+    // |    +----+----+----+----+    |    +----+----+----+----+    |
+    // +-----------------------------+-----------------------------+
+    // |     (1,0)                   |     (1,1)                   |
+    // |    +----+----+----+----+    |    +----+----+----+----+    |
+    // |    |  0 |  1 |  2 |  3 |    |    |  4 |  5 |  6 |  7 |    |
+    // |    +----+----+----+----+    |    +----+----+----+----+    |
+    // |    |  8 |  9 | 10 | 11 |    |    | 12 | 13 | 14 | 15 |    |
+    // |    +----+----+----+----+    |    +----+----+----+----+    |
+    // +-----------------------------+-----------------------------+
     //
-    tt::stl::SmallVector<std::variant<Replicate, Shard>> placements;
+
+    using Placement = std::variant<Replicate, Shard>;
+    tt::stl::SmallVector<Placement> placements;
+
+    // If provided, the sharding will be performed according to this shape, but re-mapped to the mesh device shape in
+    // either row-major order, or preserving the original coordinates (if the shape fits within the mesh device
+    // entirely).
+    std::optional<ttnn::MeshShape> mesh_shape_override = std::nullopt;
 };
+
+std::ostream& operator<<(std::ostream& os, const MeshMapperConfig::Placement& placement);
+std::ostream& operator<<(std::ostream& os, const MeshMapperConfig& config);
 
 // Distributes a host tensor onto a multi-device configuration.
 class TensorToMesh {
@@ -67,10 +81,7 @@ public:
     TensorToMesh(const TensorToMesh&) = delete;
     TensorToMesh& operator=(const TensorToMesh&) = delete;
 
-    static TensorToMesh create(
-        const MeshDevice& mesh_device,
-        const MeshMapperConfig& config,
-        const std::optional<ttnn::MeshShape>& shape = std::nullopt);
+    static TensorToMesh create(const MeshDevice& mesh_device, const MeshMapperConfig& config);
 
     // Distributes a tensor onto a mesh.
     Tensor operator()(const Tensor& tensor) const;
@@ -95,12 +106,7 @@ private:
 };
 
 // Creates an ND mesh mapper that distributes a tensor according to the `config`.
-// If `shape` is not provided, the shape of `mesh_device` is used.
-// Otherwise, the size of the shape must be smaller than the mesh device shape.
-std::unique_ptr<TensorToMesh> create_mesh_mapper(
-    MeshDevice& mesh_device,
-    const MeshMapperConfig& config,
-    const std::optional<ttnn::MeshShape>& shape = std::nullopt);
+std::unique_ptr<TensorToMesh> create_mesh_mapper(MeshDevice& mesh_device, const MeshMapperConfig& config);
 
 // Creates a mapper that replicates a tensor across all devices.
 // Shorthand for specifying a MeshMapperConfig that replicates the tensor over the entire mesh.
@@ -113,8 +119,15 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_devic
 
 struct MeshComposerConfig {
     // Specifies dimension of the tensor to concatenate.
-    std::vector<int> dims;
+    tt::stl::SmallVector<int> dims;
+
+    // If provided, the concatenation will be performed according to this shape, but re-mapped to the mesh device shape
+    // in either row-major order, or preserving the original coordinates (if the shape fits within the mesh device
+    // entirely).
+    std::optional<ttnn::MeshShape> mesh_shape_override = std::nullopt;
 };
+
+std::ostream& operator<<(std::ostream& os, const MeshComposerConfig& config);
 
 // Composer interface that aggregates a multi-device tensor into a host tensor.
 class MeshToTensor {
@@ -125,10 +138,7 @@ public:
     MeshToTensor(const MeshToTensor&) = delete;
     MeshToTensor& operator=(const MeshToTensor&) = delete;
 
-    static MeshToTensor create(
-        const MeshDevice& mesh_device,
-        const MeshComposerConfig& config,
-        const std::optional<ttnn::MeshShape>& shape = std::nullopt);
+    static MeshToTensor create(const MeshDevice& mesh_device, const MeshComposerConfig& config);
 
     Tensor compose(const std::vector<Tensor>& tensors) const;
 
@@ -141,12 +151,7 @@ private:
 };
 
 // Creates an ND mesh composer that aggregates a tensor according to the `config`.
-// If `shape` is not provided, the shape of `mesh_device` is used.
-// Otherwise, the size of the shape must match the size of the mesh device shape.
-std::unique_ptr<MeshToTensor> create_mesh_composer(
-    MeshDevice& mesh_device,
-    const MeshComposerConfig& config,
-    const std::optional<ttnn::MeshShape>& shape = std::nullopt);
+std::unique_ptr<MeshToTensor> create_mesh_composer(MeshDevice& mesh_device, const MeshComposerConfig& config);
 
 // Creates a composer that concatenates a tensor across a single dimension.
 // Shorthand for specifying a MeshComposerConfig with 1D mesh shape, and concatenating the tensor across a single

@@ -64,6 +64,50 @@ TensorSpec compute_tensor_spec_for_shards(
 
 }  // namespace
 
+std::ostream& operator<<(std::ostream& os, const MeshMapperConfig::Placement& placement) {
+    std::visit(
+        tt::stl::overloaded{
+            [&](const MeshMapperConfig::Replicate& replicate) { os << "Replicate()"; },
+            [&](const MeshMapperConfig::Shard& shard) { os << "Shard(" << shard.dim << ")"; },
+        },
+        placement);
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const MeshMapperConfig& config) {
+    os << "MeshMapperConfig(";
+    os << "placements: [";
+    for (int i = 0; i < config.placements.size(); ++i) {
+        if (i > 0) {
+            os << ", ";
+        }
+        os << config.placements[i];
+    }
+    os << "]";
+    if (config.mesh_shape_override.has_value()) {
+        os << ", mesh_shape_override=" << *config.mesh_shape_override;
+    }
+    os << ")";
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const MeshComposerConfig& config) {
+    os << "MeshComposerConfig(";
+    os << "dims: [";
+    for (int i = 0; i < config.dims.size(); ++i) {
+        if (i > 0) {
+            os << ", ";
+        }
+        os << config.dims[i];
+    }
+    os << "]";
+    if (config.mesh_shape_override.has_value()) {
+        os << ", mesh_shape_override=" << *config.mesh_shape_override;
+    }
+    os << ")";
+    return os;
+}
+
 class TensorToMesh::Impl {
 public:
     // Specifies how a tensor sharded over a specific shape will be distributed to a mesh device, which potentially
@@ -337,9 +381,8 @@ Tensor TensorToMesh::operator()(
 
 tt::tt_metal::DistributedTensorConfig TensorToMesh::config() const { return impl_->config(); }
 
-TensorToMesh TensorToMesh::create(
-    const MeshDevice& mesh_device, const MeshMapperConfig& config, const std::optional<ttnn::MeshShape>& shape) {
-    const auto distributed_shape = shape.value_or(mesh_device.shape());
+TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMapperConfig& config) {
+    const auto distributed_shape = config.mesh_shape_override.value_or(mesh_device.shape());
     TT_FATAL(
         distributed_shape.mesh_size() <= mesh_device.shape().mesh_size(),
         "The size of the supplied mesh shape {} does not match the device shape size {}",
@@ -354,17 +397,17 @@ TensorToMesh TensorToMesh::create(
 
     // Select distribution mode.
     const auto distribution_mode = [&]() {
-        if (!shape.has_value()) {
+        if (!config.mesh_shape_override.has_value()) {
             // When no shape is supplied, row-major order is equivalent to submesh.
             return Impl::DistributionMode::SUBMESH;
-        } else if (shape->dims() != mesh_device.shape().dims()) {
+        } else if (config.mesh_shape_override->dims() != mesh_device.shape().dims()) {
             // Shapes have different dimensions, so a reshape will be required.
             return Impl::DistributionMode::ROW_MAJOR;
         } else {
             // Check if `shape` fits within the mesh device. If it does, we can use submesh distribution. Otherwise,
             // a reshape will be required, and shards will be distributed in row-major order over the mesh device.
-            for (size_t i = 0; i < shape->dims(); ++i) {
-                if ((*shape)[i] > mesh_device.shape()[i]) {
+            for (size_t i = 0; i < config.mesh_shape_override->dims(); ++i) {
+                if ((*config.mesh_shape_override)[i] > mesh_device.shape()[i]) {
                     return Impl::DistributionMode::ROW_MAJOR;
                 }
             }
@@ -392,9 +435,8 @@ MeshToTensor::MeshToTensor(MeshToTensor&& other) noexcept = default;
 MeshToTensor& MeshToTensor::operator=(MeshToTensor&& other) noexcept = default;
 Tensor MeshToTensor::compose(const std::vector<Tensor>& tensors) const { return impl_->compose(tensors); }
 
-MeshToTensor MeshToTensor::create(
-    const MeshDevice& mesh_device, const MeshComposerConfig& config, const std::optional<ttnn::MeshShape>& shape) {
-    const auto distributed_shape = shape.value_or(mesh_device.shape());
+MeshToTensor MeshToTensor::create(const MeshDevice& mesh_device, const MeshComposerConfig& config) {
+    const auto distributed_shape = config.mesh_shape_override.value_or(mesh_device.shape());
     TT_FATAL(
         distributed_shape.mesh_size() <= mesh_device.shape().mesh_size(),
         "The size of the supplied mesh shape {} does not match the device shape size {}",
@@ -413,30 +455,30 @@ MeshToTensor MeshToTensor::create(
 std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device) {
     return std::make_unique<TensorToMesh>(TensorToMesh::create(
         mesh_device,
-        MeshMapperConfig{.placements = {MeshMapperConfig::Replicate{}}},
-        MeshShape(mesh_device.num_devices())));
+        MeshMapperConfig{
+            .placements = {MeshMapperConfig::Replicate{}},
+            .mesh_shape_override = MeshShape(mesh_device.num_devices())}));
 }
 
 std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim) {
     return std::make_unique<TensorToMesh>(TensorToMesh::create(
         mesh_device,
-        MeshMapperConfig{.placements = {MeshMapperConfig::Shard{dim}}},
-        MeshShape(mesh_device.num_devices())));
+        MeshMapperConfig{
+            .placements = {MeshMapperConfig::Shard{dim}},
+            .mesh_shape_override = MeshShape(mesh_device.num_devices())}));
 }
 
-std::unique_ptr<TensorToMesh> create_mesh_mapper(
-    MeshDevice& mesh_device, const MeshMapperConfig& config, const std::optional<MeshShape>& shape) {
-    return std::make_unique<TensorToMesh>(TensorToMesh::create(mesh_device, config, shape));
+std::unique_ptr<TensorToMesh> create_mesh_mapper(MeshDevice& mesh_device, const MeshMapperConfig& config) {
+    return std::make_unique<TensorToMesh>(TensorToMesh::create(mesh_device, config));
 }
 
 std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(MeshDevice& mesh_device, int dim) {
-    return std::make_unique<MeshToTensor>(
-        MeshToTensor::create(mesh_device, MeshComposerConfig{.dims = {dim}}, MeshShape(mesh_device.num_devices())));
+    return std::make_unique<MeshToTensor>(MeshToTensor::create(
+        mesh_device, MeshComposerConfig{.dims = {dim}, .mesh_shape_override = MeshShape(mesh_device.num_devices())}));
 }
 
-std::unique_ptr<MeshToTensor> create_mesh_composer(
-    MeshDevice& mesh_device, const MeshComposerConfig& config, const std::optional<MeshShape>& shape) {
-    return std::make_unique<MeshToTensor>(MeshToTensor::create(mesh_device, config, shape));
+std::unique_ptr<MeshToTensor> create_mesh_composer(MeshDevice& mesh_device, const MeshComposerConfig& config) {
+    return std::make_unique<MeshToTensor>(MeshToTensor::create(mesh_device, config));
 }
 
 Tensor distribute_tensor(

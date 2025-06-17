@@ -183,8 +183,8 @@ TEST_P(TensorDistributionT3000Test2D, FullyReplicated) {
         *mesh_device_,
         MeshMapperConfig{
             .placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Replicate{}},
-        },
-        MeshShape(num_rows, num_cols));
+            .mesh_shape_override = MeshShape(num_rows, num_cols),
+        });
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
@@ -218,8 +218,8 @@ TEST_P(TensorDistributionT3000Test2D, ReplicateDim) {
         *mesh_device_,
         MeshMapperConfig{
             .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Replicate{}},
-        },
-        MeshShape(num_rows, num_cols));
+            .mesh_shape_override = MeshShape(num_rows, num_cols),
+        });
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
@@ -252,8 +252,8 @@ TEST_P(TensorDistributionT3000Test2D, ShardDims) {
         *mesh_device_,
         MeshMapperConfig{
             .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Shard{2}},
-        },
-        MeshShape(num_rows, num_cols));
+            .mesh_shape_override = MeshShape(num_rows, num_cols),
+        });
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
@@ -266,8 +266,8 @@ TEST_P(TensorDistributionT3000Test2D, ShardDims) {
         *mesh_device_,
         MeshComposerConfig{
             .dims = {0, 2},
-        },
-        MeshShape(num_rows, num_cols));
+            .mesh_shape_override = MeshShape(num_rows, num_cols),
+        });
     Tensor concatenated_tensor = aggregate_tensor(sharded_tensor, *composer);
 
     Tensor expected_tensor =
@@ -285,8 +285,8 @@ TEST_F(TensorDistributionT3000Test, NdMapperInvalidShape) {
         *mesh_device_,
         MeshMapperConfig{
             .placements = {MeshMapperConfig::Replicate{}},
-        },
-        MeshShape{1, 9}));
+            .mesh_shape_override = MeshShape{1, 9},
+        }));
 }
 
 TEST_F(TensorDistributionT3000Test, NdMapperUnevenSharding) {
@@ -331,8 +331,8 @@ TEST_F(TensorDistributionT3000Test, NdComposerInvalidShape) {
         *mesh_device_,
         MeshComposerConfig{
             .dims = {0, 1, 2},
-        },
-        MeshShape{1, 9}));
+            .mesh_shape_override = MeshShape{1, 9},
+        }));
 }
 
 TEST_F(TensorDistributionT3000Test, NdComposerInvalidDims) {
@@ -355,8 +355,8 @@ TEST_F(TensorDistributionT3000Test, NdComposerUnevenComposition) {
         *mesh_device_,
         MeshComposerConfig{
             .dims = {0, 1},
-        },
-        MeshShape(2, 3));
+            .mesh_shape_override = MeshShape(2, 3),
+        });
 
     EXPECT_ANY_THROW({ Tensor aggregated_tensor = aggregate_tensor(replicated_tensor, *composer); });
 }
@@ -384,8 +384,8 @@ TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
                     MeshMapperConfig::Shard{2},
                     MeshMapperConfig::Shard{1},
                 },
-        },
-        MeshShape(2, 2, 2));
+            .mesh_shape_override = MeshShape(2, 2, 2),
+        });
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
@@ -404,8 +404,8 @@ TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
         *mesh_device_,
         MeshComposerConfig{
             .dims = {0, 2, 1},
-        },
-        MeshShape(2, 2, 2));
+            .mesh_shape_override = MeshShape(2, 2, 2),
+        });
     Tensor aggregated_tensor = aggregate_tensor(sharded_tensor, *composer);
     EXPECT_EQ(aggregated_tensor.logical_shape(), ttnn::Shape({2 * kOuterDim, kNumRows, kNumCols, kInnerDim}));
     EXPECT_THAT(aggregated_tensor.to_vector<float>(), Pointwise(FloatEq(), expected_data));

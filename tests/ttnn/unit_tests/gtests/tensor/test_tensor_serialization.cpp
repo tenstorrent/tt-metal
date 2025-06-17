@@ -165,8 +165,8 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard2DTensorRoundtrip) {
         ttnn::distributed::MeshMapperConfig{
             .placements =
                 {ttnn::distributed::MeshMapperConfig::Shard{1}, ttnn::distributed::MeshMapperConfig::Shard{2}},
-        },
-        ttnn::distributed::MeshShape(kNumRows, kNumCols));
+            .mesh_shape_override = ttnn::distributed::MeshShape(kNumRows, kNumCols),
+        });
 
     Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
 
@@ -251,8 +251,8 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard2x3SubmeshRoundtrip) {
         ttnn::distributed::MeshMapperConfig{
             .placements =
                 {ttnn::distributed::MeshMapperConfig::Shard{1}, ttnn::distributed::MeshMapperConfig::Shard{2}},
-        },
-        ttnn::distributed::MeshShape(kNumRows, kNumCols));
+            .mesh_shape_override = ttnn::distributed::MeshShape(kNumRows, kNumCols),
+        });
 
     Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
 
