@@ -89,6 +89,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     ttnn::MeshDevice* mesh_device = a.mesh_device();
     tt::tt_metal::Program program{};
     bool use_noc1_only = false;
+    // Setting to True causes a kernel hang in fabric creation to be investigated
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     uint32_t output_page_size = 0;
