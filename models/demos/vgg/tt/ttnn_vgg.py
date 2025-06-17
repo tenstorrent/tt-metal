@@ -136,7 +136,6 @@ def ttnn_vgg16(
                     has_bias=True,
                     **conv_kwargs,
                     input_dtype=model_config["ACTIVATIONS_DTYPE"],
-                    output_dtype=model_config["ACTIVATIONS_DTYPE"],
                 )
 
                 tt_bias = ttnn.prepare_conv_bias(
@@ -288,7 +287,6 @@ def ttnn_vgg11(
                     has_bias=True,
                     **conv_kwargs,
                     input_dtype=model_config["ACTIVATIONS_DTYPE"],
-                    output_dtype=model_config["ACTIVATIONS_DTYPE"],
                 )
 
                 tt_bias = ttnn.prepare_conv_bias(
