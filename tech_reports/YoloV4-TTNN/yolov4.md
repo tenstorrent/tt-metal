@@ -269,7 +269,6 @@ Here are the convolution parameters that can be utilized to enhance the performa
 2. Set the dtype and weight_dtype to `BFLOAT8_b`
 ```py
                 conv_config = ttnn.Conv2dConfig(
-                           dtype=ttnn.bfloat8_b,
                             weights_dtype=ttnn.bfloat8_b,
                             )
 ```
