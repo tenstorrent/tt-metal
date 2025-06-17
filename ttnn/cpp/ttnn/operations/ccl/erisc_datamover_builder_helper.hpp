@@ -33,7 +33,8 @@ public:
         bool en_dateline_sender_extra_buffer = false,
         bool en_dateline_receiver_extra_buffer = false,
         bool en_dateline_upstream_sender_extra_buffer = false,
-        bool en_dateline_upstream_receiver_extra_buffer = false);
+        bool en_dateline_upstream_receiver_extra_buffer = false,
+        bool en_dateline_upstream_adjcent_sender_extra_buffer = false);
 
     // Invocable per chip if we want to collectively build the fabric by building this separately per chip
     // (and implicitly building the fabric that way)
