@@ -61,7 +61,7 @@ def test_downsample2d(
     torch_output_tensor = torch_downsample(torch_input_tensor)
 
     ttnn_input_tensor = to_channel_last_ttnn(
-        torch_input_tensor, ttnn.bfloat16, device, ttnn.L1_MEMORY_CONFIG, ttnn.TILE_LAYOUT
+        torch_input_tensor, ttnn.bfloat16, device, ttnn.DRAM_MEMORY_CONFIG, ttnn.TILE_LAYOUT
     )
 
     ttnn_output_tensor, output_shape = tt_downsample.forward(ttnn_input_tensor, input_shape)
