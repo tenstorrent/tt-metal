@@ -895,6 +895,10 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
         }
+    } else {
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+        }
     }
     WAYPOINT("NWPW");
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
@@ -911,6 +915,10 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
         if constexpr (noc_mode == DM_DEDICATED_NOC) {
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += 1;  // num_dests
+        }
+    } else {
+        if constexpr (noc_mode == DM_DEDICATED_NOC) {
+            noc_posted_writes_num_issued[noc] += 1;
         }
     }
 }
