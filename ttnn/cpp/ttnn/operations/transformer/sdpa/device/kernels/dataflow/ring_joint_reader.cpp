@@ -25,6 +25,7 @@ void kernel_main() {
     constexpr uint32_t L_k_num_chunks = get_compile_time_arg_val(13);
     constexpr uint32_t global_logical_NK_chunks = get_compile_time_arg_val(14);
     constexpr uint32_t global_padded_NK_chunks = get_compile_time_arg_val(15);
+    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(16);
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -33,15 +34,12 @@ void kernel_main() {
     const uint32_t joint_q_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_k_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_v_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t local_batch_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t local_batch_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t local_nh_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t local_nh_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t local_q_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t local_q_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
 
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         true, /* wait_for_op_signal */
+        // false, /* wait_for_op_signal */ // DEBUG: Removing sync on AG
         argidx);
 
     constexpr bool is_dram = true;
@@ -108,39 +106,37 @@ void kernel_main() {
                << ", iter_k_chunk_start: " << iter_k_chunk_start << ", iter_k_chunk_end: " << iter_k_chunk_end
                << ENDL();
 
-        // TODO: Insert fused signaler wait
+        for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
+            // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
+            const uint32_t nb = global_q_chunk / (NH * q_num_chunks);
+            const uint32_t nq = (global_q_chunk % (NH * q_num_chunks)) / q_num_chunks;
+            const uint32_t q_chunk = global_q_chunk % q_num_chunks;
+            const auto q_row_start_tile = q_chunk * Sq_chunk_t;
+            const auto q_slice = Slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
 
-        for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-            for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-                for (uint32_t q_chunk = local_q_start; q_chunk < local_q_end; ++q_chunk) {
-                    const auto q_row_start_tile = q_chunk * Sq_chunk_t;
-                    const auto q_slice = Slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
+            read_block(
+                cat_q_generator, q_slice, cb_q_in, q_tile_bytes, barrier_threshold, false /*transpose*/
+            );
 
-                    read_block(
-                        cat_q_generator, q_slice, cb_q_in, q_tile_bytes, barrier_threshold, false /*transpose*/
-                    );
-
-                    for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < iter_k_chunk_end; ++k_chunk) {
-                        // DPRINT << "READER: k_chunk: " << k_chunk << ENDL();
-                        if (k_chunk >= global_logical_NK_chunks && k_chunk < global_padded_NK_chunks) {
-                            // This is a KV chunk on spatial input beyond the chunk-padded length of the spatial input.
-                            // If k_chunk >= global_padded_NK_chunks, then this is a joint KV chunk.
-                            // DPRINT << "READER: Skipping joint KV chunk: " << k_chunk << ENDL();
-                            continue;
-                        }
-
-                        const auto kv_row_start_tile = k_chunk * Sk_chunk_t;
-                        const auto kv_slice = Slice(nb, nq, kv_row_start_tile, kv_row_start_tile + Sk_chunk_t, 0, DHt);
-
-                        read_block(
-                            cat_k_generator, kv_slice, cb_k_in, k_tile_bytes, barrier_threshold, true /*transpose*/
-                        );
-
-                        read_block(
-                            cat_v_generator, kv_slice, cb_v_in, v_tile_bytes, barrier_threshold, false /*transpose*/
-                        );
-                    }
+            for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < iter_k_chunk_end; ++k_chunk) {
+                // DPRINT << "READER: k_chunk: " << k_chunk << ENDL();
+                if (k_chunk >= global_logical_NK_chunks && k_chunk < global_padded_NK_chunks) {
+                    // This is a KV chunk on spatial input beyond the chunk-padded length of the spatial input.
+                    // If k_chunk >= global_padded_NK_chunks, then this is a joint KV chunk.
+                    // DPRINT << "READER: Skipping joint KV chunk: " << k_chunk << ENDL();
+                    continue;
                 }
+
+                const auto kv_row_start_tile = k_chunk * Sk_chunk_t;
+                const auto kv_slice = Slice(nb, nq, kv_row_start_tile, kv_row_start_tile + Sk_chunk_t, 0, DHt);
+
+                read_block(
+                    cat_k_generator, kv_slice, cb_k_in, k_tile_bytes, barrier_threshold, true /*transpose*/
+                );
+
+                read_block(
+                    cat_v_generator, kv_slice, cb_v_in, v_tile_bytes, barrier_threshold, false /*transpose*/
+                );
             }
         }
     }

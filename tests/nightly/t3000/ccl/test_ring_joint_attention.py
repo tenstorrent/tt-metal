@@ -287,9 +287,12 @@ def run_ring_joint_sdpa(
     [
         (1, 40, 4096, 333, 64, 64, 128),  # SD3.5
         (1, 24, 44 * 1024, 118, 128, 256, 256),  # Mochi
+        (1, 10, 4096, 333, 64, 128, 1024),  # SD3.5 on TG with 4x4 SPxTP
     ],
-    ids=["sd35", "mochi"],
+    ids=["sd35", "mochi", "sd35_tg"],
 )
+# @pytest.mark.parametrize("q_chunk_size", [32, 64, 128, 256, 512])
+# @pytest.mark.parametrize("k_chunk_size", [32, 64, 128, 256, 512, 1024])
 @pytest.mark.parametrize("n_iters, trace_enabled", [(1, False), (10, True)], ids=["no_trace", "yes_trace"])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
@@ -381,7 +384,6 @@ def test_ring_joint_sdpa(
         up_axis,
         all_gather_topology,
     )
-    ttnn.close_mesh_device(submesh)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
@@ -485,4 +487,3 @@ def test_ring_joint_sdpa_program_cache(
         )
 
     assert submesh.num_program_cache_entries() == 1
-    ttnn.close_mesh_device(submesh)

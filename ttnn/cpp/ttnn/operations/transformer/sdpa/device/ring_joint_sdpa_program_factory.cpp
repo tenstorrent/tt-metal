@@ -172,27 +172,13 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         num_cores,
         device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
 
-    // Parallelization scheme
-    // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
-    uint32_t batch_parallel_factor = std::min(B, num_cores);
-    uint32_t nh_parallel_factor = std::min(num_cores / batch_parallel_factor, NH);
-    uint32_t q_parallel_factor = std::min(num_cores / (batch_parallel_factor * nh_parallel_factor), q_num_chunks);
-
-    TT_FATAL(
-        batch_parallel_factor * nh_parallel_factor * q_parallel_factor <= num_cores,
-        "Parallelism must not exceed number of cores. Got {}, expected at most {}.",
-        batch_parallel_factor * nh_parallel_factor * q_parallel_factor,
-        num_cores);
-
-    tt::log_debug("Parallelization scheme:");
-    tt::log_debug("batch_parallel_factor: {}", batch_parallel_factor);
-    tt::log_debug("nh_parallel_factor: {}", nh_parallel_factor);
-    tt::log_debug("q_parallel_factor: {}", q_parallel_factor);
-
-    // Ceiling divide to allow for non-perfect divisions
-    const uint32_t batch_per_core = tt::div_up(B, batch_parallel_factor);
-    const uint32_t nh_per_core = tt::div_up(NH, nh_parallel_factor);
-    const uint32_t q_per_core = tt::div_up(q_num_chunks, q_parallel_factor);
+    /**
+     * This parallelization scheme is efficient because it divides the global work,
+     * the total number of Q chunks processed, evenly across the cores.
+     *
+     */
+    const uint32_t global_q_chunks = B * NH * q_num_chunks;
+    const uint32_t q_per_core = tt::div_up(global_q_chunks, num_cores);
 
     const uint32_t q_buffer_factor = (q_per_core > 1) ? 2 : 1;
 
@@ -334,7 +320,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         L_k_num_chunks,
         global_logical_NK_chunks,
         global_padded_NK_chunks,
-    };
+        q_num_chunks};
 
     // Calculate which K chunks contain the mask boundaries
     // If a tensor does not require masking, set to MAX_UINT32. This avoids a
@@ -372,7 +358,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         L_k_num_chunks,
         global_logical_NK_chunks,
         global_padded_NK_chunks,
-    };
+        q_num_chunks};
 
     std::vector<uint32_t> compute_compile_time_args = {
         B,
@@ -401,7 +387,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         L_k_num_chunks,
         global_logical_NK_chunks,
         global_padded_NK_chunks,
-    };
+        q_num_chunks};
 
     std::map<string, string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -573,30 +559,18 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
-        uint32_t local_batch_start = (i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
-        uint32_t local_batch_end = local_batch_start + batch_per_core;
-        uint32_t local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
-        uint32_t local_nh_end = local_nh_start + nh_per_core;
-        uint32_t local_q_start = (i % q_parallel_factor) * q_per_core;
-        uint32_t local_q_end = local_q_start + q_per_core;
+        uint32_t global_q_start = q_per_core * i;
+        uint32_t global_q_end = global_q_start + q_per_core;
 
         // clamp all to max values for non-even partitioning
-        local_batch_start = std::min(local_batch_start, B);
-        local_batch_end = std::min(local_batch_end, B);
-        local_nh_start = std::min(local_nh_start, NH);
-        local_nh_end = std::min(local_nh_end, NH);
-        local_q_start = std::min(local_q_start, q_num_chunks);
-        local_q_end = std::min(local_q_end, q_num_chunks);
+        global_q_start = std::min(global_q_start, global_q_chunks);
+        global_q_end = std::min(global_q_end, global_q_chunks);
 
         // log the above
         tt::log_debug("core: {}", i);
         tt::log_debug("x={},y={}", core.x, core.y);
-        tt::log_debug("local_batch_start: {}", local_batch_start);
-        tt::log_debug("local_batch_end: {}", local_batch_end);
-        tt::log_debug("local_nh_start: {}", local_nh_start);
-        tt::log_debug("local_nh_end: {}", local_nh_end);
-        tt::log_debug("local_q_start: {}", local_q_start);
-        tt::log_debug("local_q_end: {}", local_q_end);
+        tt::log_debug("global_q_start: {}", global_q_start);
+        tt::log_debug("global_q_end: {}", global_q_end);
 
         std::vector<uint32_t> reader_args = {
             q_addr,
@@ -605,12 +579,9 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
             joint_q_addr,
             joint_k_addr,
             joint_v_addr,
-            local_batch_start,
-            local_batch_end,
-            local_nh_start,
-            local_nh_end,
-            local_q_start,
-            local_q_end};
+            global_q_start,
+            global_q_end,
+        };
 
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args);
 
@@ -621,18 +592,17 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
             out_addr,
             joint_out_addr,
             lse_addr,
-            local_batch_start,
-            local_batch_end,
-            local_nh_start,
-            local_nh_end,
-            local_q_start,
-            local_q_end};
+            global_q_start,
+            global_q_end,
+        };
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args);
         SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
 
         // Compute args
         std::vector<uint32_t> compute_args = {
-            local_batch_start, local_batch_end, local_nh_start, local_nh_end, local_q_start, local_q_end};
+            global_q_start,
+            global_q_end,
+        };
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args);
         SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
     }
