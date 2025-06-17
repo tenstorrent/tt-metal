@@ -244,10 +244,7 @@ CPMAddPackage(
         "TF_BUILD_TESTS OFF"
         "TF_BUILD_EXAMPLES OFF"
 )
-if(TARGET Taskflow::Taskflow)
-    message(FATAL_ERROR "Target Taskflow::Taskflow already exists")
-endif()
-if(Taskflow_ADDED)
+if(Taskflow_ADDED AND NOT TARGET Taskflow::Taskflow)
     target_compile_options(
         Taskflow
         INTERFACE
