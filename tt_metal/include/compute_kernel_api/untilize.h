@@ -15,33 +15,40 @@
 namespace ckernel {
 
 /**
- * Init function for untilize operations, to be used at the beginning of the kernel.
+ * Initializes the hardware and internal state for the untilize operation. This function should be called before
+ * performing any untilize operations in the compute kernel. The circular buffer (CB) ID provided must correspond
+ * to the buffer containing the input data to be untilized. If the data format or properties of the input operand
+ * differ from those previously configured, ensure that the appropriate reconfiguration functions are called before
+ * this initialization.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name | Description                                               | Type     | Valid Range | Required |
+ * |------------|------|-----------------------------------------------------------|----------|-------------|----------|
+ * | Function   | icb  | The identifier of the circular buffer (CB) for input data | uint32_t | 0 to 31     | True     |
  */
-ALWI void untilize_init(uint32_t icb, uint32_t ocb) {
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(
-        false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
-    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure_disaggregated(icb, icb)));
-
-    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
-    PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
-
-    UNPACK((llk_unpack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE>(icb)));
-    UNPACK((llk_unpack_untilize_init(icb)));  // init must be after configure
-}
-
-/**
- * Short init function to initialize untilize op, after a full init is already performed.
- */
-ALWI void untilize_init_short(uint32_t icb) {
+ALWI void untilize_init(uint32_t icb) {
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
     UNPACK((llk_unpack_untilize_init(icb)));
 }
 
 /**
- * Perform the untilize operation on a block of tiles. This simply loops over the provided block size.
+ * Copies a block of tiles from the DEST register buffer to the specified circular buffer (CB) for the untilize
+ * operation. This function is used to transfer multiple tiles at once, with the number of tiles determined by the
+ * template parameter `N`. The DEST register buffer must be in the acquired state before calling this function. The CB
+ * ID provided must correspond to the buffer where the untilized data will be stored.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name | Description                                               | Type     | Valid Range    |
+ * Required |
+ * |------------|------|-----------------------------------------------------------|----------|-------------
+ * |----------| | Template   | N    | The number of tiles stored in DEST at one moment          | uint32_t | > 0 | True
+ * | | Function   | icb  | The identifier of the circular buffer (CB) for input      | uint32_t | 0 to 31        | True
+ * | | Function   | block  | The length of the block in tiles                        | uint32_t | Divisible by N | True
+ * | | Function   | ocb  | The identifier of the circular buffer (CB) for output     | uint32_t | 0 to 31        | True
+ * |
  */
 template <int N = 1>
 ALWI void untilize_block(uint32_t icb, uint32_t block, uint32_t ocb) {
@@ -70,7 +77,15 @@ ALWI void untilize_block(uint32_t icb, uint32_t block, uint32_t ocb) {
 }
 
 /**
- * Uninitialize untilize operation, to allow initializing another operation.
+ * Restores hardware and internal state after the untilize operation is complete. This function should be called after
+ * all untilize operations in the compute kernel are finished. The circular buffer (CB) ID provided must correspond to
+ * the buffer that was used for the untilize operation.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name | Description                                               | Type     | Valid Range | Required |
+ * |------------|------|-----------------------------------------------------------|----------|-------------|----------|
+ * | Function   | icb  | The identifier of the circular buffer (CB) for input data | uint32_t | 0 to 31     | True     |
  */
 ALWI void untilize_uninit(uint32_t icb) { UNPACK((llk_unpack_untilize_uninit(icb))); }
 
