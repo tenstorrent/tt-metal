@@ -103,7 +103,7 @@ Tensor _isclose(
     Tensor mul_result = ttnn::multiply(ttnn::abs(value2, output_mem_config), rtol, std::nullopt, output_mem_config);
     is_close_rhs = ttnn::add(mul_result, atol, std::nullopt, output_mem_config);
     mul_result.deallocate();
-    Tensor result = ttnn::where(ttnn::le(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config), 1.0, 0.0);
+    Tensor result = ttnn::where(ttnn::le(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config), 1.f, 0.f);
     return result;
 }
 
@@ -219,8 +219,7 @@ Tensor _atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<
                 ttnn::where(
                     altz_bltz,
                     ttnn::subtract(result, M_PI, std::nullopt, output_mem_config),
-                    ttnn::where(
-                        az_bltz, -M_PI_2, ttnn::where(az_bgtz, M_PI_2, 0.0, output_mem_config), output_mem_config),
+                    ttnn::where(az_bltz, -pi_2, ttnn::where(az_bgtz, pi_2, 0.f, output_mem_config), output_mem_config),
                     output_mem_config),
                 output_mem_config),
             output_mem_config);
