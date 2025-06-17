@@ -39,7 +39,7 @@ ALWI void exp_tile_init() {
  * | Template Parameter      | Description                                                    | Type     | Valid Range      | Default |
  * |-------------------------|----------------------------------------------------------------|----------|------------------|---------|
  * | approx                  | Enable approximate mode.                                       | bool     | true, false      | false   |
- * | fast_approx             | If approx is true, enable fast approximation.                  | bool     | true, false      | true   |
+ * | fast_and_approx         | If approx is true, enable fast approximation.                  | bool     | true, false      | true   |
  * | scale_en                | Enable input scaling by a constant factor in approximate or non-approximate mode | bool     | true, false      | false   |
  * | skip_positive_check     | Skip large-positive input check                                | bool     | true, false      | false   |
  * | iterations              | Number of iterations over 32-SFPU lanes to run                 | int      | Positive integer | 8       |
@@ -53,12 +53,12 @@ ALWI void exp_tile_init() {
 // clang-format on
 template <
     bool approx = false,
-    bool fast_approx = true,
+    bool fast_and_approx = true,
     bool scale_en = false,
     bool skip_positive_check = false,
     int iterations = 8>
 ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = 0x3F80) {
-    MATH((llk_math_eltwise_unary_sfpu_exponential<approx, fast_approx, scale_en, skip_positive_check, iterations>(
+    MATH((llk_math_eltwise_unary_sfpu_exponential<approx, fast_and_approx, scale_en, skip_positive_check, iterations>(
         idst, vector_mode, iterations, scale)));
 }
 
