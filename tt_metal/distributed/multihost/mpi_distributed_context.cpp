@@ -193,6 +193,12 @@ void MPIContext::set_current_world(const ContextPtr& ctx) {
     MPIContext::current_world_ = ctx;
 }
 
+bool MPIContext::is_initialized() {
+    int is_mpi_initialized;
+    MPI_CHECK(MPI_Initialized(&is_mpi_initialized));
+    return is_mpi_initialized != 0;
+}
+
 MPIContext::MPIContext(MPI_Comm comm) : comm_(comm) {
     MPI_Comm_set_errhandler(comm_, MPI_ERRORS_RETURN);  // don't abort on error
     MPI_CHECK(MPI_Comm_group(comm_, &group_));
