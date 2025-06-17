@@ -178,9 +178,17 @@ std::vector<uint32_t> DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
     TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
     const chip_id_t device_id = device->id();
     const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);
+    log_info(
+        tt::LogMetal,
+        "Reading L1 data buffer from core {},{} {}",
+        worker_core.x,
+        worker_core.y,
+        magic_enum::enum_name(core_type));
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    std::vector<uint32_t> data_buffer(kernel_profiler::PROFILER_L1_VECTOR_SIZE * PROFILER_RISC_COUNT);
+    std::vector<uint32_t> data_buffer(
+        kernel_profiler::PROFILER_L1_VECTOR_SIZE * MetalContext::instance().hal().get_num_risc_processors(core_type));
+    log_info(tt::LogMetal, "num risc processors {}", MetalContext::instance().hal().get_num_risc_processors(core_type));
     if (auto mesh_device = device->get_mesh_device()) {
         const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
         dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue())
@@ -188,7 +196,8 @@ std::vector<uint32_t> DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
                 distributed::DeviceMemoryAddress{
                     device_coord, worker_core, reinterpret_cast<DeviceAddr>(profiler_msg->buffer)},
                 data_buffer.data(),
-                kernel_profiler::PROFILER_L1_BUFFER_SIZE * PROFILER_RISC_COUNT,
+                kernel_profiler::PROFILER_L1_BUFFER_SIZE *
+                    MetalContext::instance().hal().get_num_risc_processors(core_type),
                 true);
     } else {
         dynamic_cast<HWCommandQueue&>(device->command_queue())
@@ -196,7 +205,8 @@ std::vector<uint32_t> DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
                 worker_core,
                 data_buffer.data(),
                 reinterpret_cast<DeviceAddr>(profiler_msg->buffer),
-                kernel_profiler::PROFILER_L1_BUFFER_SIZE * PROFILER_RISC_COUNT,
+                kernel_profiler::PROFILER_L1_BUFFER_SIZE *
+                    MetalContext::instance().hal().get_num_risc_processors(core_type),
                 true);
     }
 
@@ -214,7 +224,7 @@ std::vector<uint32_t> DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
         device_id,
         worker_core,
         reinterpret_cast<uint64_t>(profiler_msg->buffer),
-        kernel_profiler::PROFILER_L1_BUFFER_SIZE * PROFILER_RISC_COUNT);
+        kernel_profiler::PROFILER_L1_BUFFER_SIZE * MetalContext::instance().hal().get_num_risc_processors(core_type));
 }
 
 void DeviceProfiler::readControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state) {

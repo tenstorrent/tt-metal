@@ -108,12 +108,12 @@ HalCoreInfoType create_active_eth_mem_map() {
         };
         processor_classes[processor_class_idx] = processor_types;
     }
-    // TODO: Review if this should  be 2 (the number of eth processors)
-    // Hardcode to 1 to keep size as before
+
     static_assert(llrt_common::k_SingleProcessorMailboxSize<EthProcessorTypes> <= MEM_AERISC_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,
+        static_cast<uint8_t>(EthProcessorTypes::COUNT),
         processor_classes,
         mem_map_bases,
         mem_map_sizes,

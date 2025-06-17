@@ -44,8 +44,6 @@ static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(EthProcess
 #else
 static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif
-#else
-static constexpr uint32_t PROFILER_RISC_COUNT = 5;
 #endif
 
 // Messages for host to tell brisc to go
@@ -318,7 +316,7 @@ static constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 4;
 
 struct profiler_msg_t {
     uint32_t control_vector[kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE];
-    uint32_t buffer[PROFILER_RISC_COUNT][kernel_profiler::PROFILER_L1_VECTOR_SIZE];
+    uint32_t buffer[MAX_RISCV_PER_CORE][kernel_profiler::PROFILER_L1_VECTOR_SIZE];
 };
 
 enum class AddressableCoreType : uint8_t {

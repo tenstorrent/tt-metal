@@ -133,6 +133,7 @@ HalCoreInfoType create_tensix_mem_map() {
     return {
         HalProgrammableCoreType::TENSIX,
         CoreType::WORKER,
+        static_cast<uint8_t>(TensixProcessorTypes::COUNT),
         processor_classes,
         mem_map_bases,
         mem_map_sizes,
