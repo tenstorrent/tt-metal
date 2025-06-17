@@ -186,18 +186,14 @@ void kernel_main() {
     }
 
     if constexpr (padding_config_cb_id) {
-        cb_reserve_back(pad_cb_id, 1);
-        const uint16_t pad_val = pad_val_u32;
-        fill_with_val(get_write_ptr(pad_cb_id), stick_nbytes / elem_nbytes, pad_val);
-        cb_push_back(pad_cb_id, 1);
-
         uint32_t padding_config_l1_addr = get_read_ptr(padding_config_cb_id);
         volatile tt_l1_ptr uint16_t* config_data =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(padding_config_l1_addr);
 
-        const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, get_read_ptr(pad_cb_id));
+        const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, MEM_ZEROS_BASE);
         const uint32_t dst_base_addr = get_write_ptr(out_cb_id);
 
+        constexpr uint32_t zeros_chunk_size = MEM_ZEROS_SIZE;
         uint16_t nsticks = 1;
         for (uint16_t j = 0; nsticks; j += 2) {
             uint16_t dst_local_idx = config_data[j + 0];
@@ -205,7 +201,20 @@ void kernel_main() {
             uint64_t dst_addr = dst_base_addr + (dst_local_idx * stick_nbytes);
 
             for (uint16_t k = 0; k < nsticks; ++k) {
-                noc_async_read(padding_l1_addr, dst_addr, stick_nbytes);
+                if constexpr (stick_nbytes <= zeros_chunk_size) {
+                    // Stick fits in single chunk - copy directly
+                    noc_async_read(padding_l1_addr, dst_addr, stick_nbytes);
+                } else {
+                    // Stick is larger than zeros buffer - copy in chunks
+                    uint32_t bytes_remaining = stick_nbytes;
+                    uint64_t current_dst_addr = dst_addr;
+                    while (bytes_remaining > 0) {
+                        uint32_t chunk_size = (bytes_remaining > zeros_chunk_size) ? zeros_chunk_size : bytes_remaining;
+                        noc_async_read(padding_l1_addr, current_dst_addr, chunk_size);
+                        current_dst_addr += chunk_size;
+                        bytes_remaining -= chunk_size;
+                    }
+                }
                 dst_addr += stick_nbytes;
             }
         }

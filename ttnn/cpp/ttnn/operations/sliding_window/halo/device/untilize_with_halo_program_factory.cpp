@@ -27,7 +27,8 @@ struct CBIndices {
     // Not assigning get_next_cb_index() value before creating cb will throw exception in circular_buffer_config.cpp
     // which can be used as a reminder.
     uint32_t src_cb_id = 32;
-    uint32_t pad_cb_id = 32;
+    uint32_t pad_cb_id0 = 32;
+    uint32_t pad_cb_id1 = 32;
     uint32_t out_cb_id = 32;
 
     // Additional CBs for sharded data kernel configs
@@ -134,10 +135,15 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
 
     // Used for storing padding immediate values (TODO: use zeroed memory region instead)
     uint32_t pad_cb_pagesize = out_stick_nbytes;
+    log_info(tt::LogOp, "pad stick size {}", out_stick_nbytes);
+
     uint32_t pad_cb_npages = 1;
-    cb_indices.pad_cb_id = cb_indices.get_next_cb_id();
-    auto pad_cb =
-        create_circular_buffer(program, all_cores, cb_indices.pad_cb_id, out_df, pad_cb_npages, pad_cb_pagesize);
+    cb_indices.pad_cb_id0 = cb_indices.get_next_cb_id();
+    auto pad_cb0 =
+        create_circular_buffer(program, all_cores, cb_indices.pad_cb_id0, out_df, pad_cb_npages, pad_cb_pagesize);
+    cb_indices.pad_cb_id1 = cb_indices.get_next_cb_id();
+    auto pad_cb1 =
+        create_circular_buffer(program, all_cores, cb_indices.pad_cb_id1, out_df, pad_cb_npages, pad_cb_pagesize);
 
     tt::DataFormat kernel_config_df = tt::DataFormat::RawUInt16;  // NOTE: UInt16 is not supported for CB types
     uint32_t pagesize = 0;
@@ -183,8 +189,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
 
     const uint32_t num_cores = all_cores.num_cores();
 
-    auto padding_config0_storage = padding_config0.device_storage();
-    auto padding_config0_buffer = padding_config0_storage.get_buffer();
+    auto padding_config_storage0 = padding_config0.device_storage();
+    auto padding_config_buffer0 = padding_config_storage0.get_buffer();
     cb_indices.padding_config0 = cb_indices.get_next_cb_id();
     auto padding_config_cb0 = create_circular_buffer(
         program,
@@ -192,20 +198,20 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         cb_indices.padding_config0,
         kernel_config_df,
         1,
-        padding_config0_buffer->size() / num_cores,
-        padding_config0_buffer);
+        padding_config_buffer0->size() / num_cores,
+        padding_config_buffer0);
 
-    auto padding_config1_storage = padding_config1.device_storage();
-    auto padding_config1_buffer = padding_config1_storage.get_buffer();
+    auto padding_config_storage1 = padding_config1.device_storage();
+    auto padding_config_buffer1 = padding_config_storage1.get_buffer();
     cb_indices.padding_config1 = cb_indices.get_next_cb_id();
     auto padding_config_cb1 = create_circular_buffer(
         program,
         all_cores,
-        cb_indices.padding_config0,
+        cb_indices.padding_config1,
         kernel_config_df,
         1,
-        padding_config1_buffer->size() / num_cores,
-        padding_config1_buffer);
+        padding_config_buffer1->size() / num_cores,
+        padding_config_buffer1);
 
     auto gather_config_storage0 = gather_config0.device_storage();
     auto gather_config_buffer0 = gather_config_storage0.get_buffer();
@@ -248,7 +254,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         cb_indices.src_cb_id,
         input_to_writer_cb_id0,
         cb_indices.out_cb_id,
-        cb_indices.pad_cb_id,
+        0,  // padding value cb
         pad_val,
         input_npages,
         out_stick_nbytes,
@@ -264,8 +270,12 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         block_stride  // Block stride
     };
 
-    reader_ct_args[0] = cb_indices.padding_config0;
+    const bool no_padding = padding_config_buffer0->size() / num_cores == 4 &&
+                            padding_config_buffer1->size() / num_cores == 4;  // TODO: This is hacky
+
+    reader_ct_args[0] = !no_padding ? cb_indices.padding_config0 : 0;
     reader_ct_args[1] = cb_indices.gather_config0;
+    reader_ct_args[5] = cb_indices.pad_cb_id0;
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
         reader_kernel_name,
@@ -273,9 +283,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
-    reader_ct_args[0] = cb_indices.padding_config1;
+    reader_ct_args[0] = !no_padding ? cb_indices.padding_config1 : 0;
     reader_ct_args[1] = cb_indices.gather_config1;
     reader_ct_args[3] = input_to_writer_cb_id1;
+    reader_ct_args[5] = cb_indices.pad_cb_id1;
     reader_ct_args[17] = 1;  // Block start offset
     KernelHandle reader_kernel_id1 = CreateKernel(
         program,
