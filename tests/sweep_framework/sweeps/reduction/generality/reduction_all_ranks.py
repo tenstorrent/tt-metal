@@ -9,6 +9,7 @@ import random
 import sys
 import torch
 import ttnn
+from loguru import logger
 
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -110,7 +111,7 @@ def test_reduction(
     op,
     dtype,
 ):
-    result, msg = run_reduction(
+    (result, msg), e2e_perf = run_reduction(
         device,
         tensor_shape,
         dim,
@@ -118,7 +119,11 @@ def test_reduction(
         op,
         dtype,
     )
-    assert result, msg
+    if not result:
+        assert result, msg
+    logger.info(msg)
+    if e2e_perf:
+        logger.info(f"E2E Performance: {e2e_perf}")
 
 
 def run(

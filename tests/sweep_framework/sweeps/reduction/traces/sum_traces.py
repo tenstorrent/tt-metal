@@ -7,6 +7,7 @@ from typing import Optional, Tuple
 import pytest
 import torch
 import ttnn
+from loguru import logger
 
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
@@ -646,12 +647,22 @@ def run_sum(device, params):
 
 @pytest.mark.parametrize("params", parameters["pytorch"]["params"])
 def test_pytorch(device, params):
-    run_sum(device, params)
+    (result, msg), e2e_perf = run_sum(device, params)
+    if not result:
+        assert result, msg
+    logger.info(msg)
+    if e2e_perf:
+        logger.info(f"E2E Performance: {e2e_perf}")
 
 
 @pytest.mark.parametrize("params", parameters["forge"]["params"])
 def test_forge(device, params):
-    run_sum(device, params)
+    (result, msg), e2e_perf = run_sum(device, params)
+    if not result:
+        assert result, msg
+    logger.info(msg)
+    if e2e_perf:
+        logger.info(f"E2E Performance: {e2e_perf}")
 
 
 def run(
