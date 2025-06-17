@@ -91,11 +91,10 @@ ScatterDeviceOperation::invocation_result_t ScatterDeviceOperation::invoke(
     const Tensor& source_tensor,
     const MemoryConfig& output_memory_config,
     const std::optional<ScatterReductionType>& opt_reduction,
-    std::optional<Tensor>& opt_output,
     const QueueId& queue_id) {
     return {
         operation_attributes_t{dim, output_memory_config, opt_reduction},
-        tensor_args_t{input_tensor, index_tensor, source_tensor, opt_output}};
+        tensor_args_t{input_tensor, index_tensor, source_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::scatter
