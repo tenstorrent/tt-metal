@@ -2,15 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <dataflow_api_addrgen.h>
-#include <hostdevcommon/kernel_structs.h>
-
 #include <cstdint>
 #include <cstring>
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
 #include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
 
 void read_block_tiles(

@@ -71,7 +71,7 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
     }
 
     // Validate the dimension argument
-    uint32_t input_rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
+    int32_t input_rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
     // TT_FATAL(
     //     (args.dim < input_rank) && (-input_rank <= args.dim),
     //     "`dim` must be in the range [-input_rank, input_rank) (provided: dim = {}, rank = {}).",
