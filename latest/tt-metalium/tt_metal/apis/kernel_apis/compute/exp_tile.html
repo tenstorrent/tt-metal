@@ -189,21 +189,72 @@
 <h1>exp_tile<a class="headerlink" href="#exp-tile" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_bEN7ckernel13exp_tile_initEvv">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">fast_and_approx</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1acd7b870d401c7fbed7ae21f8a6616019"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">exp_tile_init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bEN7ckernel13exp_tile_initEvv" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_b_b_8uint32_tEN7ckernel13exp_tile_initEvv">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">approx</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">fast_and_approx</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">true</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">scale</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0x3F800000</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1aa700ca00f94a001d01d12a154f8c76b1"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">exp_tile_init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_b_b_8uint32_tEN7ckernel13exp_tile_initEvv" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Please refer to documentation for any_init. </p>
+<p>Please refer to documentation for any_init.</p>
+<p>Template scale parameter is used when aprox and fast_and_approx are true and exp_tile is called with scale_en set to true. </p>
 </dd>
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_bEN7ckernel8exp_tileEv8uint32_t">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">fast_and_approx</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1acf8ada6cea1eb5bfefab73dcf6f3b7a5"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">exp_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bEN7ckernel8exp_tileEv8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_b_b_b_b_iEN7ckernel8exp_tileEv8uint32_ti8uint16_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">approx</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">fast_and_approx</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">true</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">scale_en</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">skip_positive_check</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">int</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">iterations</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">8</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a37ec88b3c7ecdfd8c3c1179fb0fea1c9"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">exp_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="kt"><span class="pre">int</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">vector_mode</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="p"><span class="pre">(</span></span><span class="kt"><span class="pre">int</span></span><span class="p"><span class="pre">)</span></span><span class="n"><span class="pre">VectorMode</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">RC</span></span>, <span class="n"><span class="pre">uint16_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">scale</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0x3F80</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_b_b_b_b_iEN7ckernel8exp_tileEv8uint32_ti8uint16_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Performs element-wise computation of exponential on each element of a tile in DST register at index tile_index. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
+<p>Performs element-wise computation of exponential on each element of a tile in the DST register. The DST register buffer must be in an acquired state via an <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
 <p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Template Parameter   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Default    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>approx   </p></td>
+<td><p>Enable approximate mode.   </p></td>
+<td><p>bool   </p></td>
+<td><p>true, false   </p></td>
+<td><p>false    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>fast_and_approx   </p></td>
+<td><p>If approx is true, enable fast approximation.   </p></td>
+<td><p>bool   </p></td>
+<td><p>true, false   </p></td>
+<td><p>true    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>scale_en   </p></td>
+<td><p>Enable input scaling by a constant factor in approximate or non-approximate mode   </p></td>
+<td><p>bool   </p></td>
+<td><p>true, false   </p></td>
+<td><p>false    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>skip_positive_check   </p></td>
+<td><p>Skip large-positive input check   </p></td>
+<td><p>bool   </p></td>
+<td><p>true, false   </p></td>
+<td><p>false    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>iterations   </p></td>
+<td><p>Number of iterations over 32-SFPU lanes to run   </p></td>
+<td><p>int   </p></td>
+<td><p>Positive integer   </p></td>
+<td><p>8   </p></td>
+</tr>
+</tbody>
+</table>
+
 <p></p>
 <table class="docutils align-default">
 <thead>
@@ -217,17 +268,24 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>tile_index   </p></td>
+<td><p>idst   </p></td>
 <td><p>The index of the tile in DST register buffer to perform the computation on   </p></td>
 <td><p>uint32_t   </p></td>
 <td><p>Must be less than the size of the DST register buffer   </p></td>
 <td><p>True    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>fast_and_approx   </p></td>
-<td><p>Computation to be done faster and approximate   </p></td>
-<td><p>bool   </p></td>
-<td><p></p></td>
+<td><p>vector_mode   </p></td>
+<td><p>Specifies the vector mode for computation (default: VectorMode::RC)   </p></td>
+<td><p>int   </p></td>
+<td><p>Subject to specific hardware/kernel limits   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>scale   </p></td>
+<td><p>Scale factor to apply in approximate or non-approximate mode if scale_en is true (default: 0x3F80, 1.0f in FP16b)   </p></td>
+<td><p>uint16_t   </p></td>
+<td><p>Valid FP16b representation   </p></td>
 <td><p>False   </p></td>
 </tr>
 </tbody>

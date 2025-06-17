@@ -198,8 +198,8 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel10recip_tileE8uint32_t">
-<span class="target" id="namespaceckernel_1a31441a86e04985c013f03fca3c59f55d"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">recip_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel10recip_tileE8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel10recip_tileE8uint32_ti">
+<span class="target" id="namespaceckernel_1a1ae21adbd21cca2999191aa2826b5f20"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">recip_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="kt"><span class="pre">int</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">vector_mode</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="p"><span class="pre">(</span></span><span class="kt"><span class="pre">int</span></span><span class="p"><span class="pre">)</span></span><span class="n"><span class="pre">VectorMode</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">RC</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel10recip_tileE8uint32_ti" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Performs element-wise computation of the reciprocal on each element of a tile in DST register at index tile_index. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine. Only works for Float32, Float16_b, Bfp8_b data formats for full accuracy.</p>
@@ -221,7 +221,14 @@
 <td><p>The index of the tile in DST register buffer to perform the computation on   </p></td>
 <td><p>uint32_t   </p></td>
 <td><p>Must be less than the size of the DST register buffer   </p></td>
-<td><p>True   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>vector_mode   </p></td>
+<td><p>Specifies the vector mode for computation (e.g., Row, Column). (default: VectorMode::RC)   </p></td>
+<td><p>int   </p></td>
+<td><p>Subject to specific hardware/kernel limits   </p></td>
+<td><p>False   </p></td>
 </tr>
 </tbody>
 </table>
