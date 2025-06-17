@@ -87,8 +87,8 @@ static void send_packets(
     while (1);
 }
 
-template <>
-FORCE_INLINE void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE>(
+template <bool scatter_write>
+FORCE_INLINE void send_packets_unicast_write_impl(
     FabricConnectionManager& fabric_connection,
     volatile PACKET_HEADER_TYPE* pkt_hdr_fwd,
     volatile PACKET_HEADER_TYPE* pkt_hdr_bwd,
@@ -106,35 +106,99 @@ FORCE_INLINE void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE>(
         params.dest_bank_addr_fwd,
         0);
 
-    pkt_hdr_fwd->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_fwd}, params.payload_size_bytes);
     auto noc0_dest_addr_bwd = safe_get_noc_addr(
         static_cast<uint8_t>(params.dest_noc_x_bwd),
         static_cast<uint8_t>(params.dest_noc_y_bwd),
         params.dest_bank_addr_bwd,
         0);
 
-    pkt_hdr_bwd->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_bwd}, params.payload_size_bytes);
-    for (size_t i = 0; i < params.send_count; i++) {
-        // Forward direction
-        if (params.num_fwd_hops > 0) {
-            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-            // fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
-            //     source_buffer_address, params.payload_size_bytes);
-            fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
-                (uint32_t)pkt_hdr_fwd, sizeof(PACKET_HEADER_TYPE));
-        }
+    uint32_t send_size1 = 1024;
+    uint32_t send_size2 = params.payload_size_bytes - send_size1;
 
-        // Backward direction
-        if (params.num_bwd_hops > 0) {
-            fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-            // fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
-            //     source_buffer_address, params.payload_size_bytes);
-            fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
-                (uint32_t)pkt_hdr_bwd, sizeof(PACKET_HEADER_TYPE));
-        }
+    if constexpr (scatter_write) {
+        uint32_t single_payload_size = params.payload_size_bytes >> 1;
+        pkt_hdr_fwd->to_noc_unicast_scatter_write(
+            NocUnicastScatterCommandHeader{noc0_dest_addr_fwd, noc0_dest_addr_fwd + send_size1, send_size1},
+            params.payload_size_bytes);
+        pkt_hdr_bwd->to_noc_unicast_scatter_write(
+            NocUnicastScatterCommandHeader{noc0_dest_addr_bwd, noc0_dest_addr_bwd + send_size1, send_size1},
+            params.payload_size_bytes);
 
-        noc_async_writes_flushed();
+        for (size_t i = 0; i < params.send_count; i++) {
+            // Forward direction
+            if (params.num_fwd_hops > 0) {
+                fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+                fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
+                    (uint32_t)pkt_hdr_fwd, sizeof(PACKET_HEADER_TYPE));
+            }
+
+            // Backward direction
+            if (params.num_bwd_hops > 0) {
+                fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+                fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
+                    (uint32_t)pkt_hdr_bwd, sizeof(PACKET_HEADER_TYPE));
+            }
+
+            noc_async_writes_flushed();
+        }
+    } else {
+        auto* pkt_hdr_fwd2 =
+            reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_fwd + sizeof(PACKET_HEADER_TYPE) * 4);
+        auto* pkt_hdr_bwd2 =
+            reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_fwd + sizeof(PACKET_HEADER_TYPE) * 5);
+        setup_packet_header(pkt_hdr_fwd2, params.num_fwd_hops, params.chip_send_type);
+        setup_packet_header(pkt_hdr_bwd2, params.num_bwd_hops, params.chip_send_type);
+
+        pkt_hdr_fwd->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_fwd}, send_size1);
+        pkt_hdr_fwd2->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_fwd + send_size1}, send_size2);
+        pkt_hdr_bwd->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_bwd}, send_size1);
+        pkt_hdr_bwd2->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_bwd + send_size1}, send_size2);
+        // need to be looped as the hardcoded code exceed memory limit
+        volatile PACKET_HEADER_TYPE* fwd[2] = {pkt_hdr_fwd, pkt_hdr_fwd2};
+        volatile PACKET_HEADER_TYPE* bwd[2] = {pkt_hdr_bwd, pkt_hdr_bwd2};
+
+        for (size_t i = 0; i < params.send_count; i++) {
+            // Forward direction
+            if (params.num_fwd_hops > 0) {
+                for (size_t j = 0; j < 2; j++) {
+                    fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+                    fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
+                        (uint32_t)fwd[j], sizeof(PACKET_HEADER_TYPE));
+                }
+            }
+
+            // Backward direction
+            if (params.num_bwd_hops > 0) {
+                for (size_t j = 0; j < 2; j++) {
+                    fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+                    fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
+                        (uint32_t)bwd[j], sizeof(PACKET_HEADER_TYPE));
+                }
+            }
+
+            noc_async_writes_flushed();
+        }
     }
+}
+
+template <>
+FORCE_INLINE void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE>(
+    FabricConnectionManager& fabric_connection,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_fwd,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_bwd,
+    const TestParams& params,
+    size_t source_buffer_address) {
+    send_packets_unicast_write_impl<false>(fabric_connection, pkt_hdr_fwd, pkt_hdr_bwd, params, source_buffer_address);
+}
+
+template <>
+FORCE_INLINE void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE>(
+    FabricConnectionManager& fabric_connection,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_fwd,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_bwd,
+    const TestParams& params,
+    size_t source_buffer_address) {
+    send_packets_unicast_write_impl<true>(fabric_connection, pkt_hdr_fwd, pkt_hdr_bwd, params, source_buffer_address);
 }
 
 template <>
@@ -424,6 +488,10 @@ void kernel_main() {
                         break;
                     case NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC:
                         send_packets<NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
+                            fabric_connection, fwd_packet_header, bwd_packet_header, params, source_l1_buffer_address);
+                        break;
+                    case NocSendType::NOC_UNICAST_SCATTER_WRITE:
+                        send_packets<NocSendType::NOC_UNICAST_SCATTER_WRITE>(
                             fabric_connection, fwd_packet_header, bwd_packet_header, params, source_l1_buffer_address);
                         break;
                     default: ASSERT(false); break;

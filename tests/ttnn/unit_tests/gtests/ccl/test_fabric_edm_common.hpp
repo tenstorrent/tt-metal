@@ -421,13 +421,15 @@ void generate_sender_worker_kernels(
     uint32_t dram_output_buffer_base_addr,
     bool dest_is_dram,
     uint32_t worker_buffer_index_semaphore_id,
-    uint32_t packet_header_buffer_cb_id) {
+    uint32_t packet_header_buffer_cb_id,
+    bool scatter_write) {
     const auto& edm_noc_core = CoreCoord(worker_fabric_connection.edm_noc_x, worker_fabric_connection.edm_noc_y);
     std::vector<uint32_t> sender_worker_reader_compile_args{
         src_is_dram,      //
         num_pages_total,  //
         page_size,
-        num_pages_per_edm_buffer};
+        num_pages_per_edm_buffer,
+        scatter_write};
     std::vector<uint32_t> sender_worker_reader_runtime_args{dram_input_buffer_base_addr};
 
     log_trace(tt::LogTest, "\tSenderReader CT Args");
@@ -445,7 +447,8 @@ void generate_sender_worker_kernels(
         page_size,
         worker_fabric_connection.num_buffers_per_channel,
         dest_is_dram,
-        std::holds_alternative<mcast_send>(mode) ? 1 : 0};
+        std::holds_alternative<mcast_send>(mode) ? 1 : 0,
+        scatter_write};
     log_trace(tt::LogTest, "worker_fabric_connection.edm_l1_sem_addr: {}", worker_fabric_connection.edm_l1_sem_addr);
     log_trace(tt::LogTest, "worker_buffer_index_semaphore_id: {}", worker_buffer_index_semaphore_id);
     log_trace(tt::LogTest, "last_message_semaphore_address: {}", local_worker_last_message_semaphore_id);
@@ -527,7 +530,8 @@ bool RunLoopbackTest(
     bool dest_is_dram,
     std::vector<Program>& programs,
     tt::tt_fabric::FabricEriscDatamoverBuilder& chip_0_edm_builder,
-    std::optional<SubdeviceInfo>& subdevice_managers) {
+    std::optional<SubdeviceInfo>& subdevice_managers,
+    bool scatter_write) {
     auto& sender_program = programs.at(0);
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
@@ -605,7 +609,8 @@ bool RunLoopbackTest(
         local_output_buffer_address,
         dest_is_dram,
         worker_buffer_index_semaphore_id,
-        packet_header_buffer_cb_id);
+        packet_header_buffer_cb_id,
+        scatter_write);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
@@ -994,7 +999,8 @@ bool RunLineFabricTest(
     bool dest_is_dram,
 
     std::optional<SubdeviceInfo>& subdevice_managers,
-    ttnn::ccl::EdmLineFabricOpInterface& line_fabric) {
+    ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
+    bool scatter_write) {
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
     const std::size_t edm_buffer_size_no_header =
@@ -1090,7 +1096,8 @@ bool RunLineFabricTest(
         local_output_buffer_address,
         dest_is_dram,
         worker_buffer_index_semaphore_id,
-        packet_header_buffer_cb_id);
+        packet_header_buffer_cb_id,
+        scatter_write);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
@@ -1201,7 +1208,8 @@ int TestLineFabricEntrypoint(
     const uint32_t page_size,
     const uint32_t num_pages_total,
     const bool src_is_dram,
-    const bool dest_is_dram) {
+    const bool dest_is_dram,
+    bool scatter_write = false) {
     // argv[0]: program
     // argv[1]: buffer_size_bytes
     // argv[2]: num_loops
@@ -1245,7 +1253,8 @@ int TestLineFabricEntrypoint(
                 dest_is_dram,
 
                 subdevice_managers,
-                line_fabric.value());
+                line_fabric.value(),
+                scatter_write);
 
         } catch (std::exception& e) {
             log_error(tt::LogTest, "Caught exception: {}", e.what());
@@ -1267,7 +1276,11 @@ int TestLineFabricEntrypoint(
 }
 
 int TestLoopbackEntrypoint(
-    const uint32_t page_size, const uint32_t num_pages_total, const bool src_is_dram, const bool dest_is_dram) {
+    const uint32_t page_size,
+    const uint32_t num_pages_total,
+    const bool src_is_dram,
+    const bool dest_is_dram,
+    bool scatter_write = false) {
     // argv[0]: program
     // argv[1]: buffer_size_bytes
     // argv[2]: num_loops
@@ -1364,7 +1377,8 @@ int TestLoopbackEntrypoint(
             dest_is_dram,
             programs,
             chip_0_edm_builder,
-            subdevice_managers);
+            subdevice_managers,
+            scatter_write);
     } catch (std::exception& e) {
         log_error(tt::LogTest, "Caught exception: {}", e.what());
         test_fixture.TearDown();
@@ -1389,7 +1403,8 @@ int TestLoopbackEntrypoint(
                 dest_is_dram,
                 second_programs,
                 chip_0_edm_builder,
-                subdevice_managers);
+                subdevice_managers,
+                scatter_write);
         } catch (std::exception& e) {
             log_error(tt::LogTest, "Caught exception: {}", e.what());
             test_fixture.TearDown();

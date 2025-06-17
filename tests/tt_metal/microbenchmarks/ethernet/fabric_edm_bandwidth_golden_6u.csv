@@ -271,3 +271,4 @@ mcast_RingAsLinear,noc_fused_unicast_write_no_flush_atomic_inc,4096,4,1,False,Tr
 unicast_RingAsLinear,noc_fused_unicast_write_no_flush_atomic_inc,4096,4,1,False,True,True,5.451545011577779,1330943.6063422312
 mcast_RingAsLinear,noc_fused_unicast_write_no_flush_atomic_inc,4096,4,1,True,True,True,10.953526548175413,2674200.817425638
 unicast_RingAsLinear,noc_fused_unicast_write_no_flush_atomic_inc,4096,4,1,True,True,True,11.647353675605247,2843592.2059583124
+
