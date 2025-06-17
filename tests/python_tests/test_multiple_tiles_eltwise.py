@@ -17,6 +17,7 @@ from helpers.format_arg_mapping import (
     format_dict,
 )
 from helpers.format_config import DataFormat
+from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
 from helpers.param_config import (
     clean_params,
     generate_param_ids,
@@ -26,44 +27,6 @@ from helpers.param_config import (
 from helpers.stimuli_generator import flatten_list, generate_stimuli
 from helpers.test_config import generate_make_command
 from helpers.utils import format_kernel_list, passed_test, run_shell_command
-
-
-def generate_golden(op, operand1, operand2, data_format, math_fidelity):
-    op_num = list(MathOperation).index(op) + 1
-    if op.value == "Elwadd":
-        assert op_num == 1
-    tensor1_float = (
-        operand1.clone()
-        .detach()
-        .to(format_dict.get(data_format, format_dict[DataFormat.Float16_b]))
-    )
-    tensor2_float = (
-        operand2.clone()
-        .detach()
-        .to(format_dict.get(data_format, format_dict[DataFormat.Float16_b]))
-    )
-
-    if data_format == DataFormat.Float16_b:
-        if math_fidelity in [MathFidelity.LoFi, MathFidelity.HiFi2]:  # LoFi or HiFi2
-            for element in operand2:
-                element = element.to(torch.int32)
-                element &= 0xFFFE
-        if math_fidelity == MathFidelity.LoFi:  # LoFi
-            for element in operand1:
-                element = element.to(torch.int32)
-                element &= 0xFFF8
-
-    if op_num == 1:
-        res = tensor1_float + tensor2_float
-    elif op_num == 2:
-        res = tensor1_float - tensor2_float
-    elif op_num == 3:
-        res = tensor1_float * tensor2_float
-    else:
-        raise ValueError("Unsupported operation!")
-
-    return res.tolist()
-
 
 # SUPPORTED FORMATS FOR TEST
 supported_formats = [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Float16_b]
@@ -119,7 +82,11 @@ def test_multiple_tiles(testname, formats, dest_acc, mathop, math_fidelity, tile
     src_A, src_B = generate_stimuli(
         formats.input_format, formats.input_format, tile_cnt=tile_cnt
     )
-    golden = generate_golden(mathop, src_A, src_B, formats.output_format, math_fidelity)
+
+    generate_golden = get_golden_generator(EltwiseBinaryGolden)
+    golden_tensor = generate_golden(
+        mathop, src_A, src_B, formats.output_format, math_fidelity
+    )
     write_stimuli_to_l1(
         src_A, src_B, formats.input_format, formats.input_format, "0,0", tile_cnt
     )
@@ -153,21 +120,7 @@ def test_multiple_tiles(testname, formats, dest_acc, mathop, math_fidelity, tile
 
     res_from_L1 = flatten_list(res_from_L1)
 
-    golden_tensor = torch.tensor(
-        golden,
-        dtype=(
-            format_dict[formats.output_format]
-            if formats.output_format in [DataFormat.Float16, DataFormat.Float16_b]
-            else torch.bfloat16
-        ),
-    )
-    res_tensor = torch.tensor(
-        res_from_L1,
-        dtype=(
-            format_dict[formats.output_format]
-            if formats.output_format in [DataFormat.Float16, DataFormat.Float16_b]
-            else torch.bfloat16
-        ),
-    )
+    torch_format = format_dict.get(formats.output_format)
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(golden_tensor, res_tensor, formats.output_format)

@@ -21,14 +21,7 @@ def tilize(original_tensor, stimuli_format=DataFormat.Float16_b):
 
     result = torch.cat((f0.reshape(-1), f1.reshape(-1), f2.reshape(-1), f3.reshape(-1)))
 
-    return result.to(
-        dtype=(
-            format_dict[stimuli_format]
-            if stimuli_format in [DataFormat.Float16_b, DataFormat.Float16]
-            or stimuli_format.is_integer()
-            else torch.float32
-        )
-    )
+    return result.to(dtype=format_dict[stimuli_format])
 
 
 def untilize(tilized_tensor, stimuli_format=DataFormat.Float16_b):
@@ -45,11 +38,4 @@ def untilize(tilized_tensor, stimuli_format=DataFormat.Float16_b):
 
     original_tensor = torch.cat((top, bottom), dim=0).view(1024)
 
-    return original_tensor.to(
-        dtype=(
-            format_dict[stimuli_format]
-            if stimuli_format in [DataFormat.Float16_b, DataFormat.Float16]
-            or stimuli_format.is_integer()
-            else torch.float32
-        )
-    )
+    return original_tensor.to(dtype=format_dict[stimuli_format])

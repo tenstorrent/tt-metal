@@ -11,6 +11,7 @@ from helpers.device import (
 )
 from helpers.format_arg_mapping import format_dict
 from helpers.format_config import DataFormat
+from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.param_config import (
     clean_params,
     generate_param_ids,
@@ -19,15 +20,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import generate_make_command
-from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test, run_shell_command
-
-
-def generate_golden(operand1, data_format):
-
-    A_tilized = tilize(operand1, data_format)
-    return A_tilized.flatten()
-
 
 # SUPPORTED FORMATS FOR TEST
 supported_formats = [DataFormat.Float16, DataFormat.Float16_b]
@@ -57,9 +50,10 @@ param_ids = generate_param_ids(all_params)
 @pytest.mark.parametrize("testname, formats", clean_params(all_params), ids=param_ids)
 def test_unpack_tilize(testname, formats):
 
-    src_A, src_B = generate_stimuli(formats.input_format, formats.input_format)
+    src_A, _ = generate_stimuli(formats.input_format, formats.input_format)
     src_B = torch.full((1024,), 0)
 
+    generate_golden = get_golden_generator(TilizeGolden)
     golden_tensor = generate_golden(src_A, formats.output_format)
 
     write_stimuli_to_l1(src_A, src_B, formats.input_format, formats.input_format)
@@ -78,13 +72,6 @@ def test_unpack_tilize(testname, formats):
     res_from_L1 = collect_results(formats, tensor_size=len(src_A))
     assert len(res_from_L1) == len(golden_tensor)
 
-    res_tensor = torch.tensor(
-        res_from_L1,
-        dtype=(
-            format_dict[formats.output_format]
-            if formats.output_format in [DataFormat.Float16, DataFormat.Float16_b]
-            else torch.bfloat16
-        ),
-    )
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
     assert passed_test(golden_tensor, res_tensor, formats.output_format)

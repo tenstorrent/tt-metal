@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 
 import pytest
 import torch
@@ -20,6 +19,7 @@ from helpers.format_arg_mapping import (
     format_dict,
 )
 from helpers.format_config import DataFormat
+from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.param_config import (
     clean_params,
     generate_param_ids,
@@ -29,37 +29,6 @@ from helpers.param_config import (
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import generate_make_command
 from helpers.utils import passed_test, run_shell_command
-
-
-def generate_golden(operation, operand1, data_format):
-    dtype = (
-        format_dict[data_format] if data_format != DataFormat.Bfp8_b else torch.bfloat16
-    )
-    tensor1_float = operand1.clone().detach().to(dtype)
-    ops = {
-        MathOperation.Abs: lambda x: abs(x),
-        MathOperation.Cos: lambda x: math.cos(x),
-        MathOperation.Log: lambda x: math.log(x) if x != 0 else float("nan"),
-        MathOperation.Reciprocal: lambda x: 1 / x if x != 0 else float("nan"),
-        MathOperation.Sin: lambda x: math.sin(x),
-        MathOperation.Sqrt: lambda x: math.sqrt(x),
-        MathOperation.Square: lambda x: x * x,
-        MathOperation.Celu: lambda x: torch.nn.functional.celu(
-            (
-                x
-                if isinstance(x, torch.Tensor)
-                else torch.tensor(
-                    x,
-                    dtype=dtype,
-                )
-            ),
-            alpha=1.0,
-        ),
-    }
-    if operation not in ops:
-        raise ValueError("Unsupported operation!")
-    return [ops[operation](num) for num in tensor1_float.tolist()][:1024]
-
 
 # SUPPORTED FORMATS FOR TEST
 supported_formats = [DataFormat.Float32, DataFormat.Float16, DataFormat.Float16_b]
@@ -125,7 +94,8 @@ def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):
         formats.input_format,
         formats.input_format,
     )
-    golden = generate_golden(mathop, src_A, formats.output_format)
+    generate_golden = get_golden_generator(UnarySFPUGolden)
+    golden_tensor = generate_golden(mathop, src_A, formats.output_format)
     write_stimuli_to_l1(src_A, src_B, formats.input_format, formats.input_format)
 
     unpack_to_dest = formats.input_format.is_32_bit()
@@ -145,23 +115,9 @@ def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):
     wait_for_tensix_operations_finished()
     res_from_L1 = collect_results(formats, tensor_size=len(src_A))
     res_from_L1 = res_from_L1[:1024]
-    assert len(res_from_L1) == len(golden)
+    assert len(res_from_L1) == len(golden_tensor)
 
-    golden_tensor = torch.tensor(
-        golden,
-        dtype=(
-            format_dict[formats.output_format]
-            if formats.output_format in [DataFormat.Float16, DataFormat.Float16_b]
-            else torch.bfloat16
-        ),
-    )
-    res_tensor = torch.tensor(
-        res_from_L1,
-        dtype=(
-            format_dict[formats.output_format]
-            if formats.output_format in [DataFormat.Float16, DataFormat.Float16_b]
-            else torch.bfloat16
-        ),
-    )
+    torch_format = format_dict[formats.output_format]
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(golden_tensor, res_tensor, formats.output_format)

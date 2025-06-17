@@ -10,8 +10,9 @@ from helpers.device import (
     wait_for_tensix_operations_finished,
     write_stimuli_to_l1,
 )
-from helpers.format_arg_mapping import DestAccumulation, format_dict
+from helpers.format_arg_mapping import DestAccumulation, MathOperation, format_dict
 from helpers.format_config import DataFormat
+from helpers.golden_generators import FillDestGolden, get_golden_generator
 from helpers.param_config import (
     clean_params,
     generate_param_ids,
@@ -21,40 +22,6 @@ from helpers.param_config import (
 from helpers.stimuli_generator import flatten_list, generate_stimuli
 from helpers.test_config import generate_make_command
 from helpers.utils import passed_test, run_shell_command
-
-
-def generate_golden(operations, operand1, operand2, data_format):
-    tensor1_float = (
-        operand1.clone()
-        .detach()
-        .to(format_dict.get(data_format, format_dict[DataFormat.Float16_b]))
-    )
-    tensor2_float = (
-        operand2.clone()
-        .detach()
-        .to(format_dict.get(data_format, format_dict[DataFormat.Float16_b]))
-    )
-
-    res = []
-
-    # to se why this encoding look at llk_defs.h -> enum EltwiseBinaryType
-
-    for op in operations:
-        if op == 0:
-            res_tmp = tensor1_float * tensor2_float
-        elif op == 1:
-            res_tmp = tensor1_float / tensor2_float
-        elif op == 2:
-            res_tmp = tensor1_float + tensor2_float
-        elif op == 3:
-            res_tmp = tensor1_float - tensor2_float
-        else:
-            raise ValueError("Unsupported operation!")
-
-        res.append(res_tmp.tolist())
-
-    return flatten_list(res)
-
 
 # SUPPORTED FORMATS FOR TEST
 supported_formats = [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Float16_b]
@@ -94,7 +61,11 @@ def test_fill_dest(testname, formats, dest_acc):
     pack_addresses = [pack_start_address + 0x1000 * i for i in range(16)]
 
     src_A, src_B = generate_stimuli(formats.input_format, formats.input_format)
-    golden = generate_golden([2] * 16, src_A, src_B, formats.output_format)
+
+    generate_golden = get_golden_generator(FillDestGolden)
+    golden_tensor = generate_golden(
+        src_A, src_B, formats.output_format, MathOperation.Elwadd
+    )
     write_stimuli_to_l1(src_A, src_B, formats.input_format, formats.input_format)
 
     test_config = {
@@ -116,23 +87,9 @@ def test_fill_dest(testname, formats, dest_acc):
         )
     res_from_L1 = flatten_list(res_from_L1)
 
-    assert len(res_from_L1) == len(golden)
+    assert len(res_from_L1) == len(golden_tensor)
 
-    golden_tensor = torch.tensor(
-        golden,
-        dtype=(
-            format_dict[formats.output_format]
-            if formats.output_format in [DataFormat.Float16, DataFormat.Float16_b]
-            else torch.bfloat16
-        ),
-    )
-    res_tensor = torch.tensor(
-        res_from_L1,
-        dtype=(
-            format_dict[formats.output_format]
-            if formats.output_format in [DataFormat.Float16, DataFormat.Float16_b]
-            else torch.bfloat16
-        ),
-    )
+    torch_format = format_dict.get(formats.output_format)
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
