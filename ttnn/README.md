@@ -80,8 +80,8 @@ followed the instructions for [installing and building the software with the dev
         * print(tensor)
 * How do I dump the logs of operations from the TT device?
     * You can add one or both of these environment variables
-        *   `export TT_METAL_LOGGER_TYPES=Op`
-        *   `export TT_METAL_LOGGER_LEVEL=DEBUG`
+        *   `export TT_LOGGER_TYPES=Op`
+        *   `export TT_LOGGER_LEVEL=DEBUG`
     * In addition, you can add the following environment variable to print currently executing ttnn operations. This makes every op blocking, ensuring that what is printed is actually executing. Otherwise, logging may not be representative of where the error occurs. Note: you may want to omit this when using gdb since there may be interactions with gdb.
         * `export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false, "enable_logging": true}'`
             * `enable_fast_runtime_mode`: When turned on, op validation is always skipped
