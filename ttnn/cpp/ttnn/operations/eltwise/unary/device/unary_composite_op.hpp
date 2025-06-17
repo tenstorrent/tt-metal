@@ -15,8 +15,6 @@
 namespace ttnn::operations::unary {
 
 enum class UnaryCompositeOpType {
-    DEG2RAD,
-    RAD2DEG,
     ACOSH,
     ASINH,
     ATANH,
@@ -70,8 +68,6 @@ Tensor _std(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _std(const Tensor&, const Tensor&, Tensor&, const std::optional<MemoryConfig>&);
 Tensor _std_overload(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _normalize(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _deg2rad(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _rad2deg(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _hardswish(
     const Tensor&,
     float scale = 1.0f / 6.0f,
@@ -110,16 +106,6 @@ Tensor _frac(const Tensor&, const std::optional<MemoryConfig>&);
 // OpHandler struct template
 template <UnaryCompositeOpType OpType>
 struct OpHandler;
-
-template <>
-struct OpHandler<UnaryCompositeOpType::DEG2RAD> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _deg2rad(t1, mem_cfg); }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::RAD2DEG> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _rad2deg(t1, mem_cfg); }
-};
 
 template <>
 struct OpHandler<UnaryCompositeOpType::ACOSH> {
