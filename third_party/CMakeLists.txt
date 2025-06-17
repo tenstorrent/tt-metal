@@ -245,6 +245,12 @@ CPMAddPackage(
         "TF_BUILD_EXAMPLES OFF"
 )
 if(Taskflow_ADDED AND NOT TARGET Taskflow::Taskflow)
+    target_compile_options(
+        Taskflow
+        INTERFACE
+            -isystem
+            ${Taskflow_SOURCE_DIR}
+    )
     add_library(Taskflow::Taskflow ALIAS Taskflow)
 endif()
 
