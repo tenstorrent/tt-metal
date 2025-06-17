@@ -562,8 +562,36 @@ class ModelOptimisations:
             fused_activation=None,
         )
 
+        self.matmul_configs["2D_ATTN_QKV_LINEAR_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=4,
+            per_core_M=16,
+            per_core_N=8,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+        self.matmul_configs["2D_ATTN_QKV_LINEAR_1280"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=4,
+            per_core_M=4,
+            per_core_N=15,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
         self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.compute_configs["LOFI_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -602,11 +630,16 @@ class ModelOptimisations:
                     return self.matmul_configs["2D_TM_LINEAR_1280"]
 
             # # # ATTN OUT LINEAR # # #
-            if "attn1.to_out" in matmul_path:
+            if "attn1.to_out" in matmul_path or "attn2.to_out" in matmul_path or "attn2.to_q" in matmul_path:
                 if "down_blocks.1" in matmul_path or "up_blocks.1" in matmul_path:
                     return self.matmul_configs["2D_ATTN_OUT_LINEAR_640"]
                 else:
                     return self.matmul_configs["2D_ATTN_OUT_LINEAR_1280"]
+            if "attn1.to_q" in matmul_path:
+                if "down_blocks.1" in matmul_path or "up_blocks.1" in matmul_path:
+                    return self.matmul_configs["2D_ATTN_QKV_LINEAR_640"]
+                else:
+                    return self.matmul_configs["2D_ATTN_QKV_LINEAR_1280"]
 
             # # # Down block 1 # # #
             pattern_downn_block_1_dense_out = re.compile(
@@ -703,6 +736,8 @@ class ModelOptimisations:
 
     def get_mm_compute_config(self, module_path):
         # for now, return default config
+        if ".to_q" in module_path:
+            return self.compute_configs["LOFI_MM_COMPUTE_CONFIG"]
         return self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"]
 
     def get_conv_config(self, conv_path):
