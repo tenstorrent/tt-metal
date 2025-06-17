@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -158,7 +158,7 @@ def prediction(test, model, model_type):
     return pd.DataFrame({"image_path": image_id, "predicted_mask": mask, "has_mask": has_mask})
 
 
-def preprocess(path):
+def preprocess(path, mode="default", max_samples=None):
     base_path = path
     relative_path = "lgg-mri-segmentation/kaggle_3m/"
 
@@ -226,18 +226,24 @@ def preprocess(path):
     brain_df_train["mask"] = brain_df_train["mask"].apply(lambda x: str(x))
     brain_df_train.info()
 
-    brain_df_mask = brain_df[brain_df["mask"] == 1]
+    brain_df_mask = brain_df[brain_df["mask"] == 1].reset_index(drop=True)
     brain_df_mask.shape
 
-    X_train, X_val = train_test_split(brain_df_mask, test_size=0.15)
-    X_test, X_val = train_test_split(X_val, test_size=0.5)
+    if mode == "eval":
+        if max_samples is not None:
+            return brain_df_mask.iloc[:max_samples]
+        return brain_df_mask
+    else:
+        X_train, x_val = train_test_split(brain_df_mask, test_size=0.15)
+        x_test, x_val = train_test_split(x_val, test_size=0.5)
+        if max_samples is not None:
+            return x_test.iloc[:max_samples]
+        return x_test
 
-    return X_test
 
-
-def postprocess(df_pred, X_test, model_type):
+def postprocess(df_pred, x_test, model_type):
     # merging original and prediction df
-    df_pred = X_test.merge(df_pred, on="image_path")
+    df_pred = x_test.merge(df_pred, on="image_path")
     df_pred.head(10)
 
     # Define the output folder
