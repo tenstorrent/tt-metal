@@ -107,7 +107,7 @@ def run_torch_denoising(
 
 
 @torch.no_grad()
-def run_unet_inference(ttnn_device, prompts, num_inference_steps, classifier_free_guidance=True):
+def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, classifier_free_guidance=True):
     torch.manual_seed(0)
 
     if isinstance(prompts, str):
@@ -430,15 +430,16 @@ def run_unet_inference(ttnn_device, prompts, num_inference_steps, classifier_fre
 
         tt_scheduler.set_step_index(0)
 
-    assert_with_pcc(latents, torch_tt_latents, 0.82)
+    if not is_ci_env:
+        plt.plot(pcc_per_iter, marker="o")
+        plt.title("PCC per iteration")
+        plt.xlabel("Iteration")
+        plt.ylabel("PCC")
+        plt.grid(True)
+        plt.savefig("pcc_plot.png", dpi=300, bbox_inches="tight")
+        plt.close()
 
-    plt.plot(pcc_per_iter, marker="o")
-    plt.title("PCC per iteration")
-    plt.xlabel("Iteration")
-    plt.ylabel("PCC")
-    plt.grid(True)
-    plt.savefig("pcc_plot.png", dpi=300, bbox_inches="tight")
-    plt.close()
+    assert_with_pcc(latents, torch_tt_latents, 0.82)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -460,8 +461,9 @@ def run_unet_inference(ttnn_device, prompts, num_inference_steps, classifier_fre
 def test_unet_loop(
     device,
     use_program_cache,
+    is_ci_env,
     prompt,
     num_inference_steps,
     classifier_free_guidance,
 ):
-    return run_unet_inference(device, prompt, num_inference_steps, classifier_free_guidance)
+    return run_unet_inference(device, is_ci_env, prompt, num_inference_steps, classifier_free_guidance)
