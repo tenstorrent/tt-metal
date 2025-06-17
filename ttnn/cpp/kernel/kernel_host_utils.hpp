@@ -5,7 +5,6 @@
 #if !defined(KERNEL_BUILD)
 
 #include <type_traits>
-#include <reflect>
 #include <vector>
 #include <bit>
 
@@ -14,13 +13,7 @@ namespace ttnn::kernel_utils {
 template <typename KernelStruct>
 concept KernelArgsStructU32Concept =
     alignof(KernelStruct) == alignof(uint32_t) && sizeof(KernelStruct) % sizeof(uint32_t) == 0 &&
-    std::is_aggregate_v<KernelStruct> && [] {
-        bool result = true;
-        KernelStruct val{};
-        reflect::for_each(
-            [&](auto I) { result &= reflect::type_name(uint32_t{}) == reflect::type_name(reflect::get<I>(val)); }, val);
-        return result;
-    }();
+    std::is_aggregate_v<KernelStruct> && std::is_trivially_copyable_v<KernelStruct>;
 
 template <KernelArgsStructU32Concept KernStruct>
 consteval uint32_t amount_of_fields() {
