@@ -139,7 +139,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
 
         tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]
 
-        reference_output = reference_model(torch_input[:, :1, :, : model_args.dim])
+        reference_output = reference_model(torch_input[:, :, :1, : model_args.dim])
 
         pcc_required = 0.99
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
