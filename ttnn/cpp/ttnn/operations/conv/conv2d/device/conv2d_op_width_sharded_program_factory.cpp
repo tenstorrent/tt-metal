@@ -692,7 +692,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
         conv_reader_indices_tensor, parallel_config, is_block_sharded, a.device());
 
-    const DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
+    const optimized_conv_op_utils::DeviceStorage& conv_reader_indices_storage =
+        conv_reader_indices_tensor.device_storage();
 
     cb_indices.cb_for_reader_indices = cb_indices.get_next_cb_index();
     tt::tt_metal::create_cb(

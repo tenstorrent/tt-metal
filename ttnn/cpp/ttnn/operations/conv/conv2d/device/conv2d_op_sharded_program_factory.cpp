@@ -971,7 +971,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
         conv_reader_indices_tensor, parallel_config, is_block_sharded, a.device());
 
-    const DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
+    const optimized_conv_op_utils::DeviceStorage& conv_reader_indices_storage =
+        conv_reader_indices_tensor.device_storage();
 
     log_debug(LogOp, "total_num_cores_per_weight_slice: {}", total_num_cores_per_weight_slice);
     log_debug(LogOp, "num_blocks_act_h_per_core: {}", num_blocks_act_h_per_core);
