@@ -1095,8 +1095,6 @@ bool Device::close() {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
 
-    tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
-
     this->disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);
 

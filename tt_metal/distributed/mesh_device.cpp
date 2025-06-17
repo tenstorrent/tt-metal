@@ -24,9 +24,12 @@
 
 #include "allocator.hpp"
 #include "assert.hpp"
+#include "buffer.hpp"
 #include "device/device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "host_api.hpp"
 #include "mesh_trace.hpp"
+#include "profiler_types.hpp"
 #include "shape_base.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -479,6 +482,20 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 }
 
 bool MeshDevice::close() {
+    ZoneScoped;
+    log_info(tt::LogMetal, "Closing mesh device {}", this->id());
+
+    // We only dump profile results for mesh devices that don't have any submeshes as they have active mesh command
+    // queues, whereas mesh devices with submeshes don't.
+    if (this->submeshes_.empty()) {
+        DumpMeshDeviceProfileResults(*this);
+    }
+
+    // TODO #20966: Remove these calls
+    for (auto device : view_->get_devices()) {
+        dynamic_cast<Device*>(device)->set_mesh_device(parent_mesh_);
+    }
+
     mesh_command_queues_.clear();
     sub_device_manager_tracker_.reset();
     scoped_devices_.reset();

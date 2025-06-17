@@ -118,6 +118,10 @@ void write_control_buffer_to_core(
     }
 }
 
+bool useSlowDispatchForReading(ProfilerDumpState state) {
+    return state == ProfilerDumpState::FORCE_UMD_READ || onlyProfileDispatchCores(state);
+}
+
 void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
     ZoneScoped;
     TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
@@ -229,7 +233,7 @@ void DeviceProfiler::resetControlBuffers(IDevice* device, const CoreCoord& worke
     chip_id_t device_id = device->id();
     HalProgrammableCoreType CoreType = tt::llrt::get_core_type(device_id, worker_core);
 
-    std::vector<uint32_t> control_buffer = core_control_buffers.at(worker_core);
+    const std::vector<uint32_t>& control_buffer = core_control_buffers.at(worker_core);
     std::vector<uint32_t> control_buffer_reset(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
 
     control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] =
@@ -251,7 +255,7 @@ void DeviceProfiler::readRiscProfilerResults(
     nlohmann::ordered_json& noc_trace_json_log) {
     ZoneScoped;
 
-    std::vector<uint32_t> control_buffer = core_control_buffers.at(worker_core);
+    const std::vector<uint32_t>& control_buffer = core_control_buffers.at(worker_core);
 
     if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
         (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
@@ -1132,32 +1136,27 @@ void DeviceProfiler::dumpResults(
         routing_lookup = FabricRoutingLookup(device);
     }
 
-    bool do_L1_data_buffer = data_source == ProfilerDataBufferSource::L1;
-
-    if (!do_L1_data_buffer) {
+    if (data_source == ProfilerDataBufferSource::DRAM) {
         for (const auto& worker_core : worker_cores) {
             readControlBuffers(device, worker_core, state);
         }
-        const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
-        if (USE_FAST_DISPATCH) {
-            if (state == ProfilerDumpState::LAST_CLOSE_DEVICE || state == ProfilerDumpState::FORCE_UMD_READ) {
-                if (rtoptions.get_profiler_do_dispatch_cores() || state == ProfilerDumpState::FORCE_UMD_READ) {
-                    issueSlowDispatchReadFromProfilerBuffer(device);
-                }
+
+        if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
+            if (useSlowDispatchForReading(state)) {
+                issueSlowDispatchReadFromProfilerBuffer(device);
             } else {
                 issueFastDispatchReadFromProfilerBuffer(device);
             }
         } else {
-            if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
-                issueSlowDispatchReadFromProfilerBuffer(device);
-            }
+            issueSlowDispatchReadFromProfilerBuffer(device);
         }
         for (const auto& worker_core : worker_cores) {
             resetControlBuffers(device, worker_core, state);
         }
     }
 
-    std::string zone_name = fmt::format("{}-{}-{}", device_id, magic_enum::enum_name(state), magic_enum::enum_name(data_source));
+    const std::string zone_name =
+        fmt::format("{}-{}-{}", device_id, magic_enum::enum_name(state), magic_enum::enum_name(data_source));
     ZoneName(zone_name.c_str(), zone_name.size());
 
     if (rtoptions.get_profiler_noc_events_enabled()) {
@@ -1184,14 +1183,13 @@ void DeviceProfiler::dumpResults(
         log_error(tt::LogMetal, "Could not open kernel profiler dump file '{}'", log_path);
     } else {
         for (const auto& worker_core : worker_cores) {
-            if (do_L1_data_buffer) {
-                ZoneScopedN("Reading L1 profiler Data buffer");
+            if (data_source == ProfilerDataBufferSource::L1) {
                 readControlBuffers(device, worker_core, state);
                 resetControlBuffers(device, worker_core, state);
 
                 std::vector<uint32_t> core_l1_data_buffer;
                 if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
-                    if (rtoptions.get_profiler_do_dispatch_cores() || state == ProfilerDumpState::FORCE_UMD_READ) {
+                    if (useSlowDispatchForReading(state)) {
                         core_l1_data_buffer = issueSlowDispatchReadFromL1DataBuffer(device, worker_core);
                     } else {
                         core_l1_data_buffer = issueFastDispatchReadFromL1DataBuffer(device, worker_core);
@@ -1223,9 +1221,9 @@ void DeviceProfiler::dumpResults(
         }
 
         // if defined, used profiler_noc_events_report_path to write json log. otherwise use output_dir
-        auto rpt_path = rtoptions.get_profiler_noc_events_report_path();
+        std::string rpt_path = rtoptions.get_profiler_noc_events_report_path();
         if (rpt_path.empty()) {
-            rpt_path = output_dir;
+            rpt_path = output_dir.string();
         }
 
         // serialize noc traces only in normal state, to avoid overwriting individual trace files
@@ -1520,6 +1518,11 @@ void DeviceProfiler::updateTracyContext(std::pair<uint32_t, CoreCoord> device_co
 }
 
 bool getDeviceProfilerState() { return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled(); }
+
+bool onlyProfileDispatchCores(ProfilerDumpState state) {
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores() &&
+           state == ProfilerDumpState::ONLY_DISPATCH_CORES;
+}
 
 }  // namespace tt_metal
 
