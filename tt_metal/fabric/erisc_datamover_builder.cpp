@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include <tt-metalium/assert.hpp>
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/fabric_edm_packet_header.hpp>
@@ -688,8 +689,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     const CoreCoord& my_eth_core_logical,
     size_t my_noc_x,
     size_t my_noc_y,
-    size_t my_chip_id,
-    size_t peer_chip_id,
+    const FabricNodeId& local_fabric_node_id,
+    const FabricNodeId& peer_fabric_node_id,
 
     const std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>&
         receiver_channels_downstream_flow_control_semaphore_id,
@@ -710,8 +711,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     my_noc_y(my_noc_y),
     config(config),
     direction(direction),
-    my_chip_id(my_chip_id),
-    peer_chip_id(peer_chip_id),
+    local_fabric_node_id(local_fabric_node_id),
+    peer_fabric_node_id(peer_fabric_node_id),
     handshake_address(tt::round_up(
         tt::tt_metal::hal::get_erisc_l1_unreserved_base(), FabricEriscDatamoverConfig::eth_channel_sync_size)),
     channel_buffer_size(config.channel_buffer_size_bytes),
@@ -747,8 +748,18 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 }
 
 std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_t risc_id) const {
-    const bool is_handshake_master = this->my_chip_id < this->peer_chip_id;
-    TT_ASSERT(this->my_chip_id != this->peer_chip_id);
+    TT_ASSERT(this->local_fabric_node_id != this->peer_fabric_node_id);
+
+    // Tie break policy for selecting the handshake master:
+    // 1. If both nodes are on the same mesh, compare chip_ids
+    // 2. If nodes are on different meshes, compare mesh_ids (since chip_ids can alias across meshes)
+    auto peer_tie_break_id = (local_fabric_node_id.mesh_id == peer_fabric_node_id.mesh_id)
+                                 ? peer_fabric_node_id.chip_id
+                                 : *(peer_fabric_node_id.mesh_id);
+    auto local_tie_break_id = (local_fabric_node_id.mesh_id == peer_fabric_node_id.mesh_id)
+                                  ? local_fabric_node_id.chip_id
+                                  : *(local_fabric_node_id.mesh_id);
+    bool is_handshake_master = local_tie_break_id < peer_tie_break_id;
 
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
         log_trace(tt::LogTest, "Sender {} num buffers: {}", i, this->sender_channels_num_buffers[i]);
@@ -769,7 +780,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     size_t num_sender_channels = config.num_used_sender_channels;
     size_t num_receiver_channels = config.num_used_receiver_channels;
-    auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->my_chip_id);
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto local_physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
+    auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(local_physical_chip_id);
 
     size_t sender_channel_num_buffers = this->sender_channels_num_buffers[0];
     size_t receiver_channel_num_buffers =
@@ -997,8 +1010,31 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program,
     const CoreCoord& ethernet_core,
-    chip_id_t local_chip_id,
-    chip_id_t peer_chip_id,
+    chip_id_t local_physical_chip_id,
+    chip_id_t peer_physical_chip_id,
+    const FabricEriscDatamoverConfig& config,
+    bool build_in_worker_connection_mode,
+    bool dateline_connection,
+    eth_chan_directions direction) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    return FabricEriscDatamoverBuilder::build(
+        device,
+        program,
+        ethernet_core,
+        control_plane.get_fabric_node_id_from_physical_chip_id(local_physical_chip_id),
+        control_plane.get_fabric_node_id_from_physical_chip_id(peer_physical_chip_id),
+        config,
+        build_in_worker_connection_mode,
+        dateline_connection,
+        direction);
+}
+
+FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::Program& program,
+    const CoreCoord& ethernet_core,
+    const FabricNodeId& local_fabric_node_id,
+    const FabricNodeId& peer_fabric_node_id,
     const FabricEriscDatamoverConfig& config,
     bool build_in_worker_connection_mode,
     bool dateline_connection,
@@ -1090,8 +1126,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         ethernet_core,
         device->ethernet_core_from_logical_core(ethernet_core).x,
         device->ethernet_core_from_logical_core(ethernet_core).y,
-        local_chip_id,
-        peer_chip_id,
+        local_fabric_node_id,
+        peer_fabric_node_id,
 
         receiver_channels_downstream_flow_control_semaphore_id,
         receiver_channels_downstream_teardown_semaphore_id,

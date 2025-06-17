@@ -13,7 +13,7 @@
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_edm_packet_header.hpp>
 #include <tt-metalium/edm_fabric_counters.hpp>
-
+#include <tt-metalium/routing_table_generator.hpp>  // for FabricNodeId
 #include <unordered_map>
 #include <optional>
 #include <cstdint>
@@ -299,8 +299,8 @@ public:
         const CoreCoord& my_eth_core_logical,
         size_t my_noc_x,
         size_t my_noc_y,
-        size_t my_chip_id,
-        size_t peer_chip_id,
+        const FabricNodeId& local_fabric_node_id,
+        const FabricNodeId& peer_fabric_node_id,
 
         const std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>&
             receiver_channels_downstream_flow_control_semaphore_id,
@@ -322,8 +322,19 @@ public:
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         const CoreCoord& ethernet_core,
-        chip_id_t local_chip_id,
-        chip_id_t peer_chip_id,
+        const FabricNodeId& local_fabric_node_id,
+        const FabricNodeId& peer_fabric_node_id,
+        const FabricEriscDatamoverConfig& config,
+        bool build_in_worker_connection_mode = false,
+        bool dateline_connection = false,
+        eth_chan_directions direction = eth_chan_directions::EAST);
+
+    static FabricEriscDatamoverBuilder build(
+        tt::tt_metal::IDevice* device,
+        tt::tt_metal::Program& program,
+        const CoreCoord& ethernet_core,
+        chip_id_t local_physical_chip_id,
+        chip_id_t peer_physical_chip_id,
         const FabricEriscDatamoverConfig& config,
         bool build_in_worker_connection_mode = false,
         bool dateline_connection = false,
@@ -363,8 +374,8 @@ public:
 
     FabricEriscDatamoverConfig config;
 
-    size_t my_chip_id = 0;
-    size_t peer_chip_id = 0;
+    FabricNodeId local_fabric_node_id = FabricNodeId(MeshId{0}, 0);
+    FabricNodeId peer_fabric_node_id = FabricNodeId(MeshId{0}, 0);
     size_t handshake_address = 0;
     size_t channel_buffer_size = 0;
 
