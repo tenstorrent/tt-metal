@@ -975,8 +975,6 @@ def test_demo_text(
             "N150_Llama3.1-8B": 112,
             "N150_Mistral-7B": 106,
             # N300 targets
-            "N300_Llama3.1-8B": 133,  # FIXME: not in Github Action results
-            "N300_Mistral-7B": 136,  # FIXME: not in Github Action results
             "N300_Qwen2.5-7B": 94,
             # T3K targets
             "T3K_Llama3.1-70B": 167,
@@ -988,24 +986,10 @@ def test_demo_text(
             "N150_Llama3.2-1B": 51,
             "N150_Llama3.2-3B": 31,
             "N150_Llama3.1-8B": 20,
-            "N150_Llama3.2-11B": 22,  # FIXME: not in Github Action results
             "N150_Mistral-7B": 23,
             # N300 targets
-            "N300_Llama3.2-1B": 238,  # FIXME: not in Github Action results
-            "N300_Llama3.2-3B": 95,  # FIXME: not in Github Action results
-            "N300_Llama3.1-8B": 34,  # FIXME: not in Github Action results
-            "N300_Llama3.2-11B": 36,  # FIXME: not in Github Action results
-            "N300_Mistral-7B": 34,  # FIXME: not in Github Action results
             "N300_Qwen2.5-7B": 20,
-            # P150 targets
-            "P150_Llama3.1-8B": 22,  # FIXME: not in Github Action results
-            # P300 targets
-            "P300_Llama3.1-8B": 36,  # FIXME: not in Github Action results
             # T3K targets
-            "T3K_Llama3.2-1B": 285,  # FIXME: not in Github Action results
-            "T3K_Llama3.2-3B": 143,  # FIXME: not in Github Action results
-            "T3K_Llama3.1-8B": 43,  # FIXME: not in Github Action results
-            "T3K_Llama3.2-11B": 43,  # FIXME: not in Github Action results
             "T3K_Llama3.1-70B": 14,
             "T3K_Qwen2.5-72B": 13,
             "T3K_Qwen3-32B": 19,
