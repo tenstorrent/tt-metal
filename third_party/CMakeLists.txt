@@ -247,7 +247,13 @@ CPMAddPackage(
 if(Taskflow_ADDED)
     add_library(taskflow INTERFACE)
     add_library(Taskflow::Taskflow ALIAS taskflow)
-    target_include_directories(taskflow INTERFACE SYSTEM ${Taskflow_SOURCE_DIR})
+    target_include_directories(taskflow INTERFACE ${Taskflow_SOURCE_DIR})
+    target_compile_options(
+        taskflow
+        INTERFACE
+            -isystem
+            ${Taskflow_SOURCE_DIR}
+    )
 endif()
 
 ############################################################################################################################
