@@ -55,11 +55,6 @@ class Generator:
         self.formatter = formatter
         self.data_parallel = len(self.model)
 
-        max_batch_size = self.model_args[0].max_batch_size
-        assert all(
-            self.model_args[i].max_batch_size == max_batch_size for i in range(self.data_parallel)
-        ), "All models must have the same max batch size"
-
     # Note: This function is called by vLLM
     def prefill_forward_text(self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None):
         batch_size, batch_seq_len = tokens.shape
