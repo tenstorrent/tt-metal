@@ -10,8 +10,8 @@ struct Rand {
     static Tensor invoke(
         const std::vector<uint32_t>& size,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-        const std::optional<DataType> dtype = DataType::BFLOAT16,
-        const std::optional<Layout> layout = Layout::TILE,
+        const DataType dtype = DataType::BFLOAT16,
+        const Layout layout = Layout::TILE,
         const std::optional<MemoryConfig>& memory_config = types::DRAM_MEMORY_CONFIG);
 };
 }  // namespace ttnn::operations::rand
