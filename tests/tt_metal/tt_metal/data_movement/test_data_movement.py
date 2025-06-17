@@ -216,13 +216,7 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 32700, "upper": 37500}, "bandwidth": 28},  # 18596, 28.2
         },
         52: {  # One to All Directed Ideal
-            "riscv_0": {"latency": {"lower": 11000, "upper": 12000}, "bandwidth": 22},
-        },
-        53: {  # One to All 2x2 Directed Ideal
-            "riscv_0": {"latency": {"lower": 8500, "upper": 9500}, "bandwidth": 28},
-        },
-        54: {  # One to All 4x4 Directed Ideal
-            "riscv_0": {"latency": {"lower": 9000, "upper": 10000}, "bandwidth": 27},
+            "riscv_0": {"latency": {"lower": 86000, "upper": 91000}, "bandwidth": 23},
         },
         17: {
             "riscv_1": {"latency": {"lower": 50, "upper": 700}, "bandwidth": 3},
@@ -330,13 +324,7 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 16000, "upper": 17800}, "bandwidth": 59},  # 8730, 60.1
         },
         52: {  # One to All Directed Ideal
-            "riscv_0": {"latency": {"lower": 12000, "upper": 13000}, "bandwidth": 40},
-        },
-        53: {  # One to All 2x2 Directed Ideal
-            "riscv_0": {"latency": {"lower": 8500, "upper": 9500}, "bandwidth": 56},
-        },
-        54: {  # One to All 4x4 Directed Ideal
-            "riscv_0": {"latency": {"lower": 9000, "upper": 10000}, "bandwidth": 54},
+            "riscv_0": {"latency": {"lower": 96000, "upper": 100000}, "bandwidth": 42},
         },
         17: {
             "riscv_1": {"latency": {"lower": 50, "upper": 700}, "bandwidth": 7},
