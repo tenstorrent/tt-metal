@@ -448,7 +448,10 @@ inline void RunPersistent1dFabricLatencyTest(
     log_info(tt::LogTest, "Fabric teardown");
     if (!use_device_init_fabric) {
         persistent_fabric_teardown_sequence(
-            devices, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+            devices,
+            subdevice_managers,
+            fabric_handle.value(),
+            tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
     }
 
     log_info(tt::LogTest, "Waiting for teardown completion");
