@@ -55,6 +55,11 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 
     assert((test_config.is_multicast && test_config.loopback) || (!test_config.is_multicast && !test_config.is_linked));
 
+    if (test_config.loopback && (test_config.num_of_transactions * transaction_size_bytes > 1024 * 1024 / 2)) {
+        log_error(tt::LogTest, "Not enough memory for master core using loopback");
+        return false;
+    }
+
     // Initialize core sets
 
     // Master Logical
@@ -71,12 +76,13 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
         sub_logical_core_set = sub_logical_core_set.subtract(mst_logical_core_set);
     }
     uint32_t num_subordinates = sub_logical_core_set.num_cores();
+    auto sub_core_list = corerange_to_cores(sub_logical_core_set);
 
     // Subordinate Physical
     CoreCoord sub_worker_start_coord = device->worker_core_from_logical_core(sub_logical_start_coord);
     CoreCoord sub_worker_end_coord = device->worker_core_from_logical_core(sub_logical_end_coord);
     std::vector<uint32_t> sub_worker_coordinates = {};
-    for (auto& sub_logical_core : corerange_to_cores(sub_logical_core_set)) {
+    for (auto& sub_logical_core : sub_core_list) {
         CoreCoord sub_worker_core = device->worker_core_from_logical_core(sub_logical_core);
         uint32_t sub_worker_core_packed =
             (sub_worker_core.x << 16) | (sub_worker_core.y & 0xFFFF);  // Pack coordinates into a single uint32_t
@@ -92,11 +98,24 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     // Obtain L1 Address for Storing Data
     L1AddressInfo mst_l1_info =
         tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.mst_core_coord);
+    // Check if the L1 size is sufficient for the test configuration
     if (mst_l1_info.size < total_size_bytes) {
         log_error(tt::LogTest, "Insufficient L1 size for the test configuration");
         return false;
     }
-    uint32_t l1_base_address = mst_l1_info.base_address;
+    // Checks that both master and all subordinate cores have the same L1 base address and size
+    for (auto& sub_logical_core : sub_core_list) {
+        L1AddressInfo sub_l1_info = tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, sub_logical_core);
+        if (mst_l1_info.base_address != sub_l1_info.base_address || mst_l1_info.size != sub_l1_info.size) {
+            log_error(tt::LogTest, "Mismatch in L1 address or size between master and subordinate cores");
+            return false;
+        }
+    }
+    uint32_t mst_l1_base_address = mst_l1_info.base_address;
+    uint32_t sub_l1_base_address =
+        test_config.loopback ? master_l1_base_address
+                             : master_l1_base_address + (test_config.num_of_transactions *
+                                                         total_size_bytes);  // OR bytes_per_transaction instead?
 
     // Semaphores
     const uint32_t sem_id = CreateSemaphore(program, sub_logical_core_set, 0);
@@ -105,8 +124,9 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 
     // Sender Kernel
 
-    vector<uint32_t> sender_compile_args = {// 0 - 6
-                                            (uint32_t)l1_base_address,
+    vector<uint32_t> sender_compile_args = {// 0 - 7
+                                            (uint32_t)mst_l1_base_address,
+                                            (uint32_t)sub_l1_base_address,
                                             (uint32_t)test_config.num_of_transactions,
                                             (uint32_t)test_config.pages_per_transaction,
                                             (uint32_t)test_config.bytes_per_page,
@@ -118,7 +138,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     if (test_config.is_multicast) {  // Multicast Sender Kernel
         sender_compile_args.insert(
             sender_compile_args.end(),
-            {// 7 - 11
+            {// 8 - 12
              (uint32_t)test_config.is_linked,
              (uint32_t)sub_worker_start_coord.x,
              (uint32_t)sub_worker_start_coord.y,
@@ -170,7 +190,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     vector<uint32_t> packed_golden = packed_input;
 
     // Write input to master L1 buffer
-    tt_metal::detail::WriteToDeviceL1(device, test_config.mst_core_coord, l1_base_address, packed_input);
+    tt_metal::detail::WriteToDeviceL1(device, test_config.mst_core_coord, mst_l1_base_address, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     // LAUNCH THE PROGRAM
@@ -178,10 +198,10 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 
     // Read output from subordinate L1 buffers (implement a loop)
     std::vector<uint32_t> packed_output;
-    bool pcc = true;
 
-    for (auto& sub_logical_core : corerange_to_cores(sub_logical_core_set)) {
-        tt_metal::detail::ReadFromDeviceL1(device, sub_logical_core, l1_base_address, total_size_bytes, packed_output);
+    for (auto& sub_logical_core : sub_core_list) {
+        tt_metal::detail::ReadFromDeviceL1(
+            device, sub_logical_core, sub_l1_base_address, total_size_bytes, packed_output);
 
         // Results comparison
         bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
@@ -193,11 +213,11 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
             print_vector<uint32_t>(packed_golden);
             log_info(tt::LogTest, "Output vector");
             print_vector<uint32_t>(packed_output);
-            return pcc;
+            return false;
         }
     }
 
-    return pcc;
+    return true;
 }
 
 /* TEST TYPES */
@@ -221,8 +241,8 @@ void directed_ideal_test(
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
     // Adjustable Parameters (Ideal: Less transactions, more data per transaction)
-    uint32_t num_of_transactions = 64;
-    uint32_t pages_per_transaction = max_pages_reservable / num_of_transactions;
+    uint32_t num_of_transactions = 32;     // 64;
+    uint32_t pages_per_transaction = 256;  // max_pages_reservable / num_of_transactions;
 
     unit_tests::dm::core_to_all::OneToAllConfig test_config = {
         .test_id = test_case_id,
@@ -257,8 +277,6 @@ void packet_sizes_test(
     CoreCoord sub_grid_size) {
     // Parameters
     NOC noc_id = NOC::NOC_0;
-    bool loopback = true;
-
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
@@ -267,34 +285,43 @@ void packet_sizes_test(
     uint32_t max_transactions = 256;
     uint32_t max_pages_reservable_per_transaction = 64;
 
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
-        for (uint32_t pages_reservable_per_transaction = 1;
-             pages_reservable_per_transaction <= max_pages_reservable_per_transaction;
-             pages_reservable_per_transaction *= 2) {
-            // Check if the total data size is within the limits
-            if (num_of_transactions * pages_reservable_per_transaction > max_pages_reservable) {
-                continue;
-            }
+    for (bool loopback : {true, false}) {
+        if (!loopback && is_multicast) {
+            continue;  // Loopback is not applicable for multicast
+        }
+        if (loopback) {
+            max_transactions /= 2;
+        }
 
-            // Test config
-            unit_tests::dm::core_to_all::OneToAllConfig test_config = {
-                .test_id = test_case_id,
-                .mst_core_coord = mst_core_coord,
-                .sub_start_core_coord = sub_start_core_coord,
-                .sub_grid_size = sub_grid_size,
-                .num_of_transactions = num_of_transactions,
-                .pages_per_transaction = pages_reservable_per_transaction,
-                .bytes_per_page = bytes_per_page,
-                .l1_data_format = DataFormat::Float16_b,
-                .noc_id = noc_id,
-                .loopback = loopback,
-                .is_multicast = is_multicast,
-                .is_linked = is_linked,
-            };
+        for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
+            for (uint32_t pages_reservable_per_transaction = 1;
+                 pages_reservable_per_transaction <= max_pages_reservable_per_transaction;
+                 pages_reservable_per_transaction *= 2) {
+                // Check if the total data size is within the limits
+                if (num_of_transactions * pages_reservable_per_transaction > max_pages_reservable) {
+                    continue;
+                }
 
-            // Run
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+                // Test config
+                unit_tests::dm::core_to_all::OneToAllConfig test_config = {
+                    .test_id = test_case_id,
+                    .mst_core_coord = mst_core_coord,
+                    .sub_start_core_coord = sub_start_core_coord,
+                    .sub_grid_size = sub_grid_size,
+                    .num_of_transactions = num_of_transactions,
+                    .pages_per_transaction = pages_reservable_per_transaction,
+                    .bytes_per_page = bytes_per_page,
+                    .l1_data_format = DataFormat::Float16_b,
+                    .noc_id = noc_id,
+                    .loopback = loopback,
+                    .is_multicast = is_multicast,
+                    .is_linked = is_linked,
+                };
+
+                // Run
+                for (unsigned int id = 0; id < num_devices_; id++) {
+                    EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+                }
             }
         }
     }
