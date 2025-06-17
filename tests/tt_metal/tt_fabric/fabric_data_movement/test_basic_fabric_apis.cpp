@@ -692,6 +692,63 @@ void RunAsyncWriteMulticastTest(
     }
 }
 
+void RunGetNextHopRouterDirectionAllToAllTest(BaseFabricFixture* fixture) {
+    CoreCoord logical_core = {0, 0};
+    CoreRangeSet logical_crs = {logical_core};
+
+    // Get all available devices
+    auto devices = DevicePool::instance().get_all_active_devices();
+    const size_t NUM_DEVICES = devices.size();
+    if (NUM_DEVICES < 2) {
+        GTEST_SKIP() << "Need at least 2 devices for All-to-All test";
+    }
+
+    std::vector<tt::tt_metal::Program> programs(NUM_DEVICES);
+    // fabric logical id based results
+    std::vector<std::shared_ptr<tt_metal::Buffer>> result_buffers(NUM_DEVICES);
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
+        auto* src_device = devices[src_idx];
+        uint32_t src_fabric_chip_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device->id()).chip_id;
+
+        uint32_t result_size = NUM_DEVICES * sizeof(uint32_t);  // 1xN array
+        std::vector<uint32_t> result_buffer_data(NUM_DEVICES, 0);
+        result_buffers[src_fabric_chip_id] = PrepareBuffer(src_device, result_size, logical_crs, result_buffer_data);
+        programs[src_idx] = tt::tt_metal::CreateProgram();
+
+        uint32_t dst_mesh_id = 0;
+        uint32_t result_addr = result_buffers[src_fabric_chip_id]->address();
+        std::vector<uint32_t> runtime_args = {
+            src_fabric_chip_id,
+            dst_mesh_id,
+            result_addr,
+            static_cast<uint32_t>(NUM_DEVICES),
+        };
+        // Add all destination fabric logical chip ids to runtime args
+        for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
+            runtime_args.push_back(
+                control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->id()).chip_id);
+        }
+
+        auto kernel = tt_metal::CreateKernel(
+            programs[src_idx],
+            "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_get_next_hop_router_direction.cpp",
+            {logical_core},
+            tt_metal::DataMovementConfig{});
+
+        tt_metal::SetRuntimeArgs(programs[src_idx], kernel, logical_core, runtime_args);
+    }
+
+    for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
+        auto* src_device = devices[src_idx];
+        tt::tt_metal::EnqueueProgram(src_device->command_queue(), programs[src_idx], false);
+    }
+    for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
+        auto* src_device = devices[src_idx];
+        tt::tt_metal::Finish(src_device->command_queue());
+    }
+}
+
 TEST_F(Fabric2DFixture, DISABLED_TestAsyncWrite) { RunAsyncWriteTest(this, fabric_mode::PUSH, false); }
 
 TEST_F(Fabric2DFixture, TestUnicastRaw) {
@@ -753,6 +810,8 @@ TEST_F(Fabric2DFixture, DISABLED_TestAsyncWriteAtomicInc) {
 TEST_F(Fabric2DFixture, DISABLED_TestAsyncRawWriteAtomicInc) {
     RunAsyncWriteAtomicIncTest(this, fabric_mode::PUSH, true);
 }
+
+TEST_F(Fabric2DFixture, TestGetNextHopRouterDirection2ArgsAllToAll) { RunGetNextHopRouterDirectionAllToAllTest(this); }
 
 // 2D Dynamic Routing Unicast Tests
 TEST_F(Fabric2DDynamicFixture, TestUnicastRaw) {
