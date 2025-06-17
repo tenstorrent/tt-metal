@@ -40,14 +40,6 @@ class TtAttention(nn.Module):
             exp_approx_mode=False,
         )
 
-        # Todo: In a separate PR, make this use HiFi2 (move it to default compute kernel config)
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
-
         q_weights = state_dict[f"{module_path}.to_q.weight"].unsqueeze(0).unsqueeze(0)
         k_weights = state_dict[f"{module_path}.to_k.weight"].unsqueeze(0).unsqueeze(0)
         v_weights = state_dict[f"{module_path}.to_v.weight"].unsqueeze(0).unsqueeze(0)
@@ -59,7 +51,16 @@ class TtAttention(nn.Module):
             q_weights.shape[-1] == k_weights.shape[-1] and q_weights.shape[-1] == v_weights.shape[-1]
         )
 
+        self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
         if self.is_self_attention == True:
+            self.sdpa_program_config.q_chunk_size = 128
+            self.sdpa_program_config.k_chunk_size = 1024
             fused_qkv_weights = torch.cat(
                 [
                     torch.transpose(q_weights, -2, -1),
@@ -143,7 +144,7 @@ class TtAttention(nn.Module):
             is_causal=False,
             attn_mask=attention_mask,
             program_config=self.sdpa_program_config,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
         )
 
         hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states)
