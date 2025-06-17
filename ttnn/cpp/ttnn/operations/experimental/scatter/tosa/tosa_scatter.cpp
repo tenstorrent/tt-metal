@@ -31,11 +31,13 @@ enum class InputTensorType : uint8_t {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-Tensor pre_tosa_scatter_transform_tensor(const Tensor& tensor, const uint32_t& N, const uint32_t& K, const uint32_t& W, const uint32_t& C, const InputTensorType& input_tensor_type) {
-    if (tensor.logical_shape() == ttnn::Shape{1} || tensor.logical_shape() == ttnn::Shape{0}) {
-        return tensor;
-    }
-
+Tensor pre_tosa_scatter_transform_tensor(
+    const Tensor& tensor,
+    const uint32_t& N,
+    const uint32_t& K,
+    const uint32_t& W,
+    const uint32_t& C,
+    const InputTensorType& input_tensor_type) {
     Tensor processed_tensor = tensor;
     if (input_tensor_type == InputTensorType::INDEX) {
         processed_tensor =
@@ -60,7 +62,7 @@ Tensor pre_tosa_scatter_transform_tensor(const Tensor& tensor, const uint32_t& N
 Tensor post_tosa_scatter_transform_tensor(
     Tensor& output_tensor, const uint32_t& N, const uint32_t& K, const uint32_t& W, const uint32_t& C, const Layout& original_layout) {
     Tensor processed_tensor = ttnn::transpose(output_tensor, W_DIMENSION, LAST_DIMENSION);
-    processed_tensor = ttnn::squeeze_from_4D(processed_tensor, 3);
+    processed_tensor = ttnn::squeeze_from_4D(processed_tensor, INPUT_RANK_CONSTRAINT);
     if (original_layout != Layout::ROW_MAJOR) {
         processed_tensor = ttnn::to_layout(processed_tensor, original_layout, std::nullopt, std::nullopt, processed_tensor.device());
     }

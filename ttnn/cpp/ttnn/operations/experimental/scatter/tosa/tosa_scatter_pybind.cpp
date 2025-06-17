@@ -18,9 +18,9 @@ void bind_tosa_scatter_operation(py::module& module) {
             to the index tensor.
 
             Parameters:
-                * `input` (Tensor): The input tensor to scatter values onto.
-                * `index` (Tensor): The tensor specifying indices where values from the source tensor must go to.
-                * `src` (Tensor): The tensor containing the source values to be scattered onto input.
+                * `input` (Tensor): The input tensor to scatter values onto. Must be of rank 3.
+                * `index` (Tensor): The tensor specifying indices where values from the source tensor must go to. Must be of rank 2.
+                * `src` (Tensor): The tensor containing the source values to be scattered onto input. Must be of rank 3.
 
             Keyword Arguments:
                 * `memory_config` (MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
