@@ -1295,7 +1295,7 @@ tt::tt_fabric::FabricEriscDatamoverType get_fabric_edm_type(
         bool is_dateline_upstream_adjacent_upstream_edm_along_row =
             (chip0 >= mesh_num_columns && chip0 < (2 * mesh_num_columns) && chip1 == chip0 + mesh_num_columns) ||
             (chip0 >= (mesh_num_columns * (mesh_num_rows - 2)) && chip0 < (mesh_num_columns * (mesh_num_rows - 1)) &&
-             chip1 == chip0 + mesh_num_columns);
+             chip1 == chip0 - mesh_num_columns);
         // Column dateline
         if (is_dateline_edm_along_column) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline;
