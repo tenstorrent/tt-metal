@@ -390,7 +390,6 @@ class UNet2DConditionModel:
                 input_layout=sample.get_layout(),
                 **conv_kwargs,
                 input_dtype=ttnn.bfloat8_b,
-                output_dtype=ttnn.bfloat8_b,
             )
             self.conv_in_weights = ttnn.to_device(self.conv_in_weights, self.device)
             self.conv_in_bias = ttnn.to_device(self.conv_in_bias, self.device)
@@ -677,7 +676,6 @@ class UNet2DConditionModel:
                 input_layout=sample.get_layout(),
                 **conv_kwargs_1,
                 input_dtype=ttnn.bfloat8_b,
-                output_dtype=ttnn.bfloat8_b,
             )
             self.conv_out_weights = ttnn.to_device(self.conv_out_weights, self.device)
             self.conv_out_bias = ttnn.to_device(self.conv_out_bias, self.device)

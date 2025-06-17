@@ -83,7 +83,6 @@ class Conv:
                 has_bias=True,
                 **conv_kwargs,
                 input_dtype=self.dtype,
-                output_dtype=self.dtype,
             )
             self.bias = ttnn.prepare_conv_bias(
                 bias_tensor=self.bias,
@@ -91,7 +90,6 @@ class Conv:
                 input_layout=input_tensor.get_layout(),
                 **conv_kwargs,
                 input_dtype=self.dtype,
-                output_dtype=self.dtype,
             )
             self.weights = ttnn.to_device(self.weights, device)
             self.bias = ttnn.to_device(self.bias, device)

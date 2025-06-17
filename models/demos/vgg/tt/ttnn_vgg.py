@@ -145,7 +145,6 @@ def ttnn_vgg16(
                     input_layout=tt_x.get_layout(),
                     **conv_kwargs,
                     input_dtype=model_config["ACTIVATIONS_DTYPE"],
-                    output_dtype=model_config["ACTIVATIONS_DTYPE"],
                 )
 
                 tt_weight = ttnn.to_device(tt_weight, device)
@@ -298,7 +297,6 @@ def ttnn_vgg11(
                     input_layout=tt_x.get_layout(),
                     **conv_kwargs,
                     input_dtype=model_config["ACTIVATIONS_DTYPE"],
-                    output_dtype=model_config["ACTIVATIONS_DTYPE"],
                 )
 
                 tt_weight = ttnn.to_device(tt_weight, device)
