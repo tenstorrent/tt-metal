@@ -754,6 +754,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     T* device,
     Conv2dConfig& conv_config,
     const DeviceComputeKernelConfig& compute_config,
+    DataType input_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt) {
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
@@ -815,7 +817,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         conv_config,
         input_layout,
         input_dtype,
-        output_dtype,
+        output_dtype.value_or(input_dtype),
         compute_config,
         input_memory_config,
         has_bias);
@@ -1036,6 +1038,8 @@ ttnn::Tensor prepare_conv_weights(
     const bool has_bias,
     uint32_t groups,
     T* device,
+    DataType input_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
@@ -1077,6 +1081,8 @@ ttnn::Tensor prepare_conv_weights(
         device,
         conv_config,
         compute_config,
+        input_dtype,
+        output_dtype,
         dram_slice_config_);
 
     // Use internal API to prepare weights
@@ -1100,7 +1106,7 @@ ttnn::Tensor prepare_conv_bias(
     uint32_t groups,
     T* device,
     DataType input_dtype,
-    DataType output_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
     TT_FATAL(!ttnn::has_storage_type_of(bias_tensor, ttnn::DEVICE_STORAGE_TYPE), "conv bias should be placed on host");
@@ -1126,7 +1132,9 @@ ttnn::Tensor prepare_conv_bias(
         groups,
         device,
         conv_config,
-        compute_config);
+        compute_config,
+        input_dtype,
+        output_dtype);
 
     // Use internal API to prepare bias
     auto prepared_bias = prepare_conv_bias_internal(
@@ -1157,7 +1165,7 @@ template ttnn::Tensor prepare_conv_weights<IDevice>(
     uint32_t groups,
     IDevice* device,
     DataType input_dtype,
-    DataType output_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
@@ -1180,7 +1188,7 @@ template ttnn::Tensor prepare_conv_weights<MeshDevice>(
     uint32_t groups,
     MeshDevice* device,
     DataType input_dtype,
-    DataType output_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
@@ -1228,7 +1236,7 @@ template ttnn::Tensor prepare_conv_bias<IDevice>(
     uint32_t groups,
     IDevice* device,
     DataType input_dtype,
-    DataType output_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
@@ -1248,7 +1256,7 @@ template ttnn::Tensor prepare_conv_bias<MeshDevice>(
     uint32_t groups,
     MeshDevice* device,
     DataType input_dtype,
-    DataType output_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
