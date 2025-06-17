@@ -16,6 +16,60 @@
 
 constexpr uint16_t TILE_SIZE = 32;
 
+template <uint32_t StickNBytes, uint32_t MaxChunkSize>
+FORCE_INLINE void copy_padding_small_sticks(uint64_t padding_l1_addr, uint64_t dst_addr, uint16_t nsticks) {
+    static_assert(MaxChunkSize >= StickNBytes, "This function assumes max chunk size > stick size");
+
+    constexpr uint32_t sticks_per_batch = MaxChunkSize / StickNBytes;
+    constexpr uint32_t batch_size_bytes = sticks_per_batch * StickNBytes;
+
+    if constexpr (sticks_per_batch > 1) {
+        uint16_t remaining_sticks = nsticks;
+        while (remaining_sticks >= sticks_per_batch) {
+            noc_async_read(padding_l1_addr, dst_addr, batch_size_bytes);
+            dst_addr += batch_size_bytes;
+            remaining_sticks -= sticks_per_batch;
+        }
+        for (uint16_t k = 0; k < remaining_sticks; ++k) {
+            noc_async_read(padding_l1_addr, dst_addr, StickNBytes);
+            dst_addr += StickNBytes;
+        }
+    } else {
+        noc_async_read_one_packet_set_state(padding_l1_addr, StickNBytes);
+        for (uint16_t k = 0; k < nsticks; ++k) {
+            noc_async_read_one_packet_with_state(padding_l1_addr, dst_addr);
+            dst_addr += StickNBytes;
+        }
+    }
+}
+
+template <uint32_t StickNBytes, uint32_t MaxChunkSize>
+FORCE_INLINE void copy_padding_large_sticks(uint64_t padding_l1_addr, uint64_t dst_addr, uint16_t nsticks) {
+    constexpr uint32_t num_full_chunks = StickNBytes / MaxChunkSize;
+    constexpr uint32_t remainder_bytes = StickNBytes % MaxChunkSize;
+
+    // Copy all full chunks for all sticks
+    if constexpr (num_full_chunks > 0) {
+        noc_async_read_one_packet_set_state(padding_l1_addr, MaxChunkSize);
+        for (uint16_t k = 0; k < nsticks; ++k) {
+            uint64_t stick_start_addr = dst_addr + (k * StickNBytes);
+            for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
+                uint64_t chunk_dst_addr = stick_start_addr + (chunk * MaxChunkSize);
+                noc_async_read_one_packet_with_state(padding_l1_addr, chunk_dst_addr);
+            }
+        }
+    }
+
+    // Copy all remainder chunks for all sticks
+    if constexpr (remainder_bytes > 0) {
+        noc_async_read_one_packet_set_state(padding_l1_addr, remainder_bytes);
+        for (uint16_t k = 0; k < nsticks; ++k) {
+            uint64_t remainder_dst_addr = dst_addr + (k * StickNBytes) + (num_full_chunks * MaxChunkSize);
+            noc_async_read_one_packet_with_state(padding_l1_addr, remainder_dst_addr);
+        }
+    }
+}
+
 template <uint32_t PaddingConfigCBId, uint32_t OutCBId, uint32_t StickNBytes, uint32_t MaxChunkSize = MEM_ZEROS_SIZE>
 FORCE_INLINE void copy_padding(uint16_t my_noc_x, uint16_t my_noc_y) {
     const uint32_t padding_config_l1_addr = get_read_ptr(PaddingConfigCBId);
@@ -29,25 +83,11 @@ FORCE_INLINE void copy_padding(uint16_t my_noc_x, uint16_t my_noc_y) {
         uint16_t dst_local_idx = config_data[j + 0];
         nsticks = config_data[j + 1];
         uint64_t dst_addr = dst_base_addr + (dst_local_idx * StickNBytes);
+
         if constexpr (StickNBytes <= MaxChunkSize) {
-            for (uint16_t k = 0; k < nsticks; ++k) {
-                noc_async_read(padding_l1_addr, dst_addr, StickNBytes);
-                dst_addr += StickNBytes;
-            }
+            copy_padding_small_sticks<StickNBytes, MaxChunkSize>(padding_l1_addr, dst_addr, nsticks);
         } else {
-            constexpr uint32_t num_full_chunks = StickNBytes / MaxChunkSize;
-            constexpr uint32_t remainder_bytes = StickNBytes % MaxChunkSize;
-            for (uint16_t k = 0; k < nsticks; ++k) {
-                uint64_t current_dst_addr = dst_addr;
-                for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
-                    noc_async_read(padding_l1_addr, current_dst_addr, MaxChunkSize);
-                    current_dst_addr += MaxChunkSize;
-                }
-                if constexpr (remainder_bytes > 0) {
-                    noc_async_read(padding_l1_addr, current_dst_addr, remainder_bytes);
-                }
-                dst_addr += StickNBytes;
-            }
+            copy_padding_large_sticks<StickNBytes, MaxChunkSize>(padding_l1_addr, dst_addr, nsticks);
         }
     }
 }
