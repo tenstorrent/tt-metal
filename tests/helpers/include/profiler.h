@@ -88,22 +88,9 @@ __attribute__((always_inline)) inline void sync_threads()
 {
     auto& barrier = *barrier_ptr;
 
-    // wait for all the threads to reset the barrier
-    barrier[TRISC_ID] = 0;
-    for (uint32_t i = 0; i < NUM_CORES; ++i)
-    {
-        if (i == TRISC_ID)
-        {
-            continue;
-        }
-        while (barrier[i] != 0)
-        {
-            asm volatile("fence");
-        }
-    }
-
     // wait for all the threads to set the barrier
     barrier[TRISC_ID] = 1;
+    asm volatile("fence" ::: "memory");
     for (uint32_t i = 0; i < NUM_CORES; ++i)
     {
         if (i == TRISC_ID)
@@ -112,7 +99,7 @@ __attribute__((always_inline)) inline void sync_threads()
         }
         while (barrier[i] != 1)
         {
-            asm volatile("fence");
+            asm volatile("fence" ::: "memory");
         }
     }
 }
