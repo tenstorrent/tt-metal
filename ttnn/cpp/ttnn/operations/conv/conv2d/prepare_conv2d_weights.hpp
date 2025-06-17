@@ -157,13 +157,6 @@ struct Conv2dWeightsBiasPrepConfig {
 };
 
 template <typename T>
-std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_on_device(
-    const ttnn::Tensor& weight_tensor,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    Conv2dWeightsBiasPrepConfig& params,
-    T* device);
-
-template <typename T>
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(
     const ttnn::Tensor& weight_tensor,
     const std::optional<const ttnn::Tensor>& bias_tensor,

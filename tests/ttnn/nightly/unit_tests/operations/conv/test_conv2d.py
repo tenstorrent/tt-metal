@@ -101,7 +101,6 @@ def run_conv(
     output_mesh_composer=None,
     enable_split_reader=False,
     activation="",
-    preprocess_weights_on_device=True,
     in_place=False,
     run_twice=False,
     fast_compare=False,
@@ -224,8 +223,6 @@ def run_conv(
         output_layout=output_layout,
         activation=activation,
         transpose_shards=transpose_shards,
-        preprocess_weights_on_device=preprocess_weights_on_device,
-        always_preprocess_weights=False,
         in_place=in_place,
         enable_kernel_stride_folding=enable_kernel_stride_folding,
     )
@@ -770,7 +767,6 @@ def test_conv_dram(
         input_dtype=input_dtype,
         input_layout=input_layout,
         packer_l1_acc=packer_l1_acc,
-        preprocess_weights_on_device=False,
         run_twice=False,
         fast_compare=True,
         slice_config=ttnn.Conv2dSliceConfig(
@@ -3103,7 +3099,6 @@ def test_conv2d_model_fruit(
         input_layout= input_layout,
         activation="relu",
         enable_act_double_buffer=enable_act_double_buffer,
-        preprocess_weights_on_device=False,
         input_dtype = input_dtype,
     )
 
@@ -3610,7 +3605,6 @@ def test_segformer_channel_padding(device, enable_act_double_buffer, enable_spli
 @pytest.mark.parametrize("kernel_height,kernel_width", [(16, 16), (32, 32)])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("has_bias", [True, False])
-@pytest.mark.parametrize("preprocess_weights_on_device", [True, False])
 def test_conv2d_with_fold(
     device,
     torch_tensor_map,
@@ -3623,7 +3617,6 @@ def test_conv2d_with_fold(
     kernel_width,
     input_layout,
     has_bias,
-    preprocess_weights_on_device,
 ):
     run_conv(
         device=device,
@@ -3646,7 +3639,6 @@ def test_conv2d_with_fold(
         input_layout=input_layout,
         has_bias=has_bias,
         enable_kernel_stride_folding=True,
-        preprocess_weights_on_device=preprocess_weights_on_device,
     )
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
