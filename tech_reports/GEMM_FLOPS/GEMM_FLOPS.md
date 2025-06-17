@@ -402,7 +402,7 @@ When a tensix core executes an operation, it does so by reading in data from SRA
 Each Tensix core on a WH ASIC has ~1.5MB of SRAM. When feeding data from SRAM, each tensix can operate unencumbered. However some problems require more working memory than is available via SRAM. When this happens, Tensix will instead map data to device memory or DRAM. Accessing data from DRAM is slower both in terms of bandwidth and latency than SRAM. Simultaneously, because of the interconnected nature of the WH ASIC, a clever programmer may often find that the result of one tensix unit is what is needed for the input of another tensix core. Instead of writing that data back to device memory, the data can instead be forwarded directly over the NOC.
 
 ### Blackhole Performance
-A similar benchmark can be used to demonstrate the "manual" and "out of box" matmul performance provided with Blackhole cards. These devices have larger compute grids, and so the matrix dimensions have been increased to maintain a similar about of work-per-core. The below results are collected on a *p100a*.
+A similar benchmark can be used to demonstrate the "manual" and "out of box" matmul performance provided with Blackhole cards. These devices have larger compute grids, and so the matrix dimensions have been increased to maintain a similar amount of work-per-core. The below results are collected on a *p100a*.
 
 #### Blackhole Manually Tuned Performance
 As with Wormhole, these results reflect a selection of manually selected matmul configurations for peak results.
