@@ -375,8 +375,8 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
     return true;
 }
 
-void InitializeFabricConfig(FabricConfig fabric_config) {
-    tt::tt_metal::MetalContext::instance().initialize_fabric_config(fabric_config);
+void SetFabricConfig(FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes) {
+    tt::tt_metal::MetalContext::instance().set_fabric_config(fabric_config, num_routing_planes);
 }
 
 std::map<chip_id_t, IDevice*> CreateDevices(

@@ -24,7 +24,8 @@ from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 DECODER_OP_START_INDEX = 4
-DECODER_OP_END_INDEX = -21
+DECODER_OP_END_INDEX = -22
+NUM_OPS_IN_SAMPLING = 12
 
 DECODER_PREFIX = "model"
 MODEL_TAIL_PREFIX = "model_tail"
@@ -186,7 +187,7 @@ def merge_device_rows(df):
         if not blocks:
             break
 
-        if "AllGather" in op_name or "ReduceScatter" in op_name or "AllReduce" in op_name:
+        if "AllGather" in op_name or "ReduceScatter" in op_name or "AllReduce" or "Matmul_RS" in op_name:
             # For collective ops, take the average duration over all rows within a block
             device_kernel_durations = [
                 d["DEVICE KERNEL DURATION [ns]"]
@@ -274,7 +275,7 @@ def print_dict(input_dict, dict_name):
 
 
 def is_collective_op(op_code):
-    return any(x in op_code for x in ("AllGather", "ReduceScatter", "AllReduce"))
+    return any(x in op_code for x in ("AllGather", "ReduceScatter", "AllReduce", "Matmul_RS"))
 
 
 def process_measurements(df, num_layers):
@@ -409,8 +410,11 @@ def test_llama_TG_perf_device(
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
     df = merge_device_rows(df)
     # Excluding compile run and capture trace entries
-    df_model_compilation = df[: int(len(df) / 3)]
-    df_model_trace = df[int(len(df) / 3 * 2) :]
+    len_without_second_sampling_compile_run = (
+        len(df) - NUM_OPS_IN_SAMPLING
+    )  # Need to subtract 1x sampling due to second compile run for sampling needed to get random sampling
+    df_model_compilation = df[: int(len_without_second_sampling_compile_run / 3)]
+    df_model_trace = df[int(len_without_second_sampling_compile_run / 3 * 2) + NUM_OPS_IN_SAMPLING :]
 
     # Excluding model embeddings and lmhead+sampling ops
     df_layers_compilation = df_model_compilation[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]

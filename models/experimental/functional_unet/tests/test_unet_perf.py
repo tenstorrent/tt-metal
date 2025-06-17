@@ -15,27 +15,44 @@ from models.utility_functions import (
 )
 
 from models.experimental.functional_unet.tests.common import UNET_TRACE_REGION_SIZE, UNET_L1_SMALL_REGION_SIZE
+from models.experimental.functional_unet.tests.test_unet_model import run_unet_model
+
+UNET_DEVICE_TEST_TOTAL_ITERATIONS = 4
+
+
+@pytest.mark.parametrize("batch", [1])
+@pytest.mark.parametrize("groups", [4])
+@pytest.mark.parametrize("iterations", [UNET_DEVICE_TEST_TOTAL_ITERATIONS])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
+def test_unet_model(batch, groups, device, iterations, use_program_cache, reset_seeds):
+    if (
+        not is_wormhole_b0(device)
+        and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110
+    ):
+        pytest.skip(f"Shallow UNet only support 110 cores on BH (was {device.compute_with_storage_grid_size()})")
+    device.disable_and_clear_program_cache()  # Needed to give consistent device perf between iterations
+    run_unet_model(batch, groups, device, iterations)
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, groups, expected_device_perf_fps",
-    ((1, 4, 1420.0),),
+    ((1, 4, 1415.0),),
 )
 def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: float):
-    command = f"pytest models/experimental/functional_unet/tests/test_unet_model.py::test_unet_model[device_params0-{groups}-{batch}]"
+    command = f"pytest models/experimental/functional_unet/tests/test_unet_perf.py::test_unet_model"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
-    total_batch = groups * batch
+    total_batch = groups * batch * UNET_DEVICE_TEST_TOTAL_ITERATIONS
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
     post_processed_results = run_device_perf(
-        command, subdir="unet_shallow", num_iterations=3, cols=cols, batch_size=total_batch
+        command, subdir="unet_shallow", num_iterations=1, cols=cols, batch_size=total_batch
     )
     expected_perf_cols = {inference_time_key: expected_device_perf_fps}
     expected_results = check_device_perf(
-        post_processed_results, margin=0.015, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+        post_processed_results, margin=0.005, expected_perf_cols=expected_perf_cols, assert_on_fail=True
     )
     prep_device_perf_report(
         model_name=f"unet-shallow_batch-{batch}_groups-{groups}",

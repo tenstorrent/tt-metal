@@ -82,53 +82,9 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
 Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevice* worker) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout, worker);
-    TT_ASSERT(
+    TT_FATAL(
         input_tensor.storage_type() != StorageType::DEVICE, "Bring tensor to host before converting to target layout");
     Tensor output = tensor_impl::to_layout_wrapper(input_tensor, target_layout);
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
-}
-
-Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device) {
-    ZoneScoped;
-    TT_FATAL(
-        is_cpu_tensor(input_tensor) || is_multi_device_host_tensor(input_tensor),
-        "to(layout) must be called on host tensors with MULTI_DEVICE_HOST_STORAGE when multiple "
-        "workers "
-        "are specified");
-
-    GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout, mesh_device);
-    if (mesh_device) {
-        // Mesh Device provided - have a handle to the thread-pool
-        Tensor tensor_modified_layout = std::visit(
-            tt::stl::overloaded{
-                [&](const HostStorage& s) { return tensor_impl::to_layout_wrapper(input_tensor, target_layout); },
-                [&](const MultiDeviceHostStorage& s) {
-                    // TODO: #22045 - Move to `transform` and use OMP parallel for.
-                    std::vector<Tensor> shards(s.num_buffers());
-                    for (std::size_t shard_idx = 0; shard_idx < s.num_buffers(); ++shard_idx) {
-                        // Multi-Thread Host tilization of shards.
-                        mesh_device->enqueue_to_thread_pool([shard_idx, &s, &shards, target_layout, &input_tensor]() {
-                            ZoneScopedN("HostTilize");
-                            Tensor shard(s.get_buffer(shard_idx), input_tensor.tensor_spec());
-                            shards[shard_idx] = tensor_impl::to_layout_wrapper(shard, target_layout);
-                        });
-                    }
-                    mesh_device->wait_for_thread_pool();
-                    return ttnn::distributed::aggregate_as_tensor(shards, input_tensor.distributed_tensor_config());
-                },
-                [&](const DeviceStorage& s) -> Tensor { TT_THROW("Unexpected storage type"); },
-            },
-            input_tensor.storage());
-
-        tensor_modified_layout = tt::tt_metal::set_tensor_id(tensor_modified_layout);
-        GraphTracker::instance().track_function_end(tensor_modified_layout);
-        return tensor_modified_layout;
-    }
-
-    // Running without worker threads (non-async)
-    auto output = tensor_impl::to_layout_wrapper(input_tensor, target_layout);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;

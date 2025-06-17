@@ -35,7 +35,7 @@ TSU_PERF_DROP_LIMIT_PERCENT = 10
 
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
-    "4U": {1: {"min": 390, "max": 448}, 10: {"min": 230, "max": 253}, 80: {"min": 49.5, "max": 54}},
+    "4U": {1: {"min": 390, "max": 448}, 10: {"min": 230, "max": 253}, 80: {"min": 52, "max": 56}},
     # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
     "6U": {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
 }
@@ -334,9 +334,6 @@ def run_llama3_demo(
 
         # Sampling
         _ = tt_sampling(tt_out[0], top_k, top_p, seed, tt_out_tok=tt_out_tok)  # Compile once with setting the seed
-        _ = tt_sampling(
-            tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok
-        )  # Compile again without seed to obtain random sampling
         logger.info(f"Sampling done")
 
     if not stress_test:
@@ -348,7 +345,10 @@ def run_llama3_demo(
             rot_mat_idxs,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
-    # profiler.end(f"plus one position done")
+
+    _ = tt_sampling(
+        tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok
+    )  # Compile again without seed to obtain random sampling; at this position to simplify test_decoder_device_perf.py
 
     # Capture Trace
     logger.info(f"Capturing model trace...")

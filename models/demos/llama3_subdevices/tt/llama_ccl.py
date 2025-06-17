@@ -553,6 +553,55 @@ class TT_CCL:
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return xqkv_reduced, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD
 
+    def matmul_line_reduce_scatter(
+        self,
+        # Matmul
+        matmul_input,
+        matmul_weight,
+        # Reduce Scatter
+        input_tensor_mesh,
+        # Matmul
+        compute_kernel_config=None,
+        dtype=None,
+        program_config=None,
+        memory_config=None,
+        global_cb=None,
+        sub_device_id=None,
+        # Reduce Scatter
+        dim=3,
+        num_links=1,
+        math_op=ttnn.ReduceType.Sum,
+        buffer_key=None,
+        RS_memory_config=None,
+        cluster_axis=1,
+    ):
+        persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
+            self.reduce_scatter_buffer_idx[cluster_axis]
+        ]
+        w3_out, ttnn_tensor_out = ttnn.experimental.llama_rs_matmul(
+            matmul_input,
+            matmul_weight,
+            input_tensor_mesh,
+            persistent_interim_buffer,
+            dim,
+            self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            cluster_axis,
+            self.mesh_device,
+            num_links,
+            self.worker_sub_device_id,
+            memory_config_rs=RS_memory_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=dtype,
+            program_config=program_config,
+            memory_config_mm=memory_config,
+            global_cb=global_cb,
+            topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
+        )
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        self.reduce_scatter_buffer_idx[cluster_axis] = (self.reduce_scatter_buffer_idx[cluster_axis] + 1) % self.num_cbs
+        # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
+        return ttnn_tensor_out, w3_out
+
     def llama_rs_create_heads(
         self,
         input_tensor_mesh,
