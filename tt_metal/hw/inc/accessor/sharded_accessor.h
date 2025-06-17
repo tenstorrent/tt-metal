@@ -26,6 +26,11 @@ using array_packed_u16_cta_sequence_wrapper_t =
 /**
  * @brief Accessor that encapsulates the logic for accessing sharded tensors pages.
  *
+ * The ShardedAccessor provides efficient access to pages in a sharded tensor by:
+ * 1. Computing which bank contains a given page
+ * 2. Calculating the offset within that bank
+ * 3. Providing NOC address computation and async operations
+ *
  * @tparam DSpec        DistributionSpec type.
  */
 template <typename DSpec>
@@ -151,7 +156,7 @@ FORCE_INLINE auto make_args(const size_t crta_base) {
 template <typename ArgsOffsetsT>
 FORCE_INLINE auto make_sharded_accessor_from_args(
     const ArgsOffsetsT& args, const size_t bank_base_address_in, const uint32_t page_size_in) {
-    auto dspec = detail::build_dspec_from_args(args);
+    auto dspec = detail::make_dspec_from_args(args);
     return ShardedAccessor<decltype(dspec)>(std::move(dspec), bank_base_address_in, page_size_in);
 }
 
@@ -167,7 +172,7 @@ FORCE_INLINE auto make_dspec(
     uint32_t* tensor_shape_ptr = nullptr,
     uint32_t* shard_shape_ptr = nullptr,
     uint16_t* bank_coords_ptr = nullptr) {
-    return detail::build_dspec<RankCT, NumBanksCT, TensorShapeWrapper_, ShardShapeWrapper_, BankCoordsWrapper_>(
+    return detail::make_dspec<RankCT, NumBanksCT, TensorShapeWrapper_, ShardShapeWrapper_, BankCoordsWrapper_>(
         rank_rt, num_banks_rt, tensor_shape_ptr, shard_shape_ptr, bank_coords_ptr);
 }
 

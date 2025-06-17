@@ -16,8 +16,7 @@ namespace detail {
 
 /**
  * @brief Holds all the distribution specification information for a tensor: rank, number of banks, tensor shape, shard
- * shape, bank coordinates. Each of these can be static or dynamic. ArgsLoc_ is used to determine the compile-time and
- * runtime arguments for the distribution specification.
+ * shape, bank coordinates. Each of these can be static or dynamic.
  *
  * @tparam RankCT         Compile-time rank of the tensor. If 0, the rank is dynamic.
  * @tparam NumBanksCT     Compile-time number of banks. If 0, the number of banks is dynamic.
@@ -108,33 +107,36 @@ struct DistributionSpec {
     } else {                                     \
         return val_rt;                           \
     }
-    // Getters
+
+    // === Shape and Dimension Queries ===
     FORCE_INLINE constexpr uint32_t rank() const { getter_helper(has_static_rank, rank_ct, rank_rt); }
 
     FORCE_INLINE constexpr uint32_t num_banks() const {getter_helper(has_static_num_banks, num_banks_ct, num_banks_rt)}
-
-    FORCE_INLINE constexpr const auto& shard_grid() const {getter_helper(shapes_static, shard_grid_ct, shard_grid_rt)}
-
-    FORCE_INLINE constexpr const
-        auto& shard_grid_strides() const {getter_helper(shapes_static, shard_grid_strides_ct, shard_grid_strides_rt)}
 
     FORCE_INLINE constexpr const
         auto& tensor_shape() const {getter_helper(tensor_shape_static, TensorShapeWrapper::elements, tensor_shape_rt)}
 
     FORCE_INLINE constexpr const
-        auto& tensor_strides() const {getter_helper(tensor_shape_static, tensor_strides_ct, tensor_strides_rt)}
-
-    FORCE_INLINE constexpr size_t
-        tensor_volume() const {getter_helper(tensor_shape_static, tensor_volume_ct, tensor_volume_rt)}
-
-    FORCE_INLINE constexpr const
         auto& shard_shape() const {getter_helper(shard_shape_static, ShardShapeWrapper::elements, shard_shape_rt)}
+
+    // === Computed Properties ===
+    FORCE_INLINE constexpr const
+        auto& tensor_strides() const {getter_helper(tensor_shape_static, tensor_strides_ct, tensor_strides_rt)}
 
     FORCE_INLINE constexpr const
         auto& shard_strides() const {getter_helper(shard_shape_static, shard_strides_ct, shard_strides_rt)}
 
     FORCE_INLINE constexpr size_t
+        tensor_volume() const {getter_helper(tensor_shape_static, tensor_volume_ct, tensor_volume_rt)}
+
+    FORCE_INLINE constexpr size_t
         shard_volume() const {getter_helper(shard_shape_static, shard_volume_ct, shard_volume_rt)}
+
+    // === Sharding Layout ===
+    FORCE_INLINE constexpr const auto& shard_grid() const {getter_helper(shapes_static, shard_grid_ct, shard_grid_rt)}
+
+    FORCE_INLINE constexpr const
+        auto& shard_grid_strides() const {getter_helper(shapes_static, shard_grid_strides_ct, shard_grid_strides_rt)}
 
     FORCE_INLINE constexpr const auto& packed_xy_coords() const {
         getter_helper(bank_coords_static, BankCoordsWrapper::elements, bank_coords_rt)
@@ -263,7 +265,7 @@ template <
     typename TensorShapeWrapper_ = ArrayDynamicWrapper,
     typename ShardShapeWrapper_ = ArrayDynamicWrapper,
     typename BankCoordsWrapper_ = ArrayDynamicWrapper>
-auto build_dspec(
+auto make_dspec(
     uint32_t rank_rt = 0,
     uint32_t num_banks_rt = 0,
     uint32_t* tensor_shape_ptr = nullptr,
@@ -340,7 +342,7 @@ auto build_dspec(
  * @return auto DistributionSpec instance built from provided argumnets.
  */
 template <typename ArgsOffsets>
-auto build_dspec_from_args(const ArgsOffsets& args_offsets) {
+auto make_dspec_from_args(const ArgsOffsets& args_offsets) {
     using Loc = typename ArgsOffsets::ArgsLoc;
 
     // Dispatch to the appropriate ShapeWrapper and BankCoordsWrapper types based on the "staticness"
@@ -371,7 +373,7 @@ auto build_dspec_from_args(const ArgsOffsets& args_offsets) {
         Loc::NumBanksStatic or !Loc::BankCoordsStatic,
         "Bank coords must be CRTA if num_banks is not known at compile time!");
 
-    return build_dspec<ArgsOffsets::RankCT, ArgsOffsets::NumBanksCT, TensorShapeType, ShardShapeType, BankCoordsType>(
+    return make_dspec<ArgsOffsets::RankCT, ArgsOffsets::NumBanksCT, TensorShapeType, ShardShapeType, BankCoordsType>(
         rank,
         num_banks,
         Loc::TensorShapeCRTA ? (uint32_t*)get_common_arg_addr(args_offsets.tensor_shape_crta_offset()) : nullptr,
