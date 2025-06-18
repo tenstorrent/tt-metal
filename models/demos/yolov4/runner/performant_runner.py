@@ -108,13 +108,11 @@ class YOLOv4PerformantRunner:
         assert_with_pcc(ref_confs, result_confs, YOLOV4_CONFS_PCC)
 
     def run(self, torch_input_tensor, check_pcc=False):
-        n, h, w, c = torch_input_tensor.shape
+        n, c, h, w = torch_input_tensor.shape
         tt_inputs_host, input_mem_config = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
         output = self._execute_yolov4_trace_2cqs_inference(tt_inputs_host)
 
         if check_pcc:
-            torch_input_tensor = torch_input_tensor.reshape(n, h, w, c)
-            torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
             self._validate(torch_input_tensor, output)
 
         return output
