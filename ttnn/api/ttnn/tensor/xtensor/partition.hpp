@@ -27,7 +27,6 @@ using StridedViews = std::vector<StridedView<T>>;
 //
 // Splits an xtensor expression into chunks along the specified dimension, and returns a vector of un-owned strided
 // views.
-// The value of `dim` must not be negative.
 template <typename T>
 StridedViews<T> chunk(const xt::xexpression<T>& expr, int num_chunks, int dim = 0);
 
@@ -35,10 +34,9 @@ StridedViews<T> chunk(const xt::xexpression<T>& expr, int num_chunks, int dim = 
 // Chunking is done in row-major order relative to the supplied `dims`, and returned in the vector in the same order.
 // `num_chunks` and `dims` must have the same length. When empty, no chunking is performed, and the entire tensor is
 // returned as a single chunk.
-// The values of `dims` must not be negative.
 template <typename T>
 StridedViews<T> chunk_ndim(
-    const xt::xexpression<T>& expr, tt::stl::SmallVector<int> num_chunks, tt::stl::SmallVector<int> dims);
+    const xt::xexpression<T>& expr, const tt::stl::SmallVector<int>& num_chunks, const tt::stl::SmallVector<int>& dims);
 
 // Concatenates a list of tensors along the specified dimension.
 tt::tt_metal::Tensor concat(const std::vector<tt::tt_metal::Tensor>& tensors, int dim = 0);

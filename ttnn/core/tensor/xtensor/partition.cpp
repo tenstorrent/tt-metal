@@ -22,9 +22,27 @@
 namespace ttnn::experimental::xtensor {
 namespace {
 
+tt::stl::SmallVector<int> normalize_dims(const tt::stl::SmallVector<int>& dims, size_t tensor_dims) {
+    tt::stl::SmallVector<int> normalized_dims;
+    std::transform(dims.begin(), dims.end(), std::back_inserter(normalized_dims), [tensor_dims](int dim) {
+        return dim < 0 ? dim + static_cast<int>(tensor_dims) : dim;
+    });
+    TT_FATAL(
+        std::all_of(
+            normalized_dims.begin(),
+            normalized_dims.end(),
+            [tensor_dims](int dim) { return dim >= 0 && dim < tensor_dims; }),
+        "Invalid dimension index; got dims: {}, tensor dimension: {}",
+        dims,
+        tensor_dims);
+    return normalized_dims;
+}
+
 template <typename T>
 auto chunk_xexpression(
-    const xt::xexpression<T>& expr_base, tt::stl::SmallVector<int> num_chunks, tt::stl::SmallVector<int> dims) {
+    const xt::xexpression<T>& expr_base,
+    const tt::stl::SmallVector<int>& num_chunks,
+    const tt::stl::SmallVector<int>& dims) {
     const auto& expr = expr_base.derived_cast();
     if (num_chunks.empty()) {
         xt::xstrided_slice_vector indices(expr.dimension(), xt::all());
@@ -32,34 +50,33 @@ auto chunk_xexpression(
     }
 
     TT_FATAL(num_chunks.size() == dims.size(), "num_chunks and dims must have the same size");
-    auto sorted_dims = dims;
+
+    const auto normalized_dims = normalize_dims(dims, expr.dimension());
+    auto sorted_dims = normalized_dims;
     std::sort(sorted_dims.begin(), sorted_dims.end());
     TT_FATAL(std::unique(sorted_dims.begin(), sorted_dims.end()) == sorted_dims.end(), "dims must be unique");
+
     TT_FATAL(
-        std::all_of(num_chunks.begin(), num_chunks.end(), [](size_t size) { return size > 0; }),
+        std::all_of(num_chunks.begin(), num_chunks.end(), [](int size) { return size > 0; }),
         "num_chunks must be > 0; got num_chunks: {}",
         num_chunks);
-    TT_FATAL(
-        std::all_of(dims.begin(), dims.end(), [&expr](size_t dim) { return dim >= 0 && dim < expr.dimension(); }),
-        "invalid dimension index; got dims: {}, tensor dimension: {}",
-        dims,
-        expr.dimension());
 
+    const size_t dims_size = normalized_dims.size();
     tt::stl::SmallVector<std::vector<std::pair<int, int>>> dim_ranges;
     tt::stl::SmallVector<size_t> num_chunks_per_dim;
-    for (size_t i = 0; i < dims.size(); ++i) {
-        int dim = dims[i];
-        int num_chunks_along_dim = num_chunks[i];
-        int size_along_dim = static_cast<int>(expr.shape()[dim]);
-        int chunk_size = (size_along_dim + num_chunks_along_dim - 1) / num_chunks_along_dim;
+    for (size_t i = 0; i < dims_size; ++i) {
+        const int dim = normalized_dims[i];
+        const int num_chunks_along_dim = num_chunks[i];
+        const int size_along_dim = static_cast<int>(expr.shape()[dim]);
+        const int chunk_size = (size_along_dim + num_chunks_along_dim - 1) / num_chunks_along_dim;
 
         std::vector<std::pair<int, int>> ranges;
         ranges.reserve(num_chunks_along_dim);
 
         int start = 0;
         for (int chunk_idx = 0; chunk_idx < num_chunks_along_dim && start < size_along_dim; ++chunk_idx) {
-            int current_chunk_size = std::min(chunk_size, size_along_dim - start);
-            int end = start + current_chunk_size;
+            const int current_chunk_size = std::min(chunk_size, size_along_dim - start);
+            const int end = start + current_chunk_size;
             ranges.emplace_back(start, end);
             start = end;
         }
@@ -71,19 +88,18 @@ auto chunk_xexpression(
         std::accumulate(num_chunks_per_dim.begin(), num_chunks_per_dim.end(), 1, std::multiplies<size_t>());
 
     StridedViews<T> chunk_views;
-    tt::stl::SmallVector<size_t> current_indices(dims.size(), 0);
+    tt::stl::SmallVector<size_t> current_indices(dims_size, 0);
     for (size_t chunk_idx = 0; chunk_idx < total_chunks; ++chunk_idx) {
         xt::xstrided_slice_vector indices(expr.dimension(), xt::all());
-        for (size_t i = 0; i < dims.size(); ++i) {
-            int dim = dims[i];
-            auto [start, end] = dim_ranges[i][current_indices[i]];
+        for (size_t i = 0; i < dims_size; ++i) {
+            const int dim = normalized_dims[i];
+            const auto [start, end] = dim_ranges[i][current_indices[i]];
             indices[dim] = xt::range(start, end);
         }
 
-        auto chunk_view = xt::strided_view(expr, indices);
-        chunk_views.push_back(chunk_view);
+        chunk_views.push_back(xt::strided_view(expr, indices));
 
-        for (int i = static_cast<int>(dims.size()) - 1; i >= 0; --i) {
+        for (int i = static_cast<int>(dims_size) - 1; i >= 0; --i) {
             if (++current_indices[i] < num_chunks_per_dim[i]) {
                 break;
             }
@@ -111,7 +127,9 @@ StridedViews<T> chunk(const xt::xexpression<T>& expr, int num_chunks, int dim) {
 
 template <typename T>
 StridedViews<T> chunk_ndim(
-    const xt::xexpression<T>& expr, tt::stl::SmallVector<int> num_chunks, tt::stl::SmallVector<int> dims) {
+    const xt::xexpression<T>& expr,
+    const tt::stl::SmallVector<int>& num_chunks,
+    const tt::stl::SmallVector<int>& dims) {
     return chunk_xexpression(expr, num_chunks, dims);
 }
 
@@ -172,16 +190,18 @@ xt::xarray<T> concat(const std::vector<xt::xarray<T>>& v, int dim) {
 }
 
 // Explicit instantiations for the public API.
-#define EXPLICIT_INSTANTIATIONS_FOR_TYPE(T)                                                                    \
-    template StridedViews<xt::xarray<T>> chunk(const xt::xexpression<xt::xarray<T>>&, int, int);               \
-    template StridedViews<xt::xarray<T>> chunk_ndim(                                                           \
-        const xt::xexpression<xt::xarray<T>>&, tt::stl::SmallVector<int>, tt::stl::SmallVector<int>);          \
-    template StridedViews<AdaptedType<T>> chunk(const xt::xexpression<AdaptedType<T>>&, int, int);             \
-    template StridedViews<AdaptedType<T>> chunk_ndim(                                                          \
-        const xt::xexpression<AdaptedType<T>>&, tt::stl::SmallVector<int>, tt::stl::SmallVector<int>);         \
-    template StridedViews<AdaptedType<const T>> chunk(const xt::xexpression<AdaptedType<const T>>&, int, int); \
-    template StridedViews<AdaptedType<const T>> chunk_ndim(                                                    \
-        const xt::xexpression<AdaptedType<const T>>&, tt::stl::SmallVector<int>, tt::stl::SmallVector<int>);   \
+#define EXPLICIT_INSTANTIATIONS_FOR_TYPE(T)                                                                          \
+    template StridedViews<xt::xarray<T>> chunk(const xt::xexpression<xt::xarray<T>>&, int, int);                     \
+    template StridedViews<xt::xarray<T>> chunk_ndim(                                                                 \
+        const xt::xexpression<xt::xarray<T>>&, const tt::stl::SmallVector<int>&, const tt::stl::SmallVector<int>&);  \
+    template StridedViews<AdaptedType<T>> chunk(const xt::xexpression<AdaptedType<T>>&, int, int);                   \
+    template StridedViews<AdaptedType<T>> chunk_ndim(                                                                \
+        const xt::xexpression<AdaptedType<T>>&, const tt::stl::SmallVector<int>&, const tt::stl::SmallVector<int>&); \
+    template StridedViews<AdaptedType<const T>> chunk(const xt::xexpression<AdaptedType<const T>>&, int, int);       \
+    template StridedViews<AdaptedType<const T>> chunk_ndim(                                                          \
+        const xt::xexpression<AdaptedType<const T>>&,                                                                \
+        const tt::stl::SmallVector<int>&,                                                                            \
+        const tt::stl::SmallVector<int>&);                                                                           \
     template xt::xarray<T> concat(const std::vector<xt::xarray<T>>& v, int dim);
 
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(bfloat16)
