@@ -49,10 +49,7 @@ void bind_scatter_operation(py::module& module) {
                 source_ttnn = ttnn.from_torch(source_torch, dtype=ttnn.float32, device=device, layout=ttnn.Layout.TILE)
                 dim = -1
 
-                output = ttnn.experimental.scatter_(input_ttnn, dim, index_ttnn, source_ttnn)
-
-                output_preallocated = ttnn.zeros_like(input_ttnn)
-                another_output = ttnn.experimental.scatter_(input_ttnn, dim, index_ttnn, source_ttnn, out=output_preallocated)
+                output = ttnn.experimental.scatter(input_ttnn, dim, index_ttnn, source_ttnn)
         )doc";
 
     using OperationType = decltype(ttnn::experimental::scatter);

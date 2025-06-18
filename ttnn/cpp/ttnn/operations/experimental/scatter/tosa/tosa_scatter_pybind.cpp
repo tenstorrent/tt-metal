@@ -44,9 +44,6 @@ void bind_tosa_scatter_operation(py::module& module) {
                 source_ttnn = ttnn.from_torch(source_torch, dtype=ttnn.float32, device=device, layout=ttnn.Layout.TILE)
 
                 output = ttnn.experimental.tosa_scatter(input_ttnn, index_ttnn, source_ttnn)
-
-                output_preallocated = ttnn.zeros_like(input_ttnn)
-                another_output = ttnn.experimental.scatter_(input_ttnn, dim, index_ttnn, source_ttnn, out=output_preallocated)
         )doc";
 
     using OperationType = decltype(ttnn::experimental::tosa_scatter);
