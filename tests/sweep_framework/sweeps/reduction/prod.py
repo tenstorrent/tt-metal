@@ -10,6 +10,7 @@ import random
 import ttnn
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from loguru import logger
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
@@ -123,6 +124,11 @@ import pytest
     ],
 )
 def test_reduction_prod_localrun_fail_only(device, input_shape, dim, keepdim):
-    run_prod(
+    (result, msg), e2e_perf = run_prod(
         input_shape, dim, keepdim, ttnn.float32, ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, device
     )
+
+    assert result, msg
+    logger.info(msg)
+    if e2e_perf:
+        logger.info(f"E2E Performance: {e2e_perf}")
