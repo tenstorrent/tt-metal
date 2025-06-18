@@ -53,7 +53,6 @@ jobs:
           CXX: g++-12
         run: |
           set -euo pipefail
-          set -x
           echo "::group::Building examples"
           echo "Found example directories:"
           ls -1d /usr/share/${{ inputs.product }}/examples/*/

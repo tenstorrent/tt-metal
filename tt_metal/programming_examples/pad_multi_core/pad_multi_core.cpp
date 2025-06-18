@@ -41,7 +41,7 @@ int main() {
     // create pad vector
     bfloat16 pad_value = bfloat16(2);
     std::vector<uint32_t> pad_vec(
-        1, pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(pad_value, pad_value)));
+        8, pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(pad_value, pad_value)));
 
     // create destination vector
     constexpr uint32_t dst_M = 8;

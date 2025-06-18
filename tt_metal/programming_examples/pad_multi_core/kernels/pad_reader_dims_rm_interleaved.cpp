@@ -11,7 +11,7 @@ void kernel_main() {
     const uint32_t start_src_stick_id = get_arg_val<uint32_t>(2);
     const uint32_t row_size_diff = get_arg_val<uint32_t>(3);
     const uint32_t dst_N = get_arg_val<uint32_t>(4);
-    const uint32_t data_size_bytes = get_arg_val<uint32_t>(5);
+    const uint32_t data_size_bytes = get_arg_val<uint32_t>(5) * 8;
     const uint32_t num_rows_per_core = get_arg_val<uint32_t>(6);
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
