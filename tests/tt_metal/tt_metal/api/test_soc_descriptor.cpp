@@ -16,6 +16,7 @@
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "umd/device/coordinate_manager.h"
 #include "umd/device/types/arch.h"
@@ -61,8 +62,13 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
     ASSERT_TRUE(num_devices > 0);
     tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     num_devices = (arch == tt::ARCH::GRAYSKULL) ? 1 : num_devices;
+    std::vector<int> devices_to_open;
+    for (int i = 0; i < num_devices; ++i) {
+        devices_to_open.push_back(i);
+    }
+    auto devices = detail::CreateDevices(devices_to_open);
     for (int device_id = 0; device_id < num_devices; device_id++) {
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = devices[device_id];
         uint32_t harvested_rows_mask =
             tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id);
         const metal_SocDescriptor& soc_desc =
@@ -83,9 +89,9 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
                             : physical_core_coord.x) == harvested_rows.end());
             }
         }
-
-        tt_metal::CloseDevice(device);
     }
+
+    tt::tt_metal::detail::CloseDevices(devices);
 }
 
 }  // namespace tt::tt_metal
