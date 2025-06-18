@@ -60,6 +60,14 @@ test_suite_bh_single_pcie_llama_demo_tests() {
     pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1
 }
 
+test_suite_bh_llmbox_metal_unit_tests() {
+    echo "[upstream-tests] Running BH LLMBox metal unit tests"
+
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/test_system_health
+}
+
 test_suite_bh_llmbox_llama_demo_tests() {
     echo "[upstream-tests] Running BH LLMBox upstream Llama demo model tests"
 
@@ -133,7 +141,9 @@ test_suite_bh_single_pcie_llama_demo_tests" # NOTE: This test MUST be last becau
 hw_topology_test_suites["blackhole_no_models"]="test_suite_bh_single_pcie_python_unit_tests
 test_suite_bh_single_pcie_metal_unit_tests"
 
-hw_topology_test_suites["blackhole_llmbox"]="test_suite_bh_llmbox_llama_demo_tests"
+hw_topology_test_suites["blackhole_llmbox"]="
+test_suite_bh_llmbox_metal_unit_tests
+test_suite_bh_llmbox_llama_demo_tests"
 
 hw_topology_test_suites["wh_6u"]="test_suite_wh_6u_model_unit_tests
 test_suite_wh_6u_llama_demo_tests
