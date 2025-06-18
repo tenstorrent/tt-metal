@@ -6,6 +6,7 @@
 #include "tensor/storage.hpp"
 #include "tt-metalium/shape.hpp"
 #include "tt-metalium/mesh_coord.hpp"
+#include <algorithm>
 #include <tt_stl/small_vector.hpp>
 #include "tt-metalium/tilize_utils.hpp"
 #include "tt_stl/overloaded.hpp"
@@ -417,13 +418,18 @@ TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMappe
 
     // TODO: #22258 - `DistributedTensorConfig` will be replaced by distributed host buffer, which can be used directly
     // in Tensor storage.
-    tt::tt_metal::DistributedTensorConfig distributed_tensor_config;
-    if (distributed_shape.dims() == 2) {
-        distributed_tensor_config = tt::tt_metal::DistributedTensorConfig{
-            tt::tt_metal::ShardTensor2D{tt::tt_metal::ShardMesh{.y = distributed_shape[0], .x = distributed_shape[1]}}};
-    } else {
-        distributed_tensor_config = tt::tt_metal::DistributedTensorConfig{tt::tt_metal::AllGatherTensor{}};
-    }
+    const auto distributed_tensor_config = [&config, &distributed_shape]() -> tt::tt_metal::DistributedTensorConfig {
+        if (std::all_of(config.placements.begin(), config.placements.end(), [](const auto& p) {
+                return std::holds_alternative<MeshMapperConfig::Replicate>(p);
+            })) {
+            return tt::tt_metal::ReplicateTensor{};
+        } else if (distributed_shape.dims() == 2) {
+            return tt::tt_metal::ShardTensor2D{
+                tt::tt_metal::ShardMesh{.y = distributed_shape[0], .x = distributed_shape[1]}};
+        } else {
+            return tt::tt_metal::AllGatherTensor{};
+        }
+    }();
 
     return TensorToMesh(std::make_unique<TensorToMesh::Impl>(
         mesh_device, distribution_mode, distributed_shape, config, distributed_tensor_config));

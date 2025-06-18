@@ -283,8 +283,7 @@ Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
     return tensor;
 }
 
-void dump_tensor(
-    const std::string& file_name, const Tensor& tensor, const std::unordered_map<std::string, std::string>& strategy) {
+void dump_tensor(const std::string& file_name, const Tensor& tensor) {
     FILE* output_file = fopen(file_name.c_str(), "wb");
     if (not output_file) {
         TT_THROW("Cannot open \"{}\"", file_name);
@@ -313,9 +312,9 @@ void dump_tensor(
             [output_file, dtype = tensor.dtype()](const DeviceStorage& storage) {
                 TT_THROW("Device storage isn't supported");
             },
-            [output_file, &strategy, &tensor_spec = tensor.tensor_spec()](const MultiDeviceHostStorage& storage) {
-                auto distribute_config = get_distributed_tensor_config(strategy);
-                dump_multi_device_host_storage(output_file, storage, distribute_config, tensor_spec);
+            [output_file, &tensor](const MultiDeviceHostStorage& storage) {
+                dump_multi_device_host_storage(
+                    output_file, storage, tensor.distributed_tensor_config(), tensor.tensor_spec());
             },
         },
         tensor_to_dump.storage());
