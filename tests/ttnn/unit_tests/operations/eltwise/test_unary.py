@@ -32,6 +32,8 @@ def create_full_range_tensor(input_shapes, dtype):
     in_data = torch.cat([in_data, corner_cases])
 
     in_data = in_data[:num_elements]
+    if in_data.numel() < num_elements:  # add some random noise to the tensor to make it full range
+        in_data = torch.cat([in_data, torch.randn(num_elements - in_data.numel(), dtype=dtype)])
     in_data = in_data.reshape(input_shapes)
 
     return in_data
@@ -737,3 +739,46 @@ def test_unary_angle_conversion_ttnn(input_shapes, device, ttnn_dtype, ttnn_func
     output = ttnn.to_torch(output_tensor)
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass and assert_with_ulp(golden_tensor, output)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_trunc_ttnn(input_shapes, device):
+    in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.trunc(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.trunc)
+    golden_tensor = golden_function(in_data)
+
+    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_trunc_ttnn_opt(input_shapes, device):
+    in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+    cq_id = 0
+    ttnn.trunc(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
+    golden_function = ttnn.get_golden_function(ttnn.trunc)
+    golden_tensor = golden_function(in_data)
+
+    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor)
