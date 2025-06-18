@@ -12,7 +12,7 @@
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/work_split.hpp>
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::operations::reduction {
 
 uint32_t CumprodDeviceOperation::MultiCoreCumprodProgramFactory::calc_input_tile_offset(
     const Shape& input_shape, const int32_t& dim) {
@@ -188,4 +188,4 @@ KernelHandle CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create_kern
     return kernel_id;
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::operations::reduction

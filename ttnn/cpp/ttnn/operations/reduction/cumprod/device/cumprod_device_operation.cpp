@@ -6,7 +6,7 @@
 #include <magic_enum/magic_enum.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::operations::reduction {
 
 CumprodDeviceOperation::program_factory_t CumprodDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -108,4 +108,4 @@ CumprodDeviceOperation::invocation_result_t CumprodDeviceOperation::invoke(
         tensor_args_t{input_tensor, std::move(optional_out)}};
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::operations::reduction

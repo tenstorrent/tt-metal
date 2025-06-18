@@ -94,3 +94,178 @@ def test_scatter_normal(input_shape, dim, index_and_source_shape, input_dtype, i
         assert torch_result_from_ttnn.shape == torch_result.shape
         assert torch_result_from_ttnn.dtype == torch_result.dtype
         torch.testing.assert_close(torch_result_from_ttnn, torch_result)
+
+
+@pytest.mark_parametrize(
+    "dim, input_shape, index_shape, source_shape, output_shape, torch_dtype, input_dtype, index_dtype, source_dtype, output_dtype, memory_config",
+    [
+        (
+            10,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.uint16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+        ),  # input_rank vs dim
+        (
+            -10,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.uint16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+        ),  # input_rank vs dim
+        (
+            0,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.uint16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+        ),  # index_shape vs source_shape
+        (
+            0,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 1],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.uint16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+        ),  # index_shape vs source_shape
+        (
+            0,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 1],
+            [1, 2, 3, 4, 5, 6, 7, 8, 1],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.uint16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+        ),  # non-scatter-axis different between input/output and index/source
+        (
+            0,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 1],
+            [1, 2, 3, 4, 5, 6, 7, 8, 1],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.uint16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+        ),  # input_dtype vs source_dtype
+        (
+            0,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+        ),  # index_dtype is integer
+        (
+            0,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+            ],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.uint16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+        ),  # input_shape vs output_shape
+        (
+            0,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 1],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.uint16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.DRAM_MEMORY_CONFIG,
+        ),  # input_shape vs output_shape
+        (
+            0,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 1],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.uint16,
+            ttnn.bfloat16,
+            ttnn.float32,
+            ttnn.DRAM_MEMORY_CONFIG,
+        ),  # input_dtype vs output_dtype
+        (
+            0,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            [1, 2, 3, 4, 5, 6, 7, 8, 9],
+            torch.bfloat16,
+            ttnn.bfloat16,
+            ttnn.uint16,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            ttnn.L1_MEMORY_CONFIG,
+        ),  # memory_config (tiling/sharding/buffer/source)
+    ],
+)
+def test_sctter_failing_cases(
+    dim,
+    input_shape,
+    index_shape,
+    source_shape,
+    output_shape,
+    input_dtype,
+    index_dtype,
+    source_dtype,
+    output_dtype,
+    memory_config,
+    device,
+):
+    torch.manual_seed(18062025)
+    with pytest.raises(RuntimeError):
+        ttnn.experimental.scatter()
