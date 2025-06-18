@@ -633,7 +633,7 @@ def as_tensor(
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            tensor = ttnn.to_layout(tensor, layout, dtype=dtype, memory_config=memory_config, device=device)
+            tensor = ttnn.to_layout(tensor, layout, dtype=dtype, memory_config=memory_config)
         else:
             tensor = ttnn.from_torch(
                 tensor,
