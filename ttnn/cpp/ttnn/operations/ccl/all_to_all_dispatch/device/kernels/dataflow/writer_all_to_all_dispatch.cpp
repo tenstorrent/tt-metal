@@ -216,7 +216,7 @@ void kernel_main() {
     constexpr uint32_t batch_size = get_compile_time_arg_val(22);
     constexpr uint32_t selected_experts_k = get_compile_time_arg_val(23);
     constexpr uint32_t experts = get_compile_time_arg_val(24);
-    constexpr uint32_t batches_per_device = get_compile_time_arg_val(25);
+    constexpr uint32_t tokens_per_device = get_compile_time_arg_val(25);
 
     constexpr uint32_t num_links = get_compile_time_arg_val(26);
     constexpr bool is_ring_topology = (bool)get_compile_time_arg_val(27);
@@ -280,8 +280,9 @@ void kernel_main() {
     cb_wait_front(input_tensor_cb_id, input_pages);
     cb_wait_front(indices_tensor_cb_id, indices_pages);
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
-    for (uint32_t local_token = 0; local_token < batches_per_device; local_token++) {
-        uint32_t b = (local_token + (batches_per_device * dispatch_index));
+
+    for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
+        uint32_t b = (local_token + (tokens_per_device * dispatch_index));
         uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id) + local_token * aligned_input_page_size;
         uint16_t* token_indices =
             (uint16_t*)(get_read_ptr(indices_tensor_cb_id) + (local_token * aligned_indices_page_size));
@@ -317,8 +318,8 @@ void kernel_main() {
     // send semaphore increment to all other devices
 
     uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
-    for (uint32_t local_token = 0; local_token < batches_per_device; local_token++) {
-        uint32_t b = (local_token + (batches_per_device * dispatch_index));
+    for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
+        uint32_t b = (local_token + (tokens_per_device * dispatch_index));
         uint64_t metadata_write_addr = get_noc_addr(b, metadata_addr_gen);
         uint32_t token_indices_address = get_read_ptr(indices_tensor_cb_id) + (local_token * aligned_indices_page_size);
         for (uint32_t d = 0; d < num_devices; d++) {

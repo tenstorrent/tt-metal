@@ -43,19 +43,20 @@ def get_pcc_threshold(dtype):
         raise ValueError(f"Invalid dtype: {dtype}")
 
 
-def gen_tokens(batch, hidden_size, mesh_shape, devices, scheme="random", dtype=torch.bfloat16):
-    per_batch_tokens = []
+def gen_tokens(batch, hidden_size, seq_len, mesh_shape, devices, scheme="random", dtype=torch.bfloat16):
+    tokens = []
     factor = 0
     for _ in range(batch):
-        if scheme == "random":
-            per_batch_tokens.append(torch.rand(1, 1, 1, hidden_size, dtype=dtype))
-        elif scheme == "sequential":
-            per_batch_tokens.append(torch.ones(1, 1, 1, hidden_size, dtype=dtype) * factor)
-            factor += 1
-        else:
-            raise ValueError(f"Invalid scheme: {scheme}")
-    res = torch.cat(per_batch_tokens, dim=0)
-    return res
+        for _ in range(seq_len):
+            if scheme == "random":
+                tokens.append(torch.rand(1, 1, 1, hidden_size, dtype=dtype))
+            elif scheme == "sequential":
+                tokens.append(torch.ones(1, 1, 1, hidden_size, dtype=dtype) * factor)
+                factor += 1
+            else:
+                raise ValueError(f"Invalid scheme: {scheme}")
+    res = torch.cat(tokens, dim=0)
+    return res.reshape(batch, 1, seq_len, hidden_size)
 
 
 def gen_expert_mapping(experts, devices, scheme="random"):
@@ -78,29 +79,31 @@ def get_metadata_tensor(expert_indices, expert_mapping, mesh_shape):
     # metadata tensor is expert_indices duplicated for each device
     # [D, B, 1, K]
     batch = expert_indices.shape[0]
+    seq_len = expert_indices.shape[2]
     devices = mesh_shape[0] * mesh_shape[1]
     selected_experts_k = expert_indices.shape[3]
-    metadata_tensor = torch.reshape(expert_indices, (1, batch, 1, selected_experts_k))
+    metadata_tensor = torch.reshape(expert_indices, (1, batch, seq_len, selected_experts_k))
     return metadata_tensor.repeat(devices, 1, 1, 1)
 
 
-def get_expert_indices(batch, experts, selected_experts_k, mesh_shape, scheme="random"):
-    expert_indices = torch.zeros(batch, 1, 1, selected_experts_k, dtype=torch.int16)
+def get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, scheme="random"):
+    expert_indices = torch.zeros(batch, 1, seq_len, selected_experts_k, dtype=torch.int16)
     current_expert = 0
     for b in range(batch):
-        for k in range(selected_experts_k):
-            if scheme == "sequential":
-                expert_indices[b, 0, 0, k] = current_expert % experts
-                current_expert += 1 + (k % 2)
-            elif scheme == "random":
-                expert_indices[b, 0, 0, k] = torch.randint(0, experts, (1,))
-            else:
-                raise ValueError(f"Invalid scheme: {scheme}")
+        for s in range(seq_len):
+            for k in range(selected_experts_k):
+                if scheme == "sequential":
+                    expert_indices[b, 0, s, k] = current_expert % experts
+                    current_expert += 1 + (k % 2)
+                elif scheme == "random":
+                    expert_indices[b, 0, s, k] = torch.randint(0, experts, (1,))
+                else:
+                    raise ValueError(f"Invalid scheme: {scheme}")
     return expert_indices
 
 
-def get_output_tensor(input_tokens, expert_indices, expert_mapping, mesh_shape, dtype=torch.bfloat16):
-    # output tensor is [devices, batch, 1, hidden_size]
+def get_output_tensor(input_tokens, expert_indices, expert_mapping, seq_len, mesh_shape, dtype=torch.bfloat16):
+    # output tensor is [devices, batch, seq_len, hidden_size]
     # depending on the expert indices, the input tokens are scattered to different experts
     # these experts are sent to one ore more device based on the expert mapping
     batch = input_tokens.shape[0]
@@ -110,21 +113,22 @@ def get_output_tensor(input_tokens, expert_indices, expert_mapping, mesh_shape, 
     hidden_size = input_tokens.shape[3]
     selected_experts_k = expert_indices.shape[3]
 
-    output_tensor = 7 * torch.ones(devices, batch, 1, hidden_size, dtype=dtype)
+    output_tensor = 7 * torch.ones(devices, batch, seq_len, hidden_size, dtype=dtype)
 
     for b in range(batch):
-        for k in range(selected_experts_k):
-            expert_id = expert_indices[b, 0, 0, k]
-            device_assignment = expert_mapping[0, 0, expert_id, :]
-            device_indices = torch.where(device_assignment == 1)[0]
-            for device_idx in device_indices:
-                output_tensor[device_idx, b, 0, :] = input_tokens[b, 0, 0, :]
+        for s in range(seq_len):
+            for k in range(selected_experts_k):
+                expert_id = expert_indices[b, 0, s, k]
+                device_assignment = expert_mapping[0, 0, expert_id, :]
+                device_indices = torch.where(device_assignment == 1)[0]
+                for device_idx in device_indices:
+                    output_tensor[device_idx, b, s, :] = input_tokens[b, 0, s, :]
 
     return output_tensor
 
 
 def gen_tensors(
-    batch, experts, selected_experts_k, hidden_size, mesh_shape, devices, scheme="random", dtype=torch.bfloat16
+    batch, experts, selected_experts_k, hidden_size, seq_len, mesh_shape, devices, scheme="random", dtype=torch.bfloat16
 ):
     torch.manual_seed(2005)
     # create input tokens
@@ -132,11 +136,11 @@ def gen_tensors(
     assert experts % devices == 0
     assert selected_experts_k < experts
 
-    input_tokens = gen_tokens(batch, hidden_size, mesh_shape, devices, scheme, dtype)
+    input_tokens = gen_tokens(batch, hidden_size, seq_len, mesh_shape, devices, scheme, dtype)
     expert_mapping = gen_expert_mapping(experts, devices, scheme)
-    expert_indices = get_expert_indices(batch, experts, selected_experts_k, mesh_shape, scheme)
+    expert_indices = get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, scheme)
 
-    output_tensor = get_output_tensor(input_tokens, expert_indices, expert_mapping, mesh_shape, dtype)
+    output_tensor = get_output_tensor(input_tokens, expert_indices, expert_mapping, seq_len, mesh_shape, dtype)
     metadata_tensor = get_metadata_tensor(expert_indices, expert_mapping, mesh_shape)
 
     # create expert indices
@@ -188,6 +192,7 @@ def run_all_to_all_dispatch_test(
     experts,
     select_experts_k,
     hidden_size,
+    seq_len,
     num_iters,
     warmup_iters,
     trace_mode,
@@ -233,13 +238,14 @@ def run_all_to_all_dispatch_test(
             experts,
             select_experts_k,
             hidden_size,
+            seq_len,
             mesh_shape,
             devices,
             scheme=scheme,
             dtype=tt_to_torch_dtype(dtype),
         )
-        preallocated_output_tensor = torch.zeros((devices, batch, 1, hidden_size), dtype=tt_to_torch_dtype(dtype))
-        preallocated_metadata_tensor = torch.zeros((devices, batch, 1, select_experts_k), dtype=torch.int32)
+        preallocated_output_tensor = torch.zeros((devices, batch, seq_len, hidden_size), dtype=tt_to_torch_dtype(dtype))
+        preallocated_metadata_tensor = torch.zeros((devices, batch, seq_len, select_experts_k), dtype=torch.int32)
 
         if iter == 0:
             logger.info(f"input_tokens shape: {input_tokens.shape}")
@@ -414,6 +420,7 @@ def run_all_to_all_dispatch_test(
     first_failed_batch_index = None
     first_failed_expert_index = None
     first_failed_device_index = None
+    first_failed_sequence_index = None
 
     first_failed_metadata_index = None
     failed_indices = []
@@ -453,43 +460,46 @@ def run_all_to_all_dispatch_test(
             break
 
         for b in range(batch):
-            for k in range(selected_experts_k):
-                expert_id = tt_metadata_tensor[0, b, 0, k]
-                for d in range(devices):
-                    if torch_expert_mappings[tensor_index][0, 0, expert_id, d] == 1:
-                        eq, output_results = comp_pcc(
-                            tt_torch_tensor[d, b, 0, :],
-                            output_tensor_goldens_list[tensor_index][d, b, 0, :],
-                            expected_pcc,
-                        )
-                        logger.info(
-                            f"Output tensor {tensor_index} at batch {b}, expert {expert_id}, device {d} has result {output_results}"
-                        )
-                        is_all_close = torch.allclose(
-                            tt_torch_tensor[d, b, 0, :], output_tensor_goldens_list[tensor_index][d, b, 0, :]
-                        )
-                        if not is_all_close:
-                            logger.info(f"Output tensor mismatch at batch {b}, expert {expert_id}, device {d}")
-
-                        if not eq or not is_all_close:
-                            passed = False
-                            first_failed_tensor_index = tensor_index
-                            first_failed_batch_index = b
-                            failed_indices = torch.where(
-                                tt_torch_tensor[d, b, 0, :] != output_tensor_goldens_list[tensor_index][d, b, 0, :]
-                            )
-                            first_10_fail_idx = failed_indices[0][:10]
-                            logger.info(f"First 10 failing indices: {first_10_fail_idx}")
-                            logger.info(
-                                f"Failing tt_torch_tensor tensor (first 10) {tt_torch_tensor[d, b, 0, first_10_fail_idx]}"
+            for s in range(seq_len):
+                for k in range(selected_experts_k):
+                    expert_id = tt_metadata_tensor[0, b, s, k]
+                    for d in range(devices):
+                        if torch_expert_mappings[tensor_index][0, 0, expert_id, d] == 1:
+                            eq, output_results = comp_pcc(
+                                tt_torch_tensor[d, b, s, :],
+                                output_tensor_goldens_list[tensor_index][d, b, s, :],
+                                expected_pcc,
                             )
                             logger.info(
-                                f"Relevant output_tensor_goldens_list tensor (first 10) {output_tensor_goldens_list[tensor_index][d, b, 0, first_10_fail_idx]}"
+                                f"Output tensor {tensor_index} at batch {b}, sequence {s}, expert {expert_id}, device {d} has result {output_results}"
                             )
-                            first_failed_expert_index = expert_id
-                            first_failed_device_index = d
+                            is_all_close = torch.allclose(
+                                tt_torch_tensor[d, b, s, :], output_tensor_goldens_list[tensor_index][d, b, s, :]
+                            )
+                            if not is_all_close:
+                                logger.info(
+                                    f"Output tensor mismatch at batch {b}, sequence {s}, expert {expert_id}, device {d}"
+                                )
 
-                            break
+                            if not eq or not is_all_close:
+                                passed = False
+                                first_failed_tensor_index = tensor_index
+                                first_failed_batch_index = b
+                                failed_indices = torch.where(
+                                    tt_torch_tensor[d, b, s, :] != output_tensor_goldens_list[tensor_index][d, b, s, :]
+                                )
+                                first_10_fail_idx = failed_indices[0][:10]
+                                logger.info(f"First 10 failing indices: {first_10_fail_idx}")
+                                logger.info(
+                                    f"Failing tt_torch_tensor tensor (first 10) {tt_torch_tensor[d, b, s, first_10_fail_idx]}"
+                                )
+                                logger.info(
+                                    f"Relevant output_tensor_goldens_list tensor (first 10) {output_tensor_goldens_list[tensor_index][d, b, s, first_10_fail_idx]}"
+                                )
+                                first_failed_expert_index = expert_id
+                                first_failed_device_index = d
+                                first_failed_sequence_index = s
+                                break
                 if not passed:
                     break
             if not passed:
@@ -508,7 +518,7 @@ def run_all_to_all_dispatch_test(
         logger.info(f"Failed data indices: {failed_indices}")
         assert (
             passed
-        ), f"First failing index: {first_failed_tensor_index} batch {first_failed_batch_index} expert {first_failed_expert_index} device {first_failed_device_index} FAILED data indices: {failed_indices}"
+        ), f"First failing index: {first_failed_tensor_index} batch {first_failed_batch_index} sequence {first_failed_sequence_index} expert {first_failed_expert_index} device {first_failed_device_index} FAILED data indices: {failed_indices}"
 
 
 @pytest.mark.parametrize(
@@ -526,6 +536,7 @@ def test_all_to_all_dispatch_no_trace(mesh_device, trace_mode, mesh_shape):
     experts = 8 * devices
     select_experts_k = 8
     hidden_size = 7000
+    seq_len = 2
     num_iters = 10
     warmup_iters = 0
     trace_mode = trace_mode
@@ -542,6 +553,7 @@ def test_all_to_all_dispatch_no_trace(mesh_device, trace_mode, mesh_shape):
         experts,
         select_experts_k,
         hidden_size,
+        seq_len,
         num_iters,
         warmup_iters,
         trace_mode,
@@ -575,6 +587,7 @@ def test_all_to_all_dispatch_trace(mesh_device, trace_mode, mesh_shape):
     experts = 8 * devices
     select_experts_k = 8
     hidden_size = 7000
+    seq_len = 2
     num_iters = 30
     warmup_iters = 1
     trace_mode = trace_mode
@@ -591,6 +604,7 @@ def test_all_to_all_dispatch_trace(mesh_device, trace_mode, mesh_shape):
         experts,
         select_experts_k,
         hidden_size,
+        seq_len,
         num_iters,
         warmup_iters,
         trace_mode,
@@ -608,7 +622,7 @@ def test_all_to_all_dispatch_trace(mesh_device, trace_mode, mesh_shape):
 )
 def test_simple_tensor_gen(mesh_device, mesh_shape):
     devices = mesh_shape[0] * mesh_shape[1]
-    sequence_length = 1
+    sequence_length = 2
     batch = 8 * mesh_shape[1]
     experts = 8 * devices
     select_experts_k = 8
@@ -619,17 +633,18 @@ def test_simple_tensor_gen(mesh_device, mesh_shape):
         experts,
         select_experts_k,
         hidden_size,
+        sequence_length,
         mesh_shape,
         devices,
         scheme="sequential",
         dtype=tt_to_torch_dtype(dtype),
     )
 
-    assert input_tokens.shape == (batch, 1, 1, hidden_size)
-    assert expert_indices.shape == (batch, 1, 1, select_experts_k)
+    assert input_tokens.shape == (batch, 1, sequence_length, hidden_size)
+    assert expert_indices.shape == (batch, 1, sequence_length, select_experts_k)
     assert expert_mapping.shape == (1, 1, experts, devices)
-    assert sparse_output_token_tensor.shape == (devices, batch, 1, hidden_size)
-    assert metadata_tensor.shape == (devices, batch, 1, select_experts_k)
+    assert sparse_output_token_tensor.shape == (devices, batch, sequence_length, hidden_size)
+    assert metadata_tensor.shape == (devices, batch, sequence_length, select_experts_k)
     # logger.info(f"Input tokens {input_tokens}")
     logger.info(f"Expert indices {expert_indices}")
     logger.info(f"Expert mapping {expert_mapping}")

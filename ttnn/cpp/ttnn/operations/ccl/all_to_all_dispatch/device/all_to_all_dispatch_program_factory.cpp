@@ -96,6 +96,13 @@ uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) {
     return tt::round_up(get_page_size(tensor), BUFFER_ALIGNMENT);
 }
 
+uint32_t get_num_rows(const ttnn::Tensor& tensor) {
+    auto logical_volume = tensor.logical_shape().volume();
+    auto hidden_size = tensor.logical_shape()[-1];
+    TT_FATAL(logical_volume % hidden_size == 0, "Logical volume must be divisible by hidden size");
+    return logical_volume / hidden_size;
+}
+
 uint32_t device_index(const std::vector<tt::tt_metal::IDevice*>& devices, const tt::tt_metal::IDevice* device) {
     for (uint32_t i = 0; i < devices.size(); i++) {
         if (devices[i] == device) {
@@ -354,8 +361,9 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     uint32_t hidden_size = input_shape[-1];
     uint32_t batch_size = input_shape[0] * dispatch_devices;
+    uint32_t seq_len = indices_shape[-2];
 
-    uint32_t batches_per_device = input_shape[0];
+    uint32_t tokens_per_device = detail::get_num_rows(input_tensor);
     uint32_t selected_experts_k = indices_shape[-1];
     uint32_t experts = mapping_shape[-2];
 
@@ -456,7 +464,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             {{packet_header_cb_id, tt::DataFormat::RawUInt32}})
             .set_page_size(packet_header_cb_id, packet_header_size_bytes);
 
-    uint32_t send_preparation_buffer_size = num_devices * batches_per_device * aligned_metadata_page_size;
+    uint32_t send_preparation_buffer_size = num_devices * tokens_per_device * aligned_metadata_page_size;
 
     tt::tt_metal::CircularBufferConfig send_preparation_buffer_config =
         tt::tt_metal::CircularBufferConfig(
@@ -537,7 +545,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         batch_size,
         selected_experts_k,
         experts,
-        batches_per_device,
+        tokens_per_device,
 
         num_links,
         topology == tt::tt_fabric::Topology::Ring ? 1u : 0u,
@@ -564,6 +572,10 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto output_buffer = output_tensor.buffer();
     auto metadata_buffer = metadata_tensor.buffer();
 
+    std::map<std::string, std::string> reader_defines = {
+        {"AXIS", std::to_string(operation_attributes.axis.has_value() ? operation_attributes.axis.value() : -1)},
+    };
+
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/all_to_all_dispatch/device/kernels/dataflow/reader_all_to_all_dispatch.cpp",
@@ -571,7 +583,8 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_1,
-            .compile_args = reader_compile_time_args});
+            .compile_args = reader_compile_time_args,
+            .defines = reader_defines});
 
     std::map<std::string, std::string> writer_defines = {
         {"DEST_CHIP_ID", detail::stringify_vector(dest_chip_id)},

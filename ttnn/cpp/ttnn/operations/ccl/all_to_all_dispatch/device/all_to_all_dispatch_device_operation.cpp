@@ -56,9 +56,10 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
     // final batch in the metadata tensor
     uint32_t dispatched_tokens = tokens_per_device * dispatch_devices;
     uint32_t selected_experts_k = indices_shape[-1];
+    uint32_t seq_len = indices_shape[-21];
 
-    auto output_shape = ttnn::Shape({1, dispatched_tokens, 1, hidden_size});
-    auto metadata_shape = ttnn::Shape({1, dispatched_tokens, 1, selected_experts_k});
+    auto output_shape = ttnn::Shape({1, dispatched_tokens, seq_len, hidden_size});
+    auto metadata_shape = ttnn::Shape({1, dispatched_tokens, seq_len, selected_experts_k});
 
     tt::log_info("output_shape: {}", output_shape);
     tt::log_info("metadata_shape: {}", metadata_shape);
