@@ -34,17 +34,16 @@ namespace ckernel {
  * | sign_magnitude_format | Whether the Int32 values are in sign-magnitude format (not 2's complement)  | bool     |                                                       | False    |
  */
 // clang-format on
-template <bool sign_magnitude_format = false>
 ALWI void add_int32_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, InstrModLoadStore::INT32, sign_magnitude_format>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, 8, InstrModLoadStore::INT32, false>(idst0, idst1)));
 }
 
 ALWI void add_uint16_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, InstrModLoadStore::LO16>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, 8, InstrModLoadStore::LO16, false>(idst0, idst1)));
 }
 
 ALWI void add_uint32_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, InstrModLoadStore::INT32>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_add_int<APPROX, 8, InstrModLoadStore::INT32, false>(idst0, idst1)));
 }
 
 /**
