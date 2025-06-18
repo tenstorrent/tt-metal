@@ -1121,7 +1121,7 @@ void persistent_fabric_teardown_sequence(
     const std::vector<IDevice*>& devices,
     std::optional<SubdeviceInfo>& subdevice_managers,
     ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
-    tt::tt_fabric::TerminationSignal termination_mode = tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE) {
+    tt::tt_fabric::TerminationSignal termination_mode = tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE) {
     log_info(tt::LogTest, "Tearing down fabric");
 
     // Wait for workers to finish
@@ -1151,7 +1151,8 @@ void setup_test_with_persistent_fabric(
     bool en_dateline_sender_extra_buffer = false,
     bool en_dateline_receiver_extra_buffer = false,
     bool en_dateline_upstream_sender_extra_buffer = false,
-    bool en_dateline_upstream_receiver_extra_buffer = false) {
+    bool en_dateline_upstream_receiver_extra_buffer = false,
+    bool en_dateline_upstream_adjcent_sender_extra_buffer = false) {
     log_info(tt::LogTest, "Enabling persistent fabric");
     fabric_programs = std::vector<Program>(devices.size());
     subdevice_managers = create_subdevices(devices);
@@ -1170,7 +1171,8 @@ void setup_test_with_persistent_fabric(
         en_dateline_sender_extra_buffer,
         en_dateline_receiver_extra_buffer,
         en_dateline_upstream_sender_extra_buffer,
-        en_dateline_upstream_receiver_extra_buffer);
+        en_dateline_upstream_receiver_extra_buffer,
+        en_dateline_upstream_adjcent_sender_extra_buffer);
     line_fabric->set_firmware_context_switch_interval(switch_interval);
     if (loopback_on_last_device) {
         for (auto& edm_builder : line_fabric->edm_builders_backward_direction.at(devices.back()->id())) {
@@ -2549,29 +2551,34 @@ void Run1DFabricPacketSendTest(
     bool en_dateline_receiver_extra_buffer = false;
     bool en_dateline_upstream_sender_extra_buffer = false;
     bool en_dateline_upstream_receiver_extra_buffer = false;
+    bool en_dateline_upstream_adjcent_sender_extra_buffer = false;
     if (fabric_mode == FabricTestMode::HalfRing) {
         // HalfRing test is more optimal with extra recv buffer on upstream edm.
         en_dateline_sender_extra_buffer = true;
         en_dateline_receiver_extra_buffer = true;
         en_dateline_upstream_sender_extra_buffer = false;
         en_dateline_upstream_receiver_extra_buffer = true;
+        en_dateline_upstream_adjcent_sender_extra_buffer = true;
     } else if (fabric_mode == FabricTestMode::FullRing) {
         // FullRing is more optimal with extra buffer on both send/recv channels.
         en_dateline_sender_extra_buffer = false;
         en_dateline_receiver_extra_buffer = true;
         en_dateline_upstream_sender_extra_buffer = true;
         en_dateline_upstream_receiver_extra_buffer = false;
+        en_dateline_upstream_adjcent_sender_extra_buffer = true;
     } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
         // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
         en_dateline_sender_extra_buffer = true;
         en_dateline_receiver_extra_buffer = true;
         en_dateline_upstream_sender_extra_buffer = false;
         en_dateline_upstream_receiver_extra_buffer = false;
+        en_dateline_upstream_adjcent_sender_extra_buffer = false;
     } else if (fabric_mode == FabricTestMode::RingAsLinear) {
         en_dateline_sender_extra_buffer = true;
         en_dateline_receiver_extra_buffer = true;
         en_dateline_upstream_sender_extra_buffer = true;
         en_dateline_upstream_receiver_extra_buffer = true;
+        en_dateline_upstream_adjcent_sender_extra_buffer = false;
     }
 
     auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
@@ -2618,7 +2625,8 @@ void Run1DFabricPacketSendTest(
             en_dateline_sender_extra_buffer,
             en_dateline_receiver_extra_buffer,
             en_dateline_upstream_sender_extra_buffer,
-            en_dateline_upstream_receiver_extra_buffer);
+            en_dateline_upstream_receiver_extra_buffer,
+            en_dateline_upstream_adjcent_sender_extra_buffer);
     }
 
     // Other boiler plate setup
@@ -2940,7 +2948,10 @@ void Run1DFabricPacketSendTest(
         TT_FATAL(fabric_programs->size() == devices.size(), "Expected fabric programs size to be same as devices size");
         log_info(tt::LogTest, "Fabric teardown");
         persistent_fabric_teardown_sequence(
-            devices, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+            devices,
+            subdevice_managers,
+            fabric_handle.value(),
+            tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
         for (auto& device : devices) {
             device->clear_loaded_sub_device_manager();
         }

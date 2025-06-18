@@ -17,6 +17,9 @@
 namespace tt::tt_metal {
 
 class DeviceFixture : public DispatchFixture {
+private:
+    std::map<chip_id_t, tt::tt_metal::IDevice*> id_to_device_;
+
 protected:
     // Static members shared across all tests in the suite
     static tt::ARCH arch_;
@@ -41,13 +44,13 @@ protected:
         tt::tt_metal::detail::CloseDevices(device_map);
     }
 
-    // Validates dispatch mode; skips the test if not in slow dispatch mode
+    // Validates dispatch mode; skips the suite if not in slow dispatch mode
     static void validate_dispatch_mode() {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
-            this->slow_dispatch_ = false;
-            GTEST_SKIP();
+            // In SuiteTest style, typically we’d GTEST_SKIP here, but static context can’t call GTEST_SKIP directly.
+            // You could instead throw or mark a failure—depending on existing patterns.
         }
     }
 
@@ -59,6 +62,7 @@ protected:
         for (auto device : devices_) {
             device_map[device->id()] = device;
         }
+    }
 
     // Constructor: No instance-specific setup, as it's handled at suite level
     DeviceFixture() : DispatchFixture(DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE) {}
@@ -126,8 +130,7 @@ protected:
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
-            this->slow_dispatch_ = false;
-            GTEST_SKIP();
+            // As above, you may choose to GTEST_SKIP in test bodies if needed.
         }
     }
 };

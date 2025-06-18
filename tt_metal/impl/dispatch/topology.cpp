@@ -1268,6 +1268,8 @@ tt::tt_fabric::FabricEriscDatamoverType get_fabric_edm_type(
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
         } else if ((chip1 == 0 || chip1 == mesh_num_columns) && chip0 == chip1 + 1) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
+        } else if ((chip0 == 1 || chip0 == mesh_num_columns + 1) && (chip1 == chip0 + 1)) {
+            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
         }
     } else {
         bool is_dateline_edm_along_column =
@@ -1287,6 +1289,13 @@ tt::tt_fabric::FabricEriscDatamoverType get_fabric_edm_type(
         bool is_dateline_upstream_adjacent_edm_along_row =
             (chip1 < mesh_num_columns && chip0 == chip1 + mesh_num_columns) ||
             (chip1 >= (mesh_num_columns * (mesh_num_rows - 1)) && chip0 == chip1 - mesh_num_columns);
+        bool is_dateline_upstream_adjacent_upstream_edm_along_column =
+            (chip0 % mesh_num_columns == 1 && chip1 == chip0 + 1) ||
+            (chip0 % mesh_num_columns == mesh_num_columns - 2 && chip1 == chip0 - 1);
+        bool is_dateline_upstream_adjacent_upstream_edm_along_row =
+            (chip0 >= mesh_num_columns && chip0 < (2 * mesh_num_columns) && chip1 == chip0 + mesh_num_columns) ||
+            (chip0 >= (mesh_num_columns * (mesh_num_rows - 2)) && chip0 < (mesh_num_columns * (mesh_num_rows - 1)) &&
+             chip1 == chip0 - mesh_num_columns);
         // Column dateline
         if (is_dateline_edm_along_column) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline;
@@ -1311,6 +1320,14 @@ tt::tt_fabric::FabricEriscDatamoverType get_fabric_edm_type(
         else if (is_dateline_upstream_adjacent_edm_along_row) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
         }
+        // Column dateline upstream adjacent device upstream
+        else if (is_dateline_upstream_adjacent_upstream_edm_along_column) {
+            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
+        }
+        // Row dateline upstream adjacent device upstream
+        else if (is_dateline_upstream_adjacent_upstream_edm_along_row) {
+            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
+        }
     }
 
     return fabric_edm_type;
@@ -1331,16 +1348,15 @@ void build_tt_fabric_program(
     if (is_TG && device->is_mmio_capable()) {
         auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
         for (const auto& [eth_chan, eth_direction] : router_chans_and_direction) {
-            // remote chip id is only used to dertmine the handshake master, no functional impact
+            // remote_fabric_node_id is only used to determine the handshake master, no functional impact
             // for now treat the mmio chips as the handshake master
-            auto remote_chip_id = device->id() + 1;
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                 device,
                 *fabric_program_ptr,
                 eth_logical_core,
-                device->id(),
-                remote_chip_id,
+                fabric_node_id,
+                FabricNodeId{fabric_node_id.mesh_id, fabric_node_id.chip_id + 1},
                 edm_config,
                 false, /* build_in_worker_connection_mode */
                 false, /* is_dateline */
@@ -1352,7 +1368,7 @@ void build_tt_fabric_program(
     }
 
     std::unordered_map<RoutingDirection, std::vector<chan_id_t>> active_fabric_eth_channels;
-    std::unordered_map<RoutingDirection, chip_id_t> chip_neighbors;
+    std::unordered_map<RoutingDirection, FabricNodeId> chip_neighbors;
     uint32_t num_intra_chip_neighbors = 0;
     const auto topology = fabric_context.get_fabric_topology();
     const bool is_2D_routing = topology == Topology::Mesh;
@@ -1389,7 +1405,7 @@ void build_tt_fabric_program(
         }
 
         FabricNodeId neighbor_fabric_node_id = FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
-        chip_neighbors[direction] = control_plane.get_physical_chip_id_from_fabric_node_id(neighbor_fabric_node_id);
+        chip_neighbors.emplace(direction, neighbor_fabric_node_id);
 
         active_fabric_eth_channels.insert({direction, active_eth_chans});
     }
@@ -1401,8 +1417,7 @@ void build_tt_fabric_program(
 
     const bool wrap_around_mesh = fabric_context.is_wrap_around_mesh(fabric_node_id.mesh_id);
 
-    for (const auto& [direction, remote_physical_chip_id] : chip_neighbors) {
-        auto remote_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(remote_physical_chip_id);
+    for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
         const auto& fabric_edm_type = get_fabric_edm_type(
             control_plane,
             topology,
@@ -1422,8 +1437,8 @@ void build_tt_fabric_program(
                 device,
                 *fabric_program_ptr,
                 eth_logical_core,
-                device->id(),
-                remote_physical_chip_id,
+                fabric_node_id,
+                remote_fabric_node_id,
                 curr_edm_config,
                 false, /* build_in_worker_connection_mode */
                 is_dateline,
