@@ -465,7 +465,7 @@ class TT_CCL:
                 dtype=dtype,
                 topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
                 subdevice_id=self.worker_sub_device_id,
-                use_noc1_only=True,
+                use_noc1_only=False,
             )
 
             if lm_head:
@@ -547,7 +547,7 @@ class TT_CCL:
             batch_offset=batch_offset,
             slice_size=slice_size,
             dtype=dtype,
-            use_noc1_only=True,
+            use_noc1_only=False,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return xqkv_reduced, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD
@@ -595,7 +595,7 @@ class TT_CCL:
             memory_config_mm=memory_config,
             global_cb=global_cb,
             topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
-            use_noc1_only=True,
+            use_noc1_only=False,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         self.reduce_scatter_buffer_idx[cluster_axis] = (self.reduce_scatter_buffer_idx[cluster_axis] + 1) % self.num_cbs
@@ -629,7 +629,7 @@ class TT_CCL:
             num_kv_heads=1,
             memory_config=qkv_memory_config,
             qkv_memory_config=qkv_memory_config,
-            use_noc1_only=True,
+            use_noc1_only=False,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD
@@ -694,7 +694,7 @@ class TT_CCL:
                 num_links=num_links,
                 memory_config=memory_config,
                 topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
-                use_noc1_only=True,
+                use_noc1_only=False,
             )
             self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
             self.reduce_scatter_buffer_idx[cluster_axis] = (
@@ -758,7 +758,7 @@ class TT_CCL:
             num_heads=num_heads,
             memory_config=memory_config,
             subdevice_id=self.worker_sub_device_id,
-            use_noc1_only=True,
+            use_noc1_only=False,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
@@ -895,7 +895,7 @@ def tt_sharded_distributed_rmsnorm(
         weight=gamma,
         stats=persistent_buffer,
         memory_config=output_mem_config,
-        use_noc1_only=True,
+        use_noc1_only=False,
     )
     tt_ccl.gather_idx[cluster_axis] = (tt_ccl.gather_idx[cluster_axis] + 1) % tt_ccl.num_cbs
     return tt_out, res
