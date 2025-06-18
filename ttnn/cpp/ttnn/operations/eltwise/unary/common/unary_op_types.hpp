@@ -84,6 +84,7 @@ enum class UnaryOpType {
     RIGHT_SHIFT,
     FLOOR,
     CEIL,
+    TRUNC,
     ROUND,
     LEFT_SHIFT,
     REMAINDER,

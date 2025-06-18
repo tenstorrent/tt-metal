@@ -41,6 +41,18 @@ inline void llk_math_eltwise_unary_sfpu_ceil_float32(uint dst_index, int vector_
 }
 
 template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_trunc(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::_calculate_trunc_<APPROXIMATE>, dst_index, vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_trunc_float32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::_calculate_trunc_<APPROXIMATE, true>, dst_index, vector_mode);
+}
+
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_round(uint dst_index, int decimals, int vector_mode = (int)VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
         ckernel::sfpu::_calculate_round_<APPROXIMATE>, dst_index, vector_mode, decimals);
