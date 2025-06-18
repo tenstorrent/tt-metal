@@ -61,7 +61,9 @@ class YOLOv4PerformanceRunnerInfra:
         # torch tensor
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
 
-        n, c, h, w = torch_input_tensor.shape
+        if torch_input_tensor.shape[1] == 3:
+            torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
+        n, h, w, c = torch_input_tensor.shape
         # sharded mem config for fold input
         num_cores = core_grid.x * core_grid.y
         shard_h = (n * w * h + num_cores - 1) // num_cores
@@ -72,7 +74,7 @@ class YOLOv4PerformanceRunnerInfra:
         input_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
-        torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
+
         torch_input_tensor = torch_input_tensor.reshape(1, 1, h * w * n, c)
         tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         tt_inputs_host = ttnn.pad(tt_inputs_host, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
