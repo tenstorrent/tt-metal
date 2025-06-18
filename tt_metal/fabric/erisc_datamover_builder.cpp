@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include <tt-metalium/assert.hpp>
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/fabric_edm_packet_header.hpp>
@@ -160,6 +161,8 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     constexpr std::array<std::pair<size_t, size_t>, 2> ring_buffer_slot_options = {{{8, 8}, {4, 8}}};
     constexpr std::array<std::pair<size_t, size_t>, 2> ring_buffer_slot_options_dateline = {{{8, 16}, {8, 8}}};
     constexpr std::array<std::pair<size_t, size_t>, 2> ring_buffer_slot_options_dateline_upstream = {{{8, 16}, {8, 8}}};
+    constexpr std::array<std::pair<size_t, size_t>, 2> ring_buffer_slot_options_dateline_upstream_adjcent = {
+        {{16, 8}, {8, 8}}};
 
     auto get_optimal_num_slots = [this](
                                      auto& buffer_slot_options,
@@ -206,6 +209,15 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
             this->num_used_receiver_channels - 1,
             dateline_upstream_num_sender_buffer_slots,
             dateline_upstream_num_receiver_buffer_slots);
+        // get the dateline upstream adjacent device buffer slots
+        size_t dateline_upstream_adjcent_num_sender_buffer_slots;
+        size_t dateline_upstream_adjcent_num_receiver_buffer_slots;
+        get_optimal_num_slots(
+            ring_buffer_slot_options_dateline_upstream_adjcent,
+            this->num_used_sender_channels - 1,
+            this->num_used_receiver_channels,
+            dateline_upstream_adjcent_num_sender_buffer_slots,
+            dateline_upstream_adjcent_num_receiver_buffer_slots);
         // set default buffer slots.
         num_sender_buffer_slots.fill(default_num_sender_buffer_slots);
         num_remote_sender_buffer_slots.fill(default_num_sender_buffer_slots);
@@ -283,8 +295,39 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
                     // set downstream_num_sender_buffer_slots, downstream is dateline edm
                     num_downstream_sender_buffer_slots.fill(dateline_num_sender_buffer_slots);
                 }
+                if (options.enable_dateline_upstream_adjacent_sender_extra_buffer_slots) {
+                    // set remote sender buffer slots equal to dateline upstream dajcent sender buffer slots
+                    for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
+                        bool skip_current_channel = i == this->dateline_upstream_adjcent_sender_channel_skip_idx;
+                        if (skip_current_channel) {
+                            num_remote_sender_buffer_slots[i] = 0;
+                        } else {
+                            if (i == 0) {  // tensix worker
+                                num_remote_sender_buffer_slots[i] = default_num_sender_buffer_slots;
+                            } else {
+                                num_remote_sender_buffer_slots[i] = dateline_upstream_adjcent_num_sender_buffer_slots;
+                            }
+                        }
+                    }
+                }
                 break;
             case FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice:
+                if (options.enable_dateline_upstream_adjacent_sender_extra_buffer_slots) {
+                    // set num_sender_buffer_slots
+                    for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
+                        bool skip_current_channel = (i == this->dateline_upstream_adjcent_sender_channel_skip_idx);
+                        if (skip_current_channel) {
+                            num_sender_buffer_slots[i] = 0;
+                        } else {
+                            if (i == 0) {  // tensix worker
+                                num_sender_buffer_slots[i] = default_num_sender_buffer_slots;
+                            } else {
+                                num_sender_buffer_slots[i] = dateline_upstream_adjcent_num_sender_buffer_slots;
+                            }
+                        }
+                    }
+                    this->skip_sender_vc1_channel_connection = true;
+                }
                 if (options.enable_dateline_upstream_sender_extra_buffer_slots) {
                     // set remote sender buffer slots equal to dateline upstream sender buffer slots
                     for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
@@ -310,6 +353,12 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
                             num_remote_receiver_buffer_slots[i] = dateline_upstream_num_receiver_buffer_slots;
                         }
                     }
+                }
+                break;
+            case FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream:
+                if (options.enable_dateline_upstream_adjacent_sender_extra_buffer_slots) {
+                    // set downstream_num_sender_buffer_slots, downstream is dateline upstream adjcent edm
+                    num_downstream_sender_buffer_slots.fill(dateline_upstream_adjcent_num_sender_buffer_slots);
                 }
                 break;
             default: break;
@@ -420,6 +469,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     bool is_dateline = options.edm_type == FabricEriscDatamoverType::Dateline;
     bool is_dateline_upstream = options.edm_type == FabricEriscDatamoverType::DatelineUpstream;
     bool is_dateline_upstream_adj_dev = options.edm_type == FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
+    bool is_dateline_upstream_adj_dev_upstream =
+        options.edm_type == FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
 
     configure_buffer_slots_helper(
         topology,
@@ -432,10 +483,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     log_trace(
         tt::LogOp,
-        "is_dateline {} is_dateline_upstream {} is_dateline_upstream_adj_dev {}",
+        "is_dateline {} is_dateline_upstream {} is_dateline_upstream_adj_dev {}, is_dateline_upstream_adj_dev_upstream "
+        "{}",
         is_dateline,
         is_dateline_upstream,
-        is_dateline_upstream_adj_dev);
+        is_dateline_upstream_adj_dev,
+        is_dateline_upstream_adj_dev_upstream);
     log_trace(tt::LogOp, "num_sender_buffer_slots: {}", num_sender_buffer_slots);
     log_trace(tt::LogOp, "num_remote_sender_buffer_slots: {}", num_remote_sender_buffer_slots);
     log_trace(tt::LogOp, "num_receiver_buffer_slots: {}", num_receiver_buffer_slots);
@@ -511,7 +564,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     auto skip_current_sender_channel = [&](uint32_t idx) -> bool {
         return (idx == this->dateline_sender_channel_skip_idx && is_dateline) ||
-               (idx == this->dateline_upstream_sender_channel_skip_idx && is_dateline_upstream);
+               (idx == this->dateline_upstream_sender_channel_skip_idx && is_dateline_upstream) ||
+               (idx == this->dateline_upstream_adjcent_sender_channel_skip_idx && is_dateline_upstream_adj_dev);
     };
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
@@ -635,8 +689,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     const CoreCoord& my_eth_core_logical,
     size_t my_noc_x,
     size_t my_noc_y,
-    size_t my_chip_id,
-    size_t peer_chip_id,
+    const FabricNodeId& local_fabric_node_id,
+    const FabricNodeId& peer_fabric_node_id,
 
     const std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>&
         receiver_channels_downstream_flow_control_semaphore_id,
@@ -657,8 +711,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     my_noc_y(my_noc_y),
     config(config),
     direction(direction),
-    my_chip_id(my_chip_id),
-    peer_chip_id(peer_chip_id),
+    local_fabric_node_id(local_fabric_node_id),
+    peer_fabric_node_id(peer_fabric_node_id),
     handshake_address(tt::round_up(
         tt::tt_metal::hal::get_erisc_l1_unreserved_base(), FabricEriscDatamoverConfig::eth_channel_sync_size)),
     channel_buffer_size(config.channel_buffer_size_bytes),
@@ -694,8 +748,18 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 }
 
 std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_t risc_id) const {
-    const bool is_handshake_master = this->my_chip_id < this->peer_chip_id;
-    TT_ASSERT(this->my_chip_id != this->peer_chip_id);
+    TT_ASSERT(this->local_fabric_node_id != this->peer_fabric_node_id);
+
+    // Tie break policy for selecting the handshake master:
+    // 1. If both nodes are on the same mesh, compare chip_ids
+    // 2. If nodes are on different meshes, compare mesh_ids (since chip_ids can alias across meshes)
+    auto peer_tie_break_id = (local_fabric_node_id.mesh_id == peer_fabric_node_id.mesh_id)
+                                 ? peer_fabric_node_id.chip_id
+                                 : *(peer_fabric_node_id.mesh_id);
+    auto local_tie_break_id = (local_fabric_node_id.mesh_id == peer_fabric_node_id.mesh_id)
+                                  ? local_fabric_node_id.chip_id
+                                  : *(local_fabric_node_id.mesh_id);
+    bool is_handshake_master = local_tie_break_id < peer_tie_break_id;
 
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
         log_trace(tt::LogTest, "Sender {} num buffers: {}", i, this->sender_channels_num_buffers[i]);
@@ -716,7 +780,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     size_t num_sender_channels = config.num_used_sender_channels;
     size_t num_receiver_channels = config.num_used_receiver_channels;
-    auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->my_chip_id);
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto local_physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
+    auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(local_physical_chip_id);
 
     size_t sender_channel_num_buffers = this->sender_channels_num_buffers[0];
     size_t receiver_channel_num_buffers =
@@ -742,6 +808,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
         config.skip_receiver_channel_1_connection,
         config.skip_sender_channel_1_connection,
+        config.skip_sender_vc1_channel_connection,
 
         config.sender_channels_base_address[0],
         config.sender_channels_worker_conn_info_base_address[0],
@@ -943,8 +1010,31 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program,
     const CoreCoord& ethernet_core,
-    chip_id_t local_chip_id,
-    chip_id_t peer_chip_id,
+    chip_id_t local_physical_chip_id,
+    chip_id_t peer_physical_chip_id,
+    const FabricEriscDatamoverConfig& config,
+    bool build_in_worker_connection_mode,
+    bool dateline_connection,
+    eth_chan_directions direction) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    return FabricEriscDatamoverBuilder::build(
+        device,
+        program,
+        ethernet_core,
+        control_plane.get_fabric_node_id_from_physical_chip_id(local_physical_chip_id),
+        control_plane.get_fabric_node_id_from_physical_chip_id(peer_physical_chip_id),
+        config,
+        build_in_worker_connection_mode,
+        dateline_connection,
+        direction);
+}
+
+FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::Program& program,
+    const CoreCoord& ethernet_core,
+    const FabricNodeId& local_fabric_node_id,
+    const FabricNodeId& peer_fabric_node_id,
     const FabricEriscDatamoverConfig& config,
     bool build_in_worker_connection_mode,
     bool dateline_connection,
@@ -1036,8 +1126,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         ethernet_core,
         device->ethernet_core_from_logical_core(ethernet_core).x,
         device->ethernet_core_from_logical_core(ethernet_core).y,
-        local_chip_id,
-        peer_chip_id,
+        local_fabric_node_id,
+        peer_fabric_node_id,
 
         receiver_channels_downstream_flow_control_semaphore_id,
         receiver_channels_downstream_teardown_semaphore_id,

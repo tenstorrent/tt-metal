@@ -20,19 +20,6 @@ struct ExecuteUnaryCompositeOp {
     }
 };
 
-struct ExecuteTrunc {
-    static Tensor invoke(
-        QueueId queue_id,
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-};
-
 // OpHandler_float : get_function_type_float
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOpWithFloat {
@@ -167,12 +154,6 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
     })
 
 constexpr auto rdiv = ttnn::register_operation<"ttnn::rdiv", operations::unary::ExecuteRdiv>();
-constexpr auto deg2rad = ttnn::register_operation<
-    "ttnn::deg2rad",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DEG2RAD>>();
-constexpr auto rad2deg = ttnn::register_operation<
-    "ttnn::rad2deg",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::RAD2DEG>>();
 constexpr auto acosh = ttnn::register_operation<
     "ttnn::acosh",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::ACOSH>>();
@@ -206,7 +187,6 @@ constexpr auto softsign = ttnn::register_operation<
 constexpr auto swish = ttnn::register_operation<
     "ttnn::swish",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SWISH>>();
-constexpr auto trunc = ttnn::register_operation<"ttnn::trunc", operations::unary::ExecuteTrunc>();
 constexpr auto var_hw = ttnn::register_operation<
     "ttnn::var_hw",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::VAR_HW>>();
