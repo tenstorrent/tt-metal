@@ -552,8 +552,6 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> Non
         >>> tensor = ttnn.ones([2, 3], bfloat16, ttnn.ROW_MAJOR_LAYOUT)
         >>> dump_tensor(file_name=str(tensor.bin), tensor=tensor)
     """
-    if distribute is None:
-        distribute = dict()
     file_name = pathlib.Path(file_name)
     ttnn._ttnn.tensor.dump_tensor(str(file_name), tensor)
 

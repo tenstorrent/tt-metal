@@ -917,7 +917,7 @@ void pytensor_module(py::module& m_tensor) {
                 return detail::convert_python_tensor_to_tt_tensor(
                     python_tensor,
                     data_type,
-                    layout.value_or(Layout::ROW_MAJOR),
+                    layout,
                     tile,
                     mem_config.value_or(MemoryConfig{}),
                     device.value_or(nullptr),
@@ -928,7 +928,7 @@ void pytensor_module(py::module& m_tensor) {
             py::arg("tensor"),
             py::arg("data_type") = std::nullopt,
             py::arg("device") = std::nullopt,
-            py::arg("layout").noconvert() = Layout::ROW_MAJOR,
+            py::arg("layout").noconvert() = std::nullopt,
             py::arg("mem_config").noconvert() = std::nullopt,
             py::arg("tile").noconvert() = std::nullopt,
             py::arg("cq_id") = ttnn::DefaultQueueId,
