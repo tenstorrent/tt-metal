@@ -4,7 +4,6 @@
 import pytest
 import torch
 
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import (
     collect_results,
     run_elf_files,
@@ -71,8 +70,7 @@ param_ids = generate_param_ids(all_params)
     ids=param_ids,
 )
 def test_matmul_pack_untilize(testname, formats, dest_acc, math_fidelity):
-    arch = get_chip_architecture()
-    if formats.output == DataFormat.Bfp8_b and arch == ChipArchitecture.WORMHOLE:
+    if formats.output == DataFormat.Bfp8_b:
         pytest.skip("Pack untilize does not support Bfp8_b")
 
     torch_format = format_dict[formats.output_format]
