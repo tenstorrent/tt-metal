@@ -2329,6 +2329,7 @@ TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_pref
     // regular cached program command sequence), so rta_updates includes all the RTAs.
     auto& cached_program_command_sequence = program.get_trace_cached_program_command_sequences().at(command_hash);
     std::vector<std::vector<uint8_t>> rta_data;
+    rta_data.reserve(cached_program_command_sequence.rta_updates.size());
     for (auto& update : cached_program_command_sequence.rta_updates) {
         rta_data.push_back(std::vector<uint8_t>(
             static_cast<const uint8_t*>(update.src), static_cast<const uint8_t*>(update.src) + update.size));

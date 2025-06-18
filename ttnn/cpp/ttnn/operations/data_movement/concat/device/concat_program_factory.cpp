@@ -91,6 +91,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
     };
 
     std::vector<std::tuple<uint32_t, uint32_t>> num_tiles_for_each_input_shard;
+    num_tiles_for_each_input_shard.reserve(input_tensors.size());
     for (const auto& input_tensor : input_tensors) {
         num_tiles_for_each_input_shard.push_back(get_num_tiles_per_shard(input_tensor.shard_spec()->shape));
     }
@@ -237,6 +238,7 @@ static std::array<std::vector<T>, 2> split(std::vector<T> input, std::size_t ind
 
 static CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores) {
     std::vector<CoreRange> core_ranges;
+    core_ranges.reserve(cores.size());
     for (const auto& core : cores) {
         core_ranges.push_back(CoreRange(core));
     }

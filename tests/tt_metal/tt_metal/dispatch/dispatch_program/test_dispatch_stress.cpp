@@ -136,6 +136,7 @@ TEST(DispatchStress, TensixRunManyTimes) {
         }
         vector<IDevice*> devices_;
         auto reserved_devices_ = tt::tt_metal::detail::CreateDevices(chip_ids);
+        devices_.reserve(reserved_devices_.size());
         for (const auto& [id, device] : reserved_devices_) {
             devices_.push_back(device);
         }

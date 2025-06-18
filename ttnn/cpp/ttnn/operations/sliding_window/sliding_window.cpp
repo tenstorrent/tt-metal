@@ -441,6 +441,7 @@ static std::vector<uint16_t> serialize_gather_config(const GatherConfig& config)
 // Flatten a list of configs and ensure they are uniform lengths by padding
 static std::vector<std::vector<uint16_t>> serialize_gather_configs(const std::vector<GatherConfig>& configs) {
     std::vector<std::vector<uint16_t>> serialized_configs;
+    serialized_configs.reserve(configs.size());
     for (const auto& config : configs) {
         serialized_configs.push_back(serialize_gather_config(config));
     }

@@ -604,6 +604,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         auto sender_to_backward_receiver_semaphore_id =
             CreateSemaphore(program, receiver_backward_semaphore_core_range_set, 0);
         std::vector<CoreCoord> receiver_worker_cores_noc;
+        receiver_worker_cores_noc.reserve(receiver_worker_cores.size());
         for (const auto& core : receiver_worker_cores) {
             receiver_worker_cores_noc.push_back(mesh_device->worker_core_from_logical_core(core));
         }
