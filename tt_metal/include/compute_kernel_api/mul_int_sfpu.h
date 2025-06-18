@@ -6,7 +6,7 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_binary_sfpu_sub_uint16.h"
+#include "llk_math_eltwise_binary_sfpu_mul_int.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -17,7 +17,7 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Performs an elementwise sub operation with the two uint16 inputs: y = sub(x0,x1)
+ * Performs an elementwise mul operation with the two integer inputs: y = mul(x0,x1)
  * Output overwrites first operand in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
@@ -33,13 +33,13 @@ namespace ckernel {
  * | idst1                 | The index of the tile in DST register buffer to use as second operand       | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void sub_uint16_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_sub_uint16<APPROX>(idst0, idst1)));
+ALWI void mul_uint16_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_mul_int<APPROX, 8>(idst0, idst1)));
 }
 
 /**
- * Please refer to documentation for any_init.
+ * Please refer to documentation for mul_uint16_tile_init.
  */
-ALWI void sub_uint16_tile_init() { MATH((llk_math_eltwise_binary_sfpu_sub_uint16_init<APPROX>())); }
+ALWI void mul_int_tile_init() { MATH((llk_math_eltwise_binary_sfpu_mul_int_init<APPROX>())); }
 
 }  // namespace ckernel
