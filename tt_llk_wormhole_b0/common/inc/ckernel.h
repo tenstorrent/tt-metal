@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ckernel_instr_params.h"
+#include "llk_defs.h"
 #include "risc_attribs.h"
 
 // MT: This should be dissolved and moved to the appropriate place
@@ -622,6 +623,11 @@ inline void init_prng_seed(const uint seed)
     {
         TTI_SFPNOP;
     }
+}
+
+inline constexpr bool is_valid_instruction_mode(InstrModLoadStore mode)
+{
+    return mode == InstrModLoadStore::INT32_2S_COMP || mode == InstrModLoadStore::INT32 || mode == InstrModLoadStore::LO16;
 }
 
 } // namespace ckernel

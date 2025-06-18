@@ -5,6 +5,8 @@
 #pragma once
 
 #include "ckernel_instr_params.h"
+#include "ckernel_ops.h"
+#include "llk_defs.h"
 #include "risc_attribs.h"
 
 // MT: This should be dissolved and moved to the appropriate place
@@ -830,6 +832,18 @@ inline void init_prng_seed(const uint seed)
     {
         TTI_SFPNOP;
     }
+}
+
+inline constexpr bool is_valid_instruction_mode(InstrModLoadStore mode)
+{
+    return mode == InstrModLoadStore::INT32_2S_COMP || mode == InstrModLoadStore::INT32 || mode == InstrModLoadStore::LO16;
+}
+
+inline void apply_sign_magnitude_conversion(uint src, uint dst, InstrModCast cast_mode)
+{
+    TTI_SFPCAST(src /*lreg*/, dst /*ldest*/, cast_mode);
+    // Required after cast due to a bug in Blackhole RTL (Refer tenstorrent/tt-llk-bh#16)
+    TTI_SFPSETSGN(0 /* imm */, dst /*lreg_c*/, src /*ldest*/, 0 /*imod*/);
 }
 
 } // namespace ckernel
