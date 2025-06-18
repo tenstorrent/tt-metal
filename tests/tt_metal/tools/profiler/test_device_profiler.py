@@ -221,8 +221,8 @@ def test_dispatch_cores():
     RISC_COUNT = 1
     ZONE_COUNT = 37
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch": [400, 1000, 2000],
-        "Tensix CQ Prefetch": [400, 1000, 4000],
+        "Tensix CQ Dispatch": [400, 1000, 1290, 2000],
+        "Tensix CQ Prefetch": [400, 1000, 1580, 4000],
         "dispatch_total_cq_cmd_op_time": [103],
         "dispatch_go_send_wait_time": [103],
     }
@@ -292,7 +292,7 @@ def test_dispatch_cores():
 @skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [322, 541, 1400, 2100],
+        "Ethernet CQ Dispatch": [322, 541, 1400, 1900, 2100],
         "Ethernet CQ Prefetch": [600, 2500],
     }
     devicesData = run_device_profiler_test(
@@ -428,6 +428,28 @@ def test_timestamped_events():
             devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]["all_events"]
         )
         assert eventCount in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong event count"
+
+
+def test_noc_event_profiler_linked_multicast_hang():
+    # test that we can avoid hangs with linked multicast
+    # see tt-metal issue #22578
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
+
+    testCommand = "build/test/tt_metal/perf_microbenchmark/dispatch/test_bw_and_latency"
+    # note: this runs a long series repeated multicasts from worker {1,1} to grid {2,2},{3,3}
+    # note: -m6 is multicast test mode, -link activates linked multicast
+    testCommandArgs = "-tx 3 -ty 3 -sx 2 -sy 2 -rx 1 -ry 1 -m 6 -link -profdump"
+    clear_profiler_runtime_artifacts()
+    nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
+    profilerRun = os.system(f"cd {TT_METAL_HOME} && {nocEventProfilerEnv} {testCommand} {testCommandArgs}")
+    assert profilerRun == 0
+
+    expected_trace_file = f"{PROFILER_LOGS_DIR}/noc_trace_dev0_ID0.json"
+    assert os.path.isfile(expected_trace_file)
+
+    with open(expected_trace_file, "r") as nocTraceJson:
+        noc_trace_data = json.load(nocTraceJson)
 
 
 def test_noc_event_profiler():

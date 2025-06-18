@@ -144,7 +144,7 @@ TEST_F(MeshTensorTest, GetDeviceTensors) {
     EXPECT_THAT(device_shard_coords, ElementsAreArray(coord_matchers));
 }
 
-TEST_F(MeshTensorTestT3K, AggregateAsTensor) {
+TEST_F(MeshTensorTestT3K, CombineDeviceTensors) {
     const ttnn::Shape shape{1, 1, 32, 32};
     const TensorSpec tensor_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
@@ -169,7 +169,7 @@ TEST_F(MeshTensorTestT3K, AggregateAsTensor) {
     EXPECT_THAT(
         ([&]() {
             std::vector<Tensor> shards_to_aggregate = {device_tensors1[0], device_tensors2[1]};
-            aggregate_as_tensor(shards_to_aggregate, AllGatherTensor{});
+            combine_device_tensors(shards_to_aggregate);
         }),
         ThrowsMessage<std::runtime_error>(HasSubstr("tensor shards must be allocated on the same mesh buffer.")));
 
@@ -177,14 +177,13 @@ TEST_F(MeshTensorTestT3K, AggregateAsTensor) {
     EXPECT_THAT(
         ([&]() {
             std::vector<Tensor> shards_to_aggregate = {device_tensors1[0], device_tensors1[0]};
-            aggregate_as_tensor(shards_to_aggregate, AllGatherTensor{});
+            combine_device_tensors(shards_to_aggregate);
         }),
-        ThrowsMessage<std::runtime_error>(HasSubstr("Found a tensor shard at duplicate coordiante")));
+        ThrowsMessage<std::runtime_error>(HasSubstr("Found a tensor shard at duplicate coordinate")));
 
     // Aggregate every second shard into a new mesh tensor.
-    auto partial_tensor = aggregate_as_tensor(
-        std::vector<Tensor>{device_tensors1[6], device_tensors1[4], device_tensors1[2], device_tensors1[0]},
-        AllGatherTensor{});
+    auto partial_tensor = combine_device_tensors(
+        std::vector<Tensor>{device_tensors1[6], device_tensors1[4], device_tensors1[2], device_tensors1[0]});
 
     auto* partial_device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&partial_tensor.storage());
     ASSERT_NE(partial_device_storage, nullptr);
@@ -318,8 +317,9 @@ auto get_mesh_tensor_write_test_params() {
                                 {
                                     MeshMapperConfig::Replicate(),
                                     MeshMapperConfig::Shard(1),
-                                }},
-                        MeshShape(2, 3));
+                                },
+                            .mesh_shape_override = MeshShape(2, 3),
+                        });
                 },
         },
     };

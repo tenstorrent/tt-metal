@@ -1,5 +1,5 @@
 add_library(ttnn_op_matmul ${LIB_TYPE})
-add_library(TT::NN::Ops::Matmul ALIAS ttnn_op_matmul)
+add_library(TTNN::Ops::Matmul ALIAS ttnn_op_matmul)
 
 target_precompile_headers(ttnn_op_matmul REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_matmul)
@@ -22,7 +22,7 @@ target_link_libraries(
     ttnn_op_matmul
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
 install(TARGETS ttnn_op_matmul LIBRARY COMPONENT tar)

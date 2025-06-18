@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,8 +9,8 @@ from loguru import logger
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import run_for_wormhole_b0
-from models.experimental.yolov8s_world.reference import yolov8s_world
-from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world import (
+from models.demos.yolov8s_world.reference import yolov8s_world
+from models.demos.yolov8s_world.tt.ttnn_yolov8s_world import (
     TtConv,
     TtC2f,
     TtSPPF,
@@ -22,7 +22,7 @@ from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world import (
     TtYOLOWorld,
     TtImagePoolingAttn,
 )
-from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
+from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
     create_custom_preprocessor,
     attempt_load,
     move_to_device,
@@ -715,7 +715,7 @@ def test_YoloModel(device, use_pretrained_weight, reset_seeds):
 
     ttnn_x = x.permute(0, 2, 3, 1)
     ttnn_x = ttnn.from_torch(
-        ttnn_x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        ttnn_x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
     parameters = preprocess_model_parameters(

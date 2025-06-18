@@ -7,6 +7,7 @@
 
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
 #include <flatbuffers/flatbuffers.h>
 
 #include "ttnn/tensor/types.hpp"
@@ -39,7 +40,7 @@ tt::tt_metal::distributed::MeshCoordinate from_flatbuffer(const flatbuffer::Mesh
 
 flatbuffers::Offset<flatbuffer::MeshShape> to_flatbuffer(
     const tt::tt_metal::distributed::MeshShape& shape, flatbuffers::FlatBufferBuilder& builder) {
-    auto dimensions_vector = builder.CreateVector(std::vector<uint32_t>(shape.view().begin(), shape.view().end()));
+    auto dimensions_vector = builder.CreateVector(std::vector<uint32_t>(shape.cbegin(), shape.cend()));
     return flatbuffer::CreateMeshShape(builder, dimensions_vector);
 }
 
@@ -98,8 +99,8 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
             const auto& host_storage = std::get<tt::tt_metal::HostStorage>(storage);
             buffer_size = host_storage.buffer.view_bytes().size();
         } else {
-            const auto buffer = std::get<tt::tt_metal::MultiDeviceHostStorage>(storage).get_buffer(0);
-            buffer_size = buffer.view_bytes().size();
+            std::get<tt::tt_metal::MultiDeviceHostStorage>(storage).distributed_buffer().apply(
+                [&buffer_size](const tt::tt_metal::HostBuffer& shard) { buffer_size = shard.view_bytes().size(); });
         }
 
         auto inline_storage = ttnn::flatbuffer::InlineFileStorage(/*offset=*/0, buffer_size);
@@ -120,29 +121,28 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
 
         std::vector<flatbuffers::Offset<ttnn::flatbuffer::TensorShard>> shards_vector;
         uint64_t data_offset = 0;
-        for (std::size_t i = 0; i < multi_device_storage.num_buffers(); i++) {
-            const auto& buffer = multi_device_storage.get_buffer(i);
-            const std::size_t buffer_size = buffer.view_bytes().size();
+        for (const auto& coord : multi_device_storage.distributed_buffer().shard_coords()) {
+            if (const auto& buffer = multi_device_storage.distributed_buffer().get_shard(coord); buffer.has_value()) {
+                const std::size_t buffer_size = buffer->view_bytes().size();
 
-            auto inline_storage = ttnn::flatbuffer::InlineFileStorage(data_offset, buffer_size);
+                auto inline_storage = ttnn::flatbuffer::InlineFileStorage(data_offset, buffer_size);
+                auto mesh_coord_offset = to_flatbuffer(coord, builder);
 
-            auto shard_offset = ttnn::flatbuffer::CreateTensorShard(
-                builder,
-                ttnn::flatbuffer::TensorBuffer::InlineFileStorage,
-                builder.CreateStruct(inline_storage).Union());
+                auto shard_offset = ttnn::flatbuffer::CreateTensorShard(
+                    builder,
+                    ttnn::flatbuffer::TensorBuffer::InlineFileStorage,
+                    builder.CreateStruct(inline_storage).Union(),
+                    mesh_coord_offset);
 
-            shards_vector.push_back(shard_offset);
-            data_offset += buffer_size;
+                shards_vector.push_back(shard_offset);
+                data_offset += buffer_size;
+            }
         }
         auto shards = builder.CreateVector(shards_vector);
 
-        flatbuffers::Offset<ttnn::flatbuffer::MeshShape> mesh_shape_offset;
-        if (const auto* shard_2d = std::get_if<tt::tt_metal::ShardTensor2D>(&strategy)) {
-            ttnn::MeshShape mesh_shape{shard_2d->shard_mesh.x, shard_2d->shard_mesh.y};
-            mesh_shape_offset = to_flatbuffer(mesh_shape, builder);
-        }
-        auto sharded_tensor = ttnn::flatbuffer::CreateShardedTensor(builder, mesh_shape_offset, shards);
+        auto mesh_shape_offset = to_flatbuffer(multi_device_storage.distributed_buffer().shape(), builder);
 
+        auto sharded_tensor = ttnn::flatbuffer::CreateShardedTensor(builder, mesh_shape_offset, shards);
         auto tensor_offset = ttnn::flatbuffer::CreateTensor(
             builder, tensor_spec_offset, ttnn::flatbuffer::TensorType::ShardedTensor, sharded_tensor.Union());
 
@@ -171,25 +171,25 @@ Tensor from_flatbuffer(const ttnn::flatbuffer::Tensor* fb_tensor, tt::stl::Span<
             return Tensor(std::move(host_buffer), spec);
         }
         case ttnn::flatbuffer::TensorType::ShardedTensor: {
-            auto sharded = fb_tensor->tensor_type_as_ShardedTensor();
+            const auto* sharded = fb_tensor->tensor_type_as_ShardedTensor();
+
+            const auto* mesh_shape = sharded->mesh_shape();
+            TT_FATAL(mesh_shape != nullptr, "Mesh shape is required for sharded tensor");
+            const tt::tt_metal::distributed::MeshShape ttnn_mesh_shape = from_flatbuffer(mesh_shape);
 
             tt::tt_metal::DistributedTensorConfig strategy;
-            auto* mesh_shape = sharded->mesh_shape();
-            if (mesh_shape != nullptr) {
-                const tt::tt_metal::distributed::MeshShape ttnn_mesh_shape = from_flatbuffer(mesh_shape);
+            if (ttnn_mesh_shape.dims() == 2) {
                 strategy = tt::tt_metal::ShardTensor2D{
                     tt::tt_metal::ShardMesh{.y = ttnn_mesh_shape[0], .x = ttnn_mesh_shape[1]}};
             }
 
             const size_t num_shards = sharded->shards()->size();
 
-            std::vector<tt::tt_metal::HostBuffer> buffers;
-            std::vector<TensorSpec> specs(num_shards, spec);
-            buffers.reserve(num_shards);
-            for (size_t i = 0; i < num_shards; i++) {
-                auto* shard = sharded->shards()->Get(i);
+            auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(ttnn_mesh_shape);
+            for (size_t i = 0; i < sharded->shards()->size(); ++i) {
+                const auto* shard = sharded->shards()->Get(i);
 
-                auto* inline_storage = shard->buffer_as<ttnn::flatbuffer::InlineFileStorage>();
+                const auto* inline_storage = shard->buffer_as<ttnn::flatbuffer::InlineFileStorage>();
                 TT_FATAL(
                     inline_storage != nullptr, "Only InlineFileStorage is supported in flatbuffer deserialization");
 
@@ -199,10 +199,13 @@ Tensor from_flatbuffer(const ttnn::flatbuffer::Tensor* fb_tensor, tt::stl::Span<
                 tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(size, spec);
                 TT_FATAL(offset + size <= tensor_data.size(), "Tensor data out of bounds for shard {}", i);
                 std::memcpy(static_cast<void*>(host_buffer.view_bytes().data()), tensor_data.data() + offset, size);
-                buffers.push_back(std::move(host_buffer));
+
+                TT_FATAL(shard->mesh_coordinate() != nullptr, "Mesh coordinate is required for each shard");
+                const auto coord = from_flatbuffer(shard->mesh_coordinate());
+                distributed_buffer.emplace_shard(coord, [&host_buffer]() { return std::move(host_buffer); });
             }
 
-            tt::tt_metal::MultiDeviceHostStorage multi_device_storage{std::move(buffers)};
+            tt::tt_metal::MultiDeviceHostStorage multi_device_storage{std::move(distributed_buffer)};
 
             return Tensor(std::move(multi_device_storage), spec, strategy);
         }

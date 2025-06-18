@@ -328,8 +328,7 @@ void set_or_update_runtime_arguments(
                 auto b_shard_shape = b_shard_shape_generator(core);
                 b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
             }
-            // for the specific case of subtile no_bcast type, writer no longer needs b's information
-            // for other cases, it remains needing b's information for now.
+            // TODO: after transition, remove b from writer completely
             std::array writer_runtime_args = {
                 b->buffer()->address(),
                 c.buffer()->address(),
@@ -417,6 +416,38 @@ void set_or_update_runtime_arguments(
     }
 }
 
+KernelName get_reader_kernel_name_and_defines(
+    const SubtileBroadcastType subtile_broadcast_type, std::map<std::string, std::string>& reader_defines) {
+    if (subtile_broadcast_type == SubtileBroadcastType::NONE) {
+        return KernelName::ReaderNoBcastNg;
+    } else if (
+        subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
+        reader_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
+        reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
+        return KernelName::ReaderRowBcastNg;
+    } else if (
+        subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+        subtile_broadcast_type == SubtileBroadcastType::COL_B) {
+        reader_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::COL_A ? "1" : "0";
+        reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::COL_B ? "1" : "0";
+        return KernelName::ReaderColBcastNg;
+    } else if (
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B) {
+        reader_defines["SRC_BCAST_COL"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
+        reader_defines["SRC_BCAST_ROW_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
+        return KernelName::ReaderRowBColABcastNg;
+    } else if (
+        subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+        subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
+        reader_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ? "1" : "0";
+        reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::SCALAR_B ? "1" : "0";
+        return KernelName::ReaderScalarBcastNg;
+    } else {
+        TT_FATAL(false, "Unsupported subtile broadcast type {}", static_cast<int>(subtile_broadcast_type));
+    }
+}
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -587,17 +618,25 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         writer_kernel = kernel_config.writer_kernel;
         compute_kernel = kernel_config.compute_kernel;
     }
-    auto writer_defines = make_dataflow_defines(b_dtype);
+
+    // to maintain backward compatibility, old writer kernel only needs b_dtype
+    auto writer_defines = make_dataflow_defines(b_dtype, a_dtype);
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
 
-    // overwrite reader and write kernel names for the following specific case
-    // so that reader reads of both and b and writer does not read b
-    if (b.has_value() && operation_attributes.subtile_broadcast_type == SubtileBroadcastType::NONE) {
-        kernel_config.reader_kernel = KernelName::ReaderNoBcastSplit;
-        writer_kernel = KernelName::WriterNoBcastSplit;
-    }
+    auto reader_defines = make_dataflow_defines(a_dtype, b_dtype);
+    reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
+    reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
 
+    // overwrite reader and write kernel names so that reader reads both and b and
+    // writer does not read b. For the transition, it can choose the original kernels
+    // or overwrite with new kernel here. If going back to old kernels, we can just
+    // skip the if clause.
+    if (b.has_value()) {
+        kernel_config.reader_kernel = CMAKE_UNIQUE_NAMESPACE::get_reader_kernel_name_and_defines(
+            operation_attributes.subtile_broadcast_type, reader_defines);
+        writer_kernel = KernelName::WriterNoBcastNg;
+    }
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(writer_kernel, is_sfpu_op),
@@ -605,9 +644,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         tt_metal::WriterDataMovementConfig({b_is_dram, c_is_dram, has_sharding}, std::move(writer_defines)));
 
     // READER KERNEL
-    auto reader_defines = make_dataflow_defines(a_dtype);
-    reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
-    reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,

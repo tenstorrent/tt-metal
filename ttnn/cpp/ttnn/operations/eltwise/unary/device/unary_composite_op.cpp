@@ -26,16 +26,6 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::operations::unary {
 
-Tensor _deg2rad(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::multiply(
-        input_tensor, (float)(M_PI / 180.0), std::nullopt, output_mem_config.value_or(input_tensor.memory_config()));
-}
-
-Tensor _rad2deg(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::multiply(
-        input_tensor, (float)(180.0 / M_PI), std::nullopt, output_mem_config.value_or(input_tensor.memory_config()));
-}
-
 // acosh(x) = log(x + sqrt(x^2 - 1))
 Tensor _acosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL(input_a.storage_type() == StorageType::DEVICE, "Unary operation requires input to be on Device.");
@@ -333,35 +323,6 @@ Tensor _softsign(const Tensor& a, const std::optional<MemoryConfig>& output_mem_
 Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& output_mem_config) {
     // x / (1.0f + exp(-x))
     return ttnn::silu(a);
-}
-
-Tensor ExecuteTrunc::invoke(
-    QueueId queue_id,
-    const Tensor& input,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> output_tensor) {
-    output_tensor = output_tensor.value_or(ttnn::empty_like(input));
-    Tensor floor_res = ttnn::floor(queue_id, input, output_mem_config);
-    ttnn::where(
-        queue_id,
-        ttnn::ne(queue_id, input, floor_res),
-        ttnn::add(queue_id, floor_res, 1.0f, std::nullopt, output_mem_config),
-        floor_res,
-        output_mem_config,
-        output_tensor);
-    ttnn::where(
-        queue_id,
-        ttnn::gtz(queue_id, input, output_mem_config),
-        floor_res,
-        output_tensor.value(),
-        output_mem_config,
-        output_tensor);
-    return output_tensor.value();
-}
-
-Tensor ExecuteTrunc::invoke(
-    const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
-    return ExecuteTrunc::invoke(DefaultQueueId, input, output_mem_config, std::move(output_tensor));
 }
 
 // Function variance of whole tensor.

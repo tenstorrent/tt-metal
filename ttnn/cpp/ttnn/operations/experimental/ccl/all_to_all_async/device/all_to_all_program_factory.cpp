@@ -150,7 +150,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
 
     // Basic configuration
     const bool enable_async_output = false;
-    const bool enable_persistent_fabric = true;
     const bool is_first_chip = ring_index == 0;
     const bool is_last_chip = ring_index == ring_size - 1;
 
@@ -187,10 +186,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     uint32_t num_senders_per_link = 1;
     uint32_t num_receivers_per_link = ring_size;
     const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_senders_per_link, enable_persistent_fabric, device, sub_device_id);
+        choose_worker_cores(num_links, num_senders_per_link, device, sub_device_id);
 
-    const auto [total_workers_core_range, total_workers_cores] = choose_worker_cores(
-        num_links, (num_senders_per_link + num_receivers_per_link), enable_persistent_fabric, device, sub_device_id);
+    const auto [total_workers_core_range, total_workers_cores] =
+        choose_worker_cores(num_links, (num_senders_per_link + num_receivers_per_link), device, sub_device_id);
 
     const auto receiver_worker_core_range = total_workers_core_range.subtract(sender_worker_core_range);
     const auto receiver_worker_cores = corerange_to_cores(receiver_worker_core_range, std::nullopt, true);
