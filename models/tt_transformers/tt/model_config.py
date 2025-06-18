@@ -788,7 +788,7 @@ class ModelArgs:
                 m=num_rows(seq_len),
                 k=k_dim,
                 n=n_dim,
-                grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
+                grid_size=self.find_prefill_grid(num_rows(seq_len) // self.tile_size, k_dim // self.tile_size),
                 in0_block_w=1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
                 per_core_N=math.ceil(n_dim / (self.tile_size * dram_shard_grid_width)) if dram_sharded_wo else None,
@@ -1653,15 +1653,6 @@ class ModelArgs:
         per_core_M=None,
         per_core_N=None,
     ):
-        if in0_block_w is None:
-            # Reduce grid size if necessary
-            if k % (self.tile_size * grid_size[1]) != 0:
-                grid_size = (grid_size[0], self.find_largest_divisor(k // self.tile_size, max_divisor=grid_size[1]))
-            assert (
-                k % (self.tile_size * grid_size[1]) == 0
-            ), f"Input width must be divisible by tile size times grid size"
-            in0_block_w = self.find_largest_divisor(k // (self.tile_size * grid_size[1]))
-
         if per_core_M is None:
             per_core_M = math.ceil(m / (self.tile_size * grid_size[1]))
         if per_core_N is None:
@@ -1671,6 +1662,12 @@ class ModelArgs:
         out_subblock_w = (
             get_out_subblock_w(per_core_N, out_subblock_h) if not self.is_galaxy else 1
         )  # TODO: Needed for TG hang workaround
+
+        if in0_block_w is None:
+            assert (
+                k % (self.tile_size * grid_size[1]) == 0
+            ), f"Input width must be divisible by tile size times grid size"
+            in0_block_w = self.find_largest_divisor(k // (self.tile_size * grid_size[1]))
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
