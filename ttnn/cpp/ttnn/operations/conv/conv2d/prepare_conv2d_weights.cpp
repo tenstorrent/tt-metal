@@ -616,7 +616,6 @@ static OptimizedConvBlockConfig get_opt_block_config(
     const bool has_bias) {
     auto compute_grid_size = device->compute_with_storage_grid_size();
 
-    // TODO check if this may break some things...
     conv_config = determine_conv_config_for_auto_shard(
         conv_config,
         mm_conv,
@@ -1166,6 +1165,7 @@ ttnn::Tensor prepare_conv_weights(
             weights_format);
     }
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    DataType conv_output_dtype = output_dtype.value_or(input_dtype);
 
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
@@ -1233,7 +1233,7 @@ ttnn::Tensor prepare_conv_weights(
         conv_config,
         input_layout,
         input_dtype,
-        output_dtype.value_or(input_dtype),
+        conv_output_dtype,
         compute_config,
         input_memory_config,
         has_bias);
@@ -1330,7 +1330,7 @@ ttnn::Tensor prepare_conv_bias(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-
+    DataType conv_output_dtype = output_dtype.value_or(input_dtype);
     TT_ASSERT(conv_config.weights_dtype.has_value(), "prepare_conv_bias requires conv_config.weights_dtype to be set.");
 
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
@@ -1367,7 +1367,7 @@ ttnn::Tensor prepare_conv_bias(
         conv_config,
         input_layout,
         input_dtype,
-        output_dtype.value_or(input_dtype),
+        conv_output_dtype,
         compute_config,
         input_memory_config,
         true);

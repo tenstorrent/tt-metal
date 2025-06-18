@@ -249,7 +249,7 @@ void py_bind_conv_transpose2d(py::module& module) {
         py::arg("groups"),
         py::arg("device"),
         py::arg("input_dtype"),
-        py::arg("output_dtype"),
+        py::arg("output_dtype") = std::nullopt,
         py::arg("conv_config") = std::nullopt,
         py::arg("compute_config") = std::nullopt,
         py::arg("mirror_kernel") = true);
@@ -275,7 +275,7 @@ void py_bind_conv_transpose2d(py::module& module) {
         py::arg("groups"),
         py::arg("device"),
         py::arg("input_dtype"),
-        py::arg("output_dtype"),
+        py::arg("output_dtype") = std::nullopt,
         py::arg("conv_config") = std::nullopt,
         py::arg("compute_config") = std::nullopt,
         py::arg("mirror_kernel") = true);
