@@ -113,6 +113,12 @@ void validate_tensors(
         input_shape,
         index_shape
     );
+
+    TT_FATAL(
+        index_shape[1] == source_shape[1],
+        "Index shape has a different dimension W than source shape (index shape: {}, source shape: {}).",
+        index_shape,
+        source_shape);
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
