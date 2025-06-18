@@ -246,8 +246,6 @@ def read_golden_results(
         f"tests/tt_metal/microbenchmarks/ethernet/fabric_edm_bandwidth_golden{'_' + machine_type_suffix if machine_type_suffix is not None else ''}.csv",
     )
 
-    print(csv_path)
-
     if not os.path.exists(csv_path):
         logger.warning("No golden data found")
         return 0, 0
