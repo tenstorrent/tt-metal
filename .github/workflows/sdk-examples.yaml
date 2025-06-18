@@ -54,7 +54,8 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Building examples"
-          ls -d /usr/share/${{ inputs.product }}/examples/*/
+          echo "Found example directories:"
+          ls -1d /usr/share/${{ inputs.product }}/examples/*/
           for example in /usr/share/${{ inputs.product }}/examples/*; do
             [ -f "$example/CMakeLists.txt" ] || continue
 
