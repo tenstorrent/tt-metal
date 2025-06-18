@@ -208,6 +208,9 @@ public:
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
+    // Creates a view of the region of the buffer.
+    // The view is a new buffer (unless the region is the entire buffer) that shares the same underlying device memory.
+    // The view keeps the underlying buffer alive as long as the view is alive.
     std::shared_ptr<Buffer> view(const BufferRegion& region);
 
     Buffer(const Buffer& other) = delete;
@@ -319,7 +322,10 @@ private:
 
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
 
+    // The root buffer is the buffer that owns the underlying device memory.
+    // The root buffer is populated only when the buffer was created with a view method.
     std::shared_ptr<Buffer> root_buffer_;
+    // Offset of the current view buffer in the root buffer
     DeviceAddr root_buffer_offset_ = 0;
 
     size_t unique_id_ = 0;
