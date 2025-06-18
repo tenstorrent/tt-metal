@@ -1,22 +1,21 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import requests
-import cv2
 import math
+import os
 import time
+from pathlib import Path
+
+import cv2
+import numpy as np
+import requests
 import torch
 import torchvision
-import numpy as np
-from pathlib import Path
 from loguru import logger
 
-from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
-    attempt_load,
-)
-from models.experimental.yolov8s_world.reference import yolov8s_world
+from models.demos.yolov8s_world.reference import yolov8s_world
+from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import attempt_load
 
 
 def imread(filename: str, flags: int = cv2.IMREAD_COLOR):
@@ -40,7 +39,7 @@ def load_torch_model(use_pretrained_weight=True):
         torch_model.load_state_dict(new_state_dict)
     else:
         torch_model = yolov8s_world.YOLOWorld()
-
+    torch_model.eval()
     torch_model = torch_model.model
 
     return torch_model
