@@ -72,7 +72,8 @@ int main() {
     uint32_t pad_buffer_size = packed_data_size * pad_vec.size();
     tt_metal::InterleavedBufferConfig pad_dram_config{
         .device = device,
-        .size = pad_buffer_size * 8,
+        .size =
+            pad_buffer_size * 8,  // apparently the buffer size needs to be a multiple of the page size, so we need this
         .page_size = dram_page_size,
         .buffer_type = tt_metal::BufferType::DRAM};
     std::shared_ptr<tt::tt_metal::Buffer> pad_buffer = CreateBuffer(pad_dram_config);
