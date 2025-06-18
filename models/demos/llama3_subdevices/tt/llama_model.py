@@ -368,13 +368,13 @@ class TtTransformer(LightweightModule):
             ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
             ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
         )
-
         tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
         if isinstance(tt_out, list):
             tt_out = tt_out[0]
 
-        logits = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()[0, 0, 0, :1]
-        return logits
+        toks = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()[0, 0, 0, :1]
+        logits = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]).float()
+        return logits, toks
 
     def process_output_decode(self, tt_out):
         """

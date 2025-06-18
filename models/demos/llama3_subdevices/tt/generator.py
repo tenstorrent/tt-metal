@@ -84,7 +84,8 @@ class Generator:
 
         kv_cache = kv_cache[0]
         batch, batch_seq_len = tokens.shape
-        output_logits = torch.zeros(batch, 1, 1)
+        output_toks = torch.zeros(batch, 1, 1)
+        output_logits = torch.zeros(batch, 1, 131072)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
         if page_table is not None:
             assert isinstance(
@@ -119,15 +120,15 @@ class Generator:
                 "last_token_idx": last_token_idx,
             }
             if enable_trace:
-                tt_logits = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
+                tt_logits, tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
             else:
-                tt_logits = self.prefill_forward_single_user_text(**prefill_kwargs)
+                tt_logits, tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
 
+            output_toks[id] = tt_tok
             output_logits[id] = tt_logits
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
-
-        return output_logits
+        return output_toks, output_logits
 
     def prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, kv_cache=None):
         seq_len = tokens.shape[-1]
@@ -191,8 +192,10 @@ class Generator:
                 )
 
                 if chunk_start == last_chunk_start:
-                    logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx_in_chunk % 32))
-                    return logits
+                    tt_logits, tt_toks = self.model.process_output_prefill(
+                        tt_logits, last_token_idx=(last_token_idx_in_chunk % 32)
+                    )
+                    return tt_logits, tt_toks
                 else:
                     del tt_logits
         else:
@@ -210,9 +213,9 @@ class Generator:
                 kv_cache=kv_cache,
             )
 
-            logits = self.model.process_output_prefill(tt_logits, last_token_idx=last_token_idx)
+            tt_logits, tt_toks = self.model.process_output_prefill(tt_logits, last_token_idx=last_token_idx)
 
-            return logits
+            return tt_logits, tt_toks
 
     def _easy_trace_prefill(self, tokens, last_token_idx, prefill_seq_len, page_table=None, kv_cache=None, user_id=0):
         """
@@ -235,8 +238,8 @@ class Generator:
             user_id,
             page_table=page_table,
         )
-        logits = self.model.process_output_prefill(tt_out_trace, last_token_idx=last_token_idx)
-        return logits
+        logits, toks = self.model.process_output_prefill(tt_out_trace, last_token_idx=last_token_idx)
+        return logits, toks
 
     def _capture_trace_prefill(
         self,
