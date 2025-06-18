@@ -63,6 +63,7 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
     tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     num_devices = (arch == tt::ARCH::GRAYSKULL) ? 1 : num_devices;
     std::vector<int> devices_to_open;
+    devices_to_open.reserve(num_devices);
     for (int i = 0; i < num_devices; ++i) {
         devices_to_open.push_back(i);
     }
