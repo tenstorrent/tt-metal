@@ -31,14 +31,14 @@ def test_embedding(device, input_shape, module_path, use_program_cache, reset_se
     torch_output_tensor = torch_embedding(torch_input_tensor)
 
     ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor.unsqueeze(0).unsqueeze(0),
+        torch_input_tensor,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_output_tensor = tt_embedding.forward(ttnn_input_tensor)
-    output_tensor = ttnn.to_torch(ttnn_output_tensor).view(1, -1)
+    output_tensor = ttnn.to_torch(ttnn_output_tensor)
 
     del unet
     gc.collect()
