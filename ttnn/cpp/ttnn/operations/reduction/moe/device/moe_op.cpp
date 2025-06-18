@@ -11,7 +11,7 @@ namespace ttnn::operations::reduction {
 
 void MoeDeviceOperation::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    auto input_shape = input_tensors.at(0).get_padded_shape();
+    auto input_shape = input_tensors.at(0).padded_shape();
     TT_FATAL(input_shape.rank() == 4, "Input shape must be 4D, got {}", input_shape.rank());
     TT_FATAL(this->k == 32, "K must be equal to 32, pad with -infinity if necessary to get 32, got {}", this->k);
 
@@ -29,10 +29,10 @@ void MoeDeviceOperation::validate_with_output_tensors(
         input_shape[0] * input_shape[1] * input_shape[2]);
 
     TT_FATAL(this->output_mem_config.is_sharded() == false, "Sharded implementation not supported yet");
-    TT_FATAL(input_tensors.at(0).get_layout() == Layout::TILE, "The input must be in tiled format");
+    TT_FATAL(input_tensors.at(0).layout() == Layout::TILE, "The input must be in tiled format");
 
-    auto topk_shape = input_tensors.at(2).get_padded_shape();
-    auto expert_shape = input_tensors.at(1).get_padded_shape();
+    auto topk_shape = input_tensors.at(2).padded_shape();
+    auto expert_shape = input_tensors.at(1).padded_shape();
 
     TT_FATAL(topk_shape[-1] == this->k, "Topk shape inner dim must be equal to k, got {}", topk_shape[-1]);
     TT_FATAL(
@@ -47,15 +47,14 @@ std::vector<TensorSpec> MoeDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     if (output_tensors.size() == 1) {
         if (output_tensors.at(0).has_value()) {
-            return {output_tensors[0]->get_tensor_spec()};
+            return {output_tensors[0]->tensor_spec()};
         }
     }
 
     auto& input_tensor = input_tensors.at(0);
-    auto output_shape = input_tensor.get_logical_shape();
+    auto output_shape = input_tensor.logical_shape();
     output_shape[-1] = 1;
-    return {
-        TensorSpec(output_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
+    return {TensorSpec(output_shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::TILE), output_mem_config))};
 }
 
 std::vector<Tensor> MoeDeviceOperation::create_output_tensors(

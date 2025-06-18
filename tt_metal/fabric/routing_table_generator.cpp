@@ -13,7 +13,7 @@
 #include <unordered_map>
 
 #include "assert.hpp"
-#include "logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_fabric {
 
@@ -69,7 +69,7 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
         MeshId mesh_id{mesh_id_val};
         for (chip_id_t src_chip_id = 0; src_chip_id < this->intra_mesh_table_[mesh_id_val].size(); src_chip_id++) {
             for (chip_id_t dst_chip_id = 0; dst_chip_id < this->intra_mesh_table_[mesh_id_val].size(); dst_chip_id++) {
-                int row_size = this->mesh_graph->get_mesh_ew_size(mesh_id);
+                int row_size = this->mesh_graph->get_mesh_shape(mesh_id)[1];
                 uint32_t src_x = src_chip_id / row_size;
                 uint32_t src_y = src_chip_id % row_size;
                 uint32_t dst_x = dst_chip_id / row_size;
@@ -182,8 +182,9 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
     for (std::uint32_t src_mesh_id_val = 0; src_mesh_id_val < this->inter_mesh_table_.size(); src_mesh_id_val++) {
         MeshId src_mesh_id{src_mesh_id_val};
         auto paths = get_paths_to_all_meshes(src_mesh_id, inter_mesh_connectivity);
-        std::uint32_t ew_size = this->mesh_graph->get_mesh_ew_size(src_mesh_id);
-        std::uint32_t ns_size = this->mesh_graph->get_mesh_ns_size(src_mesh_id);
+        MeshShape mesh_shape = this->mesh_graph->get_mesh_shape(src_mesh_id);
+        std::uint32_t ns_size = mesh_shape[0];
+        std::uint32_t ew_size = mesh_shape[1];
         for (chip_id_t src_chip_id = 0; src_chip_id < this->inter_mesh_table_[src_mesh_id_val].size(); src_chip_id++) {
             for (std::uint32_t dst_mesh_id_val = 0; dst_mesh_id_val < this->inter_mesh_table_.size(); dst_mesh_id_val++) {
                 MeshId dst_mesh_id{dst_mesh_id_val};
@@ -195,7 +196,10 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
                 auto& candidate_paths = paths[dst_mesh_id_val];
                 std::uint32_t min_load = std::numeric_limits<std::uint32_t>::max();
                 std::uint32_t min_distance = std::numeric_limits<std::uint32_t>::max();
-                TT_ASSERT(candidate_paths.size() > 0, "Expecting at least one path to target mesh");
+                if (candidate_paths.size() == 0) {
+                    this->inter_mesh_table_[src_mesh_id_val][src_chip_id][dst_mesh_id_val] = RoutingDirection::NONE;
+                    continue;
+                }
                 // TODO: This exit_chip_id doesn't make sense since it is always chip 0
                 chip_id_t exit_chip_id = candidate_paths[0][1].first;
                 MeshId next_mesh_id = candidate_paths[0][1].second;

@@ -73,6 +73,7 @@ int main(int argc, char *argv[]) {
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
     risc_init();
+    signal_subordinate_idle_erisc_completion();
 
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
@@ -93,9 +94,9 @@ int main(int argc, char *argv[]) {
 
         WAYPOINT("R");
         int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM1);
-        uint32_t (*kernel_address)(uint32_t) = (uint32_t (*)(uint32_t))
-            (kernel_config_base + mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index]);
-        auto stack_free = (*kernel_address)((uint32_t)kernel_address);
+        uint32_t kernel_lma =
+            kernel_config_base + mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
+        auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
         WAYPOINT("D");
 

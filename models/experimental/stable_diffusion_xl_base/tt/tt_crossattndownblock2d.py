@@ -27,6 +27,7 @@ class TtCrossAttnDownBlock2D(nn.Module):
         num_layers = 2
         self.attentions = []
         self.resnets = []
+        self.device = device
 
         for i in range(num_layers):
             self.attentions.append(
@@ -34,6 +35,7 @@ class TtCrossAttnDownBlock2D(nn.Module):
                     device,
                     state_dict,
                     f"{module_path}.attentions.{i}",
+                    model_config,
                     query_dim,
                     num_attn_heads,
                     out_dim,
@@ -74,6 +76,8 @@ class TtCrossAttnDownBlock2D(nn.Module):
             hidden_states = attn.forward(hidden_states, [B, C, H, W], encoder_hidden_states=encoder_hidden_states)
             residual = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
             output_states = output_states + (residual,)
+
+        ttnn.DumpDeviceProfiler(self.device)
 
         if self.downsamplers is not None:
             hidden_states, [C, H, W] = self.downsamplers.forward(hidden_states, [B, C, H, W])

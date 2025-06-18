@@ -249,7 +249,7 @@ void device_setup() {
 
 inline void deassert_ncrisc_trisc() {
     // Below sets ncrisc to go so we can wait until it is cleared on first iteration
-    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_INIT;
 
     // Bring ncrisc/triscs out of reset
     deassert_all_reset();
@@ -272,7 +272,7 @@ inline void start_ncrisc_kernel_run_early(dispatch_core_processor_masks enables)
     // On Wormhole, start_ncrisc_kernel_run will reset NCRISC to start the
     // kernel running. We delay it until later to give the NCRISC time to load
     // CBs before we wait on it.
-#if !defined(NCRISC_FIRMWARE_KERNEL_SPLIT)
+#if !defined(ARCH_WORMHOLE)
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
         mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
     }
@@ -280,7 +280,7 @@ inline void start_ncrisc_kernel_run_early(dispatch_core_processor_masks enables)
 }
 
 inline void start_ncrisc_kernel_run(dispatch_core_processor_masks enables) {
-#ifdef NCRISC_FIRMWARE_KERNEL_SPLIT
+#if defined(ARCH_WORMHOLE)
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
         // The NCRISC behaves badly if it jumps from L1 to IRAM, so instead halt it and then reset it to the IRAM
         // address it provides.
@@ -341,9 +341,10 @@ int main() {
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
     mailboxes->ncrisc_halt.resume_addr = 0;
-    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
     deassert_ncrisc_trisc();
 
+    // Wait for all cores to be finished initializing before reporting initialization done.
+    wait_ncrisc_trisc();
     mailboxes->go_message.signal = RUN_MSG_DONE;
 
     // Initialize the NoCs to a safe state
@@ -454,9 +455,9 @@ int main() {
                 barrier_remote_cb_interface_setup(noc_index, end_cb_index);
                 start_ncrisc_kernel_run(enables);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
-                uint32_t (*kernel_address)(uint32_t) = (uint32_t (*)(uint32_t))
-                    (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
-                auto stack_free = (*kernel_address)((uint32_t)kernel_address);
+                uint32_t kernel_lma = (kernel_config_base +
+                                       launch_msg_address->kernel_config.kernel_text_offset[index]);
+                auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                 record_stack_usage(stack_free);
             } else {
 #if defined(PROFILE_KERNEL)

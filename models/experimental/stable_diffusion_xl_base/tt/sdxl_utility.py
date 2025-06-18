@@ -52,7 +52,7 @@ def prepare_gn_beta_gamma(device, weights, bias, num_cores):
 
 
 def prepare_linear_params(device, weights, bias, dtype):
-    tt_weights = ttnn.from_torch(torch.permute(weights, (0, 1, 3, 2)), dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weights = ttnn.from_torch(weights.movedim(-1, -2), dtype, device=device, layout=ttnn.TILE_LAYOUT)
     tt_bias = ttnn.from_torch(bias, dtype, device=device, layout=ttnn.TILE_LAYOUT) if bias is not None else None
     return tt_weights, tt_bias
 
@@ -63,7 +63,7 @@ def prepare_conv_params(
     bias,
     dtype,
     fp32_dest_acc_en=False,
-    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
     packer_l1_acc=False,
 ):
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -94,7 +94,7 @@ def prepare_split_conv_params(
     split_in,
     split_out,
     fp32_dest_acc_en=False,
-    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
 ):
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),

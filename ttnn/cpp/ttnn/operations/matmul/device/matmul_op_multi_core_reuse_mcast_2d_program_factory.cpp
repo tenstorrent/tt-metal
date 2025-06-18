@@ -389,7 +389,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)B       // batch
         };
     }
-    in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
+    in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // interleaved accessor args
@@ -443,7 +443,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
 
-    in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
 
     if (in1_is_sharded and in1_is_dram) {
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in0_block_w);
@@ -496,7 +497,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     };
     if (bias_buffer != nullptr) {
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in1_block_w);
+    } else {
+        in1_receiver_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
+    in1_receiver_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
 
     std::map<string, string> mm_kernel_defines;
     std::map<string, string> mm_kernel_in0_sender_sharded_defines;
@@ -592,8 +596,14 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         }
     } else {
         if (fuse_op) {
-            // Create semaphores
-            fused_op_signaler->init_fused_op(program, device, in0_sender_interleaved);
+            if (fused_op_signaler->is_all_gather()) {
+                // Create semaphores
+                fused_op_signaler->init_fused_op(program, device, in0_sender_interleaved);
+            } else if (fused_op_signaler->is_reduce_scatter()) {
+                fused_op_signaler->init_fused_op(program, device, all_cores, cores);
+            } else {
+                TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
+            }
         }
 
         mm_kernel_in0_sender_id = tt_metal::CreateKernel(
@@ -988,7 +998,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 mm_in0_sender_args.push_back(out_block_h);
             }
 
-            if (fuse_op) {
+            if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
 
@@ -1095,6 +1105,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                         mm_in1_sender_writer_args.push_back(curr_storage_core);  // current_dram_bank_id
 
                         log_debug(
+                            tt::LogOp,
                             "curr worker core: {} read {} tiles from dram bank: {}, start from index: {}",
                             curr_worker_core,
                             worker_core_stride,
@@ -1122,6 +1133,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                             mm_in1_sender_writer_args.push_back(curr_storage_core);     // current_dram_bank_id
 
                             log_debug(
+                                tt::LogOp,
                                 "curr worker core: {} read {} tiles from dram bank: {}, start from index: {}",
                                 curr_worker_core,
                                 (stride - worker_core_stride),
@@ -1139,7 +1151,13 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + num_iter_index, num_iter);
                 }
                 if (fuse_op) {
-                    fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
+                    if (fused_op_signaler->is_all_gather()) {
+                        fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
+                    } else if (fused_op_signaler->is_reduce_scatter()) {
+                        fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, in0_idx, in1_idx);
+                    } else {
+                        TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
+                    }
                 }
                 tt_metal::SetRuntimeArgs(
                     program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_1_default
@@ -1218,6 +1236,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                         mm_in1_receiver_writer_args.push_back(out_num_blocks_y);
                         mm_in1_receiver_writer_args.push_back(out_num_blocks_x);
                     }
+                }
+
+                if (fuse_op && fused_op_signaler->is_reduce_scatter()) {
+                    fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_receiver_writer_args, in0_idx, in1_idx);
                 }
 
                 // left half
@@ -1353,20 +1375,20 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
-    const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
-    auto in0_tile = a.get_tensor_spec().tile();
-    auto in1_tile = b.get_tensor_spec().tile();
+    const auto &ashape = a.padded_shape(), bshape = b.padded_shape();
+    auto in0_tile = a.tensor_spec().tile();
+    auto in1_tile = b.tensor_spec().tile();
     auto in0_tile_shape = in0_tile.get_tile_shape();
     auto in1_tile_shape = in1_tile.get_tile_shape();
     // cannot use the output tensor tile directly as that might be changed by user override
     auto output_tile = tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]});
 
     // CB dataformats
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());          // in0
-    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());          // in1
-    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());  // output
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());          // in0
+    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());          // in1
+    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());  // output
 
-    uint32_t in0_last_ktile_w = a.get_logical_shape()[-1] % in0_tile.get_tile_shape()[1];
+    uint32_t in0_last_ktile_w = a.logical_shape()[-1] % in0_tile.get_tile_shape()[1];
 
     tt_metal::Buffer* bias_buffer = nullptr;
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
@@ -1378,7 +1400,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
 
         bias_buffer = c.buffer();
 
-        bias_data_format = tt_metal::datatype_to_dataformat_converter(c.get_dtype());
+        bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
     tt_metal::IDevice* device = a.device();
@@ -1477,7 +1499,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         out_buffer,
         in0_tile,
         in1_tile,
-        bias.has_value() ? bias->get_tensor_spec().tile() : output_tile,
+        bias.has_value() ? bias->tensor_spec().tile() : output_tile,
         output_tile,
         in0_data_format,
         in1_data_format,

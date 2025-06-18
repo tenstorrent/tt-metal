@@ -21,11 +21,13 @@ namespace tt::tt_metal {
 class MultiCommandQueueSingleDeviceFixture : public DispatchFixture {
 protected:
     void SetUp() override {
-        this->validate_dispatch_mode();
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
 
         this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
         if (this->num_cqs_ != 2) {
-            tt::log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
+            log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
         }
 
@@ -42,22 +44,22 @@ protected:
         }
     }
 
-    void validate_dispatch_mode() {
+    bool validate_dispatch_mode() {
         this->slow_dispatch_ = false;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            tt::log_info(
-                tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
-            GTEST_SKIP();
+            return false;
         }
+        return true;
     }
 
     DispatchCoreType get_dispatch_core_type() {
         DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
         if (this->arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
             if (!tt::tt_metal::IsGalaxyCluster()) {
-                tt::log_warning(
+                log_warning(
                     tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in SetUp()");
                 dispatch_core_type = DispatchCoreType::ETH;
             }
@@ -87,11 +89,13 @@ class MultiCommandQueueSingleDeviceProgramFixture : public MultiCommandQueueSing
 class MultiCommandQueueSingleDeviceTraceFixture : public MultiCommandQueueSingleDeviceFixture {
 protected:
     void SetUp() override {
-        this->validate_dispatch_mode();
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
 
         this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
         if (this->num_cqs_ != 2) {
-            tt::log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
+            log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
         }
 
@@ -113,15 +117,14 @@ protected:
         this->slow_dispatch_ = false;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            tt::log_info(
-                tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
             GTEST_SKIP();
         }
 
         auto num_cqs = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
         if (num_cqs != 2) {
-            tt::log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
+            log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
         }
 
@@ -130,21 +133,28 @@ protected:
         DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
         if (arch == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
             if (!tt::tt_metal::IsGalaxyCluster()) {
-                tt::log_warning(
+                log_warning(
                     tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
                 dispatch_core_type = DispatchCoreType::ETH;
             }
         }
 
-        const chip_id_t mmio_device_id = 0;
+        std::vector<int> devices_to_open;
+        for (int i = 0; i < tt::tt_metal::GetNumAvailableDevices(); ++i) {
+            devices_to_open.push_back(i);
+        }
         reserved_devices_ = tt::tt_metal::detail::CreateDevices(
-            {mmio_device_id}, num_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+            devices_to_open, num_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
         for (const auto& [id, device] : reserved_devices_) {
             devices_.push_back(device);
         }
     }
 
-    void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
+    void TearDown() override {
+        if (!reserved_devices_.empty()) {
+            tt::tt_metal::detail::CloseDevices(reserved_devices_);
+        }
+    }
 
     std::vector<tt::tt_metal::IDevice*> devices_;
     std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;

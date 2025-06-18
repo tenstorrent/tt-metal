@@ -29,7 +29,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     static_assert(MEM_IERISC_MAP_END % L1_ALIGNMENT == 0);
 
     std::vector<DeviceAddr> mem_map_bases;
-    constexpr std::uint32_t L1_KERNEL_CONFIG_SIZE = 69 * 1024;
+    constexpr std::uint32_t L1_KERNEL_CONFIG_SIZE = 25 * 1024;
 
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_ETH_BASE;

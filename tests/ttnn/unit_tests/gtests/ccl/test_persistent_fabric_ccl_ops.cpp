@@ -21,7 +21,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
@@ -42,11 +42,11 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     constexpr size_t test_expected_num_devices = 4;
     if (tt::tt_metal::GetNumAvailableDevices() < test_expected_num_devices) {
-        log_info("This test can only be run on T3000 devices");
+        log_info(tt::LogTest, "This test can only be run on T3000 devices");
         return;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        log_info(tt::LogTest, "Test must be run on WH");
         return;
     }
     MeshFabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D);
@@ -81,8 +81,6 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     // Need to make it a mesh tensor for use with the op
     const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{})
                                          .to_device(test_fixture.mesh_device_.get());
-    // FABRIC setup
-    const bool enable_persistent_fabric = true;
 
     std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
 

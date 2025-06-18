@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device/padded_slice_op.hpp"
-#include "tt-metalium/logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "ttnn/run_operation.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/common/queue_id.hpp"
@@ -29,9 +29,9 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     const std::optional<float>& pad_value) {
     // Ensure start and end vectors have matching sizes and correct tensor rank
 
-    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     uint32_t input_rank = input_shape.rank();
-    auto input_layout = input_tensor.get_layout();
+    auto input_layout = input_tensor.layout();
 
     TT_FATAL(input_rank == 4, "Only 4D tensors are supported for padded_slice");
 
@@ -55,7 +55,6 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     }
 
     TT_FATAL(no_step, "Steps != 1 are not supported for padded_slice.");
-    TT_FATAL(input_layout == Layout::ROW_MAJOR, "Only Row Major Inputs are supported for padded_slice.");
     TT_FATAL(memory_config.is_sharded(), "Output Memory Config must be sharded. Use slice for non-sharded outputs.");
     TT_FATAL(!input_tensor.memory_config().is_sharded(), " padded_slice does not support sharded inputs.");
 

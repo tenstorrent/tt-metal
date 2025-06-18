@@ -15,7 +15,9 @@
 #include "tt-metalium/base_types.hpp"
 
 using namespace tt::tt_metal;
-
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
 int main(int argc, char** argv) {
     // Fast Dispatch = support for async operations. We need it for most applications.
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
@@ -115,17 +117,17 @@ int main(int argc, char** argv) {
         // back to DRAM.
         auto reader = CreateKernel(
             program,
-            "tt_metal/programming_examples/eltwise_binary/kernels/dataflow/read_tiles.cpp",
+            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/read_tiles.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
         auto writer = CreateKernel(
             program,
-            "tt_metal/programming_examples/eltwise_binary/kernels/dataflow/write_tile.cpp",
+            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/write_tile.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
         auto compute = CreateKernel(
             program,
-            "tt_metal/programming_examples/eltwise_binary/kernels/compute/tiles_add.cpp",
+            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/compute/tiles_add.cpp",
             core,
             ComputeConfig{.math_fidelity = MathFidelity::HiFi4});   // There's different math fidelity modes (for the tensor engine)
                                                                 // that trade off performance for accuracy. HiFi4 is the most accurate
@@ -160,22 +162,22 @@ int main(int argc, char** argv) {
 
             if (std::abs(expected - actual) > eps) {
                 pass = false;
-                tt::log_error(tt::LogTest, "Result mismatch at index {}: expected {}, got {}", i, expected, actual);
+                log_error(tt::LogTest, "Result mismatch at index {}: expected {}, got {}", i, expected, actual);
             }
         }
 
         // Finally, we close the device.
         pass &= CloseDevice(device);
     } catch (const std::exception& e) {
-        tt::log_error(tt::LogTest, "Test failed with exception!");
-        tt::log_error(tt::LogTest, "{}", e.what());
+        log_error(tt::LogTest, "Test failed with exception!");
+        log_error(tt::LogTest, "{}", e.what());
 
         throw;
     }
     // clang-format on
 
     if (pass) {
-        tt::log_info(tt::LogTest, "Test Passed");
+        log_info(tt::LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

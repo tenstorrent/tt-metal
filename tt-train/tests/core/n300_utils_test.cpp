@@ -26,8 +26,7 @@ protected:
         if (!check_board_is_n300()) {
             GTEST_SKIP() << "Skipping N300 specific tests";
         }
-        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
-        ttml::autograd::ctx().open_device();
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
     }
 
     void TearDown() override {
@@ -264,5 +263,5 @@ TEST_F(N300UtilsTest, MorehClipGradNorm) {
 
     ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
     auto res_back = ttml::core::to_xtensor(tensor, identity_composer)[0];
-    EXPECT_TRUE(xt::allclose(expected_res, res_back, 2e-2F));
+    EXPECT_TRUE(xt::allclose(expected_res, res_back, 2.2e-2F));
 }

@@ -6,7 +6,7 @@
 #include <fmt/base.h>
 #include <magic_enum/magic_enum.hpp>
 #include <stdint.h>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <initializer_list>
 #include <memory>
 #include <optional>
@@ -117,8 +117,13 @@ TEST_P(EmptyTensorTest, Combinations) {
     auto dtype = std::get<1>(params);
     auto layout = std::get<2>(params);
     auto memory_config = std::get<3>(params);
-    tt::log_info(
-        "Running test with shape={}, dtype={}, layout={}, memory_config={}", shape, dtype, layout, memory_config);
+    log_info(
+        tt::LogTest,
+        "Running test with shape={}, dtype={}, layout={}, memory_config={}",
+        shape,
+        dtype,
+        layout,
+        memory_config);
 
     if (layout == tt::tt_metal::Layout::ROW_MAJOR && dtype == tt::tt_metal::DataType::BFLOAT8_B) {
         GTEST_SKIP() << "Skipping test with ROW_MAJOR layout and BFLOAT8_B dtype!";
@@ -135,7 +140,7 @@ TEST_P(EmptyTensorTest, Combinations) {
     }
 
     auto tensor = tt::tt_metal::create_device_tensor(shape, dtype, layout, device_, memory_config);
-    EXPECT_EQ(tensor.get_logical_shape(), shape);
+    EXPECT_EQ(tensor.logical_shape(), shape);
 
     test_utils::test_tensor_on_device(shape, tensor_layout, device_);
 }

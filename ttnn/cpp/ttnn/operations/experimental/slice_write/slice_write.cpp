@@ -6,7 +6,7 @@
 #include "device/slice_write_op.hpp"
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/constants.hpp"
-#include "tt-metalium/logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
@@ -27,9 +27,9 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     const std::array<uint32_t, 4>& begins,
     const std::array<uint32_t, 4>& ends,
     const std::array<uint32_t, 4>& step) {
-    const auto& logical_input_shape = input_tensor.get_logical_shape();
-    const auto& padded_input_shape = input_tensor.get_padded_shape();
-    const auto& padded_output_shape = output_tensor.get_padded_shape();
+    const auto& logical_input_shape = input_tensor.logical_shape();
+    const auto& padded_input_shape = input_tensor.padded_shape();
+    const auto& padded_output_shape = output_tensor.padded_shape();
 
     TT_FATAL(padded_input_shape.rank() == 4, "Input tensor must have rank 4");
     TT_FATAL(padded_output_shape.rank() == 4, "Output tensor must have rank 4");
@@ -41,7 +41,7 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
 
     TT_FATAL(no_step, "Slice Write does not support strides");
 
-    bool rm_only = !no_step && input_tensor.get_layout() == Layout::TILE;
+    bool rm_only = !no_step && input_tensor.layout() == Layout::TILE;
     ttnn::Tensor input = input_tensor;
     if (rm_only) {
         input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (IDevice*)nullptr);
@@ -55,7 +55,7 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
         "Slice Write currently supports Interleaved or Height & Block Sharding for input tensors.");
 
     TT_FATAL(!output_tensor.is_sharded(), "Slice Write currently doesn't support sharded output tensors.");
-    const bool tiled = input.get_layout() == Layout::TILE;
+    const bool tiled = input.layout() == Layout::TILE;
     bool on_device = input.storage_type() == StorageType::DEVICE;
 
     std::array<uint32_t, 4> actual_shape_vec;
@@ -80,7 +80,7 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     ttnn::Shape padded_shape(padded_shape_vec);
 
     if (empty) {
-        tt::log_debug("Empty tensor slice, returning unchanged output tensor");
+        log_debug(tt::LogOp, "Empty tensor slice, returning unchanged output tensor");
         return output_tensor;
     }
 
@@ -115,14 +115,14 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     } else {
         for (int i = 0; i < 4; i++) {
             TT_FATAL(
-                actual_shape[i] == input.get_logical_shape()[i],
+                actual_shape[i] == input.logical_shape()[i],
                 "Size of the slice being written {} should match the size of the input tensor {} at dim {}. Got {}, "
                 "expected {} , {}",
                 actual_shape[i],
-                input.get_logical_shape()[i],
+                input.logical_shape()[i],
                 i,
                 actual_shape,
-                input.get_logical_shape(),
+                input.logical_shape(),
                 padded_shape);
         }
     }
@@ -142,12 +142,12 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
                                       tt::div_up(padded_output_shape[2], input.shard_spec().value().shape[0]);
             in_place_unpad &= begins[3] == 0 && ends[3] == padded_output_shape[3];
             if (in_place_unpad) {
-                tt::log_info("In-place unpad optimization via copy");
+                log_info(tt::LogOp, "In-place unpad optimization via copy");
                 ttnn::copy(DefaultQueueId, input_tensor, output_tensor);
                 return output_tensor;
             }
         }
-        tt::log_debug("Invoking SliceWriteDeviceOperation");
+        log_debug(tt::LogOp, "Invoking SliceWriteDeviceOperation");
 
         (void)tt::tt_metal::operation::run(
             SliceWriteDeviceOperation{ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step)},

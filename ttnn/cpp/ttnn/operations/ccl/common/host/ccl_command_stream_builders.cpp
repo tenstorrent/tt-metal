@@ -126,7 +126,7 @@ std::vector<ttnn::ccl::v2::TensorSlice> compute_page_aligned_slices(
     TT_FATAL(num_slices > 0, "Number of slices must be greater than 0");
     std::vector<ttnn::ccl::v2::TensorSlice> tensor_slices;
 
-    const auto input_tensor_shape_in_tiles = shape_to_shape_in_tiles(input_tensor.get_logical_shape());
+    const auto input_tensor_shape_in_tiles = shape_to_shape_in_tiles(input_tensor.logical_shape());
     tensor_slices.reserve(num_slices);
 
     // split the input tensor, by shape, into pieces

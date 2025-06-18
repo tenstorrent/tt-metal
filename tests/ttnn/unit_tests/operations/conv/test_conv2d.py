@@ -132,6 +132,10 @@ SliceWidth = ttnn.Conv2dSliceWidth
     "has_bias, fp32_accum, packer_l1_acc",
     [[True, False, False]],
 )
+@pytest.mark.parametrize(
+    "input_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+)
 def test_conv_dram(
     device,
     torch_tensor_map,
@@ -152,6 +156,7 @@ def test_conv_dram(
     act_block_h_override,
     math_fidelity,
     fp32_accum,
+    input_layout,
     packer_l1_acc,
 ):
     if device.core_grid.y == 7:
@@ -180,8 +185,8 @@ def test_conv_dram(
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
         preprocess_weights_on_device=False,
-        transpose_shards=True,
-        run_twice=False,
+        input_layout=input_layout,
+        run_twice=True,
         fast_compare=True,
         slice_config=ttnn.Conv2dSliceConfig(
             slice_type=slice_type,
