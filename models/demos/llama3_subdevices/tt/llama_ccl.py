@@ -546,6 +546,7 @@ class TT_CCL:
             batch_offset=batch_offset,
             slice_size=slice_size,
             dtype=dtype,
+            use_noc1_only=True,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return xqkv_reduced, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD

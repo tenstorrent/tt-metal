@@ -47,6 +47,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const uint32_t num_q_heads,
     const uint32_t num_kv_heads,
-    const uint32_t head_dim);
+    const uint32_t head_dim,
+    const bool use_noc1_only);
 
 }  // namespace ttnn
