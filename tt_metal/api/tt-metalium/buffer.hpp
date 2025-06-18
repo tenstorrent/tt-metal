@@ -262,6 +262,8 @@ public:
     std::optional<uint32_t> num_cores() const;
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
 
+    // Returns the buffer that owns the underlying device memory.
+    // Typically returns itself unless the buffer was created with a view method.
     std::shared_ptr<Buffer> root_buffer();
     BufferRegion root_buffer_region() const { return BufferRegion(root_buffer_offset_, size_); }
 
