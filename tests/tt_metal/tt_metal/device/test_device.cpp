@@ -28,7 +28,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -66,7 +66,7 @@ bool l1_ping(
             tt_metal::detail::ReadFromDeviceL1(device, dest_core, l1_byte_address, byte_size, dest_core_data);
             pass &= (dest_core_data == inputs);
             if (not pass) {
-                log_error("Mismatch at Core: ={}", dest_core.str());
+                log_error(tt::LogTest, "Mismatch at Core: ={}", dest_core.str());
             }
         }
     }
@@ -234,7 +234,7 @@ TEST_F(DeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
             uint32_t read_address =
                 l1_address + this->devices_.at(id)->allocator()->get_bank_offset(BufferType::L1, bank_id);
             tt_metal::detail::ReadFromDeviceL1(this->devices_.at(id), logical_core, read_address, size_bytes, output);
-            ASSERT_TRUE(output.size() == host_input.size());
+            ASSERT_EQ(output.size(), host_input.size());
             uint32_t expected_value =
                 bank_id_to_value.at(bank_id) + 1;  // ping_legal_l1s kernel increments each value it reads
             ASSERT_TRUE(output.at(0) == expected_value) << "Logical core " + logical_core.str() + " should have " +

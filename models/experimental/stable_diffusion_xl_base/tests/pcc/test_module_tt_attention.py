@@ -6,10 +6,12 @@ from loguru import logger
 import torch
 import pytest
 import ttnn
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from models.experimental.stable_diffusion_xl_base.tt.tt_attention import TtAttention
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize(
@@ -21,7 +23,7 @@ from models.utility_functions import torch_random
         ((1, 1024, 1280), (1, 77, 2048), 2, 2, 1280, 20, 1280),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("weights_dtype", [ttnn.bfloat16])
 def test_attention(
     device,
@@ -39,7 +41,6 @@ def test_attention(
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
-    # unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
 
@@ -47,10 +48,12 @@ def test_attention(
         torch_attention = unet.down_blocks[down_block_id].attentions[0].transformer_blocks[0].attn1
     else:
         torch_attention = unet.down_blocks[down_block_id].attentions[0].transformer_blocks[0].attn2
+    model_config = ModelOptimisations()
     tt_attention = TtAttention(
         device,
         state_dict,
         f"down_blocks.{down_block_id}.attentions.0.transformer_blocks.0.attn{attn_id}",
+        model_config,
         query_dim,
         num_attn_heads,
         out_dim,

@@ -24,30 +24,30 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     using namespace tt::constants;
     Program program{};
 
-    const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
     const uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
 
-    const tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.get_dtype());
+    const tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.dtype());
     const uint32_t cos_single_tile_size = tt_metal::detail::TileSize(cos_cb_data_format);
 
-    const tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.get_dtype());
+    const tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.dtype());
     const uint32_t sin_single_tile_size = tt_metal::detail::TileSize(sin_cb_data_format);
 
-    const tt::DataFormat trans_mat_cb_data_format = tt_metal::datatype_to_dataformat_converter(trans_mat.get_dtype());
+    const tt::DataFormat trans_mat_cb_data_format = tt_metal::datatype_to_dataformat_converter(trans_mat.dtype());
     const uint32_t trans_mat_single_tile_size = tt_metal::detail::TileSize(trans_mat_cb_data_format);
 
-    const tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    const tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     const uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
-    const uint32_t batch = input.get_padded_shape()[0];
-    const uint32_t n_heads = input.get_padded_shape()[1];
-    const uint32_t seq_len_t = input.get_padded_shape()[2] / TILE_HEIGHT;
-    const uint32_t head_dim_t = input.get_padded_shape()[3] / TILE_WIDTH;
+    const uint32_t batch = input.padded_shape()[0];
+    const uint32_t n_heads = input.padded_shape()[1];
+    const uint32_t seq_len_t = input.padded_shape()[2] / TILE_HEIGHT;
+    const uint32_t head_dim_t = input.padded_shape()[3] / TILE_WIDTH;
 
     // Flag for whether or not sin/cos vary per head. If false, they will be broadcasted across heads.
-    const bool freq_per_head = cos.get_padded_shape()[1] == n_heads;
+    const bool freq_per_head = cos.padded_shape()[1] == n_heads;
 
-    const uint32_t Wbytes = input.get_padded_shape()[-1] * sizeof(bfloat16);
+    const uint32_t Wbytes = input.padded_shape()[-1] * sizeof(bfloat16);
 
     tt_metal::IDevice* device = input.device();
 
@@ -257,7 +257,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
                 // on cos/sin data which will never arrive.
                 continue;
             }
-            tt::log_debug(
+            log_debug(
                 tt::LogTest,
                 "core: {}, start_batch: {}, end_batch: {}, start_seq: {}, end_seq: {}",
                 core_idx,
@@ -341,26 +341,26 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core_sharded(
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     Program program{};
 
-    const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
     const uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
 
-    const tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.get_dtype());
+    const tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.dtype());
     const uint32_t cos_single_tile_size = tt_metal::detail::TileSize(cos_cb_data_format);
 
-    const tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.get_dtype());
+    const tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.dtype());
     const uint32_t sin_single_tile_size = tt_metal::detail::TileSize(sin_cb_data_format);
 
-    const tt::DataFormat trans_mat_cb_data_format = tt_metal::datatype_to_dataformat_converter(trans_mat.get_dtype());
+    const tt::DataFormat trans_mat_cb_data_format = tt_metal::datatype_to_dataformat_converter(trans_mat.dtype());
     const uint32_t trans_mat_single_tile_size = tt_metal::detail::TileSize(trans_mat_cb_data_format);
 
-    const tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    const tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     const uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
     bool in_sharded = input.shard_spec().has_value();
     bool out_sharded = output.shard_spec().has_value();
     std::optional<ShardSpec> shard_spec = in_sharded ? input.shard_spec() : output.shard_spec();
 
-    const uint32_t batch = input.get_padded_shape()[1];
+    const uint32_t batch = input.padded_shape()[1];
     const uint32_t n_heads_t = shard_spec->shape[0] / constants::TILE_HEIGHT;
     const uint32_t head_dim_t = shard_spec->shape[1] / constants::TILE_WIDTH;
 

@@ -21,6 +21,7 @@ target_sources(
             tt_stl/overloaded.hpp
             tt_stl/reflection.hpp
             tt_stl/slotmap.hpp
+            tt_stl/small_vector.hpp
             tt_stl/span.hpp
             tt_stl/strong_type.hpp
             tt_stl/type_name.hpp
@@ -37,7 +38,9 @@ target_link_libraries(
         magic_enum::magic_enum
         nlohmann_json::nlohmann_json
         span
+        small_vector
         fmt::fmt-header-only
+        tt-logger::tt-logger
 )
 
 target_precompile_headers(

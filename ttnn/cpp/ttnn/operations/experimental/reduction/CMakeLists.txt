@@ -1,5 +1,5 @@
 add_library(ttnn_op_experimental_reduction ${LIB_TYPE})
-add_library(TT::NN::Ops::Experimental::Reduction ALIAS ttnn_op_experimental_reduction)
+add_library(TTNN::Ops::Experimental::Reduction ALIAS ttnn_op_experimental_reduction)
 
 target_precompile_headers(ttnn_op_experimental_reduction REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_reduction)
@@ -27,7 +27,7 @@ target_link_libraries(
     ttnn_op_experimental_reduction
     PRIVATE
         TT::Metalium
-        TT::NN::Core
+        TTNN::Core
 )
 
 install(TARGETS ttnn_op_experimental_reduction LIBRARY COMPONENT tar)

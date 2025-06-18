@@ -43,7 +43,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/sub_device_types.hpp>
@@ -123,7 +123,7 @@ create_programs(
     uint32_t cb_padding,
     const std::shared_ptr<tt::tt_metal::Buffer>& input_buffer,
     bool use_sub_devices) {
-    log_info("created program");
+    log_info(tt::LogTest, "created program");
     std::vector<tt_metal::Program> programs;
     programs.push_back(tt_metal::Program());
 
@@ -159,8 +159,8 @@ create_programs(
     uint32_t writer_page_size, writer_num_pages;
     get_max_page_size_and_num_pages(block_w / num_receivers, single_tile_size, writer_page_size, writer_num_pages);
 
-    log_info("writer_page_size: {}", writer_page_size);
-    log_info("writer_num_pages: {}", writer_num_pages);
+    log_info(tt::LogTest, "writer_page_size: {}", writer_page_size);
+    log_info(tt::LogTest, "writer_num_pages: {}", writer_num_pages);
 
     tt_metal::CircularBufferConfig reader_cb_config =
         tt_metal::CircularBufferConfig(reader_cb_size, {{reader_cb_index, tile_format}})
@@ -206,8 +206,8 @@ create_programs(
     auto receiver_cb = tt_metal::experimental::CreateCircularBuffer(
         receiver_program, l1_receiver_cores, receiver_cb_config, global_cb);
 
-    log_info("reader_cb_size: {}", reader_cb_size);
-    log_info("receiver_cb_size: {}", receiver_cb_size);
+    log_info(tt::LogTest, "reader_cb_size: {}", reader_cb_size);
+    log_info(tt::LogTest, "receiver_cb_size: {}", receiver_cb_size);
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)input_buffer->address(),
@@ -255,7 +255,7 @@ create_programs(
 
     // reader rt
     auto dram_reader_core_coord = dram_reader_core.ranges().begin()->start_coord;
-    log_info("dram_reader_core_coord: {}", dram_reader_core_coord);
+    log_info(tt::LogTest, "dram_reader_core_coord: {}", dram_reader_core_coord);
     auto dram_reader_core_coord_physical = device->worker_core_from_logical_core(dram_reader_core_coord);
     uint32_t bank_id = 0;
     uint32_t vc = bank_id & 0x1;
@@ -327,7 +327,7 @@ create_programs(
             receiver_rt_args.push_back(i % 2 == 0 ? receiver_block_num_tile : next_layer_receiver_block_num_tile);
         }
 
-        log_info("l1_receiver_core_coords: {}", l1_receiver_core_coords[i]);
+        log_info(tt::LogTest, "l1_receiver_core_coords: {}", l1_receiver_core_coords[i]);
 
         tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, l1_receiver_core_coords[i], receiver_rt_args);
     }
@@ -601,9 +601,9 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
         {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
         {ht, wt});
 
-    log_info("cores: {}", cores);
-    log_info("size_bytes: {}", size_bytes);
-    log_info("page_size_bytes: {}", page_size_bytes);
+    log_info(tt::LogTest, "cores: {}", cores);
+    log_info(tt::LogTest, "size_bytes: {}", size_bytes);
+    log_info(tt::LogTest, "page_size_bytes: {}", page_size_bytes);
 
     auto config = tt::tt_metal::ShardedBufferConfig{
         .device = device,
@@ -622,14 +622,14 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
     tt::tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
 
-    log_info("created sharded tensor");
+    log_info(tt::LogTest, "created sharded tensor");
 
     return input_buffer;
 }
 
 int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        log_error("Test not supported w/ slow dispatch, exiting");
+        log_error(tt::LogTest, "Test not supported w/ slow dispatch, exiting");
     }
 
     bool pass = true;
@@ -679,8 +679,8 @@ int main(int argc, char** argv) {
             TT_ASSERT(false);
         }
 
-        log_info("num_mixed_df_layers: {} ", num_mixed_df_layers);
-        log_info("num_receivers: {} ", num_receivers);
+        log_info(tt::LogTest, "num_mixed_df_layers: {} ", num_mixed_df_layers);
+        log_info(tt::LogTest, "num_receivers: {} ", num_receivers);
 
         TT_FATAL(
             num_mixed_df_layers % 2 == 1,
@@ -840,7 +840,7 @@ int main(int argc, char** argv) {
         }
 
         for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
-            log_info("input_buffers addr: {}", input_buffers[i]->address());
+            log_info(tt::LogTest, "input_buffers addr: {}", input_buffers[i]->address());
         }
 
         ////////////////////////////////////////////////////////////////////////////
@@ -915,7 +915,7 @@ int main(int argc, char** argv) {
             }
             Finish(device->command_queue());
             for (auto& program : programs) {
-                tt_metal::DumpDeviceProfileResults(device, program);
+                tt_metal::detail::DumpDeviceProfileResults(device);
             }
         }
 

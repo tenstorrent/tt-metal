@@ -88,6 +88,13 @@ struct WatcherSettings {
     int interval_ms = 0;
 };
 
+struct InspectorSettings {
+    bool enabled = true;
+    bool initialization_is_important = true;
+    bool warn_on_write_exceptions = true;
+    std::filesystem::path log_path;
+};
+
 class RunTimeOptions {
     bool is_root_dir_env_var_set = false;
     std::string root_dir;
@@ -103,6 +110,8 @@ class RunTimeOptions {
 
     WatcherSettings watcher_settings;
     bool record_noc_transfer_data = false;
+
+    InspectorSettings inspector_settings;
 
     TargetSelection feature_targets[RunTimeDebugFeatureCount];
 
@@ -212,6 +221,16 @@ public:
     inline bool watcher_ring_buffer_disabled() const { return watcher_feature_disabled(watcher_ring_buffer_str); }
     inline bool watcher_stack_usage_disabled() const { return watcher_feature_disabled(watcher_stack_usage_str); }
     inline bool watcher_dispatch_disabled() const { return watcher_feature_disabled(watcher_dispatch_str); }
+
+    // Info from inspector environment variables, setters included so that user
+    // can override with a SW call.
+    inline const std::filesystem::path& get_inspector_log_path() const { return inspector_settings.log_path; }
+    inline bool get_inspector_enabled() const { return inspector_settings.enabled; }
+    inline void set_inspector_enabled(bool enabled) { inspector_settings.enabled = enabled; }
+    inline bool get_inspector_initialization_is_important() const { return inspector_settings.initialization_is_important; }
+    inline void set_inspector_initialization_is_important(bool important) { inspector_settings.initialization_is_important = important; }
+    inline bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
+    inline void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
@@ -380,6 +399,7 @@ public:
     inline void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
 
     inline bool get_disable_dma_ops() const { return disable_dma_ops; }
+    inline void set_disable_dma_ops(bool disable) { disable_dma_ops = disable; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.
@@ -407,6 +427,9 @@ private:
     bool watcher_feature_disabled(const std::string& name) const {
         return watcher_disabled_features.find(name) != watcher_disabled_features.end();
     }
+
+    // Helper function to parse inspector-specific environment variables.
+    void ParseInspectorEnv();
 };
 
 }  // namespace llrt

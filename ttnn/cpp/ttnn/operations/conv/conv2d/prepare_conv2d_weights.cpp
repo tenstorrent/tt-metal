@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "tt-metalium/assert.hpp"
-#include "tt-metalium/logger.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/shape.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -39,7 +39,7 @@ Tensor convert_tensor(const Tensor& input_tensor, compute_& compute) {
                     TT_THROW("Unsupported storage type");
                 }
             },
-            input_tensor.get_storage());
+            input_tensor.storage());
     };
 
     TT_FATAL(!is_device_tensor(input_tensor), "convert_tensor only supports host tensors");
@@ -56,14 +56,14 @@ Tensor convert_tensor_to_tiled_layout_common(
     const std::unordered_map<DataType, Func>& function_map,
     Args&&... args) {
     TT_ASSERT(
-        input_tensor.get_layout() == Layout::ROW_MAJOR &&
+        input_tensor.layout() == Layout::ROW_MAJOR &&
         "Tensor(weight/bias) should be in row major layout for conversion to tilized layout.");
 
-    auto entry = function_map.find(input_tensor.get_dtype());
+    auto entry = function_map.find(input_tensor.dtype());
     if (entry == function_map.end()) {
         TT_THROW("Unsupported data type");
     }
-    return entry->second(input_tensor, std::forward<Args>(args)..., output_dtype.value_or(input_tensor.get_dtype()));
+    return entry->second(input_tensor, std::forward<Args>(args)..., output_dtype.value_or(input_tensor.dtype()));
 }
 
 template <typename T>
@@ -93,7 +93,7 @@ Tensor create_tensor_from_owned_buffer(
 template <typename T>
 Tensor to_weight_special_padding_tile_layout(
     const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype) {
-    auto w_shape = conv_weight_tensor.get_padded_shape();
+    auto w_shape = conv_weight_tensor.padded_shape();
     auto compute = [&w_shape, &in1_block_h, &in1_block_w, &output_dtype](const auto& input_buffer) {
         uint32_t in1_block_h_datums = in1_block_h * constants::TILE_HEIGHT;
         uint32_t in1_block_w_datums = in1_block_w * constants::TILE_WIDTH;
@@ -131,7 +131,7 @@ Tensor to_weight_special_padding_tile_layout(
 template <typename T>
 Tensor to_weight_tile_layout(
     const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype) {
-    auto w_shape = conv_weight_tensor.get_padded_shape();
+    auto w_shape = conv_weight_tensor.padded_shape();
     auto compute = [&w_shape, &in1_block_h, &in1_block_w, &output_dtype](const auto& input_buffer) {
         auto weight_matrix_cols = w_shape[0];
         // width padding
@@ -189,7 +189,7 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
 template <typename T>
 Tensor to_weight_tile_layout_block_sharded(
     const Tensor& conv_weight_tensor, uint32_t num_channel_shards, DataType output_dtype) {
-    auto w_shape = conv_weight_tensor.get_padded_shape();
+    auto w_shape = conv_weight_tensor.padded_shape();
     auto compute = [&w_shape, &num_channel_shards, &output_dtype](const auto& input_buffer) {
         auto weight_matrix_cols = w_shape[0];
         TT_ASSERT(weight_matrix_cols % num_channel_shards == 0);
@@ -257,7 +257,7 @@ Tensor convert_conv_weight_tensor_to_tiled_layout_block_sharded(
 template <typename T>
 Tensor to_bias_tile_layout_block_sharded(
     const Tensor& conv_bias_tensor, uint32_t num_channel_shards, DataType output_dtype) {
-    auto b_shape = conv_bias_tensor.get_padded_shape();
+    auto b_shape = conv_bias_tensor.padded_shape();
     TT_ASSERT(b_shape[0] == 1 && b_shape[1] == 1 && b_shape[2] == 1);
     auto compute = [&b_shape, &num_channel_shards, &output_dtype](const auto& input_buffer) {
         auto bias_matrix_cols = b_shape[3];
@@ -419,7 +419,7 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
     const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype) {
     // Define output tensor shape. This is going to be channel dimension of weight tensor * num_groups - this value
     // should match number of input channels being convolved with the weight tensor
-    const auto& original_conv_weight_tensor_shape = conv_weight_tensor.get_logical_shape();
+    const auto& original_conv_weight_tensor_shape = conv_weight_tensor.logical_shape();
     ttnn::Shape output_conv_weight_tensor_shape{
         original_conv_weight_tensor_shape[0],
         original_conv_weight_tensor_shape[1] * num_groups,
@@ -440,6 +440,7 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
 
     if (tt_metal::is_device_tensor(conv_weight_tensor)) {
         log_warning(
+            tt::LogOp,
             "Prepare weights for Conv2D with groups > 1 expects weights on host, but they are on device. The op will "
             "move them back to host.");
     }
@@ -461,7 +462,7 @@ from the original weight tensor - it would be convolving act_block in conv_matri
 */
 Tensor convert_conv_weight_tensor_to_depthwise_layout(
     const Tensor& conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype) {
-    const auto& original_conv_weight_tensor_shape = conv_weight_tensor.get_logical_shape();
+    const auto& original_conv_weight_tensor_shape = conv_weight_tensor.logical_shape();
     uint32_t num_input_channels_to_repeat = act_block_h_ntiles * constants::TILE_HEIGHT;
     ttnn::Shape output_conv_weight_tensor_shape{
         original_conv_weight_tensor_shape[0],
@@ -484,6 +485,7 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
                                                                                                     : output_dtype;
     if (tt_metal::is_device_tensor(conv_weight_tensor)) {
         log_warning(
+            tt::LogOp,
             "Prepare weights for Depthwise Conv1D expects weights on host, but they are on device. The op will move "
             "them back to host.");
     }
@@ -501,17 +503,17 @@ static Tensor to_folded_weight_layout(
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 4> padding) {
-    auto w_shape = conv_weight_tensor.get_padded_shape();
+    auto w_shape = conv_weight_tensor.padded_shape();
     uint32_t out_channels = w_shape[0];
     uint32_t in_channels = w_shape[1];
     uint32_t kernel_h = w_shape[2];
     uint32_t kernel_w = w_shape[3];
 
     // Get input data type
-    auto dtype = conv_weight_tensor.get_dtype();
+    auto dtype = conv_weight_tensor.dtype();
 
     ttnn::Shape output_shape = ttnn::Shape({w_shape[0], w_shape[1] * kernel_h * kernel_w, 1, 1});
-    auto storage = std::get<tt::tt_metal::HostStorage>(conv_weight_tensor.get_storage()).buffer;
+    auto storage = std::get<tt::tt_metal::HostStorage>(conv_weight_tensor.storage()).buffer;
 
     auto fold_weights = [&](auto input_buffer) {
         using T = std::decay_t<decltype(input_buffer[0])>;
@@ -551,14 +553,14 @@ static Tensor to_folded_weight_layout(
 }
 
 void validate_weight_tensor(const ttnn::Tensor& weight_tensor) {
-    TT_FATAL(weight_tensor.get_layout() == Layout::ROW_MAJOR, "conv weight layout should be in row_major layout");
-    TT_FATAL(weight_tensor.get_logical_shape().rank() == 4, "conv weight should be 4D tensor");
+    TT_FATAL(weight_tensor.layout() == Layout::ROW_MAJOR, "conv weight layout should be in row_major layout");
+    TT_FATAL(weight_tensor.logical_shape().rank() == 4, "conv weight should be 4D tensor");
 }
 
 void validate_bias_tensor(const ttnn::Tensor& bias_tensor) {
     TT_FATAL(!ttnn::has_storage_type_of(bias_tensor, ttnn::DEVICE_STORAGE_TYPE), "conv bias should be placed on host");
-    TT_FATAL(bias_tensor.get_logical_shape().rank() == 4, "bias tensor should be 4D tensor");
-    TT_FATAL(bias_tensor.get_layout() == Layout::ROW_MAJOR, "bias tensor layout should be in row_major layout");
+    TT_FATAL(bias_tensor.logical_shape().rank() == 4, "bias tensor should be 4D tensor");
+    TT_FATAL(bias_tensor.layout() == Layout::ROW_MAJOR, "bias tensor layout should be in row_major layout");
 }
 
 void validate_weights_format(const std::string& weights_format) {
@@ -581,13 +583,13 @@ ttnn::Tensor conv_bias_layout_convert(
     uint32_t out_channels) {
     ttnn::Tensor bias_tensor_ = bias_tensor;
     validate_bias_tensor(bias_tensor_);
-    const auto& bias_shape = bias_tensor_.get_logical_shape();
+    const auto& bias_shape = bias_tensor_.logical_shape();
     TT_FATAL(bias_shape[0] == 1 && bias_shape[1] == 1 && bias_shape[2] == 1, "bias shape is not correct");
     ttnn::Shape bias_channels_padded_shape({1, 1, 32, round_up(out_channels, weight_block_w_ntiles * 32)});
     bias_tensor_ =
         ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D{0, 0, 0, 0}, 0);
     bias_tensor_ = ttnn::to_layout(bias_tensor_, Layout::TILE, std::nullopt, std::nullopt, (T*)nullptr);
-    if (bias_tensor_.get_dtype() != bias_dtype) {
+    if (bias_tensor_.dtype() != bias_dtype) {
         bias_tensor_ = ttnn::to_dtype(bias_tensor_, bias_dtype);
     }
     return bias_tensor_;
@@ -733,7 +735,7 @@ ttnn::Tensor prepare_bias_on_device(
         bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
     }
     if (input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
-        auto bias_out_channels = bias_tensor_.get_logical_shape()[3];
+        auto bias_out_channels = bias_tensor_.logical_shape()[3];
         ttnn::Shape bias_channels_padded_shape({1, 1, 1, out_channels_padded});
         bias_tensor_ = ttnn::pad(
             bias_tensor_,
@@ -784,7 +786,7 @@ ttnn::Tensor prepare_bias_on_device(
         true);
 
     ttnn::Shape bias_target_shape(std::array<uint32_t, 4>{1, 1, 1, out_channels});
-    bias_tensor_ = ttnn::reshape(bias_tensor_, bias_target_shape, bias_tensor_.get_padded_shape());
+    bias_tensor_ = ttnn::reshape(bias_tensor_, bias_target_shape, bias_tensor_.padded_shape());
     return bias_tensor_;
 }
 
@@ -795,7 +797,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     Conv2dWeightsBiasPrepConfig& params,
     T* device) {
     ttnn::Tensor weight_tensor_ = weight_tensor;  // tensor to return
-    Shape weight_shape = weight_tensor.get_logical_shape();
+    Shape weight_shape = weight_tensor.logical_shape();
     // In case of 1D convolution and 3D weight tensor, reinterpret it as 4D tensor
     if (weight_shape.rank() == 3 && params.input_width == 1) {
         weight_tensor_ = ttnn::reshape(weight_tensor_, Shape({weight_shape[0], weight_shape[1], weight_shape[2], 1}));
@@ -803,7 +805,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     validate_weight_tensor(weight_tensor_);
 
-    auto original_weights_shape = weight_tensor_.get_logical_shape();
+    auto original_weights_shape = weight_tensor_.logical_shape();
     uint32_t original_weights_out_channels = original_weights_shape[0];
     uint32_t original_weights_in_channels = original_weights_shape[1];
     uint32_t original_weights_window_h = original_weights_shape[2];
@@ -846,21 +848,21 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     if (!is_conv1d and params.groups > 1) {
         weight_tensor_ =
-            convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, params.groups, weight_tensor_.get_dtype());
+            convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, params.groups, weight_tensor_.dtype());
     } else if (is_conv1d and params.groups > 1) {
         if (is_conv_1d_depthwise_conv) {
             weight_tensor_ = convert_conv_weight_tensor_to_depthwise_layout(
-                weight_tensor_, params.act_block_h_ntiles, weight_tensor_.get_dtype());
+                weight_tensor_, params.act_block_h_ntiles, weight_tensor_.dtype());
             params.weight_block_h_ntiles = params.act_block_h_ntiles;
         } else {
             weight_tensor_ =
-                convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, params.groups, weight_tensor_.get_dtype());
+                convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, params.groups, weight_tensor_.dtype());
         }
     }
 
     weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
 
-    auto weights_shape = weight_tensor_.get_logical_shape();
+    auto weights_shape = weight_tensor_.logical_shape();
     uint32_t out_channels = weights_shape[0];
     uint32_t in_channels = weights_shape[1];
     uint32_t window_h = weights_shape[2];
@@ -873,7 +875,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t in_channels_padded = tt::round_up(in_channels, input_num_cores_channels * params.input_channels_alignment);
     uint32_t out_channel_padding = out_channels_padded - out_channels;
 
-    TT_ASSERT(weight_tensor_.get_layout() == Layout::ROW_MAJOR, "Conv Weights should be in row major layout ");
+    TT_ASSERT(weight_tensor_.layout() == Layout::ROW_MAJOR, "Conv Weights should be in row major layout ");
 
     // Block sharding re-orders the weights by dividing the input_channels along number of in_channel_cores.
     if (params.input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -990,28 +992,28 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     if (params.weights_bias_dtype.has_value()) {
         TT_ASSERT(
-            weight_tensor_.get_dtype() == params.weights_bias_dtype.value(),
+            weight_tensor_.dtype() == params.weights_bias_dtype.value(),
             "Weight tensor should be in the dtype specified by Conv2dConfig");
     }
     uint32_t weight_matrix_height = in_channels * window_h * window_w;
-    int32_t weight_matrix_height_padding = weight_tensor_.get_logical_shape()[2] - weight_matrix_height;
+    int32_t weight_matrix_height_padding = weight_tensor_.logical_shape()[2] - weight_matrix_height;
     TT_FATAL(weight_matrix_height_padding >= 0, " Matrix Height Padding can't be negative");
 
     ttnn::Shape target_shape(std::array<uint32_t, 4>{1, 1, weight_matrix_height, out_channels});
 
-    weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape, weight_tensor_.get_padded_shape());
+    weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape, weight_tensor_.padded_shape());
 
     if (bias_tensor.has_value()) {
         bias_tensor_ = prepare_bias_on_device(
             bias_tensor.value(),
-            weight_tensor_.get_dtype(),
+            weight_tensor_.dtype(),
             out_channels,
             params.weight_block_w_ntiles,
             params.input_parallel_config,
             params.output_parallel_config,
             device);
         TT_ASSERT(
-            bias_tensor_.get_dtype() == weight_tensor_.get_dtype(),
+            bias_tensor_.dtype() == weight_tensor_.dtype(),
             "Bias tensor should be in same dtype as the weights tensor.");
     }
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
@@ -1024,7 +1026,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     Conv2dWeightsBiasPrepConfig& params,
     T* device) {
     ttnn::Tensor weight_tensor_ = weight_tensor;  // tensor to return
-    Shape weight_shape = weight_tensor.get_logical_shape();
+    Shape weight_shape = weight_tensor.logical_shape();
     // In case of 1D convolution and 3D weight tensor, reinterpret it as 4D tensor
     if (weight_shape.rank() == 3 && params.input_width == 1) {
         weight_tensor_ = ttnn::reshape(weight_tensor_, Shape({weight_shape[0], weight_shape[1], weight_shape[2], 1}));
@@ -1032,7 +1034,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     validate_weight_tensor(weight_tensor_);
     ttnn::Tensor bias_tensor_;
 
-    const auto& original_weights_shape = weight_tensor_.get_logical_shape();
+    const auto& original_weights_shape = weight_tensor_.logical_shape();
     uint32_t original_weights_out_channels = original_weights_shape[0];
     uint32_t original_weights_in_channels = original_weights_shape[1];
     uint32_t original_weights_window_h = original_weights_shape[2];
@@ -1052,22 +1054,22 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     // Convert weight tensor to 0 padded shape if groups > 1
     if (!is_conv1d and params.groups > 1) {
         weight_tensor_ =
-            convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, params.groups, weight_tensor_.get_dtype());
+            convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, params.groups, weight_tensor_.dtype());
     } else if (is_conv1d and params.groups > 1) {
         if (is_conv_1d_depthwise_conv) {
             weight_tensor_ = convert_conv_weight_tensor_to_depthwise_layout(
-                weight_tensor_, params.act_block_h_ntiles, weight_tensor_.get_dtype());
+                weight_tensor_, params.act_block_h_ntiles, weight_tensor_.dtype());
             params.weight_block_h_ntiles = params.act_block_h_ntiles;
         } else {
             weight_tensor_ =
-                convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, params.groups, weight_tensor_.get_dtype());
+                convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, params.groups, weight_tensor_.dtype());
         }
     }
     if (params.enable_kernel_stride_folding) {
         weight_tensor_ = to_folded_weight_layout(
             weight_tensor_, params.stride, {original_weights_window_h, original_weights_window_w}, params.padding_n4);
     }
-    const auto& weights_shape = weight_tensor_.get_logical_shape();
+    const auto& weights_shape = weight_tensor_.logical_shape();
     uint32_t out_channels = weights_shape[0];
     uint32_t in_channels = weights_shape[1];
     uint32_t window_h = weights_shape[2];
@@ -1087,19 +1089,19 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     // for conv op, pad the weights to block shape
     if (params.input_parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
         weight_tensor_ = convert_conv_weight_tensor_to_special_padding_tiled_layout(
-            weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, weight_tensor_.get_dtype());
+            weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, weight_tensor_.dtype());
     } else if (params.input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout_block_sharded(
-            weight_tensor_, input_num_cores_channels, weight_tensor_.get_dtype());
+            weight_tensor_, input_num_cores_channels, weight_tensor_.dtype());
     } else {
         weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout(
-            weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, weight_tensor_.get_dtype());
+            weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, weight_tensor_.dtype());
     }
 
     uint32_t weight_matrix_height = in_channels * window_h * window_w;
-    TT_FATAL(weight_tensor_.get_logical_shape()[2] >= weight_matrix_height, " Matrix Height Padding can't be negative");
+    TT_FATAL(weight_tensor_.logical_shape()[2] >= weight_matrix_height, " Matrix Height Padding can't be negative");
     ttnn::Shape target_shape({1, 1, weight_matrix_height, out_channels});
-    ttnn::Shape padded_target_shape({1, 1, weight_tensor_.get_logical_shape()[2], out_channels + out_channel_padding});
+    ttnn::Shape padded_target_shape({1, 1, weight_tensor_.logical_shape()[2], out_channels + out_channel_padding});
     weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape, padded_target_shape);
     if (params.weights_bias_dtype.has_value()) {
         weight_tensor_ = ttnn::to_dtype(weight_tensor_, params.weights_bias_dtype.value());
@@ -1114,11 +1116,10 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         bool is_bias_tensor_is_on_device = tt::tt_metal::is_device_tensor(bias_tensor_);
         if (!is_bias_tensor_is_on_device) {
             TT_FATAL(
-                bias_tensor_.get_logical_shape()[3] == out_channels,
-                "Bias must have the same length as output channels");
+                bias_tensor_.logical_shape()[3] == out_channels, "Bias must have the same length as output channels");
             bias_tensor_ = conv_bias_layout_convert(
                 bias_tensor_,
-                weight_tensor_.get_dtype(),
+                weight_tensor_.dtype(),
                 params.weight_block_h_ntiles,
                 params.weight_block_w_ntiles,
                 params.output_parallel_config,
@@ -1127,7 +1128,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
         }
         TT_ASSERT(
-            bias_tensor_.get_dtype() == weight_tensor_.get_dtype(),
+            bias_tensor_.dtype() == weight_tensor_.dtype(),
             "Bias tensor should be in the same dtype as the weights tensor");
     }
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
@@ -1156,6 +1157,7 @@ ttnn::Tensor prepare_conv_weights(
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
     if (weights_format != "OIHW") {
         log_warning(
+            tt::LogOp,
             "PyTorch expects Conv2D Weights in OIHW format, but got {}. If you have passed the correct weights, then "
             "make sure that the weights_format string is set to \"OIHW\".",
             weights_format);
@@ -1395,7 +1397,7 @@ ttnn::Tensor prepare_conv_bias(
         parallel_config, device->compute_with_storage_grid_size(), out_channels, mm_conv);
 
     ttnn::Tensor bias_tensor_ = bias_tensor;
-    TT_FATAL(bias_tensor_.get_logical_shape()[3] == out_channels, "Bias must have the same length as output channels");
+    TT_FATAL(bias_tensor_.logical_shape()[3] == out_channels, "Bias must have the same length as output channels");
 
     TT_ASSERT(conv_config.weights_dtype.has_value(), "prepare_conv_bias requires weights_dtype to be set.");
     if (tt::tt_metal::is_device_tensor(bias_tensor_)) {

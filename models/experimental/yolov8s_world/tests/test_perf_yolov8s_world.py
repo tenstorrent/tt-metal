@@ -132,11 +132,11 @@ def test_perf(device, use_pretrained_weight, use_program_cache):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 71.2],
+        [1, 80.0],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_perf_device_bare_metal_yolov9c(batch_size, expected_perf):
+def test_perf_device_bare_metal_yolov8s_world(batch_size, expected_perf):
     subdir = "ttnn_yolov8s_world"
     num_iterations = 1
     margin = 0.03

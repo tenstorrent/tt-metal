@@ -131,12 +131,12 @@ auto bind_registered_operation(
 
     py_operation.def_property_readonly(
         "name",
-        [](const registered_operation_t& self) -> const std::string { return self.base_name(); },
+        [](const registered_operation_t& self) -> std::string { return self.base_name(); },
         "Shortened name of the api");
 
     py_operation.def_property_readonly(
         "python_fully_qualified_name",
-        [](const registered_operation_t& self) -> const std::string { return self.python_fully_qualified_name(); },
+        [](const registered_operation_t& self) -> std::string { return self.python_fully_qualified_name(); },
         "Fully qualified name of the api");
 
     // Attribute to identify of ttnn operations

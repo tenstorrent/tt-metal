@@ -41,10 +41,8 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
             4,
         ),  # test all groups on core fit in less than one tile, so need to reduce col core count
         # # # SDXL 1024x1024 resoultion
-        (2, 1920, 64, 64, 32, 4, 4, 4),
-        (2, 320, 128, 128, 32, 12, 2, 2),
-        (2, 640, 128, 128, 32, 6, 4, 4),
-        (2, 960, 128, 128, 32, 12, 2, 2),
+        (1, 640, 128, 128, 32, 3, 4, 4),
+        (1, 960, 128, 128, 32, 6, 2, 2),
         # VAE
         # tensor is too large, but good example
         (1, 256, 1024, 1024, 32, 128, 8, 4),

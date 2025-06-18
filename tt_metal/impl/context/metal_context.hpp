@@ -29,6 +29,10 @@ class ControlPlane;
 
 namespace tt::tt_metal {
 
+namespace inspector {
+class Data;
+}
+
 // A class to manage one-time initialization and teardown (FW, dispatch, fabric, cluster) and access to related state.
 // Dispatch-independent state (Cluster) is initialized with the creation of MetalContext and accessible right after.
 // Dispatch-dependent state (FW, dispatch, fabric) is initialized explicitly with a MetalContext::initialize() call, and
@@ -50,6 +54,9 @@ public:
     DispatchQueryManager& get_dispatch_query_manager();
     const DispatchMemMap& dispatch_mem_map() const;  // DispatchMemMap for the core type we're dispatching on.
     const DispatchMemMap& dispatch_mem_map(const CoreType& core_type) const;  // DispatchMemMap for specific core type.
+    inspector::Data* get_inspector_data() const {
+        return inspector_data_.get();
+    }
 
     void initialize(
         const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, const BankMapping& l1_bank_remap);
@@ -60,7 +67,9 @@ public:
         const std::string& mesh_graph_desc_file,
         const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
     void set_default_control_plane_mesh_graph();
-    void initialize_fabric_config(tt_metal::FabricConfig fabric_config);
+    void set_fabric_config(
+        tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
+    void initialize_fabric_config();
     tt_metal::FabricConfig get_fabric_config() const;
 
 private:
@@ -73,6 +82,7 @@ private:
     void clear_dram_state(chip_id_t device_id);
     void clear_launch_messages_on_eth_cores(chip_id_t device_id);
     void initialize_control_plane();
+    void teardown_fabric_config();
 
     bool initialized_ = false;
     bool teardown_registered_ = false;
@@ -90,9 +100,11 @@ private:
     std::unique_ptr<Hal> hal_;
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
+    std::unique_ptr<inspector::Data> inspector_data_;
     std::array<std::unique_ptr<DispatchMemMap>, magic_enum::enum_count<CoreType>()> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::GlobalControlPlane> global_control_plane_;
     tt_metal::FabricConfig fabric_config_ = tt_metal::FabricConfig::DISABLED;
+    uint8_t num_fabric_active_routing_planes_ = 0;
 };
 
 }  // namespace tt::tt_metal

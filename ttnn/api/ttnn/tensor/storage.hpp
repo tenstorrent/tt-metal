@@ -34,12 +34,11 @@ struct DeviceStorage {
     DeviceStorage(
         std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords_);
 
-    MemoryConfig memory_config() const;
     Buffer* get_buffer() const;
     std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer() const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("memory_config");
-    auto attribute_values() const { return std::make_tuple(this->memory_config()); }
+    static constexpr auto attribute_names = std::forward_as_tuple();
+    auto attribute_values() const { return std::forward_as_tuple(); }
 
     bool is_allocated() const;
 
@@ -51,19 +50,20 @@ struct DeviceStorage {
 
 class MultiDeviceHostStorage {
 public:
+    // Constructor that creates a linearized distributed host buffer from a vector of host buffers.
+    // The buffer is re-shaped upon a write to device, to fit the actual shape of the device.
+    // TODO: #22169 - Remove this once there are no more usages of this constructor.
     explicit MultiDeviceHostStorage(std::vector<HostBuffer> buffers);
+
+    explicit MultiDeviceHostStorage(DistributedHostBuffer buffer);
+
+    const DistributedHostBuffer& distributed_buffer() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple();
     auto attribute_values() const { return std::forward_as_tuple(); }
 
-    // Returns `HostBuffer` at position `buffer_index`;
-    HostBuffer get_buffer(int buffer_index) const;
-
-    // Returns the number of `HostBuffer`s in the storage;
-    size_t num_buffers() const;
-
 private:
-    std::vector<HostBuffer> buffers_;
+    DistributedHostBuffer distributed_buffer_;
 };
 
 using Storage = std::variant<HostStorage, DeviceStorage, MultiDeviceHostStorage>;

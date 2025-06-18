@@ -7,6 +7,7 @@ from loguru import logger
 import torch
 import pytest
 import ttnn
+from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from models.experimental.stable_diffusion_xl_base.tt.tt_feedforward import TtFeedForward
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -28,16 +29,17 @@ def test_feedforward(
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
-    # unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
 
     torch_ff = unet.down_blocks[block_id].attentions[0].transformer_blocks[transformer_block_id].ff
 
+    model_config = ModelOptimisations()
     tt_ff = TtFeedForward(
         device,
         state_dict,
         f"down_blocks.{block_id}.attentions.0.transformer_blocks.{transformer_block_id}.ff",
+        model_config,
         weights_dtype=transformer_weights_dtype,
     )
 

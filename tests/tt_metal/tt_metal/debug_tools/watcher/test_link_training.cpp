@@ -18,7 +18,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
-#include <tt-metalium/logger.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
@@ -72,8 +72,6 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     }
 
     // Close devices to trigger watcher check on teardown.
-    for (IDevice* device : this->devices_) {
-        tt::tt_metal::CloseDevice(device);
-    }
+    TearDown();
     EXPECT_TRUE(FileContainsAllStrings(this->log_file_name, expected_strings));
 }
