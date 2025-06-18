@@ -26,8 +26,8 @@ TEST(DevicePool, DevicePoolOpenClose) {
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
-        ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
-        ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
+        ASSERT_EQ((int)(dev->allocator()->get_config().l1_small_size), l1_small_size);
+        ASSERT_EQ((int)(dev->num_hw_cqs()), num_hw_cqs);
         ASSERT_TRUE(dev->is_initialized());
     }
 
@@ -37,8 +37,8 @@ TEST(DevicePool, DevicePoolOpenClose) {
     }
     devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
-        ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
-        ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
+        ASSERT_EQ((int)(dev->allocator()->get_config().l1_small_size), l1_small_size);
+        ASSERT_EQ((int)(dev->num_hw_cqs()), num_hw_cqs);
         ASSERT_TRUE(dev->is_initialized());
     }
     for (const auto& dev : devices) {
