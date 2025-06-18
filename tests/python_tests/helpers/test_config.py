@@ -51,8 +51,11 @@ def generate_build_header(
         "// SPDX-License-Identifier: Apache-2.0",
         "// AUTO-GENERATED CONFIGURATION HEADER. DO NOT EDIT MANUALLY!",
         "",
-        '#include "tensix_types.h"',
         "#include <type_traits>",
+        "",
+        '#include "perf.h"',
+        '#include "tensix_types.h"',
+        "",
         "#pragma once",
         "",
         "// Basic configuration",
@@ -146,6 +149,12 @@ def generate_build_header(
             header_content.append(f"#define PACK_ADDR_CNT {pack_addr_cnt}")
         if pack_addrs is not None:
             header_content.append(f"#define PACK_ADDRS {pack_addrs}")
+
+    if perf_run_type := test_config.get("perf_run_type"):
+        header_content.append("")
+        header_content.append(
+            f"constexpr auto PERF_RUN_TYPE = PerfRunType::{perf_run_type.name};"
+        )
 
     header_content.append("")
     return "\n".join(header_content)

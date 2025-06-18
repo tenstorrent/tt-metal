@@ -17,6 +17,7 @@
 #include "data_format_inference.h"
 #include "llk_defs.h"
 #include "llk_sfpu_types.h"
+#include "perf.h"
 #include "tensix_types.h"
 
 inline uint32_t L1_ADDRESS(const volatile void* buffer)
