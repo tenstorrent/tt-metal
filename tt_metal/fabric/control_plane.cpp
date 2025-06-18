@@ -1086,6 +1086,9 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
         tt::tt_fabric::MAX_MESH_SIZE,
         (eth_chan_directions)eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
     const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
+    TT_FATAL(
+        router_intra_mesh_routing_table[*mesh_id][chip_id].size() <= tt::tt_fabric::MAX_MESH_SIZE,
+        "ControlPlane: Intra mesh routing table size exceeds maximum allowed size");
     for (chip_id_t dst_chip_id = 0; dst_chip_id < router_intra_mesh_routing_table[*mesh_id][chip_id].size();
          dst_chip_id++) {
         if (chip_id == dst_chip_id) {
@@ -1106,7 +1109,11 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
         tt::tt_fabric::MAX_NUM_MESHES,
         (eth_chan_directions)eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
     const auto& router_inter_mesh_routing_table = this->routing_table_generator_->get_inter_mesh_table();
-    for (std::uint32_t dst_mesh_id = 0; dst_mesh_id < router_inter_mesh_routing_table.size(); dst_mesh_id++) {
+    TT_FATAL(
+        router_inter_mesh_routing_table[*mesh_id][chip_id].size() <= tt::tt_fabric::MAX_NUM_MESHES,
+        "ControlPlane: Inter mesh routing table size exceeds maximum allowed size");
+    for (std::uint32_t dst_mesh_id = 0; dst_mesh_id < router_inter_mesh_routing_table[*mesh_id][chip_id].size();
+         dst_mesh_id++) {
         if (*mesh_id == dst_mesh_id) {
             tensix_routing_info.inter_mesh_routing_table[dst_mesh_id] =
                 (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
@@ -1119,7 +1126,7 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
                 : (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
     }
 
-    TT_ASSERT(
+    TT_FATAL(
         tt_metal::MetalContext::instance().hal().get_dev_size(
             tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::TENSIX_ROUTING_TABLE) >=
             sizeof(tensix_routing_l1_info_t),
@@ -1127,6 +1134,7 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
     const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
     const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_desc.get_cores(CoreType::TENSIX, CoordSystem::PHYSICAL);
     // Write to all Tensix cores
+    // TODO: "mcast" to all tensix cores
     for (const auto& tensix_core : tensix_cores) {
         auto virtual_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(

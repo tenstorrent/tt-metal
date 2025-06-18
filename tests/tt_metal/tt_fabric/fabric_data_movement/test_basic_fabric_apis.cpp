@@ -697,8 +697,9 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
 
     auto devices = DevicePool::instance().get_all_active_devices();
     const size_t NUM_DEVICES = devices.size();
-    if (NUM_DEVICES < 2) {
-        GTEST_SKIP() << "Need at least 2 devices for routing direction test";
+    bool invalid_test_scenario = !is_multi_mesh && NUM_DEVICES < 2;
+    if (invalid_test_scenario) {
+        GTEST_SKIP() << "Test requires at least 2 devices, found " << NUM_DEVICES;
     }
 
     std::vector<tt::tt_metal::Program> programs(NUM_DEVICES);

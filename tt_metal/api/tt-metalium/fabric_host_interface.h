@@ -92,4 +92,7 @@ struct tensix_routing_l1_info_t {
     std::uint8_t padding[8];  // pad to 16-byte alignment
 } __attribute__((packed));
 
+// MEM_TENSIX_ROUTING_TABLE_SIZE
+static_assert(sizeof(tensix_routing_l1_info_t) == 2064, "Struct size mismatch!");
+
 }  // namespace tt::tt_fabric
