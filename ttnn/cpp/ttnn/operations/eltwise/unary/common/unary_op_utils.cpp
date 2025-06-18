@@ -49,7 +49,8 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::I1: return "SFPU_OP_I1_INCLUDE";
         case UnaryOpType::COS:
         case UnaryOpType::SIN:
-        case UnaryOpType::TAN: return "SFPU_OP_TRIG_FAMILY_INCLUDE";
+        case UnaryOpType::TAN:
+        case UnaryOpType::ATANH: return "SFPU_OP_TRIG_FAMILY_INCLUDE";
         case UnaryOpType::NEG: return "SFPU_OP_NEG_INCLUDE";
         case UnaryOpType::SOFTPLUS: return "SFPU_OP_SOFTPLUS_INCLUDE";
         case UnaryOpType::PRELU_SFPU: return "SFPU_OP_PRELU_INCLUDE";
@@ -431,6 +432,7 @@ std::pair<string, string> get_op_init_and_func_default(
         case UnaryOpType::ASIN: op_init_and_name = {"asin_tile_init();", fmt::format("asin_tile({});", idst)}; break;
         case UnaryOpType::ACOS: op_init_and_name = {"acos_tile_init();", fmt::format("acos_tile({});", idst)}; break;
         case UnaryOpType::ATAN: op_init_and_name = {"atan_tile_init();", fmt::format("atan_tile({});", idst)}; break;
+        case UnaryOpType::ATANH: op_init_and_name = {"atanh_tile_init();", fmt::format("atanh_tile({});", idst)}; break;
         case UnaryOpType::TAN: op_init_and_name = {"tan_tile_init();", fmt::format("tan_tile({});", idst)}; break;
         case UnaryOpType::SILU: op_init_and_name = {"silu_tile_init();", fmt::format("silu_tile({});", idst)}; break;
         case UnaryOpType::IDENTITY:

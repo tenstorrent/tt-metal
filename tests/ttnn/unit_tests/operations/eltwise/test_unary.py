@@ -714,3 +714,22 @@ def test_unary_tanhshrink_edge_case_ttnn(input_shapes, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_atanh_ttnn(input_shapes, device):
+    in_data1 = torch.rand(input_shapes, dtype=torch.bfloat16)
+    input_tensor1 = ttnn.from_torch(in_data1, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.atanh(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn.atanh)
+    golden_tensor = golden_function(in_data1)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass

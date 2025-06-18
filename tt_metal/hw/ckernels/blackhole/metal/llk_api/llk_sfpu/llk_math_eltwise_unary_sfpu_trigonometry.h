@@ -81,4 +81,18 @@ inline void llk_math_eltwise_unary_sfpu_atan(uint dst_index, int vector_mode = (
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_atan<APPROXIMATE>, dst_index, vector_mode);
 }
 
+// atanh
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_atanh_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::atanh, APPROXIMATE>(
+        ckernel::sfpu::_init_inverse_hyperbolic_<APPROXIMATE>());
+}
+s
+
+    template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+    inline void llk_math_eltwise_unary_sfpu_atanh(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::_calculate_atanh_<APPROXIMATE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
+}
+
 }  // namespace ckernel

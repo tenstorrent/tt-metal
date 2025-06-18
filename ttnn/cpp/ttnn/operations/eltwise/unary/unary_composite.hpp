@@ -179,9 +179,6 @@ constexpr auto acosh = ttnn::register_operation<
 constexpr auto asinh = ttnn::register_operation<
     "ttnn::asinh",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::ASINH>>();
-constexpr auto atanh = ttnn::register_operation<
-    "ttnn::atanh",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::ATANH>>();
 constexpr auto cbrt = ttnn::register_operation<
     "ttnn::cbrt",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::CBRT>>();
