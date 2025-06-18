@@ -1,5 +1,5 @@
 # This is a dummy file to ensure that git adds this empty kernel folder
 # Even an empty kernel folder is necessary because it's how the CI pipeline differentiates
-# Between root example folders (that contain the CMakeLists to build executables) and 
+# Between root example folders (that contain the CMakeLists to build executables) and
 # Parent example folders, like contributed, that exist to group sub examples.
 # Matmul is a root example folder because it builds examples directly using the CMakeLists in it
