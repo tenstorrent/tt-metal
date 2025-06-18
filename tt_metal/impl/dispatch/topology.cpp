@@ -1374,7 +1374,8 @@ void build_tt_fabric_program(
     const bool is_2D_routing = topology == Topology::Mesh;
 
     for (const auto& direction : tt::tt_fabric::FabricContext::routing_directions) {
-        auto active_eth_chans = control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
+        auto active_eth_chans =
+            control_plane.get_active_fabric_eth_routing_planes_in_direction(fabric_node_id, direction);
         if (active_eth_chans.empty()) {
             continue;
         }
@@ -1408,6 +1409,13 @@ void build_tt_fabric_program(
         chip_neighbors.emplace(direction, neighbor_fabric_node_id);
 
         active_fabric_eth_channels.insert({direction, active_eth_chans});
+        log_debug(
+            tt::LogMetal,
+            "Building fabric router -> device (phys): {}, (logical): {}, direction: {}, active_eth_chans: {}",
+            device->id(),
+            control_plane.get_fabric_node_id_from_physical_chip_id(device->id()).chip_id,
+            direction,
+            active_eth_chans.size());
     }
 
     if (active_fabric_eth_channels.empty()) {
@@ -1537,6 +1545,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
     const auto num_enabled_eth_cores = edm_builders.size();
     const auto num_enabled_risc_cores =
         edm_builders.begin()->second.get_configured_risc_count();  // same across all eth cores
+    size_t num_local_fabric_routers = num_enabled_risc_cores * num_enabled_eth_cores;
     for (auto& [eth_chan, edm_builder] : edm_builders) {
         edm_builder.set_wait_for_host_signal(true);
         const std::vector<uint32_t> rt_args = edm_builder.get_runtime_args();
@@ -1546,7 +1555,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
             const auto is_master_risc_core = eth_chan == master_router_chan && (risc_id == 0);
             ct_args.push_back(is_master_risc_core);
             ct_args.push_back(master_router_chan);
-            ct_args.push_back(num_enabled_risc_cores * num_enabled_eth_cores);
+            ct_args.push_back(num_local_fabric_routers);
             ct_args.push_back(router_channels_mask);
 
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
@@ -1563,6 +1572,14 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
 
             tt::tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, eth_logical_core, rt_args);
         }
+
+        log_debug(
+            tt::LogMetal,
+            "Building fabric router -> device (phys): {}, (logical): {}, channel: {}, num_local_fabric_routers: {}",
+            device->id(),
+            control_plane.get_fabric_node_id_from_physical_chip_id(device->id()).chip_id,
+            eth_chan,
+            num_local_fabric_routers);
     }
 
     detail::CompileProgram(device, *fabric_program_ptr, /*force_slow_dispatch=*/device->using_fast_dispatch());

@@ -43,8 +43,8 @@ std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() con
     return wrap_around_mesh;
 }
 
-tt::tt_fabric::Topology FabricContext::get_topology() const {
-    switch (this->fabric_config_) {
+tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_metal::FabricConfig fabric_config) {
+    switch (fabric_config) {
         case tt::tt_metal::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
         case tt::tt_metal::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
         case tt::tt_metal::FabricConfig::FABRIC_2D: return tt::tt_fabric::Topology::Mesh;
@@ -52,7 +52,7 @@ tt::tt_fabric::Topology FabricContext::get_topology() const {
         case tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC: return tt::tt_fabric::Topology::Mesh;
         case tt::tt_metal::FabricConfig::DISABLED:
         case tt::tt_metal::FabricConfig::CUSTOM:
-            TT_THROW("Unsupported fabric config: {}", magic_enum::enum_name(this->fabric_config_));
+            TT_THROW("Unsupported fabric config: {}", magic_enum::enum_name(fabric_config));
     }
     return tt::tt_fabric::Topology::Linear;
 }
@@ -105,7 +105,7 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
     this->fabric_config_ = fabric_config;
 
     this->wrap_around_mesh_ = this->check_for_wrap_around_mesh();
-    this->topology_ = this->get_topology();
+    this->topology_ = this->get_topology_from_config(fabric_config);
 
     this->packet_header_size_bytes_ = this->get_packet_header_size_bytes();
     this->max_payload_size_bytes_ = this->get_max_payload_size_bytes();
