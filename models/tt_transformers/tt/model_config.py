@@ -819,7 +819,7 @@ class ModelArgs:
                 grid_size=self.find_prefill_grid(
                     num_rows(seq_len) // self.tile_size,
                     k_dim // self.tile_size,
-                    dram_shard_grid_width=dram_shard_grid_width,
+                    dram_shard_grid_width=dram_shard_grid_width if dram_sharded_wo else None,
                 ),
                 in0_block_w=1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
