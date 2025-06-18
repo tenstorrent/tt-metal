@@ -5,18 +5,17 @@
 import os
 import random
 import string
-import time
 
 import torch
 from diffusers import AutoencoderKL, UNet2DConditionModel
 from loguru import logger
 from PIL import Image
-from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import compile_trace_sd
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
@@ -30,22 +29,6 @@ def constant_prop_time_embeddings(timesteps, sample, time_proj):
     timesteps = timesteps.expand(sample.shape[0])
     t_emb = time_proj(timesteps)
     return t_emb
-
-
-def tt_guide(noise_pred, guidance_scale):  # will return latents
-    noise_pred_uncond = noise_pred[:1, :, :, :]
-    noise_pred_text = ttnn.slice(
-        noise_pred,
-        [1, 0, 0, 0],
-        [
-            noise_pred.shape[0],
-            noise_pred.shape[1],
-            noise_pred.shape[2],
-            noise_pred.shape[3],
-        ],
-    )
-    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-    return noise_pred
 
 
 # Global variable for the Stable Diffusion model pipeline
@@ -130,6 +113,19 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
 
     time_step = ttnn_scheduler.timesteps.tolist()
 
+    ttnn_text_embeddings_device, output, tid = compile_trace_sd(
+        device,
+        model,
+        config,
+        tt_vae,
+        rand_latents,
+        _tlist,
+        time_step,
+        guidance_scale,
+        ttnn_scheduler,
+        num_inference_steps,
+    )
+
     # Function to generate an image from the given prompt
     def _model_pipeline(input_prompt):
         ttnn_scheduler.set_timesteps(num_inference_steps)
@@ -158,53 +154,18 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
         # In practice, we can concatenate both into a single batch to avoid doing two forward passes.
         text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
         ttnn_text_embeddings = torch.nn.functional.pad(text_embeddings, (0, 0, 0, 19))
-        ttnn_text_embeddings = ttnn.from_torch(
-            ttnn_text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
+        ttnn_text_embeddings = ttnn.from_torch(ttnn_text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
-        iter = 0
-        ttnn_latents = rand_latents
-
-        total_accum = 0
-        for index in tqdm(range(len(time_step))):
-            t0 = time.time()
-            ttnn_latent_model_input = ttnn.concat([ttnn_latents, ttnn_latents], dim=0)
-            _t = _tlist[index]
-            t = time_step[index]
-
-            with torch.no_grad():
-                ttnn_output = model(
-                    ttnn_latent_model_input,  # input
-                    timestep=_t,
-                    encoder_hidden_states=ttnn_text_embeddings,
-                    class_labels=None,
-                    attention_mask=None,
-                    cross_attention_kwargs=None,
-                    return_dict=True,
-                    config=config,
-                )
-
-            noise_pred = tt_guide(ttnn_output, guidance_scale)
-
-            ttnn_latents = ttnn_scheduler.step(noise_pred, t, ttnn_latents).prev_sample
-            total_accum += time.time() - t0
-            iter += 1
-        logger.info(f"Time taken for {iter} iterations: total: {total_accum:.3f}")
-
-        # scale and decode the image latents with vae
-        latents = 1 / 0.18215 * ttnn_latents
-
-        # on blackhole, we use the original vae decoder until #20760 is fixed
+        ttnn.copy_host_to_device_tensor(ttnn_text_embeddings, ttnn_text_embeddings_device, cq_id=0)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         if not is_blackhole():
-            latents = ttnn.permute(latents, [0, 2, 3, 1])
-            ttnn_output = tt_vae.decode(latents)
-            ttnn_output = ttnn.reshape(ttnn_output, [1, image_size[0], image_size[1], ttnn_output.shape[3]])
-            ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
-            image = ttnn.to_torch(ttnn_output)
+            image = ttnn.to_torch(output.cpu(blocking=True))
         else:
-            latents = ttnn.to_torch(latents).to(torch.float32)
-            with torch.no_grad():
-                image = vae.decode(latents).sample
+            # on blackhole, we use the original vae decoder until #20760 is fixed
+            latents = ttnn.to_torch(output).to(torch.float32)
+            image = vae.decode(latents).sample
+        ttnn.synchronize_device(device)
+        ttnn.release_trace(device, tid)
 
         image = (image / 2 + 0.5).clamp(0, 1)
         image = image.detach().cpu().float().permute(0, 2, 3, 1).numpy()
@@ -217,8 +178,6 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
 
         return image_path
 
-    # warmup model pipeline
-    _model_pipeline(["ship"])
     global model_pipeline
     model_pipeline = _model_pipeline
 
@@ -226,7 +185,7 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
 def warmup_model():
     # create device, these constants are specific to n150 & n300
     device_id = 0
-    device_params = {"l1_small_size": 11 * 8192}
+    device_params = {"l1_small_size": 11 * 8192, "trace_region_size": 595230720}
     dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
     if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
         dispatch_core_type = ttnn.device.DispatchCoreType.ETH
