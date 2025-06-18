@@ -432,7 +432,7 @@ class ModelOptimisations:
 
         self.matmul_configs["2D_FF2_SEQ_LEN_1024"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
-            in0_block_w=16,  # max is 160, 20 seems optimal?
+            in0_block_w=10,  # max is 20, 10 seems optimal
             out_subblock_h=1,
             out_subblock_w=5,
             per_core_M=4,
@@ -443,9 +443,9 @@ class ModelOptimisations:
 
         self.matmul_configs["2D_FF2_SEQ_LEN_4096"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(7, 8),
-            in0_block_w=2,  # max is 80, 2 seems optimal
-            out_subblock_h=8,
-            out_subblock_w=1,
+            in0_block_w=10,  # max is 10, 2 seems optimal
+            out_subblock_h=1,
+            out_subblock_w=3,
             per_core_M=16,
             per_core_N=3,
             transpose_mcast=False,
@@ -464,27 +464,58 @@ class ModelOptimisations:
             fused_activation=None,
         )
 
-        self.matmul_configs["2D_GEGLU_LINEAR_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        in_0_block_w_geglu_640 = 5
+        per_core_M_geglu_640 = 16
+        per_core_N_geglu_640 = 10
+        out_subblock_h_geglu_640 = 1
+        out_subblock_w_geglu_640 = 5
+        self.matmul_configs["2D_GEGLU_LINEAR_640_SPLIT"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
-            in0_block_w=4,
-            per_core_M=16,
-            per_core_N=20,
-            out_subblock_h=1,
-            out_subblock_w=5,
+            in0_block_w=in_0_block_w_geglu_640,
+            per_core_M=per_core_M_geglu_640,
+            per_core_N=per_core_N_geglu_640,
+            out_subblock_h=out_subblock_h_geglu_640,
+            out_subblock_w=out_subblock_w_geglu_640,
             transpose_mcast=False,
             fused_activation=None,
         )
 
-        self.matmul_configs["1D_GEGLU_LINEAR_1280"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        self.matmul_configs["2D_GEGLU_LINEAR_640_SPLIT_GELU"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
-            in0_block_w=4,
-            out_subblock_h=1,
-            out_subblock_w=5,
-            per_core_M=32,
-            per_core_N=5,
-            fuse_batch=False,
+            in0_block_w=in_0_block_w_geglu_640,
+            per_core_M=per_core_M_geglu_640,
+            per_core_N=per_core_N_geglu_640,
+            out_subblock_h=out_subblock_h_geglu_640,
+            out_subblock_w=out_subblock_w_geglu_640,
+            transpose_mcast=False,
+            fused_activation=[ttnn.UnaryOpType.GELU, False],
+        )
+
+        in_0_block_w_geglu_1280 = 5
+        per_core_M_geglu_1280 = 4
+        per_core_N_geglu_1280 = 20
+        out_subblock_h_geglu_1280 = 1
+        out_subblock_w_geglu_1280 = 5
+        self.matmul_configs["2D_GEGLU_LINEAR_1280_SPLIT"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=in_0_block_w_geglu_1280,
+            per_core_M=per_core_M_geglu_1280,
+            per_core_N=per_core_N_geglu_1280,
+            out_subblock_h=out_subblock_h_geglu_1280,
+            out_subblock_w=out_subblock_w_geglu_1280,
+            transpose_mcast=False,
             fused_activation=None,
-            mcast_in0=True,
+        )
+
+        self.matmul_configs["2D_GEGLU_LINEAR_1280_SPLIT_GELU"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=in_0_block_w_geglu_1280,
+            per_core_M=per_core_M_geglu_1280,
+            per_core_N=per_core_N_geglu_1280,
+            out_subblock_h=out_subblock_h_geglu_1280,
+            out_subblock_w=out_subblock_w_geglu_1280,
+            transpose_mcast=False,
+            fused_activation=[ttnn.UnaryOpType.GELU, False],
         )
 
         self.matmul_configs["2D_TM_LINEAR_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -530,9 +561,16 @@ class ModelOptimisations:
             # # # GEGLU # # #
             if "net.0.proj" in matmul_path:
                 if "down_blocks.1" in matmul_path or "up_blocks.1" in matmul_path:
-                    return self.matmul_configs["2D_GEGLU_LINEAR_640"]
+                    if "gelu" in matmul_path:
+                        return self.matmul_configs["2D_GEGLU_LINEAR_640_SPLIT_GELU"]
+                    else:
+                        return self.matmul_configs["2D_GEGLU_LINEAR_640_SPLIT"]
+
                 else:
-                    return self.matmul_configs["1D_GEGLU_LINEAR_1280"]
+                    if "gelu" in matmul_path:
+                        return self.matmul_configs["2D_GEGLU_LINEAR_1280_SPLIT_GELU"]
+                    else:
+                        return self.matmul_configs["2D_GEGLU_LINEAR_1280_SPLIT"]
 
             # # # TM LINEAR # # #
             if "proj_in" in matmul_path or "proj_out" in matmul_path:

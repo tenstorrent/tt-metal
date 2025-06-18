@@ -51,7 +51,7 @@ def test_feedforward(
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     ttnn_output_tensor = tt_ff.forward(ttnn_input_tensor)
     output_tensor = ttnn.to_torch(ttnn_output_tensor).squeeze()
