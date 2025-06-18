@@ -16,11 +16,15 @@
 #include <tt-metalium/program.hpp>
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/erisc_datamover_builder.hpp>
-#include "erisc_datamover_builder_helper.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 namespace ttnn {
 namespace ccl {
+
+enum class LineDirection: uint8_t {
+    FORWARD,
+    BACKWARD,
+};
 
 // Creates a mesh workload by calling the `create_program` function for each coordinate in the `tensor_coords` set.
 tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_programs(
@@ -70,8 +74,8 @@ class LineTopology {
         size_t line_size,
         size_t line_index);
 
-    bool is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const;
-    bool is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const;
+    bool is_first_device_in_line(ttnn::ccl::LineDirection direction) const;
+    bool is_last_device_in_line(ttnn::ccl::LineDirection direction) const;
 
     bool is_at_end_of_line() const;
 
@@ -79,7 +83,7 @@ class LineTopology {
 
     size_t line_index() const;
 
-    size_t get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction direction) const;
+    size_t get_distance_to_end_of_line(ttnn::ccl::LineDirection direction) const;
 
     ttnn::ccl::Topology topology() const;
 
@@ -383,8 +387,8 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
             wrapped);
     }
 
-    [[deprecated("deprecated code path for reduce scatter. Use nerw get_worker_slice API instead")]]
-    virtual void increment(uint32_t num_pages) override {
+    [[deprecated("deprecated code path for reduce scatter. Use nerw get_worker_slice API instead")]] void increment(
+        uint32_t num_pages) override {
         TT_THROW("deprecated code path for ");
     }
 
@@ -537,7 +541,7 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
         this->output_start_addr_offset = slice_idx /*ring_index*/ * output_addr_offset;
     }
 
-    virtual void increment(uint32_t num_pages) override {
+    void increment(uint32_t num_pages) override {
         if (num_pages /*pages_per_worker*/ > 0) {
             if (row_major) {
                 uint32_t num_rows_shifted = row_idx + num_pages /*pages_per_worker*/;

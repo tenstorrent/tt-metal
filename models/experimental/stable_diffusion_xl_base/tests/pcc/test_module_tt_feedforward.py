@@ -29,7 +29,6 @@ def test_feedforward(
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
     )
-    # unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
 
@@ -52,7 +51,7 @@ def test_feedforward(
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     ttnn_output_tensor = tt_ff.forward(ttnn_input_tensor)
     output_tensor = ttnn.to_torch(ttnn_output_tensor).squeeze()

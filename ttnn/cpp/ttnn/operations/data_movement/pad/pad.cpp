@@ -65,7 +65,6 @@ ttnn::Tensor pad_impl(
         }
         using ShardStrategy = ttnn::operations::data_movement::ShardStrategy;
         using ShardOrientation = tt::tt_metal::ShardOrientation;
-        using Layout = tt::tt_metal::Layout;
 
         auto output_memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 

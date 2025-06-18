@@ -1204,13 +1204,18 @@ uint32_t process_paged_to_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream_
     uint32_t page_size = 1 << log2_page_size;
     uint32_t length = cmd->paged_to_ringbuffer.length;
     uint8_t flags = cmd->paged_to_ringbuffer.flags;
+    uint32_t wp_update_offset = cmd->paged_to_ringbuffer.wp_offset_update;
+
+    ASSERT(length <= wp_update_offset);
 
     if (flags & CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START) {
         ringbuffer_wp = scratch_db_base;
     }
 
     ASSERT(length % DRAM_ALIGNMENT == 0);
-    ASSERT(length + ringbuffer_wp <= ringbuffer_end);
+    ASSERT(wp_update_offset + ringbuffer_wp <= ringbuffer_end);
+
+    ringbuffer_offset = ringbuffer_wp - scratch_db_base;
 
     const bool is_dram = true;
     InterleavedPow2AddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .log_base_2_of_page_size = log2_page_size};
@@ -1230,9 +1235,9 @@ uint32_t process_paged_to_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream_
         scratch_read_addr += length;
     }
 
-    ringbuffer_wp = scratch_read_addr;
+    ringbuffer_wp += wp_update_offset;
 
-    // The consumer will perforam a read barrier.
+    // The consumer will perform a read barrier.
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -1241,7 +1246,12 @@ uint32_t process_set_ringbuffer_offset(uint32_t cmd_ptr) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
     uint32_t offset = cmd->set_ringbuffer_offset.offset;
 
-    ringbuffer_offset = offset;
+    if (cmd->set_ringbuffer_offset.update_wp) {
+        ringbuffer_wp = scratch_db_base + offset;
+        ASSERT(ringbuffer_wp <= ringbuffer_end);
+    } else {
+        ringbuffer_offset = offset;
+    }
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -1440,7 +1450,7 @@ bool process_cmd(
             break;
 
         case CQ_PREFETCH_CMD_RELAY_RINGBUFFER:
-            // DPRINT << "relay paged packed" << ENDL();
+            // DPRINT << "relay ringbuffer" << ENDL();
             if (exec_buf) {
                 stride = process_exec_buf_relay_ringbuffer_cmd(cmd_ptr, downstream_data_ptr, l1_cache, exec_buf_state);
             } else {

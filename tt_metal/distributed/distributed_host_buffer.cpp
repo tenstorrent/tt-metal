@@ -41,7 +41,10 @@ DistributedHostBuffer DistributedHostBuffer::create(
             global_shape[dim]);
     }
     return DistributedHostBuffer(
-        global_shape, local_offset, distributed::MeshContainer<Shard>(local_shape, Shard{.is_populated = false}));
+        global_shape,
+        local_offset,
+        distributed::MeshContainer<Shard>(local_shape, Shard{.is_populated = false}),
+        /*populated_shards=*/std::set<distributed::MeshCoordinate>{});
 }
 
 DistributedHostBuffer DistributedHostBuffer::create(const distributed::MeshShape& shape) {
@@ -107,7 +110,6 @@ DistributedHostBuffer DistributedHostBuffer::transform(
     const std::vector<size_t> indices_to_process = get_populated_local_shard_indices();
     const auto& local_shards = local_shards_.values();
     std::vector<Shard> transformed_shards(local_shards.size());
-
     if (policy == ProcessShardExecutionPolicy::SEQUENTIAL || indices_to_process.size() < 2) {
         std::for_each(indices_to_process.begin(), indices_to_process.end(), [&](size_t i) {
             transformed_shards[i] = Shard{.buffer = fn(local_shards[i].buffer), .is_populated = true};
@@ -119,12 +121,11 @@ DistributedHostBuffer DistributedHostBuffer::transform(
         });
         detail::GetExecutor().run(taskflow).wait();
     }
-
-    DistributedHostBuffer transformed_buffer(
+    return DistributedHostBuffer(
         global_shape_,
         local_offset_,
-        distributed::MeshContainer<Shard>(local_shards_.shape(), std::move(transformed_shards)));
-    return transformed_buffer;
+        distributed::MeshContainer<Shard>(local_shards_.shape(), std::move(transformed_shards)),
+        populated_shards_);
 }
 
 void DistributedHostBuffer::apply(const ApplyFn& fn, ProcessShardExecutionPolicy policy) const {

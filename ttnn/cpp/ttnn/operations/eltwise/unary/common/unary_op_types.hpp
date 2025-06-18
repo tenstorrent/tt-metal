@@ -84,6 +84,7 @@ enum class UnaryOpType {
     RIGHT_SHIFT,
     FLOOR,
     CEIL,
+    TRUNC,
     ROUND,
     LEFT_SHIFT,
     REMAINDER,
@@ -126,7 +127,7 @@ using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
 
 }  // namespace ttnn::operations::unary
 
-namespace tt::stl::json {
+namespace ttsl::json {
 
 template <>
 struct from_json_t<ttnn::operations::unary::UnaryWithParam> {
@@ -136,4 +137,4 @@ struct from_json_t<ttnn::operations::unary::UnaryWithParam> {
             from_json<std::vector<float>>(json_object["params"])};
     }
 };
-};  // namespace tt::stl::json
+};  // namespace ttsl::json

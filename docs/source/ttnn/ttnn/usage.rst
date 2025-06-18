@@ -97,8 +97,8 @@ Basic Examples
     export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false, "enable_logging": true}'
 
     # To print the currently executing TT-NN and tt_lib operation and its input tensors to stdout
-    export TT_METAL_LOGGER_TYPES=Op
-    export TT_METAL_LOGGER_LEVEL=Debug
+    export TT_LOGGER_TYPES=Op
+    export TT_LOGGER_LEVEL=Debug
 
 Logging is not a substitute for profiling.
 Please refer to :doc:`Profiling TT-NN Operations </ttnn/profiling_ttnn_operations>` for instructions on how to profile operations.

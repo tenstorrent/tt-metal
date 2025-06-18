@@ -375,8 +375,8 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
     return true;
 }
 
-void InitializeFabricConfig(FabricConfig fabric_config) {
-    tt::tt_metal::MetalContext::instance().initialize_fabric_config(fabric_config);
+void SetFabricConfig(FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes) {
+    tt::tt_metal::MetalContext::instance().set_fabric_config(fabric_config, num_routing_planes);
 }
 
 std::map<chip_id_t, IDevice*> CreateDevices(
@@ -1175,8 +1175,6 @@ uint32_t CreateSemaphore(
             std::optional<uint32_t> semaphore_id;
             TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
             for (const auto& core_range : crs.ranges()) {
-                CoreCoord start_core = core_range.start_coord;
-                CoreCoord end_core = core_range.end_coord;
                 std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range, core_type);
                 if (!semaphore_id.has_value()) {
                     semaphore_id = semaphore_id_candidate;
