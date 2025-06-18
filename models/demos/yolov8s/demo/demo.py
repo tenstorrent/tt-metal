@@ -108,9 +108,7 @@ def test_demo(device, source, model_type, res, use_weights_from_ultralytics, use
                 ttnn.ShardStrategy.HEIGHT,
             )
 
-            ttnn_im = ttnn.from_torch(ttnn_im, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-
-            preds = yolov8s_trace_2cq.execute_yolov8s_trace_2cqs_inference(ttnn_im)
+            preds = yolov8s_trace_2cq.run(ttnn_im)
             preds = ttnn.to_torch(preds, dtype=torch.float32)
         results = postprocess(preds, im, im0s, batch, names)[0]
 
