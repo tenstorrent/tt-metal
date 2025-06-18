@@ -8,6 +8,12 @@
 #include <cstdio>
 #include <string>
 #include <type_traits>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <cerrno>
+#include <cstring>
 
 #include <flatbuffers/flatbuffers.h>
 
@@ -403,35 +409,35 @@ void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) 
 }
 
 Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) {
-    FILE* input_file = fopen(file_name.c_str(), "rb");
-    TT_FATAL(input_file != nullptr, "Cannot open \"{}\"", file_name);
-    std::unique_ptr<FILE, FileCloser> file_guard(input_file);
+    int fd = open(file_name.c_str(), O_RDONLY);
+    TT_FATAL(fd != -1, "Cannot open \"{}\"", file_name);
+
+    struct stat file_stat;
+    TT_FATAL(fstat(fd, &file_stat) == 0, "Failed to get file stats for \"{}\"", file_name);
+    size_t file_size = file_stat.st_size;
+
+    // Mmap the file to read tensor data lazily.
+    void* mmap_addr = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    TT_FATAL(mmap_addr != MAP_FAILED, "Failed to mmap file \"{}\": {}", file_name, strerror(errno));
+
+    close(fd);
+
+    std::shared_ptr<void> mmap_ptr(mmap_addr, [file_size, file_name](void* addr) { munmap(addr, file_size); });
+    MemoryPin memory_pin(mmap_ptr);
+
+    std::byte* file_data = static_cast<std::byte*>(mmap_addr);
 
     uint64_t header_size = 0;
-    safe_fread(&header_size, sizeof(header_size), 1, input_file);
+    std::memcpy(&header_size, file_data, sizeof(header_size));
 
-    std::vector<std::byte> header_buffer(header_size);
-    safe_fread(header_buffer.data(), header_size, 1, input_file);
+    std::byte* header_start = file_data + sizeof(header_size);
+    auto fb_tensor = ttnn::flatbuffer::GetTensor(header_start);
 
-    auto fb_tensor = ttnn::flatbuffer::GetTensor(header_buffer.data());
+    const uint64_t data_offset = sizeof(header_size) + header_size;
+    const uint64_t data_size = file_size - data_offset;
 
-    // Get current position and seek to end to calculate remaining data size
-    off_t current_pos = ftello(input_file);
-    TT_FATAL(current_pos != -1, "Failed to get current file position");
-
-    TT_FATAL(fseek(input_file, 0, SEEK_END) == 0, "Failed to seek to end of file");
-
-    off_t end_pos = ftello(input_file);
-    TT_FATAL(end_pos != -1, "Failed to get end file position");
-
-    uint64_t data_size = static_cast<uint64_t>(end_pos - current_pos);
-
-    TT_FATAL(fseek(input_file, current_pos, SEEK_SET) == 0, "Failed to seek back to data start");
-
-    std::vector<std::byte> data_buffer(data_size);
-    safe_fread(data_buffer.data(), data_size, 1, input_file);
-
-    Tensor tensor = ttnn::from_flatbuffer(fb_tensor, data_buffer);
+    Tensor tensor =
+        ttnn::from_flatbuffer(fb_tensor, tt::stl::Span<std::byte>(file_data + data_offset, data_size), memory_pin);
     if (device != nullptr) {
         tensor = tensor.to_device(device);
     }
