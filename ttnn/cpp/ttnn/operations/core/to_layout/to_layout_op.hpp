@@ -28,15 +28,7 @@ struct ToLayout {
         const ttnn::Tensor& tensor_arg,
         const ttnn::Layout layout,
         const std::optional<ttnn::DataType>& dtype = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        IDevice* device = nullptr);
-
-    static Tensor invoke(
-        const ttnn::Tensor& tensor_arg,
-        const ttnn::Layout layout,
-        const std::optional<ttnn::DataType>& dtype = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        MeshDevice* device = nullptr);
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace core

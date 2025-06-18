@@ -37,7 +37,7 @@ ttnn::Tensor ExecuteRepeatInterleave::invoke(
         rm_input = ttnn::typecast(rm_input, DataType::BFLOAT16, mem_config);
     }
 
-    rm_input = ttnn::to_layout(rm_input, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (IDevice*)nullptr);
+    rm_input = ttnn::to_layout(rm_input, Layout::ROW_MAJOR);
     const auto& rm_input_shape = rm_input.logical_shape();
     SmallVector<uint32_t> final_shape;
     final_shape.reserve(input_rank);
@@ -64,8 +64,7 @@ ttnn::Tensor ExecuteRepeatInterleave::invoke(
 
     auto concatenated_tensor = ttnn::concat(combined_tensors, normalized_dim + 1);
     auto reshaped_tensor = ttnn::reshape(concatenated_tensor, ttnn::Shape(final_shape));
-    auto original_layout =
-        ttnn::to_layout(reshaped_tensor, input_a.layout(), std::nullopt, std::nullopt, (IDevice*)nullptr);
+    auto original_layout = ttnn::to_layout(reshaped_tensor, input_a.layout());
     return typecast ? ttnn::typecast(original_layout, input_a.dtype(), mem_config) : original_layout;
 }
 
