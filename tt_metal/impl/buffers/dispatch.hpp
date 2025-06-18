@@ -17,6 +17,7 @@
 #include "core_coord.hpp"
 #include <tt_stl/span.hpp>
 #include "dispatch/system_memory_manager.hpp"
+#include "dispatch/hardware_counter.hpp"
 
 enum class CoreType;
 namespace tt {
@@ -68,7 +69,7 @@ using CompletionReaderVariant =
 namespace buffer_dispatch {
 
 struct BufferReadDispatchParams {
-    tt::stl::Span<const uint32_t> expected_num_workers_completed;
+    tt::stl::Span<const NOCAutoIncStreamReg> expected_num_workers_completed;
     uint32_t cq_id = 0;
     IDevice* device = nullptr;
     uint32_t padded_page_size = 0;
@@ -123,20 +124,20 @@ void write_to_device_buffer(
     Buffer& buffer,
     const BufferRegion& region,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const NOCAutoIncStreamReg> expected_num_workers_completed,
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids);
 
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     Buffer& buffer,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const NOCAutoIncStreamReg> expected_num_workers_completed,
     const BufferRegion& region);
 
 BufferReadDispatchParamsVariant initialize_interleaved_buf_read_dispatch_params(
     Buffer& buffer,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const NOCAutoIncStreamReg> expected_num_workers_completed,
     const BufferRegion& region);
 
 void copy_sharded_buffer_from_core_to_completion_queue(

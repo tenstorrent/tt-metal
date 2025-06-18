@@ -7,6 +7,7 @@
 #include "dispatch/device_command.hpp"
 #include "dispatch/device_command_calculator.hpp"
 #include "dispatch/system_memory_manager.hpp"
+#include "dispatch/hardware_counter.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -99,7 +100,7 @@ void write_to_core(
     DeviceAddr address,
     uint32_t size_bytes,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const NOCAutoIncStreamReg> expected_num_workers_completed,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     validate_core_read_write_bounds(device, virtual_core, address, size_bytes);
 

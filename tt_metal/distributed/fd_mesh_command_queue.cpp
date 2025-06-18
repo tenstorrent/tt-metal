@@ -34,6 +34,7 @@
 #include "shape2d.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
+#include "dispatch/hardware_counter.hpp"
 #include "trace/trace_buffer.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
@@ -224,9 +225,9 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
 
     program_dispatch::ProgramDispatchMetadata dispatch_metadata;
-    uint32_t expected_num_workers_completed = sysmem_manager.get_bypass_mode()
-                                                  ? trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores
-                                                  : expected_num_workers_completed_[*sub_device_id];
+    uint32_t expected_num_workers_completed =
+        sysmem_manager.get_bypass_mode() ? trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores
+                                         : static_cast<uint32_t>(expected_num_workers_completed_[*sub_device_id]);
     // Reserve space in the L1 Kernel Config Ring Buffer for this workload.
     program_dispatch::reserve_space_in_kernel_config_buffer(
         this->get_config_buffer_mgr(*sub_device_id),

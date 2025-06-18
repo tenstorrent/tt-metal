@@ -7,6 +7,7 @@
 #include <command_queue.hpp>
 #include "device.hpp"
 #include "dispatch/topology.hpp"
+#include "dispatch/hardware_counter.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 
@@ -30,7 +31,7 @@ struct CoreDispatchParams {
     IDevice* device = nullptr;
     uint32_t cq_id = 0;
     CoreType dispatch_core_type;
-    tt::stl::Span<const uint32_t> expected_num_workers_completed;
+    tt::stl::Span<const NOCAutoIncStreamReg> expected_num_workers_completed;
     tt::stl::Span<const SubDeviceId> sub_device_ids;
 };
 
@@ -48,7 +49,7 @@ void write_to_core(
     DeviceAddr address,
     uint32_t size_bytes,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const NOCAutoIncStreamReg> expected_num_workers_completed,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_params);

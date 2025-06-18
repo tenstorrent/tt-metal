@@ -2400,14 +2400,14 @@ uint32_t program_base_addr_on_core(
 
 void reset_config_buf_mgrs_and_expected_workers(
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
-    DispatchArray<uint32_t>& expected_num_workers_completed,
+    DispatchArray<NOCAutoIncStreamReg>& expected_num_workers_completed,
     uint32_t num_entries_to_reset,
     uint32_t worker_l1_unreserved_start) {
     for (uint32_t i = 0; i < num_entries_to_reset; ++i) {
         config_buffer_mgrs[i] = WorkerConfigBufferMgr();
+        expected_num_workers_completed[i].reset();
         initialize_worker_config_buf_mgr(config_buffer_mgrs[i], worker_l1_unreserved_start);
     }
-    std::fill(expected_num_workers_completed.begin(), expected_num_workers_completed.begin() + num_entries_to_reset, 0);
 }
 
 void reset_worker_dispatch_state_on_device(
@@ -2415,7 +2415,7 @@ void reset_worker_dispatch_state_on_device(
     SystemMemoryManager& manager,
     uint8_t cq_id,
     CoreCoord dispatch_core,
-    const DispatchArray<uint32_t>& expected_num_workers_completed,
+    const DispatchArray<NOCAutoIncStreamReg>& expected_num_workers_completed,
     bool reset_launch_msg_state) {
     auto num_sub_devices = device->num_sub_devices();
     if (reset_launch_msg_state) {

@@ -10,6 +10,7 @@
 #include <tt-metalium/device.hpp>
 
 #include <tt_stl/span.hpp>
+#include "dispatch/hardware_counter.hpp"
 #include "dispatch/system_memory_manager.hpp"
 
 namespace tt {
@@ -40,7 +41,7 @@ void issue_record_event_commands(
     uint32_t num_command_queues,
     SystemMemoryManager& manager,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const NOCAutoIncStreamReg> expected_num_workers_completed,
     bool notify_host = true,
     bool clear_count = false);
 

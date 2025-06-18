@@ -154,7 +154,7 @@ KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 
 void reset_config_buf_mgrs_and_expected_workers(
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
-    DispatchArray<uint32_t>& expected_num_workers_completed,
+    DispatchArray<NOCAutoIncStreamReg>& expected_num_workers_completed,
     uint32_t num_entries_to_reset,
     uint32_t worker_l1_unreserved_start);
 
@@ -163,7 +163,7 @@ void reset_worker_dispatch_state_on_device(
     SystemMemoryManager& manager,
     uint8_t cq_id,
     CoreCoord dispatch_core,
-    const DispatchArray<uint32_t>& expected_num_workers_completed,
+    const DispatchArray<NOCAutoIncStreamReg>& expected_num_workers_completed,
     bool reset_launch_msg_state);
 
 void set_num_worker_sems_on_dispatch(

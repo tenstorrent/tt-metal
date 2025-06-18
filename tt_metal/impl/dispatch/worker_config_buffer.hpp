@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <vector>
 #include <tt-metalium/hal_types.hpp>
+#include "hardware_counter.hpp"
 
 namespace tt {
 
@@ -16,6 +17,7 @@ struct ConfigBufferEntry {
     uint32_t addr;
     uint32_t size;
     uint32_t sync_count;
+    HardwareCounter<17> counter;
 };
 
 struct ConfigBufferSync {

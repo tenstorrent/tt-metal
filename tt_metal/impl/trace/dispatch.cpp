@@ -20,6 +20,7 @@
 #include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
+#include "dispatch/hardware_counter.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 
 namespace tt::tt_metal::trace_dispatch {
@@ -27,10 +28,10 @@ namespace tt::tt_metal::trace_dispatch {
 void reset_host_dispatch_state_for_trace(
     uint32_t num_sub_devices,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
-    DispatchArray<uint32_t>& expected_num_workers_completed,
+    DispatchArray<NOCAutoIncStreamReg>& expected_num_workers_completed,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state_reset,
-    DispatchArray<uint32_t>& expected_num_workers_completed_reset,
+    DispatchArray<NOCAutoIncStreamReg>& expected_num_workers_completed_reset,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr_reset) {
     // Record the original value of expected_num_workers_completed, and reset it to 0.
     std::copy(
@@ -60,10 +61,10 @@ void reset_host_dispatch_state_for_trace(
 void load_host_dispatch_state(
     uint32_t num_sub_devices,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
-    DispatchArray<uint32_t>& expected_num_workers_completed,
+    DispatchArray<NOCAutoIncStreamReg>& expected_num_workers_completed,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state_reset,
-    DispatchArray<uint32_t>& expected_num_workers_completed_reset,
+    DispatchArray<NOCAutoIncStreamReg>& expected_num_workers_completed_reset,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr_reset) {
     std::copy(
         expected_num_workers_completed_reset.begin(),
@@ -82,7 +83,7 @@ void issue_trace_commands(
     SystemMemoryManager& sysmem_manager,
     const TraceDispatchMetadata& dispatch_md,
     uint8_t cq_id,
-    const DispatchArray<uint32_t>& expected_num_workers_completed,
+    const DispatchArray<NOCAutoIncStreamReg>& expected_num_workers_completed,
     CoreCoord dispatch_core) {
     void* cmd_region = sysmem_manager.issue_queue_reserve(dispatch_md.cmd_sequence_sizeB, cq_id);
 
@@ -201,7 +202,7 @@ void update_worker_state_post_trace_execution(
     const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& trace_worker_descriptors,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
-    DispatchArray<uint32_t>& expected_num_workers_completed) {
+    DispatchArray<NOCAutoIncStreamReg>& expected_num_workers_completed) {
     for (const auto& [id, desc] : trace_worker_descriptors) {
         auto index = *id;
         // Update the expected worker cores counter due to trace programs completion

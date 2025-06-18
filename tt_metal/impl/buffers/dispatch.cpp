@@ -18,6 +18,7 @@
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "dispatch/hardware_counter.hpp"
 #include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "math.hpp"
@@ -48,7 +49,7 @@ struct BufferDispatchConstants {
 // to assemble dispatch commands and compute src + dst offsets
 // required to write buffer data.
 struct BufferWriteDispatchParams {
-    tt::stl::Span<const uint32_t> expected_num_workers_completed;
+    tt::stl::Span<const NOCAutoIncStreamReg> expected_num_workers_completed;
     uint32_t address = 0;
     uint32_t dst_page_index = 0;
     uint32_t page_size_to_write = 0;
@@ -70,7 +71,7 @@ public:
         uint32_t dst_page_index,
         uint32_t total_pages_to_write,
         uint32_t cq_id,
-        tt::stl::Span<const uint32_t> expected_num_workers_completed) {
+        tt::stl::Span<const NOCAutoIncStreamReg> expected_num_workers_completed) {
         this->num_banks = buffer.device()->allocator()->get_num_banks(buffer.buffer_type());
         this->address = buffer.address();
         this->dst_page_index = dst_page_index;
@@ -132,7 +133,7 @@ public:
         uint32_t total_pages_to_write,
         uint32_t num_full_pages,
         uint32_t cq_id,
-        tt::stl::Span<const uint32_t> expected_num_workers_completed) :
+        tt::stl::Span<const NOCAutoIncStreamReg> expected_num_workers_completed) :
         InterleavedBufferWriteDispatchParams(
             buffer, dst_page_index, total_pages_to_write, cq_id, expected_num_workers_completed),
         buffer(buffer) {
@@ -297,7 +298,7 @@ void update_offset_on_issue_wait_cmd(uint32_t& byte_offset, bool issue_wait, uin
 ShardedBufferWriteDispatchParams initialize_sharded_buf_dispatch_params(
     Buffer& buffer,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const NOCAutoIncStreamReg> expected_num_workers_completed,
     const BufferDispatchConstants& buf_dispatch_constants,
     const BufferRegion& region) {
     ShardedBufferWriteDispatchParams dispatch_params;
@@ -354,7 +355,7 @@ InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_
     const Buffer& buffer,
     const BufferDispatchConstants& /*buf_dispatch_constants*/,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const NOCAutoIncStreamReg> expected_num_workers_completed,
     const BufferRegion& region) {
     InterleavedBufferWriteDispatchParamsVariant dispatch_params;
 
@@ -745,7 +746,7 @@ void write_to_device_buffer(
     Buffer& buffer,
     const BufferRegion& region,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const NOCAutoIncStreamReg> expected_num_workers_completed,
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     validate_buffer_region_conditions(buffer, region);
@@ -798,7 +799,7 @@ void write_to_device_buffer(
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     Buffer& buffer,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const NOCAutoIncStreamReg> expected_num_workers_completed,
     const BufferRegion& region) {
     validate_buffer_region_conditions(buffer, region);
 
@@ -835,7 +836,7 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
 BufferReadDispatchParamsVariant initialize_interleaved_buf_read_dispatch_params(
     Buffer& buffer,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const NOCAutoIncStreamReg> expected_num_workers_completed,
     const BufferRegion& region) {
     validate_buffer_region_conditions(buffer, region);
 

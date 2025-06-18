@@ -12,6 +12,7 @@
 #include "assert.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
+#include "dispatch/hardware_counter.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/command_queue_common.hpp"
@@ -45,7 +46,7 @@ void issue_record_event_commands(
     uint32_t num_command_queues,
     SystemMemoryManager& manager,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    tt::stl::Span<const NOCAutoIncStreamReg> expected_num_workers_completed,
     bool notify_host,
     bool clear_count) {
     std::vector<uint32_t> event_payload(DispatchSettings::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
