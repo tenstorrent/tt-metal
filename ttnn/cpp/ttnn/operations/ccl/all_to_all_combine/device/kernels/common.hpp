@@ -1,12 +1,13 @@
+#include <tuple>
 
 namespace detail{
 
-template<uint32_t Size, bool ReturnIdx>
-inline auto find_if(volatile tt_l1_ptr uint32_t * ptr, const uint32_t val){
+template <typename T, uint32_t Size, bool ReturnIdx>
+inline auto find_if(volatile tt_l1_ptr T* ptr, const uint32_t val) {
     for(uint32_t i=0;i<Size;++i){
         if (ptr[i]==val){
             if constexpr(ReturnIdx){
-                std::make_tuple(true, i)l
+                return std::make_tuple(true, i);
             }
             else{
                 return true;
@@ -14,10 +15,10 @@ inline auto find_if(volatile tt_l1_ptr uint32_t * ptr, const uint32_t val){
         }
     }
     if constexpr(ReturnIdx){
-        std::make_tuple(false,0);
+        return std::make_tuple(false, 0ul);
     }
     else{
         return false;
     }
 }
-} // namespace detail
+}  // namespace detail

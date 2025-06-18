@@ -92,10 +92,19 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
     enum Direction : std::size_t { East = 0, West = 1, North = 2, South = 3 };
 
     std::vector<tt::tt_metal::IDevice*> neighbors;
+<<<<<<< HEAD
     // directions: {East, West, North, South}
     std::array<bool, 4> directions = {false, false, false, false};
 
     const bool is_ring = topology == Topology::Ring;
+=======
+    std::array<bool, 4> directions;  // east, west, north, south
+    if (topology == tt::tt_fabric::Topology::Ring) {
+        directions = {true, true, true, true};
+    } else {
+        directions = {false, false, false, false};
+    }
+>>>>>>> ea6393060b (reader working, writer mostly working)
     auto src_device = mesh_view.get_device(mesh_coordinate);
 
     // Helper that appends neighbours for a single axis

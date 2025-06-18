@@ -59,6 +59,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
 
+    const auto input_dtype = input_tensor.get_dtype();
+
     auto mesh_device = input_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();
     auto src_device = mesh_device->get_device(mesh_coordinate);
@@ -75,13 +77,15 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     const uint32_t num_devices = mesh_view.num_devices();
     const uint32_t hidden_size = input_shape[-1];
-    const uint32_t batch_size = input_shape[0] * num_devices;
+    const uint32_t batch_size = metadata_shape[1];
     const uint32_t selected_experts_k = metadata_shape[-1];
     const uint32_t experts = mapping_shape[-2];
 
     // straightforward to lift this assumption
     TT_ASSERT(experts % num_devices == 0, "Currently assuming that experts are evenly split among devices");
     const uint32_t experts_per_device = experts / num_devices;
+    // std::cout<<mapping_shape<<std::endl;
+    // std::cout<<"NUM_EXPERTS: "<< experts<<" EXPERTS/DEVICE: "<<experts_per_device<<std::endl;
 
     auto input_spec = input_tensor.get_tensor_spec();
     auto mapping_spec = mapping_tensor.get_tensor_spec();
@@ -102,7 +106,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const bool metadata_is_dram = metadata_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
     const bool output_is_dram = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    constexpr uint32_t buffering_factor = 2;
+    // Anything less will lead to deadlocks. It's clear why, TODO fix it.
+    const uint32_t buffering_factor = experts_per_device;
 
     // input sharded buffer
     const auto data_cb_id = tt::CBIndex::c_0;
@@ -119,7 +124,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     // scratch space to store and share indices of per device experts
     const auto local_experts_cb_id = tt::CBIndex::c_2;
-    using local_experts_t = uint32_t;
+    using local_experts_t = uint16_t;
     const auto local_experts_dataformat = datatype_to_dataformat_converter(convert_to_data_type<local_experts_t>());
     tt::tt_metal::CircularBufferConfig cb_local_experts_config =
         tt::tt_metal::CircularBufferConfig(
@@ -129,15 +134,15 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     // metadata page buffer
     const auto metadata_cb_id = tt::CBIndex::c_3;
     tt::tt_metal::CircularBufferConfig cb_metadata_config =
-        tt::tt_metal::CircularBufferConfig(
-            buffering_factor * metadata_page_size_bytes, {{metadata_cb_id, metadata_data_format}})
+        tt::tt_metal::CircularBufferConfig(metadata_page_size_bytes, {{metadata_cb_id, metadata_data_format}})
             .set_page_size(metadata_cb_id, metadata_page_size_bytes);
 
     // client interface
+    constexpr auto num_headers = 2;  // data unicast headers and atomic inc "multicast" headers
     const auto client_interface_cb_id = tt::CBIndex::c_4;
     tt::tt_metal::CircularBufferConfig client_interface_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
+            num_headers * tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(client_interface_cb_id, tt::tt_fabric::CLIENT_INTERFACE_SIZE);
 
     const auto src_core_grid = mesh_device->get_device(mesh_coordinate)->compute_with_storage_grid_size();
@@ -185,30 +190,40 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         mapping_is_dram,
         metadata_is_dram};
 
+    const tt::tt_metal::DataMovementConfig reader_config{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+        .noc = tt::tt_metal::NOC::NOC_1,
+        .compile_args = reader_compile_time_args};
+
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/all_to_all_combine/device/kernels/dataflow/reader_all_to_all_combine.cpp",
         sender_core,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        reader_config);
 
-    // TODO, figure this out from grid dims and mirror axis.
     const auto& axis = operation_attributes.axis;
 
-    const uint32_t batch_mirror_dimension = axis.has_value() ? mesh_device->shape()[axis.value()] : 1;
+    const uint32_t batch_replicate_dim = axis.has_value() ? mesh_device->shape()[axis.value()] : 1;
+    const auto fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t max_packet_size_bytes =
+        input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
 
-    // TODO defines
     const std::vector<uint32_t> writer_compile_time_args = {
         metadata_cb_id,
         local_experts_cb_id,
         client_interface_cb_id,
+        data_cb_id,
         batch_size,
+        selected_experts_k,
         experts_per_device,
         num_devices,
         src_chip_id,
         input_page_size_bytes,
         output_is_dram,
+        mesh_view.num_rows(),
         mesh_view.num_cols(),
-        batch_mirror_dimension,
+        batch_replicate_dim,
+        max_packet_size_bytes,
     };
 
     // fabric routing info
@@ -221,16 +236,28 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     }
     const auto [neighbors, directions] = detail::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
 
+    std::cout << "DIRECTIONS: " << std::endl;
+    for (auto d : directions) {
+        std::cout << d << " ";
+    }
+    std::cout << std::endl;
+
     std::map<std::string, std::string> writer_defines = {
         {"DEST_CHIP_ID", detail::stringify_vector(dest_chip_id)},
         {"DEST_MESH_ID", detail::stringify_vector(dest_mesh_id)},
         {"DIRECTIONS", detail::stringify_array(directions)}};
 
+    const tt::tt_metal::DataMovementConfig writer_config{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = tt::tt_metal::NOC::NOC_0,
+        .compile_args = writer_compile_time_args,
+        .defines = writer_defines};
+
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/ccl/all_to_all_combine/device/kernels/dataflow/writer_all_to_all_combine.cpp",
         sender_core,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
+        writer_config);
 
     std::vector<uint32_t> reader_runtime_args = {
         mapping_tensor.buffer()->address(),
@@ -245,14 +272,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     for (auto& neighbor : neighbors) {
         auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
         uint32_t link_id = detail::select_link(mesh_view, mesh_coordinate, neighbor_coordinate, num_links, topology);
-        // tt::log_info(
-        //     tt::LogAlways,
-        //     "Connection between ({}, {}) and ({}, {}) will choose link_id: {}",
-        //     mesh_coordinate[0],
-        //     mesh_coordinate[1],
-        //     neighbor_coordinate[0],
-        //     neighbor_coordinate[1],
-        //     link_id);
+
         tt::tt_fabric::append_fabric_connection_rt_args(
             src_physical_device_id, neighbor->id(), link_id, program, sender_core, writer_runtime_args);
     }
