@@ -768,7 +768,7 @@ class TtModelArgs:
                 if not use_interleaved:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                         compute_with_storage_grid_size=(7, 10),
-                        in0_block_w=1,
+                        in0_block_w=8,
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                         per_core_M=max(
@@ -784,7 +784,7 @@ class TtModelArgs:
                     per_core_M = 20 * seq_len // 4096
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                         compute_with_storage_grid_size=(7, 7),
-                        in0_block_w=1,
+                        in0_block_w=4,
                         out_subblock_h=1,
                         out_subblock_w=8,
                         out_block_h=10,
@@ -800,7 +800,7 @@ class TtModelArgs:
 
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                         compute_with_storage_grid_size=(7, 7),
-                        in0_block_w=1,
+                        in0_block_w=4,
                         out_subblock_h=1,
                         out_subblock_w=8,
                         out_block_h=10,
@@ -823,7 +823,7 @@ class TtModelArgs:
                 if seq_len < 4096:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                         compute_with_storage_grid_size=(7, 10),
-                        in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                        in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                         per_core_M=max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8),  # 8~10 rows
@@ -903,7 +903,7 @@ class TtModelArgs:
 
                 return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(7, 7),
-                    in0_block_w=1,
+                    in0_block_w=4,
                     out_subblock_h=1,
                     out_subblock_w=5,
                     out_block_h=out_block_h,
@@ -919,7 +919,7 @@ class TtModelArgs:
 
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(7, 10),
-                in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(1, 4 if seq_len >= 1024 else seq_len // self.tile_size // 8),  # 8~10 rows
@@ -957,7 +957,7 @@ class TtModelArgs:
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(7, 10),
-                in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(
@@ -2131,7 +2131,7 @@ class TtModelArgs:
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
-            in0_block_w=1,
+            in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
             per_core_M=per_core_M,
@@ -2285,7 +2285,7 @@ class TtModelArgs:
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(grid.x, grid.y),
-            in0_block_w=1,
+            in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
             per_core_M=out_block_h,
@@ -2343,7 +2343,7 @@ class TtModelArgs:
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(grid.x, grid.y),
-            in0_block_w=1,
+            in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
             per_core_M=out_block_h,
@@ -2413,7 +2413,7 @@ class TtModelArgs:
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(grid.x, grid.y),
-            in0_block_w=1,
+            in0_block_w=per_core_k,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
             per_core_M=per_core_m,
