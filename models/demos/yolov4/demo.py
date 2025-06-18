@@ -57,8 +57,8 @@ def test_yolov4(
     )
 
     img = load_image(imgfile, resolution)
-    torch_input = image_to_tensor(img)
-    torch_input_tensor = torch_input.permute(0, 2, 3, 1)
+    torch_input_tensor = image_to_tensor(img)
+    torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
 
     preds = yolov4_trace_2cq.run(torch_input_tensor)
 
