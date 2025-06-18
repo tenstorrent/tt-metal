@@ -527,7 +527,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     ReduceOpMath reduce_op,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     float scaler) {
-    bool use_nd_sharding = a.is_sharded() && a.shard_spec().has_value();
+    bool use_nd_sharding = a.is_sharded() && !a.shard_spec().has_value();
     if (use_nd_sharding) {
         return reduce_nd_shard_multi_core_h(a, output, reduce_op, compute_kernel_config, scaler);
     }

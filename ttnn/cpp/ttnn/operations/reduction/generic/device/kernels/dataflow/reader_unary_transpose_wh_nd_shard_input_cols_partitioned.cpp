@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "accessor/sharded_accessor.h"
 
 void kernel_main() {
     uint32_t bank_base_address = get_arg_val<uint32_t>(0);
@@ -20,7 +21,6 @@ void kernel_main() {
 
     constexpr tt::CBIndex cb_id_in0 = tt::CBIndex::c_0;
 
-    auto sharded_accessor = ShardedAccessor<input_dspec, page_size>{.bank_base_address = bank_base_address};
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
