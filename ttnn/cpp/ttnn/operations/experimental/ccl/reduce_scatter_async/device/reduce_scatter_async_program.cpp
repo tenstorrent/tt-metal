@@ -2489,7 +2489,9 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
         if (!num_links.has_value()) {
             if (pair.second.has_value()) {
                 auto remote_chip_id = pair.second.value()->id();
-                num_links = std::min(target_device->get_ethernet_sockets(remote_chip_id).size(), max_num_links);
+                // Yes! Do not skip reserved fabric routers. This is counting the number of fabric links to connect to
+                // This op is using device init fabric
+                num_links = std::min(target_device->get_ethernet_sockets(remote_chip_id, tt::tt_metal::CoreFilter::NONE).size(), max_num_links);
             }
         }
     }

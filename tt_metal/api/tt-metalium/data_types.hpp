@@ -31,4 +31,11 @@ enum Eth : uint8_t {
     IDLE = 2,
 };
 
+enum class CoreFilter : uint32_t {
+    // Return all cores available
+    NONE = 0,
+    // Skip reserved Fabric cores
+    SKIP_RESERVED = 1 << 0
+};
+
 }  // namespace tt::tt_metal

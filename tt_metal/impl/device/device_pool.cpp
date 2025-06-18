@@ -318,9 +318,7 @@ void DevicePool::initialize(
                 tt::tt_metal::detail::SetFabricConfig(
                     FabricConfig::FABRIC_1D, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
                 // Previously disabled. Need to init
-                if (fabric_config == FabricConfig::DISABLED) {
-                    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-                }
+                tt::tt_metal::MetalContext::instance().initialize_fabric_config();
                 fabric_config = FabricConfig::FABRIC_1D;
                 log_info(tt::LogMetal, "Dispatch on 1D Fabric");
             } else {

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "data_types.hpp"
 #include "device_impl.hpp"
 
 #include <core_descriptor.hpp>
@@ -184,8 +185,10 @@ std::tuple<chip_id_t, CoreCoord> Device::get_connected_ethernet_core(CoreCoord e
         std::make_tuple(this->id_, eth_core));
 }
 
-std::vector<CoreCoord> Device::get_ethernet_sockets(chip_id_t connected_chip_id) const {
-    if (tt::tt_metal::MetalContext::instance().get_fabric_config() != tt::tt_metal::FabricConfig::DISABLED) {
+std::vector<CoreCoord> Device::get_ethernet_sockets(
+    chip_id_t connected_chip_id, tt::tt_metal::CoreFilter filter) const {
+    if (tt::tt_metal::MetalContext::instance().get_fabric_config() != tt::tt_metal::FabricConfig::DISABLED &&
+        filter == tt::tt_metal::CoreFilter::SKIP_RESERVED) {
         return tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_routers_between_src_and_dest(
             this->id_, connected_chip_id);
     } else {

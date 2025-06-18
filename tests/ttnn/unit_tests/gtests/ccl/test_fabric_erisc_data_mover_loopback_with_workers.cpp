@@ -36,6 +36,7 @@
 #include <tt-metalium/shape_base.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+#include "context/metal_context.hpp"
 #include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -762,7 +763,20 @@ TEST(EdmFabric, BasicMcastThroughputTest_SingleLink_LineSize2_SingleMcast) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 
+//
+// The routing plane for fast dispatch uses 1 eth core in each direction
+// Not enough eth cores for tests that need 2 links. Remove when dispatch routing
+// plane can be customized to not create a router in the MMIO to MMIO direction.
+//
+// Function must be macro to because GTEST_SKIP needs to be used inside the context of TEST.
+//
+#define CHECK_TWO_LINKS_AVAILABLE()                                           \
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) { \
+        GTEST_SKIP() << "Not enough eth cores for 2 links";                   \
+    }
+
 TEST(EdmFabric, BasicMcastThroughputTest_SingleMcast) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 1;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -926,6 +940,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SingleLink_LineSize2_SingleMcast_LineSy
 }
 
 TEST(EdmFabric, BasicMcastThroughputTest_SingleMcast_LineSync) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 1;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1046,6 +1061,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderTwoWrap_ReceiverOneWrap_LineSync)
 }
 
 TEST(EdmFabric, BasicMcastThroughputTest_SmallPerf_2Device) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 70;
     const size_t num_unicasts = 0;
     const size_t num_links = 2;
@@ -1060,6 +1076,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SmallPerf_2Device) {
 }
 
 TEST(EdmFabric, BasicMcastThroughputTest_SmallPerf0) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 70;
     const size_t num_unicasts = 0;
     const size_t num_links = 2;
@@ -1070,6 +1087,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SmallPerf0) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_SmallPerf1) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 70;
     const size_t num_unicasts = 0;
     const size_t num_links = 2;
@@ -1081,6 +1099,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SmallPerf1) {
 }
 
 TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_0) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 100;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1093,6 +1112,7 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_0) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_1) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 1000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1104,6 +1124,7 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_1) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_2) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 50000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1123,6 +1144,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_3_SingleLink) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_3) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 200000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1146,6 +1168,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_3_onehop) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_4) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 800000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1154,6 +1177,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_4) {
 }
 
 TEST(EdmFabric, BasicMcastThroughputTest_5) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 1;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1162,6 +1186,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_5) {
 }
 // DISABLED due to long runtime
 TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_6) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 100;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1170,6 +1195,7 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_6) {
 }
 // DISABLED due to long runtime
 TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_7) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 1000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1178,6 +1204,7 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_7) {
 }
 // DISABLED due to long runtime
 TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_8) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 50000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1186,6 +1213,7 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_8) {
 }
 // DISABLED due to long runtime
 TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_9) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 200000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1194,6 +1222,7 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_9) {
 }
 // DISABLED due to long runtime
 TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_10) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 800000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1201,6 +1230,7 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_10) {
     RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_6_Short) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 100;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1208,6 +1238,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_6_Short) {
     RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_7_Short) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 1000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1215,6 +1246,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_7_Short) {
     RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_8_Short) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 50000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1222,6 +1254,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_8_Short) {
     RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_9_Short) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 200000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1229,6 +1262,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_9_Short) {
     RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_10_Short) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 800000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1237,6 +1271,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_10_Short) {
 }
 
 TEST(EdmFabric, BasicMcastThroughputTest_0_WithLineSync) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 100;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1248,6 +1283,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_0_WithLineSync) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_1_WithLineSync) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 1000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1259,6 +1295,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_1_WithLineSync) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_2_WithLineSync) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 50000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1270,6 +1307,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_2_WithLineSync) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_3_WithLineSync) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 200000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1281,6 +1319,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_3_WithLineSync) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_4_WithLineSync) {
+    CHECK_TWO_LINKS_AVAILABLE();
     const size_t num_mcasts = 800000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;

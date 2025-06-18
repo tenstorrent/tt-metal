@@ -66,8 +66,10 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         log_trace(tt::LogOp, "device[{}] id={}", i, device_sequence[i]->id());
     }
     auto get_min_link_count = [&](IDevice* src_device, IDevice* dest_device, size_t min_link_count) {
-        const auto& src_device_sockets = src_device->get_ethernet_sockets(dest_device->id());
-        const auto& dest_device_sockets = dest_device->get_ethernet_sockets(src_device->id());
+        const auto& src_device_sockets =
+            src_device->get_ethernet_sockets(dest_device->id(), tt::tt_metal::CoreFilter::SKIP_RESERVED);
+        const auto& dest_device_sockets =
+            dest_device->get_ethernet_sockets(src_device->id(), tt::tt_metal::CoreFilter::SKIP_RESERVED);
         if (src_device_sockets.size() > 0) {
             min_link_count = std::min(min_link_count, src_device_sockets.size());
         }
@@ -93,8 +95,10 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
     auto build_edm_directions =
         [&](IDevice* src_device, IDevice* dest_device, Program* src_program, Program* dest_program) {
-            const auto& src_device_sockets = src_device->get_ethernet_sockets(dest_device->id());
-            const auto& dest_device_sockets = dest_device->get_ethernet_sockets(src_device->id());
+            const auto& src_device_sockets =
+                src_device->get_ethernet_sockets(dest_device->id(), tt::tt_metal::CoreFilter::SKIP_RESERVED);
+            const auto& dest_device_sockets =
+                dest_device->get_ethernet_sockets(src_device->id(), tt::tt_metal::CoreFilter::SKIP_RESERVED);
             // re-order the connected_sockets based on virtual coords
             auto reordered_src_device_sockets = reorder_connected_sockets(src_device, src_device_sockets);
             auto reordered_dest_device_sockets = reorder_connected_sockets(dest_device, dest_device_sockets);
@@ -294,7 +298,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 }
                 if (enable_core_placement_opt) {
                     if (edm_fwd.my_noc_x < edm_bwd.my_noc_x) {
-                        log_info(
+                        log_trace(
                             tt::LogOp,
                             "Fabric MeshId {} ChipId {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
                             *(edm_fwd.local_fabric_node_id.mesh_id),
@@ -317,7 +321,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                             edm_bwd.config.sender_channel_ack_noc_ids[i] = 0;
                         }
                     } else if (edm_fwd.my_noc_x > edm_bwd.my_noc_x) {
-                        log_info(
+                        log_trace(
                             tt::LogOp,
                             "Fabric MeshId {} ChipId {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
                             *(edm_fwd.local_fabric_node_id.mesh_id),
@@ -410,7 +414,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         auto& edm_builders = *edm_builders_maps[i];
 
         tt::tt_metal::IDevice* remote_device = device_pairs[i].second.value();
-        const auto connected_sockets = local_device->get_ethernet_sockets(remote_device->id());
+        const auto connected_sockets =
+            local_device->get_ethernet_sockets(remote_device->id(), tt::tt_metal::CoreFilter::SKIP_RESERVED);
         // re-order the connected_sockets based on virtual coords
         auto reordered_connected_sockets = reorder_connected_sockets(local_device, connected_sockets);
 
@@ -520,15 +525,15 @@ void EdmLineFabricOpInterface::build_kernels() const {
             if (edm_builders.find(device->id()) != edm_builders.end()) {
                 for (auto& edm_builder : edm_builders.at(device->id())) {
                     for (uint32_t risc_id = 0; risc_id < edm_builder.get_configured_risc_count(); risc_id++) {
-                        log_trace(
+                        log_info(
                             tt::LogOp,
-                            "Building EDM kernel on device {}, logical-core (y={},x={}), noc_core (y={},x={}), risc_id "
+                            "Building EDM kernel on device {}, logical-core (x={},y={}), noc_core (x={},y={}), risc_id "
                             "{}",
                             device->id(),
-                            edm_builder.my_eth_core_logical.y,
                             edm_builder.my_eth_core_logical.x,
-                            device->ethernet_core_from_logical_core(edm_builder.my_eth_core_logical).y,
+                            edm_builder.my_eth_core_logical.y,
                             device->ethernet_core_from_logical_core(edm_builder.my_eth_core_logical).x,
+                            device->ethernet_core_from_logical_core(edm_builder.my_eth_core_logical).y,
                             risc_id);
                         auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
                             *program,

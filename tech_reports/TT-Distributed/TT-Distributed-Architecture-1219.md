@@ -2318,7 +2318,7 @@ bool Device::is_inactive_ethernet_core(CoreCoord logical_core) const;
 std::tuple<chip_id_t, CoreCoord> Device::get_connected_ethernet_core(CoreCoord eth_core) const;
 
 // Get the ethernet sockets on this device that are connected to the input chip_id
-std::vector<CoreCoord> Device::get_ethernet_sockets(chip_id_t connected_chip_id) const;
+std::vector<CoreCoord> Device::get_ethernet_sockets(chip_id_t connected_chip_id, tt::tt_metal::CoreFilter filter = tt::tt_metal::CoreFilter::NONE) const;
 
 // Check if the device is accessible over MMIO.
 bool Device::is_mmio_capable() const;
