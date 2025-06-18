@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import torch
 import ttnn
 
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
@@ -12,6 +11,7 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_conv_params,
     prepare_split_conv_params,
     split_conv2d,
+    prepare_linear_params,
 )
 
 
@@ -156,13 +156,8 @@ class TtResnetBlock2D(nn.Module):
         else:
             self.tt_conv3_weights = self.tt_conv3_bias = None
 
-        self.tt_time_emb_weights = ttnn.from_torch(
-            torch.permute(time_emb_weights, (1, 0)), model_config.conv_w_dtype, device=device, layout=ttnn.TILE_LAYOUT
-        )
-        self.tt_time_emb_bias = (
-            ttnn.from_torch(time_emb_bias, model_config.conv_w_dtype, device=device, layout=ttnn.TILE_LAYOUT)
-            if time_emb_bias is not None
-            else None
+        self.tt_time_emb_weights, self.tt_time_emb_bias = prepare_linear_params(
+            device, time_emb_weights, time_emb_bias, model_config.conv_w_dtype
         )
 
         mm_path = f"{module_path}.linear"
@@ -266,9 +261,6 @@ class TtResnetBlock2D(nn.Module):
             program_config=self.linear_program_config,
             compute_kernel_config=self.default_compute_config,
         )
-
-        temb = ttnn.unsqueeze_to_4D(temb)
-        temb = ttnn.repeat(temb, (1, 1, H * W, 1))
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         hidden_states = ttnn.add(hidden_states, temb)
