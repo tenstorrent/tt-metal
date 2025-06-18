@@ -270,10 +270,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         block_stride  // Block stride
     };
 
-    const bool no_padding = padding_config_buffer0->size() / num_cores == 4 &&
-                            padding_config_buffer1->size() / num_cores == 4;  // TODO: This is hacky
+    const bool enable_padding = padding_config_buffer0->size() / num_cores != 4 ||
+                                padding_config_buffer1->size() / num_cores != 4;  // TODO: This is hacky
 
-    reader_ct_args[0] = !no_padding ? cb_indices.padding_config0 : 0;
+    reader_ct_args[0] = enable_padding ? cb_indices.padding_config0 : 0;
     reader_ct_args[1] = cb_indices.gather_config0;
     reader_ct_args[5] = cb_indices.pad_cb_id0;
     KernelHandle reader_kernel_id0 = CreateKernel(
@@ -283,7 +283,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
-    reader_ct_args[0] = !no_padding ? cb_indices.padding_config1 : 0;
+    reader_ct_args[0] = enable_padding ? cb_indices.padding_config1 : 0;
     reader_ct_args[1] = cb_indices.gather_config1;
     reader_ct_args[3] = input_to_writer_cb_id1;
     reader_ct_args[5] = cb_indices.pad_cb_id1;
