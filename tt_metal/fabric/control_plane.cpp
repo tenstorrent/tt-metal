@@ -149,7 +149,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     size_t min_routing_planes = std::numeric_limits<size_t>::max();
 
     auto apply_min =
-        [this, reliability_mode](
+        [this](
             const std::unordered_map<tt::tt_fabric::RoutingDirection, std::vector<tt::tt_fabric::chan_id_t>>&
                 port_direction_eth_chans,
             tt::tt_fabric::RoutingDirection direction,
@@ -1425,7 +1425,7 @@ uint16_t ControlPlane::get_routing_mode() const { return this->routing_mode_; }
 void ControlPlane::initialize_fabric_context(tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode) {
     TT_FATAL(this->fabric_context_ == nullptr, "Trying to re-initialize fabric context");
     tt::tt_metal::MetalContext::instance().set_fabric_config(fabric_config, reliability_mode);
-    this->fabric_context_ = std::make_unique<FabricContext>(fabric_config);//, reliability_mode);
+    this->fabric_context_ = std::make_unique<FabricContext>(fabric_config);
 }
 
 FabricContext& ControlPlane::get_fabric_context() const {
