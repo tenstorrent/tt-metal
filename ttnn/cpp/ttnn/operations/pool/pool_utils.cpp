@@ -193,7 +193,8 @@ uint32_t calculate_L1_usage(
 
     uint32_t clear_value_cb_size = 0;
     const bool avg_pool_on_blackhole = is_blackhole && pool_type == Pool2DType::AVG_POOL2D;
-    if (max_rows_for_reduction == tt::constants::TILE_HEIGHT) {
+    if (max_rows_for_reduction == tt::constants::TILE_HEIGHT || is_large_kernel ||
+        (is_wide_reduction && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0)) {
         // CB storing just "clear value" (-inf for maxpool, 0 for avgpool)
         // is needed only if we use more then 16 sticks per tile for reduction.
         clear_value_cb_size = tile_size(in_df);
@@ -228,7 +229,7 @@ uint32_t calculate_L1_usage(
 
     uint32_t max_pool_partials_cb_config_size = 0;
     if (is_large_kernel) {
-        uint32_t max_pool_partials_cb_pagesize = out_cb_pagesize;
+        uint32_t max_pool_partials_cb_pagesize = in_cb_pagesize;
         uint32_t max_pool_partials_cb_npages = nblocks;
         max_pool_partials_cb_config_size = max_pool_partials_cb_npages * max_pool_partials_cb_pagesize;
     }
@@ -241,9 +242,11 @@ uint32_t calculate_L1_usage(
         uint32_t factor = (size + alignment_bytes - 1) / alignment_bytes;
         return factor * alignment_bytes;
     };
+
+    uint32_t sync_cb_1_2 = 2 * 2 * 2;
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + in_one_cb_size + clear_value_cb_size + in_cb_config_0_size +
            in_cb_config_1_size + align(out_cb_config_size) /* global, involved */
-           + max_pool_partials_cb_config_size;
+           + max_pool_partials_cb_config_size + sync_cb_1_2;
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
