@@ -17,17 +17,6 @@ namespace ckernel
 namespace sfpu
 {
 
-enum class BinaryOp : uint8_t
-{
-    ADD   = 0,
-    SUB   = 1,
-    MUL   = 2,
-    DIV   = 3,
-    RSUB  = 4,
-    POW   = 5,
-    XLOGY = 6
-};
-
 sfpi_inline sfpi::vFloat _calculate_sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow)
 {
     sfpi::vFloat original_base = base;

@@ -48,8 +48,13 @@ inline void _calculate_binary_right_shift_(const uint dst_offset)
         TTI_SFPLOAD(0, 12, ADDR_MOD_7, 0);
         TT_SFPLOAD(1, 12, ADDR_MOD_7, dst_offset * dst_tile_size);
         TTI_SFPMOV(0, 0, 4, 0); // save shift_value for later
+        // if (shift_amount < 0 OR shift_amount >= 32) -> result should be 0
+        TTI_SFPSETCC(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
+        TTI_SFPIADD(0xFE0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0); // 0xFE0 = -32
+        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPENCC(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
+        TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 6); // take negative of shift_amount to shift right
         // shift right
-        TTI_SFPIADD(0, 9, 1, 6); // take negative of shift_amount to shift right
         TTI_SFPSHFT(0, 1, 0, 0);
         // if shift_value was negative, need to shift in 1's manually
         TTI_SFPSETCC(0, 4, 0, 0);    // only run if shift_value is negative

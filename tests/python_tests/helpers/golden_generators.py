@@ -166,6 +166,8 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             MathOperation.SfpuElwsub: self._sub,
             MathOperation.SfpuElwmul: self._mul,
             MathOperation.SfpuXlogy: self._xlogy,
+            MathOperation.SfpuElwRightShift: self._right_shift,
+            MathOperation.SfpuElwLeftShift: self._left_shift,
         }
 
     def __call__(self, operation, operand1, operand2, data_format):
@@ -180,6 +182,12 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
     # Operation methods are cover by Eltwise Binary Golden
     def _xlogy(self, t1, t2):
         return torch.xlogy(t1, t2)
+
+    def _right_shift(self, t1, t2):
+        return torch.bitwise_right_shift(t1, t2)
+
+    def _left_shift(self, t1, t2):
+        return torch.bitwise_left_shift(t1, t2)
 
 
 @register_golden
