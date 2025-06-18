@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,7 +35,6 @@ inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
 inline bool is_dram(const tt::tt_metal::Buffer* b) { return b->buffer_type() == tt::tt_metal::BufferType::DRAM; }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
-
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
 tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     const Tensor& input_tensor,
@@ -43,7 +43,8 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     std::optional<float> scale,
     bool causal_mask,
     DeviceComputeKernelConfig compute_kernel_config,
-    bool numeric_stable) {
+    bool numeric_stable,
+    bool inplace) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto shape = input_tensor.padded_shape();
     uint32_t W = shape[-1], H = (input_tensor.physical_volume() / (shape[0] * shape[-1])), NC = shape[0];
@@ -124,44 +125,48 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
     // cb_exps - keeps exps in tt::CBIndex in L1 to avoid recomputing
     uint32_t im0_t = block_size * tt::div_up(Wt, block_size);
-    TT_FATAL(im0_t == Wt, "Intermediate buffer size (im0_t={}) must match width (Wt={})", im0_t, Wt);
+    TT_FATAL(im0_t == Wt, "im0_t: {} == Wt: {}, (Non user error)", im0_t, Wt);
 
     // used for buffering scale-mask
     // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
     uint32_t im3_t = block_size * (tt::div_up(Wt, block_size) + 1);
-    TT_FATAL(
-        im3_t == Wt + block_size,
-        "Intermediate buffer size (im3_t={}) must be equal to width plus block_size (Wt ({}) + block_size ({}))",
-        im3_t,
-        Wt,
-        block_size);
 
-    TT_FATAL(Wt % block_size == 0, "Width (Wt={}) must be divisible by block_size ({})", Wt, block_size);
-    TT_FATAL(
-        block_size != -1,
-        "Block size not set. Wt ({}) must be divisible by one of the numbers in the range from 8 to 1",
-        Wt);
+    uint32_t cb_length = in0_t;
+    bool use_large_kernel = false;
+    // Noisy CB estimator, if the cbs used take up 90% of L1 switch to large kernel implementation
+    uint32_t cb_size_sum_bytes = (in0_t * in0_tile_size) + (im0_t * im_tile_size);
+    if (mask.has_value()) {
+        cb_size_sum_bytes += (im3_t * im_tile_size) + (im4_t * im_tile_size);
+    }
+    if ((input_tensor.device()->l1_size_per_core() * 0.9) < cb_size_sum_bytes) {
+        use_large_kernel = true;
+        cb_length = 80;
+        in0_t = 80;
+        im4_t = 80;
+        im0_t = 80;
+        im3_t = 80;
+        TT_FATAL(!inplace, "Tensor is too large to run softmax inplace, please use standard softmax");
+    }
+    // TODO: Not sure why this fatal is here but not needed for use_large_kernel
+    if (!use_large_kernel) {
+        TT_FATAL(
+            im3_t == Wt + block_size, "im3_t {} == Width in tiles {} + num_dest_regs to use {}", im3_t, Wt, block_size);
+    }
+
+    TT_FATAL(Wt % block_size == 0, "Wt: {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
+    TT_FATAL((block_size != -1), "Wt: {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
     TT_FATAL(
         im0_t % block_size == 0,
-        "Size of cb (im0_t {}) must be divisible by the size of block ({}) used by the reader and compute kernel.",
-        im0_t,
-        block_size);
+        "Size of cb: {} must be divisible by the size of block used by the reader and compute kernel.",
+        im0_t);
     TT_FATAL(
         out0_t % block_size == 0,
-        "Size of cb (out0_t {}) must be divisible by the size of block ({}) used by the reader and compute kernel.",
-        out0_t,
-        block_size);
+        "Size of cb: {} must be divisible by the size of block used by the reader and compute kernel.",
+        out0_t);
     TT_FATAL(
         in4_t % block_size == 0,
-        "Buffer size in4_t ({}) must be divisible by block_size ({}) for proper operation",
-        in4_t,
-        block_size);
-    TT_FATAL(
-        W <= TILE_WIDTH * im0_t,
-        "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now).",
-        W,
-        TILE_WIDTH,
-        im0_t);
+        "Size of cb: {} must be divisible by the size of block used by the reader and compute kernel.",
+        in4_t);
 
     uint32_t num_tile_rows = NC * Ht;
     auto grid_size = device->compute_with_storage_grid_size();
@@ -189,7 +194,8 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     }
 
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-                                                      out0_is_dram};
+                                                      out0_is_dram,
+                                                      num_datum_padded};
     std::map<string, string> softmax_defines, writer_defines;
     if (mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
@@ -197,9 +203,17 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     if (causal_mask) {
         softmax_defines["CAUSAL_MASK"] = "1";
     }
+    if (numeric_stable) {
+        softmax_defines["NUMERIC_STABLE"] = "1";
+    }
+    std::string reader_kernel_path = use_large_kernel
+                                         ? "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/dataflow/"
+                                           "reader_unary_interleaved_sm_large_tensor.cpp"
+                                         : "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/dataflow/"
+                                           "reader_unary_interleaved_sm.cpp";
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/dataflow/reader_unary_interleaved_sm.cpp",
+        reader_kernel_path,
         all_device_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, softmax_defines));
 
@@ -215,13 +229,14 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     // if wtpc < Ht then since we pass tpc to the kernel as Ht, the broadcasts should be correct
     // if wtpc >= Ht then tpc should be a multiple of Ht
 
-    if (numeric_stable) {
-        softmax_defines["NUMERIC_STABLE"] = "1";
-    }
     softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
+    std::string softmax_kernel_path =
+        use_large_kernel
+            ? "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/compute/softmax_large_tensor.cpp"
+            : "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/compute/softmax.cpp";
     auto softmax_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/compute/softmax.cpp",
+        softmax_kernel_path,
         all_device_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -244,6 +259,17 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     auto c_intermed1_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CBIndex::c_7, im_cb_data_format}})
                                   .set_page_size(tt::CBIndex::c_7, im_tile_size);
     auto cb_intermed1_id = CreateCircularBuffer(program, all_device_cores, c_intermed1_config);
+    if (use_large_kernel) {
+        auto c_intermedsum_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CBIndex::c_12, im_cb_data_format}})
+                                        .set_page_size(tt::CBIndex::c_12, im_tile_size);
+        auto cb_intermedsum_id = CreateCircularBuffer(program, all_device_cores, c_intermedsum_config);
+        auto c_intermedmax_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CBIndex::c_15, im_cb_data_format}})
+                                        .set_page_size(tt::CBIndex::c_15, im_tile_size);
+        auto cb_intermedmax_id = CreateCircularBuffer(program, all_device_cores, c_intermedmax_config);
+        auto c_recip_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CBIndex::c_16, im_cb_data_format}})
+                                  .set_page_size(tt::CBIndex::c_16, im_tile_size);
+        auto cb_recip_id = CreateCircularBuffer(program, all_device_cores, c_recip_config);
+    }
     auto c_in2_config = CircularBufferConfig(in2_t * scalar_tile_size, {{tt::CBIndex::c_2, scalar_cb_data_format}})
                             .set_page_size(tt::CBIndex::c_2, scalar_tile_size);
     auto cb_in2_id = CreateCircularBuffer(program, all_device_cores, c_in2_config);
@@ -279,7 +305,9 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         auto c_intermed2_config = CircularBufferConfig(im2_t * im_tile_size, {{tt::CBIndex::c_8, im_cb_data_format}})
                                       .set_page_size(tt::CBIndex::c_8, im_tile_size);
         cb_intermed2_id = CreateCircularBuffer(program, all_device_cores, c_intermed2_config);
-        // cb_x
+    }
+    // cb_x
+    if (numeric_stable || use_large_kernel) {
         auto c_x_config = CircularBufferConfig(im4_t * im_tile_size, {{tt::CBIndex::c_10, im_cb_data_format}})
                               .set_page_size(tt::CBIndex::c_10, im_tile_size);
         cb_intermed4_id = CreateCircularBuffer(program, all_device_cores, c_x_config);
@@ -340,6 +368,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                  curr_ht,
                  mask_id,
                  0x3f803f80,
+                 in0_t,
                  mask_curr_ht,
                  mask_offset});  // [10]=1.0f is scaler
         } else {
@@ -357,11 +386,15 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                  mask_addr,
                  curr_ht,
                  mask_id,
-                 0x3f803f80});  // [10]=1.0f is scaler
+                 0x3f803f80,
+                 in0_t});  // [10]=1.0f is scaler
         }
 
         SetRuntimeArgs(
-            program, softmax_kernels_id, core, {num_tile_rows_per_core, Ht, Wt, block_size, curr_ht, mask_padded_data});
+            program,
+            softmax_kernels_id,
+            core,
+            {num_tile_rows_per_core, Ht, Wt, block_size, curr_ht, mask_padded_data, cb_length});
 
         SetRuntimeArgs(
             program,
@@ -446,40 +479,10 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             // used for buffering scale-mask
             // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
             uint32_t im3_t = block_size * (tt::div_up(Wt, block_size) + 1);
-            TT_FATAL(
-                im3_t == Wt + block_size,
-                "Intermediate buffer size (im3_t={}) must be equal to width plus block_size (Wt + block_size = {})",
-                im3_t,
-                Wt + block_size);
+            TT_FATAL(im3_t == Wt + block_size, "im3_t {} == Wt {}+ block_size {}", im3_t, Wt, block_size);
 
-            TT_FATAL(Wt % block_size == 0, "Width (Wt={}) must be divisible by block_size ({})", Wt, block_size);
-            TT_FATAL(
-                block_size != -1,
-                "Block size not set. Wt ({}) must be divisible by one of the numbers in the range from 8 to 1",
-                Wt);
-            TT_FATAL(
-                im0_t % block_size == 0,
-                "Size of cb (im0_t {}) must be divisible by the size of block ({}) used by the reader and compute "
-                "kernel.",
-                im0_t,
-                block_size);
-            TT_FATAL(
-                out0_t % block_size == 0,
-                "Size of cb (out0_t {}) must be divisible by the size of block ({}) used by the reader and compute "
-                "kernel.",
-                out0_t,
-                block_size);
-            TT_FATAL(
-                in4_t % block_size == 0,
-                "Buffer size in4_t ({}) must be divisible by block_size ({}) for proper operation",
-                in4_t,
-                block_size);
-            TT_FATAL(
-                W <= TILE_WIDTH * im0_t,
-                "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now).",
-                W,
-                TILE_WIDTH,
-                im0_t);
+            TT_FATAL(Wt % block_size == 0, "Wt {} must be divisible by block size {}", Wt, block_size);
+            TT_FATAL((block_size != -1), "Wt {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
 
             uint32_t NCHt = NC * Ht;
             uint32_t num_tile_rows = NC * Ht;
@@ -573,6 +576,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                 softmax_kernel_args[3] = block_size;
                 softmax_kernel_args[4] = curr_ht;
                 softmax_kernel_args[5] = mask_padded_data;
+                softmax_kernel_args[6] = fp32_dest_acc_en ? 1 : 0;
 
                 writer_kernel_args[0] = dst_buffer_address;
                 writer_kernel_args[1] = num_tile_rows_per_core * Wt;
