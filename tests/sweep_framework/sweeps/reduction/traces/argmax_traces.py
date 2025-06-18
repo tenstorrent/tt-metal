@@ -7,6 +7,7 @@ from typing import Optional, Tuple
 import pytest
 import torch
 import ttnn
+from loguru import logger
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
@@ -46,7 +47,11 @@ def run_argmax(device, height, width, dim, dtype, layout):
 @pytest.mark.parametrize("dtype", parameters["pytorch"]["dtype"])
 @pytest.mark.parametrize("layout", parameters["pytorch"]["layout"])
 def test_pytorch(device, height, width, dim, dtype, layout):
-    run_argmax(device, height, width, dim, dtype, layout)
+    (result, msg), e2e_perf = run_argmax(device, height, width, dim, dtype, layout)
+    assert result, msg
+    logger.info(msg)
+    if e2e_perf:
+        logger.info(f"E2E Performance: {e2e_perf}")
 
 
 def run(
