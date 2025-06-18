@@ -42,10 +42,8 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::tensor {
-
-using tt::tt_metal::CoreCoord;
-
-namespace detail {
+namespace CMAKE_UNIQUE_NAMESPACE {
+namespace {
 
 #ifdef DEBUG
 
@@ -594,7 +592,8 @@ auto parse_external_operation(
     return std::make_tuple(operation, input_tensors);
 }
 
-}  // namespace detail
+}  // namespace
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 
 void pytensor_module_types(py::module& m_tensor) {
     // Tensor constructors that accept device and .to_device() function use keep alive call policy to communicate that
@@ -644,9 +643,9 @@ void pytensor_module(py::module& m_tensor) {
                 std::function([function, function_name](const py::args& args, const py::kwargs& kwargs) {
                     ZoneScopedN("TT_DNN_FALLBACK_OP");
                     auto [operation, input_tensors] =
-                        detail::parse_external_operation(function, args, kwargs, function_name);
+                        CMAKE_UNIQUE_NAMESPACE::parse_external_operation(function, args, kwargs, function_name);
                     GraphTracker::instance().track_function_start(operation.get_type_name(), args, kwargs);
-                    detail::log_external_operation(operation, input_tensors);
+                    CMAKE_UNIQUE_NAMESPACE::log_external_operation(operation, input_tensors);
                     auto output = function(*args, **kwargs);
                     TracyOpTTNNExternal(
                         operation, input_tensors, ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id());
@@ -860,7 +859,7 @@ void pytensor_module(py::module& m_tensor) {
                           std::optional<Layout> optional_layout,
                           const std::optional<MemoryConfig>& optional_memory_config,
                           std::optional<float> pad_value) {
-                return detail::convert_python_tensor_to_tt_tensor(
+                return CMAKE_UNIQUE_NAMESPACE::convert_python_tensor_to_tt_tensor(
                     tensor,
                     data_type,
                     optional_layout,
@@ -914,7 +913,7 @@ void pytensor_module(py::module& m_tensor) {
                           const std::optional<Tile>& tile,
                           ttnn::QueueId cq_id,
                           std::optional<float> pad_value) {
-                return detail::convert_python_tensor_to_tt_tensor(
+                return CMAKE_UNIQUE_NAMESPACE::convert_python_tensor_to_tt_tensor(
                     python_tensor,
                     data_type,
                     layout,
@@ -1448,7 +1447,9 @@ void pytensor_module(py::module& m_tensor) {
             py::return_value_policy::reference)
         .def(
             "to_torch_with_padded_shape",
-            [](const Tensor& self) -> py::object { return detail::convert_tt_tensor_to_torch_tensor(self, true); },
+            [](const Tensor& self) -> py::object {
+                return CMAKE_UNIQUE_NAMESPACE::convert_tt_tensor_to_torch_tensor(self, true);
+            },
             R"doc(
             Convert tensor to torch tensor using legacy padded shape.
             WARNING: Will be deprecated soon!
@@ -1462,7 +1463,9 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "to_torch",
-            [](const Tensor& self) -> py::object { return detail::convert_tt_tensor_to_torch_tensor(self); },
+            [](const Tensor& self) -> py::object {
+                return CMAKE_UNIQUE_NAMESPACE::convert_tt_tensor_to_torch_tensor(self);
+            },
             R"doc(
             Convert tensor to torch tensor.
 
@@ -1475,7 +1478,9 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "to_numpy",
-            [](const Tensor& self) -> py::object { return detail::convert_tt_tensor_to_numpy_tensor(self); },
+            [](const Tensor& self) -> py::object {
+                return CMAKE_UNIQUE_NAMESPACE::convert_tt_tensor_to_numpy_tensor(self);
+            },
             R"doc(
             Convert tensor to numpy tensor.
 
