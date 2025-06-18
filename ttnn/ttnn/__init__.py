@@ -97,6 +97,8 @@ def manage_config(name, value):
 from ttnn._ttnn.multi_device import (
     CppMeshToTensor,
     CppTensorToMesh,
+    PlacementReplicate,
+    PlacementShard,
     MeshMapperConfig,
     MeshComposerConfig,
     get_device_tensors,

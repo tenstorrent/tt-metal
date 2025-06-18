@@ -85,7 +85,7 @@ public:
     // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
     // elements have to match `spec`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
     //
-    // The data in the buffer is copied into a tensor with an owned storage.
+    // The data in the buffer is copied into a tensor with host storage.
     template <typename T>
     static Tensor from_span(
         tt::stl::Span<const T> buffer,

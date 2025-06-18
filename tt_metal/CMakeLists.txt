@@ -75,6 +75,7 @@ target_sources(
             api/tt-metalium/mesh_coord.hpp
             api/tt-metalium/mesh_device.hpp
             api/tt-metalium/mesh_device_view.hpp
+            api/tt-metalium/mesh_trace_id.hpp
             api/tt-metalium/metal_soc_descriptor.h
             api/tt-metalium/persistent_kernel_cache.hpp
             api/tt-metalium/profiler_optional_metadata.hpp
@@ -138,6 +139,7 @@ target_sources(
             fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
             fabric/hw/inc/fabric_routing_mode.h
+            fabric/hw/inc/noc_addr.h
             impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
             impl/dispatch/kernels/cq_helpers.hpp
@@ -169,6 +171,8 @@ target_sources(
             include/compute_kernel_api/tilize.h
             include/compute_kernel_api/transpose_wh.h
             include/compute_kernel_api/untilize.h
+            include/compute_kernel_api/eltwise_binary.h
+            include/compute_kernel_api/tile_move_copy.h
             soc_descriptors/blackhole_140_arch.yaml
             soc_descriptors/wormhole_b0_80_arch.yaml
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h
@@ -339,6 +343,8 @@ target_sources(
             kernels/dataflow/reader_unary.cpp
             kernels/dataflow/writer_unary.cpp
             kernels/dataflow/writer_unary_1.cpp
+            jit_build/genfiles.cpp
+            jit_build/genfiles.hpp
 )
 
 target_link_libraries(
