@@ -43,8 +43,10 @@ enum class HalL1MemAddrType : uint8_t {
     RETRAIN_FORCE,
     FABRIC_ROUTER_CONFIG,
     ETH_FW_MAILBOX,
-    TENSIX_ROUTING_TABLE,  // New dedicated area for Tensix routing tables
-    COUNT                  // Keep this last so it always indicates number of enum options
+    INTERMESH_ETH_LINK_CONFIG,
+    INTERMESH_ETH_LINK_STATUS,
+    TENSIX_ROUTING_TABLE,
+    COUNT  // Keep this last so it always indicates number of enum options
 };
 
 enum class HalDramMemAddrType : uint8_t { BARRIER = 0, PROFILER = 1, UNRESERVED = 2, COUNT = 3 };
