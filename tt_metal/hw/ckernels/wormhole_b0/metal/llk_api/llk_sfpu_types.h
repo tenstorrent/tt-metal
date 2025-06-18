@@ -95,6 +95,7 @@ enum SfpuType {
     bitwise_or,
     right_shift,
     floor,
+    trunc,
     left_shift,
     remainder,
     fmod,
