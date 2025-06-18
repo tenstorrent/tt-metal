@@ -5,6 +5,7 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <stddef.h>
+#include <umd/device/tt_core_coordinates.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <cstdint>
@@ -292,6 +293,82 @@ bool noc_reader_and_writer_kernels(
     return pass;
 }
 
+void RunBlackholeBasicEthKernelTest(tt::tt_metal::DispatchFixture* fixture, tt::tt_metal::IDevice* device, const tt::tt_metal::HalProgrammableCoreType& core_type, const tt::tt_metal::DataMovementProcessor& processor_1, const tt::tt_metal::DataMovementProcessor& processor_2) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    uint32_t eth_l1_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(core_type, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+
+    tt_metal::EthernetConfig noc0_ethernet_config{
+        .eth_mode = tt::tt_metal::Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = processor_1};
+    tt_metal::EthernetConfig noc1_ethernet_config{
+        .eth_mode = tt::tt_metal::Eth::IDLE, .noc = tt_metal::NOC::NOC_1, .processor = processor_2};
+
+    const auto cores =
+        core_type == tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH ? device->get_active_ethernet_cores(true) : device->get_inactive_ethernet_cores();
+    for (const auto& eth_core : cores) {
+        ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
+            fixture,
+            device,
+            WORD_SIZE * 2048,
+            eth_l1_address,
+            eth_core,
+            noc0_ethernet_config));
+        ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
+            fixture,
+            device,
+            WORD_SIZE * 2048,
+            eth_l1_address,
+            eth_core,
+            noc1_ethernet_config));
+        ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
+            fixture,
+            device,
+            WORD_SIZE * 2048,
+            eth_l1_address,
+            eth_core,
+            noc0_ethernet_config));
+        ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
+            fixture,
+            device,
+            WORD_SIZE * 2048,
+            eth_l1_address,
+            eth_core,
+            noc1_ethernet_config));
+    }
+}
+
+void RunBlackholeBasicEthKernelMixedNocTest(tt::tt_metal::DispatchFixture* fixture, tt::tt_metal::IDevice* device, const tt::tt_metal::HalProgrammableCoreType& core_type, const tt::tt_metal::DataMovementProcessor& processor_1, const tt::tt_metal::DataMovementProcessor& processor_2) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    uint32_t read_write_size_bytes = WORD_SIZE * 2048;
+    uint32_t reader_dst_address =
+        tt::tt_metal::MetalContext::instance().hal().get_dev_addr(core_type, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    uint32_t writer_src_address = reader_dst_address + read_write_size_bytes;
+    tt_metal::EthernetConfig erisc0_ethernet_config{
+        .eth_mode = tt::tt_metal::Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = processor_1};
+    tt_metal::EthernetConfig erisc1_ethernet_config{
+        .eth_mode = tt::tt_metal::Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = processor_2};
+
+    for (const auto& eth_core : device->get_inactive_ethernet_cores()) {
+        ASSERT_TRUE(unit_tests::erisc::kernels::noc_reader_and_writer_kernels(
+            device,
+            read_write_size_bytes,
+            reader_dst_address,
+            writer_src_address,
+            eth_core,
+            erisc0_ethernet_config,
+            erisc1_ethernet_config));
+        erisc0_ethernet_config.noc = tt_metal::NOC::NOC_1;
+        erisc1_ethernet_config.noc = tt_metal::NOC::NOC_1;
+        ASSERT_TRUE(unit_tests::erisc::kernels::noc_reader_and_writer_kernels(
+            device,
+            read_write_size_bytes,
+            reader_dst_address,
+            writer_src_address,
+            eth_core,
+            erisc0_ethernet_config,
+            erisc1_ethernet_config));
+    }
+}
+
 }  // namespace unit_tests::erisc::kernels
 
 namespace tt::tt_metal {
@@ -432,117 +509,32 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsNocWriteNoReceive) {
 // TODO #14640: Run this on WH when i$ flush issue is addressed
 TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    uint32_t eth_l1_address =
-        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
-    tt_metal::EthernetConfig noc0_ethernet_config{
-        .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = tt_metal::DataMovementProcessor::RISCV_0};
-    tt_metal::EthernetConfig noc1_ethernet_config{
-        .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_1, .processor = tt_metal::DataMovementProcessor::RISCV_0};
-
-    for (const auto& eth_core : device_->get_inactive_ethernet_cores()) {
-        ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            static_cast<BlackholeSingleCardFixture*>(this),
-            device_,
-            WORD_SIZE * 2048,
-            eth_l1_address,
-            eth_core,
-            noc0_ethernet_config));
-        ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            static_cast<BlackholeSingleCardFixture*>(this),
-            device_,
-            WORD_SIZE * 2048,
-            eth_l1_address,
-            eth_core,
-            noc1_ethernet_config));
-        ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-            static_cast<BlackholeSingleCardFixture*>(this),
-            device_,
-            WORD_SIZE * 2048,
-            eth_l1_address,
-            eth_core,
-            noc0_ethernet_config));
-        ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-            static_cast<BlackholeSingleCardFixture*>(this),
-            device_,
-            WORD_SIZE * 2048,
-            eth_l1_address,
-            eth_core,
-            noc1_ethernet_config));
-    }
+    unit_tests::erisc::kernels::RunBlackholeBasicEthKernelTest(this, device_, HalProgrammableCoreType::IDLE_ETH, tt_metal::DataMovementProcessor::RISCV_0, tt_metal::DataMovementProcessor::RISCV_0);
 }
 
 TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    uint32_t eth_l1_address =
-        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
-    tt_metal::EthernetConfig noc0_ethernet_config{
-        .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = tt_metal::DataMovementProcessor::RISCV_1};
-    tt_metal::EthernetConfig noc1_ethernet_config{
-        .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_1, .processor = tt_metal::DataMovementProcessor::RISCV_1};
-
-    for (const auto& eth_core : device_->get_inactive_ethernet_cores()) {
-        ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            static_cast<BlackholeSingleCardFixture*>(this),
-            device_,
-            WORD_SIZE * 2048,
-            eth_l1_address,
-            eth_core,
-            noc0_ethernet_config));
-        ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            static_cast<BlackholeSingleCardFixture*>(this),
-            device_,
-            WORD_SIZE * 2048,
-            eth_l1_address,
-            eth_core,
-            noc1_ethernet_config));
-        ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-            static_cast<BlackholeSingleCardFixture*>(this),
-            device_,
-            WORD_SIZE * 2048,
-            eth_l1_address,
-            eth_core,
-            noc0_ethernet_config));
-        ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-            static_cast<BlackholeSingleCardFixture*>(this),
-            device_,
-            WORD_SIZE * 2048,
-            eth_l1_address,
-            eth_core,
-            noc1_ethernet_config));
-    }
+    unit_tests::erisc::kernels::RunBlackholeBasicEthKernelTest(this, device_, HalProgrammableCoreType::IDLE_ETH, tt_metal::DataMovementProcessor::RISCV_1, tt_metal::DataMovementProcessor::RISCV_1);
 }
 
 TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnBothIdleEriscs) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    uint32_t read_write_size_bytes = WORD_SIZE * 2048;
-    uint32_t reader_dst_address =
-        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
-    uint32_t writer_src_address = reader_dst_address + read_write_size_bytes;
-    tt_metal::EthernetConfig erisc0_ethernet_config{
-        .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = tt_metal::DataMovementProcessor::RISCV_0};
-    tt_metal::EthernetConfig erisc1_ethernet_config{
-        .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = tt_metal::DataMovementProcessor::RISCV_1};
+    unit_tests::erisc::kernels::RunBlackholeBasicEthKernelMixedNocTest(this, device_, HalProgrammableCoreType::IDLE_ETH, tt_metal::DataMovementProcessor::RISCV_0, tt_metal::DataMovementProcessor::RISCV_1);
+}
 
-    for (const auto& eth_core : device_->get_inactive_ethernet_cores()) {
-        ASSERT_TRUE(unit_tests::erisc::kernels::noc_reader_and_writer_kernels(
-            device_,
-            read_write_size_bytes,
-            reader_dst_address,
-            writer_src_address,
-            eth_core,
-            erisc0_ethernet_config,
-            erisc1_ethernet_config));
-        erisc0_ethernet_config.noc = tt_metal::NOC::NOC_1;
-        erisc1_ethernet_config.noc = tt_metal::NOC::NOC_1;
-        ASSERT_TRUE(unit_tests::erisc::kernels::noc_reader_and_writer_kernels(
-            device_,
-            read_write_size_bytes,
-            reader_dst_address,
-            writer_src_address,
-            eth_core,
-            erisc0_ethernet_config,
-            erisc1_ethernet_config));
-    }
+TEST_F(BlackholeSingleCardFixture, ActiveEthKernelOnActiveErisc0) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    unit_tests::erisc::kernels::RunBlackholeBasicEthKernelTest(this, device_, HalProgrammableCoreType::ACTIVE_ETH, tt_metal::DataMovementProcessor::RISCV_0, tt_metal::DataMovementProcessor::RISCV_0);
+}
+
+TEST_F(BlackholeSingleCardFixture, ActiveEthKernelOnActiveErisc1) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    unit_tests::erisc::kernels::RunBlackholeBasicEthKernelTest(this, device_, HalProgrammableCoreType::ACTIVE_ETH, tt_metal::DataMovementProcessor::RISCV_1, tt_metal::DataMovementProcessor::RISCV_1);
+}
+
+TEST_F(BlackholeSingleCardFixture, ActiveEthKernelNocsOnBothActiveEriscs) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    unit_tests::erisc::kernels::RunBlackholeBasicEthKernelMixedNocTest(this, device_, HalProgrammableCoreType::ACTIVE_ETH, tt_metal::DataMovementProcessor::RISCV_0, tt_metal::DataMovementProcessor::RISCV_1);
 }
 
 }  // namespace tt::tt_metal
