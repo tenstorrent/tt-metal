@@ -179,7 +179,6 @@ autograd::TensorPtr scaled_dot_product_attention(
             false);
     }
     // (B, H, S, S)
-    // auto attention_weights = ttnn_fixed::softmax(qk_scaled, /* axis */ 3);
     auto attention_weights = ttml::metal::softmax(qk_scaled, /* axis */ 3);
     // TODO: add dropout here
 

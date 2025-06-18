@@ -71,7 +71,7 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
     }
 
     // Validate the dimension argument
-    int32_t input_rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
+    auto input_rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
     // TT_FATAL(
     //     (args.dim < input_rank) && (-input_rank <= args.dim),
     //     "`dim` must be in the range [-input_rank, input_rank) (provided: dim = {}, rank = {}).",
@@ -79,7 +79,7 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
     //     input_rank);
 
     TT_FATAL(
-        args.dim == (input_rank - 1U) || args.dim == -1U,
+        args.dim == (input_rank - 1) || args.dim == -1,
         "Currently only supports softmax over the last dimension. Got: {}",
         args.dim);
 }
