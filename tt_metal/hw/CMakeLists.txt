@@ -360,7 +360,6 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_softplus.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_sqrt.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_square.h
-                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_sub_int32.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_tanh.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_tanh_derivative.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_tiled_prod.h
