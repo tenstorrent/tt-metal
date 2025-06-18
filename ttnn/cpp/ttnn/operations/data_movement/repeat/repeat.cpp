@@ -197,7 +197,7 @@ ttnn::Tensor RepeatOperation::invoke(
 
     // RM -> OG page layout
     if (tensor.layout() == ttnn::TILE_LAYOUT) {
-        working_tensor = ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT);
+        working_tensor = ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT, tensor.dtype());
     }
 
     // Interleaved to OG mem layout

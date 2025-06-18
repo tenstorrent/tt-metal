@@ -115,7 +115,7 @@ ttnn::Tensor SliceOperation::invoke(
         TT_FATAL(
             input.dtype() != DataType::UINT16,
             "This slice requires an implicit Tile->RM conversion and that is not currently supported for uint16");
-        input = ttnn::to_layout(input, Layout::ROW_MAJOR);
+        input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config);
         if (one_dimensional) {
             std::cout << "ONE D" << std::endl;
         }
