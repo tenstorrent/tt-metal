@@ -271,9 +271,7 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
 @pytest.mark.parametrize("dim", [3, 4])
 @pytest.mark.parametrize("k", [17, 32, 64])
 @pytest.mark.parametrize("largest", [True])
-@pytest.mark.parametrize(
-    "dtype", [ttnn.bfloat16, pytest.param(ttnn.bfloat8_b, marks=pytest.mark.xfail(reason="Issue #21438"))]
-)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2, dim3, dim4, dim5]
