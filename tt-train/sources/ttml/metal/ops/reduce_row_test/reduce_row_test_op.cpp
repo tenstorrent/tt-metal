@@ -8,7 +8,7 @@
 
 namespace ttml::metal::ops::reduce_row_test_op {
 
-ttnn::Tensor ReduceRowTestOperation::invoke(const ttnn::Tensor& first_input, const ttnn::Tensor& second_input) {
-    return ttnn::prim::ttml_reduce_row_test_op(first_input, second_input);
+ttnn::Tensor ReduceRowTestOperation::invoke(const ttnn::Tensor& input, const bool use_matmul) {
+    return ttnn::prim::ttml_reduce_row_test_op(input, use_matmul);
 }
 }  // namespace ttml::metal::ops::reduce_row_test_op

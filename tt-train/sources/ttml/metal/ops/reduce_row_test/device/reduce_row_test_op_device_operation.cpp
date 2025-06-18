@@ -59,18 +59,9 @@ void ReduceRowTestDeviceOperation::validate_on_program_cache_miss(
             magic_enum::enum_name(tensor.memory_config().memory_layout()));
     };
 
-    const auto& first_input = tensor_args.first_input;
-    const auto& second_input = tensor_args.second_input;
+    const auto& input = tensor_args.input;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
-    check_tensor(first_input, "First Input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
-    check_tensor(second_input, "Second Input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
-
-    TT_FATAL(
-        first_input.logical_shape() == second_input.logical_shape(),
-        "First and Second Input tensors must have the same logical shape. "
-        "First Input shape: {}, Second Input shape: {}",
-        first_input.logical_shape(),
-        second_input.logical_shape());
+    check_tensor(input, "Input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
 
     if (preallocated_output_tensor.has_value()) {
         check_tensor(
@@ -86,11 +77,12 @@ ReduceRowTestDeviceOperation::spec_return_value_t ReduceRowTestDeviceOperation::
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
     }
-    auto input_logical_shape = tensor_args.first_input.logical_shape();
+    auto input_logical_shape = tensor_args.input.logical_shape();
+    input_logical_shape[-1] = 1;
     return ttnn::TensorSpec(
         ttnn::Shape(input_logical_shape),
         tt::tt_metal::TensorLayout(
-            tensor_args.first_input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.first_input.memory_config()));
+            tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
 }
 
 ReduceRowTestDeviceOperation::tensor_return_value_t ReduceRowTestDeviceOperation::create_output_tensors(
@@ -102,7 +94,7 @@ ReduceRowTestDeviceOperation::tensor_return_value_t ReduceRowTestDeviceOperation
     if (tensor_args.preallocated_output.has_value()) {
         output_tensor = tensor_args.preallocated_output.value();
     } else {
-        output_tensor = create_device_tensor(output_specs, tensor_args.first_input.device());
+        output_tensor = create_device_tensor(output_specs, tensor_args.input.device());
     }
 
     return output_tensor;
@@ -110,22 +102,21 @@ ReduceRowTestDeviceOperation::tensor_return_value_t ReduceRowTestDeviceOperation
 
 tt::stl::hash::hash_t ReduceRowTestDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& first_input = tensor_args.first_input;
-    const auto& input_logical_shape = first_input.logical_shape();
+    const auto& input = tensor_args.input;
+    const auto& input_logical_shape = input.logical_shape();
     auto program_factory = select_program_factory(args, tensor_args);
     return tt::tt_metal::operation::hash_operation<ReduceRowTestDeviceOperation>(
-        args, program_factory.index(), first_input.dtype(), input_logical_shape);
+        args, program_factory.index(), input.dtype(), input_logical_shape);
 }
 
 std::tuple<operation_attributes_t, tensor_args_t> ReduceRowTestDeviceOperation::invoke(
-    const ttnn::Tensor& first_input,
-    const ttnn::Tensor& second_input,
-    const std::optional<ttnn::Tensor>& preallocated_output) {
+    const ttnn::Tensor& input, const bool use_matmul, const std::optional<ttnn::Tensor>& preallocated_output) {
     return {
-        operation_attributes_t{},
+        operation_attributes_t{
+            .use_matmul = use_matmul,
+        },
         tensor_args_t{
-            .first_input = first_input,
-            .second_input = second_input,
+            .input = input,
             .preallocated_output = preallocated_output,
         }};
 }

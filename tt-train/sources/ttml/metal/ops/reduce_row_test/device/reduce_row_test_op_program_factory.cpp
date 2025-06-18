@@ -24,22 +24,19 @@ constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/reduce_row_test/device/kernels/compute/reduce_row_test_op_compute_kernel.cpp";
 
 // reader runtime args
-constexpr uint32_t kFirstInputBufferIdx = 0;
-constexpr uint32_t kSecondInputBufferIdx = 1U;
+constexpr uint32_t kInputBufferIdx = 0;
 // writer runtime args
 constexpr uint32_t kOutputBufferIdx = 0;
 
 constexpr auto kFirstInputCbIndex = tt::CBIndex::c_0;
-constexpr auto kSecondInputCbIndex = tt::CBIndex::c_1;
-constexpr auto kOutputCbIndex = tt::CBIndex::c_2;
+constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_1;
+constexpr auto kMatMulCbIndex = tt::CBIndex::c_2;
+constexpr auto kBeforeReductionCbIndex = tt::CBIndex::c_3;
+constexpr auto kOutputCbIndex = tt::CBIndex::c_4;
 
-constexpr uint32_t kNumMaskTiles = 1U;
 constexpr uint32_t kNumScalerTiles = 1U;
-constexpr uint32_t kNumRmsBeforeReductionTiles = 2U;
-constexpr uint32_t kNumRmsAfterReductionTiles = 2U;
-constexpr uint32_t kNumInverseRmsAfterReductionTiles = 2U;
-constexpr uint32_t kNumRmsOutputTiles = 2U;
-constexpr uint32_t kNumEpsTiles = 1U;
+
+const std::string kUseMatmul = "USE_MATMUL";
 }  // namespace
 
 namespace ttml::metal::ops::reduce_row_test_op::device {
@@ -127,8 +124,7 @@ tt::tt_metal::KernelHandle create_compute_kernel(
 void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
     const ReduceRowTestOperationKernels& kernels,
-    const tt::tt_metal::Buffer* first_input_buffer,
-    const tt::tt_metal::Buffer* second_input_buffer,
+    const tt::tt_metal::Buffer* input_buffer,
     const tt::tt_metal::Buffer* output_buffer,
     uint32_t num_cores,
     uint32_t num_cores_y,
@@ -149,12 +145,8 @@ void assign_per_core_runtime_args(
             TT_FATAL(false, "Core not in specified core ranges");
         }
 
-        // Reader kernel: (first_input_addr, second_input_addr, number_of_rows, offset_in_rows)
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {first_input_buffer->address(), second_input_buffer->address(), num_rows_per_core, num_rows_written});
+        // Reader kernel: (input_addr, number_of_rows, offset_in_rows)
+        SetRuntimeArgs(program, kernels.reader, core, {input_buffer->address(), num_rows_per_core, num_rows_written});
 
         // Writer kernel: (dst_addr, number_of_rows, offset_in_rows)
         SetRuntimeArgs(program, kernels.writer, core, {output_buffer->address(), num_rows_per_core, num_rows_written});
@@ -168,20 +160,19 @@ ReduceRowTestProgramFactory::cached_program_t ReduceRowTestProgramFactory::creat
     // -------------------------------------------------------------------------
     // 1) Setup device, data formats, tile sizes, and compute split
     // -------------------------------------------------------------------------
-    const auto& first_input = tensor_args.first_input;
-    const auto& second_input = tensor_args.second_input;
+    const auto& input = tensor_args.input;
 
-    auto* device = first_input.device();
+    auto* device = input.device();
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(first_input.dtype());
+    tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
     TT_FATAL(input_data_format == tt::DataFormat::Float16_b, "Input data format must be Float16_b");
 
     uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 
-    auto padded_tensor_shape = first_input.padded_shape();
-    auto padded_tensor_volume = first_input.padded_volume();
+    auto padded_tensor_shape = input.padded_shape();
+    auto padded_tensor_volume = input.physical_volume();
     TT_FATAL(
         padded_tensor_volume % tt::constants::TILE_HW == 0, "Padded input tensor volume must be divisible by TILE_HW");
     TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
@@ -202,11 +193,17 @@ ReduceRowTestProgramFactory::cached_program_t ReduceRowTestProgramFactory::creat
     // -------------------------------------------------------------------------
     auto data_format = input_data_format;
 
-    auto cb_first_input = create_circular_buffer(
+    auto cb_input = create_circular_buffer(
         program, all_cores, kFirstInputCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
 
-    auto cb_second_input = create_circular_buffer(
-        program, all_cores, kSecondInputCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
+    auto cb_reduction_scaler = create_circular_buffer(
+        program, all_cores, kReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
+
+    auto cb_matmul_reduce = create_circular_buffer(
+        program, all_cores, kMatMulCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
+
+    auto cb_before_reduction = create_circular_buffer(
+        program, all_cores, kBeforeReductionCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
     auto cb_output =
         create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, Wt);
@@ -214,17 +211,11 @@ ReduceRowTestProgramFactory::cached_program_t ReduceRowTestProgramFactory::creat
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
-    auto* first_input_buffer = first_input.buffer();
+    auto* input_buffer = input.buffer();
     TT_FATAL(
-        first_input_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        input_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
-        magic_enum::enum_name(first_input_buffer->buffer_type()));
-
-    auto* second_input_buffer = second_input.buffer();
-    TT_FATAL(
-        second_input_buffer->buffer_type() == ttnn::BufferType::DRAM,
-        "Gamma buffer must be in DRAM. Gamma buffer of type {}",
-        magic_enum::enum_name(second_input_buffer->buffer_type()));
+        magic_enum::enum_name(input_buffer->buffer_type()));
 
     auto* output_buffer = output.buffer();
     TT_FATAL(
@@ -240,6 +231,10 @@ ReduceRowTestProgramFactory::cached_program_t ReduceRowTestProgramFactory::creat
     // LLK reduction uses define values as default template parameters
     defines["REDUCE_OP"] = "PoolType::SUM";
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
+
+    if (args.use_matmul) {
+        defines[kUseMatmul] = "1";
+    }
 
     ReduceRowTestOperationKernels kernels;
     kernels.reader = create_reader_kernel(
@@ -281,8 +276,7 @@ ReduceRowTestProgramFactory::cached_program_t ReduceRowTestProgramFactory::creat
     assign_per_core_runtime_args(
         program,
         kernels,
-        first_input_buffer,
-        second_input_buffer,
+        input_buffer,
         output_buffer,
         num_cores,
         num_cores_y,
@@ -323,11 +317,9 @@ void ReduceRowTestProgramFactory::override_runtime_arguments(
     uint32_t num_cores = shared_vars.num_cores;
     uint32_t num_cores_y = shared_vars.num_cores_y;
 
-    const auto& first_input = tensor_args.first_input;
-    const auto& second_input = tensor_args.second_input;
+    const auto& input = tensor_args.input;
 
-    auto* first_input_buffer = first_input.buffer();
-    auto* second_input_buffer = second_input.buffer();
+    auto* input_buffer = input.buffer();
     auto* output_buffer = output.buffer();
 
     // Only address arguments need updating here; tile counts remain the same as in create().
@@ -345,8 +337,7 @@ void ReduceRowTestProgramFactory::override_runtime_arguments(
         // Update input buffers for the reader kernel
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[kFirstInputBufferIdx] = first_input_buffer->address();
-            runtime_args[kSecondInputBufferIdx] = second_input_buffer->address();
+            runtime_args[kInputBufferIdx] = input_buffer->address();
         }
         // Update destination buffers for the writer kernel
         {

@@ -9,7 +9,7 @@
 namespace ttml::metal::ops::reduce_row_test_op {
 
 struct ReduceRowTestOperation {
-    static ttnn::Tensor invoke(const ttnn::Tensor& first_input, const ttnn::Tensor& second_input);
+    static ttnn::Tensor invoke(const ttnn::Tensor& input, const bool use_matmul = false);
 };
 
 }  // namespace ttml::metal::ops::reduce_row_test_op

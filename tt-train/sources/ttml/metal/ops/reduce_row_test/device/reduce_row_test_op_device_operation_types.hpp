@@ -8,11 +8,12 @@
 
 namespace ttml::metal::ops::reduce_row_test_op::device {
 
-struct operation_attributes_t {};
+struct operation_attributes_t {
+    bool use_matmul = false;
+};
 
 struct tensor_args_t {
-    const ttnn::Tensor& first_input;
-    const ttnn::Tensor& second_input;
+    const ttnn::Tensor& input;
 
     std::optional<ttnn::Tensor> preallocated_output;
 };

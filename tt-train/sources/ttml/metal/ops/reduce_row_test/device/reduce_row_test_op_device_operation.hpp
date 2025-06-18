@@ -32,8 +32,8 @@ struct ReduceRowTestDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& first_input,
-        const ttnn::Tensor& second_input,
+        const ttnn::Tensor& input,
+        const bool use_matmul = false,
         const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 };
 
