@@ -43,8 +43,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     attn_mask: B x NQH x S x S
     */
 
-    const auto q_shape = input_tensor_q.get_logical_shape();
-    const auto k_shape = input_tensor_k.get_logical_shape();
+    const auto q_shape = input_tensor_q.logical_shape();
+    const auto k_shape = input_tensor_k.logical_shape();
     const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2], DH = q_shape[3];
     const uint32_t NKH = k_shape[1];
 
@@ -121,7 +121,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         const auto& page_table_tensor = page_table.value();
         block_size = k_shape[2];  // K's sequence dimension represents block size
         block_size_t = block_size / TILE_HEIGHT;
-        max_blocks_per_seq = page_table_tensor.get_padded_shape()[1];
+        max_blocks_per_seq = page_table_tensor.padded_shape()[1];
         page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
         TT_FATAL(
             page_table_stick_size % 32 == 0,
@@ -224,11 +224,17 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
     const uint32_t qk_in0_block_w = DHt;
     // max of Sk_chunk_t and dst_size
-    const uint32_t qk_out_subblock_w = std::min(Sk_chunk_t, dst_size);
+    uint32_t qk_out_subblock_w = std::min(Sk_chunk_t, dst_size);
     // If qk_out_subblock_w is full row of output, scale subblock_h so volume = dst_size. Otherwise it's 1 to maintain
     // row-major intermediate buffer.
-    const uint32_t qk_out_subblock_h =
+    uint32_t qk_out_subblock_h =
         (qk_out_subblock_w == Sk_chunk_t) ? (std::min(Sq_chunk_t, dst_size / qk_out_subblock_w)) : 1;
+
+    if (qk_out_subblock_w == dst_size && qk_out_subblock_h == 1 && Sk_chunk_t % 2 == 0) {
+        // Hacky, try to get 2x4 output subblock if possible to optimize matmul util.
+        qk_out_subblock_w = qk_out_subblock_w / 2;
+        qk_out_subblock_h = 2;
+    }
 
     const uint32_t qk_in0_num_subblocks = Sq_chunk_t / qk_out_subblock_h;
     const uint32_t qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
@@ -387,6 +393,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         (std::uint32_t)use_provided_mask,
         (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
+        scale_union.u,
     };
 
     std::map<string, string> defines;
@@ -432,13 +439,13 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     // Create circular buffers
 
-    tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.get_dtype());
-    tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.get_dtype());
-    tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.get_dtype());
+    tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
+    tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
+    tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
     tt::DataFormat mask_df = attn_mask.has_value()
-                                 ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().get_dtype())
+                                 ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
                                  : tt::DataFormat::Bfp4_b;
-    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
                                                        // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -484,15 +491,14 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         auto cb_in3_id = CreateCircularBuffer(program, core_grid, c_in3_config);
     }
 
-    // scale input
-    auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_4, scalar_df}})
-                            .set_page_size(tt::CBIndex::c_4, scalar_tile_size);
-    auto cb_in4_id = CreateCircularBuffer(program, core_grid, c_in4_config);
-
-    // identity scale input
+    // identity scalar input
     auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_5, scalar_df}})
                             .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
     auto cb_in5_id = CreateCircularBuffer(program, core_grid, c_in5_config);
+    // identity column input
+    auto c_in7_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_7, scalar_df}})
+                            .set_page_size(tt::CBIndex::c_7, scalar_tile_size);
+    auto cb_in7_id = CreateCircularBuffer(program, core_grid, c_in7_config);
 
     if (is_chunked) {
         auto c_in6_config = CircularBufferConfig(page_table_stick_size, {{tt::CBIndex::c_6, page_table_df}})

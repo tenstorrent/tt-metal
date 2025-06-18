@@ -102,7 +102,7 @@ TEST_F(TensorDistributionT3000Test, Shard1DInvalidDim) {
         std::vector<float>(num_devices, 0), get_tensor_spec(ttnn::Shape{1, 1, 1, num_devices}, DataType::FLOAT32));
 
     EXPECT_ANY_THROW({
-        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, -1);
+        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, -10);
         Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
     });
 
@@ -137,6 +137,23 @@ TEST_F(TensorDistributionT3000Test, Shard1DFewerShardsThanDevices) {
     Tensor expected_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{num_devices - 1, 1, 3, 1}, DataType::FLOAT32));
     EXPECT_TRUE(ttnn::allclose<float>(concatenated_tensor, expected_tensor));
+}
+
+TEST_F(TensorDistributionT3000Test, Shard1DNegativeDim) {
+    const int num_devices = mesh_device_->num_devices();
+    std::vector<float> test_data(num_devices, 0);
+    std::iota(test_data.begin(), test_data.end(), 0);
+    Tensor input_tensor =
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, 1, 1, num_devices}, DataType::FLOAT32));
+
+    auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, -1);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+
+    std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
+    EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
+    for (int i = 0; i < device_tensors.size(); i++) {
+        EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i));
+    }
 }
 
 TEST_F(TensorDistributionT3000Test, Shard1D) {
@@ -183,8 +200,8 @@ TEST_P(TensorDistributionT3000Test2D, FullyReplicated) {
         *mesh_device_,
         MeshMapperConfig{
             .placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Replicate{}},
-        },
-        MeshShape(num_rows, num_cols));
+            .mesh_shape_override = MeshShape(num_rows, num_cols),
+        });
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
@@ -218,8 +235,8 @@ TEST_P(TensorDistributionT3000Test2D, ReplicateDim) {
         *mesh_device_,
         MeshMapperConfig{
             .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Replicate{}},
-        },
-        MeshShape(num_rows, num_cols));
+            .mesh_shape_override = MeshShape(num_rows, num_cols),
+        });
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
@@ -252,8 +269,8 @@ TEST_P(TensorDistributionT3000Test2D, ShardDims) {
         *mesh_device_,
         MeshMapperConfig{
             .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Shard{2}},
-        },
-        MeshShape(num_rows, num_cols));
+            .mesh_shape_override = MeshShape(num_rows, num_cols),
+        });
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
@@ -266,8 +283,8 @@ TEST_P(TensorDistributionT3000Test2D, ShardDims) {
         *mesh_device_,
         MeshComposerConfig{
             .dims = {0, 2},
-        },
-        MeshShape(num_rows, num_cols));
+            .mesh_shape_override = MeshShape(num_rows, num_cols),
+        });
     Tensor concatenated_tensor = aggregate_tensor(sharded_tensor, *composer);
 
     Tensor expected_tensor =
@@ -285,8 +302,8 @@ TEST_F(TensorDistributionT3000Test, NdMapperInvalidShape) {
         *mesh_device_,
         MeshMapperConfig{
             .placements = {MeshMapperConfig::Replicate{}},
-        },
-        MeshShape{1, 9}));
+            .mesh_shape_override = MeshShape{1, 9},
+        }));
 }
 
 TEST_F(TensorDistributionT3000Test, NdMapperUnevenSharding) {
@@ -331,8 +348,8 @@ TEST_F(TensorDistributionT3000Test, NdComposerInvalidShape) {
         *mesh_device_,
         MeshComposerConfig{
             .dims = {0, 1, 2},
-        },
-        MeshShape{1, 9}));
+            .mesh_shape_override = MeshShape{1, 9},
+        }));
 }
 
 TEST_F(TensorDistributionT3000Test, NdComposerInvalidDims) {
@@ -355,8 +372,8 @@ TEST_F(TensorDistributionT3000Test, NdComposerUnevenComposition) {
         *mesh_device_,
         MeshComposerConfig{
             .dims = {0, 1},
-        },
-        MeshShape(2, 3));
+            .mesh_shape_override = MeshShape(2, 3),
+        });
 
     EXPECT_ANY_THROW({ Tensor aggregated_tensor = aggregate_tensor(replicated_tensor, *composer); });
 }
@@ -384,14 +401,14 @@ TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
                     MeshMapperConfig::Shard{2},
                     MeshMapperConfig::Shard{1},
                 },
-        },
-        MeshShape(2, 2, 2));
+            .mesh_shape_override = MeshShape(2, 2, 2),
+        });
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
     for (const auto& tensor : device_tensors) {
-        EXPECT_EQ(tensor.get_logical_shape(), ttnn::Shape({kOuterDim, 1, 2, kInnerDim}));
+        EXPECT_EQ(tensor.logical_shape(), ttnn::Shape({kOuterDim, 1, 2, kInnerDim}));
     }
 
     // Expect the first dim to be replicated.
@@ -404,10 +421,10 @@ TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
         *mesh_device_,
         MeshComposerConfig{
             .dims = {0, 2, 1},
-        },
-        MeshShape(2, 2, 2));
+            .mesh_shape_override = MeshShape(2, 2, 2),
+        });
     Tensor aggregated_tensor = aggregate_tensor(sharded_tensor, *composer);
-    EXPECT_EQ(aggregated_tensor.get_logical_shape(), ttnn::Shape({2 * kOuterDim, kNumRows, kNumCols, kInnerDim}));
+    EXPECT_EQ(aggregated_tensor.logical_shape(), ttnn::Shape({2 * kOuterDim, kNumRows, kNumCols, kInnerDim}));
     EXPECT_THAT(aggregated_tensor.to_vector<float>(), Pointwise(FloatEq(), expected_data));
 }
 

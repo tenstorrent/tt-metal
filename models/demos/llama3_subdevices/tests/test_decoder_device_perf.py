@@ -9,6 +9,9 @@ import ttnn
 import json
 import pandas as pd
 from collections import defaultdict
+from models.demos.llama3_subdevices.tt.llama_common import (
+    PagedAttentionConfig,
+)
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf
 from tt_metal.tools.profiler.process_model_log import (
@@ -37,7 +40,7 @@ MAX_TYPE = "max"
     "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
     [
         (  # 10 layers for devive perf measurements
-            "random",
+            "instruct",
             10,
             "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
             True,  # instruct mode
@@ -108,6 +111,14 @@ def test_llama_demo(
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
+    if paged_attention:
+        paged_attention_config = PagedAttentionConfig(
+            block_size=page_params["page_block_size"],
+            max_num_blocks=page_params["page_max_num_blocks"],
+        )
+    else:
+        paged_attention_config = None
+
     return run_llama3_demo(
         user_input=input_prompts,
         mesh_device=mesh_device,
@@ -115,7 +126,7 @@ def test_llama_demo(
         batch_size=batch_size,
         num_batches=repeat_batches,
         paged_attention=paged_attention,
-        page_params=page_params,
+        paged_attention_config=paged_attention_config,
         max_generated_tokens=max_generated_tokens,
         optimizations=optimizations,
         sampling_params=sampling_params,
@@ -175,7 +186,7 @@ def merge_device_rows(df):
         if not blocks:
             break
 
-        if "AllGather" in op_name or "ReduceScatter" in op_name or "AllReduce" in op_name:
+        if "AllGather" in op_name or "ReduceScatter" in op_name or "AllReduce" or "Matmul_RS" in op_name:
             # For collective ops, take the average duration over all rows within a block
             device_kernel_durations = [
                 d["DEVICE KERNEL DURATION [ns]"]
@@ -263,7 +274,7 @@ def print_dict(input_dict, dict_name):
 
 
 def is_collective_op(op_code):
-    return any(x in op_code for x in ("AllGather", "ReduceScatter", "AllReduce"))
+    return any(x in op_code for x in ("AllGather", "ReduceScatter", "AllReduce", "Matmul_RS"))
 
 
 def process_measurements(df, num_layers):

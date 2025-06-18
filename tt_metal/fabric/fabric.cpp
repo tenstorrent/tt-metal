@@ -60,6 +60,11 @@ size_t get_tt_fabric_channel_buffer_size_bytes() {
     return control_plane.get_fabric_context().get_fabric_channel_buffer_size_bytes();
 }
 
+size_t get_tt_fabric_packet_header_size_bytes() {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    return control_plane.get_fabric_context().get_fabric_packet_header_size_bytes();
+}
+
 void append_fabric_connection_rt_args(
     const chip_id_t src_chip_id,
     const chip_id_t dst_chip_id,
@@ -159,7 +164,6 @@ void append_fabric_connection_rt_args(
         .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
         .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
         .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
-        .persistent_fabric = true,
         .edm_direction = router_direction};
 
     auto worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(worker_program, {worker_core}, 0, core_type);

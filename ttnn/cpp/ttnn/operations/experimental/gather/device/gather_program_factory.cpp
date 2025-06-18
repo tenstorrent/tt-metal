@@ -16,11 +16,11 @@ GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySi
 
     // Tensor config info
     const tt::DataFormat input_tensor_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.get_dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
     const tt::DataFormat input_index_tensor_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_index_tensor.get_dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_index_tensor.dtype());
     const tt::DataFormat output_tensor_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
 
     const uint32_t input_tensor_tile_size = tile_size(input_tensor_cb_data_format);
     const uint32_t input_index_tensor_tile_size = tile_size(input_index_tensor_cb_data_format);
@@ -37,8 +37,8 @@ GatherProgramFactorySingleRowSingleCore::cached_program_t GatherProgramFactorySi
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
 
-    const auto input_index_shape = tensor_args.input_index_tensor.get_padded_shape();
-    const auto input_shape = tensor_args.input_tensor.get_padded_shape();
+    const auto input_index_shape = tensor_args.input_index_tensor.padded_shape();
+    const auto input_shape = tensor_args.input_tensor.padded_shape();
     const uint32_t Ht = (input_index_shape[0] * input_index_shape[1] * input_index_shape[2]) / tile_height;
     const uint32_t Wt_input = input_shape[3] / tile_width;
     const uint32_t Wt_index = input_index_shape[3] / tile_width;
@@ -213,7 +213,7 @@ void GatherProgramFactorySingleRowSingleCore::override_runtime_arguments(
     auto input_index_tensor_buffer = tensor_args.input_tensor.buffer();
     auto output_tensor_buffer = output_tensor.buffer();
 
-    const auto input_index_shape = tensor_args.input_index_tensor.get_padded_shape();
+    const auto input_index_shape = tensor_args.input_index_tensor.padded_shape();
     const uint32_t Ht =
         (input_index_shape[0] * input_index_shape[1] * input_index_shape[2]) / tt::constants::TILE_HEIGHT;
     const uint32_t total_number_of_cores =
@@ -254,11 +254,11 @@ GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySin
 
     // Tensor config info
     const tt::DataFormat input_tensor_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.get_dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
     const tt::DataFormat input_index_tensor_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_index_tensor.get_dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_index_tensor.dtype());
     const tt::DataFormat output_tensor_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
 
     const uint32_t input_tensor_tile_size = tile_size(input_tensor_cb_data_format);
     const uint32_t input_index_tensor_tile_size = tile_size(input_index_tensor_cb_data_format);
@@ -275,8 +275,8 @@ GatherProgramFactorySingleRowMultiCore::cached_program_t GatherProgramFactorySin
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
 
-    const auto input_index_shape = tensor_args.input_index_tensor.get_padded_shape();
-    const auto input_shape = tensor_args.input_tensor.get_padded_shape();
+    const auto input_index_shape = tensor_args.input_index_tensor.padded_shape();
+    const auto input_shape = tensor_args.input_tensor.padded_shape();
     const uint32_t Ht = (input_index_shape[0] * input_index_shape[1] * input_index_shape[2]) / tile_height;
     const uint32_t Wt_input = input_shape[3] / tile_width;
     const uint32_t Wt_index = input_index_shape[3] / tile_width;
@@ -452,7 +452,7 @@ void GatherProgramFactorySingleRowMultiCore::override_runtime_arguments(
     auto input_index_tensor_buffer = tensor_args.input_tensor.buffer();
     auto output_tensor_buffer = output_tensor.buffer();
 
-    const auto input_index_shape = tensor_args.input_index_tensor.get_padded_shape();
+    const auto input_index_shape = tensor_args.input_index_tensor.padded_shape();
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const uint32_t Wt_index = tensor_args.input_index_tensor.padded_shape()[3] / tile_width;
     const uint32_t total_number_of_cores =

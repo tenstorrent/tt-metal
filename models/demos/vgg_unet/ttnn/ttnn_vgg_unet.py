@@ -62,7 +62,6 @@ class Conv:
             enable_act_double_buffer=conv_param.enable_act_double_buffer,
             enable_split_reader=conv_param.enable_split_reader,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
-            transpose_shards=conv_param.transpose_shards,
         )
         config_override = None
         if conv_param.act_block_h is not None:
@@ -74,18 +73,7 @@ class Conv:
         else:
             self.bias = None
 
-        weight = ttnn.from_device(conv_pth.weight)
-        self.weight = weight
-
-        if conv_param.shard_layout is None:
-            self.input_memory_config = ttnn.L1_MEMORY_CONFIG
-        elif (
-            conv_param.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-            and conv_param.shard_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED
-        ):
-            self.input_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
-        else:
-            self.input_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+        self.weight = ttnn.from_device(conv_pth.weight)
 
         self.conv_kwargs = {
             "in_channels": conv_param.in_channels,
@@ -101,25 +89,6 @@ class Conv:
             "device": device,
             "conv_config": self.conv_config,
         }
-
-        if not ttnn.is_tensor_storage_on_device(self.weight):
-            self.weight = ttnn.prepare_conv_weights(
-                weight_tensor=self.weight,
-                weights_format="OIHW",
-                input_memory_config=self.input_memory_config,
-                input_layout=input_tensor_layout,
-                has_bias=True,
-                **self.conv_kwargs,
-            )
-
-            self.bias = ttnn.prepare_conv_bias(
-                bias_tensor=self.bias,
-                input_memory_config=self.input_memory_config,
-                input_layout=ttnn.TILE_LAYOUT,
-                **self.conv_kwargs,
-            )
-            self.weight = ttnn.to_device(self.weight, device)
-            self.bias = ttnn.to_device(self.bias, device)
 
     def __str__(self) -> str:
         return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"

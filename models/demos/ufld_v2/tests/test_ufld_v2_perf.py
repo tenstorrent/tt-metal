@@ -25,7 +25,7 @@ from tests.ttnn.integration_tests.ufld_v2.test_ttnn_ufld_v2 import custom_prepro
 
 
 def get_expected_times(name):
-    base = {"ufld_v2": (36.6, 0.23)}
+    base = {"ufld_v2": (36.6, 0.28)}
     return base[name]
 
 
@@ -117,7 +117,7 @@ def test_ufld_v2_perf(device, batch_size, input_channels, height, width, use_pre
 @pytest.mark.parametrize(
     "batch_size, expected_perf,test",
     [
-        [1, 304, "UFLD-v2"],
+        [1, 330, "UFLD-v2"],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

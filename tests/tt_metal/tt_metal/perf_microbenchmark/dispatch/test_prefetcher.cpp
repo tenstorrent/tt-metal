@@ -1073,6 +1073,7 @@ void gen_dram_ringbuffer_read_cmd(
         ringbuffer_cmd.log2_page_size = log_page_size;
         ringbuffer_cmd.base_addr = DRAM_DATA_BASE_ADDR + count * page_size;
         ringbuffer_cmd.length = length;
+        ringbuffer_cmd.wp_offset_update = length;
         count++;
 
         update_cmd_sizes(prefetch_cmds, cmd_sizes, [&]() { add_bare_prefetcher_cmd(prefetch_cmds, cmd, true); });
@@ -2058,14 +2059,26 @@ void configure_for_single_chip(
         0,                                           // unused: for prefetch_hd <--> dispatch_hd
         0,                                           // unused: for prefetch_hd <--> dispatch_hd
         0,                                           // unused: for prefetch_hd <--> dispatch_hd
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
         scratch_db_size_g,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
     };
 
     constexpr NOC my_noc_index = NOC::NOC_0;
@@ -2351,17 +2364,29 @@ void configure_for_single_chip(
         host_completion_queue_wr_ptr,
         dev_completion_queue_wr_ptr,
         dev_completion_queue_rd_ptr,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
         MetalContext::instance().dispatch_mem_map(DISPATCH_CORE_TYPE).get_dispatch_stream_index(0),
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
@@ -3497,9 +3522,9 @@ int main(int argc, char** argv) {
         if (test_device_id_g == 0) {
             device_r = device;
         } else {
+            const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
             auto const& device_active_eth_cores = device->get_active_ethernet_cores();
-            auto remote_chips =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(device_id_l);
+            auto remote_chips = cluster.get_devices_controlled_by_mmio_device(device_id_l);
             // remove mmio chip from the set. get_devices_controlled_by_mmio_device() returns a set that
             // holds mmio chips as well as remote chips accessed through that mmmio chip.
             remote_chips.erase(device_id_l);
@@ -3514,6 +3539,9 @@ int main(int argc, char** argv) {
 
             device_id_r = test_device_id_g;
             for (auto eth_core : device_active_eth_cores) {
+                if (!cluster.is_ethernet_link_up(device->id(), eth_core)) {
+                    continue;
+                }
                 auto [connected_device_id, eth_receiver_core] = device->get_connected_ethernet_core(eth_core);
                 if (remote_chips.find(connected_device_id) != remote_chips.end()) {
                     device_id_r = connected_device_id;

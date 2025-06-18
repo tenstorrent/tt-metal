@@ -6,11 +6,9 @@
 
 #include <nlohmann/json_fwd.hpp>
 #include <stdint.h>
-#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <map>
-#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -22,14 +20,11 @@
 #include <vector>
 
 #include "buffer.hpp"
-#include "mesh_buffer.hpp"
 #include "program.hpp"
 #include "common/TracyTTDeviceData.hpp"
 #include "core_coord.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "profiler_optional_metadata.hpp"
-#include "profiler_paths.hpp"
-#include "profiler_state.hpp"
 #include "profiler_types.hpp"
 #include "tt-metalium/program.hpp"
 #include "tracy/TracyTTDevice.hpp"
@@ -41,11 +36,6 @@ class IDevice;
 class Program;
 }  // namespace tt_metal
 }  // namespace tt
-
-using std::chrono::duration;
-using std::chrono::duration_cast;
-using std::chrono::nanoseconds;
-using std::chrono::steady_clock;
 
 namespace tt {
 
@@ -60,6 +50,9 @@ struct pair_hash {
         return h1 ^ (h2 + hash_combine_prime + (h1 << 6) + (h1 >> 2));
     }
 };
+
+// defined locally in profiler.cpp
+class FabricRoutingLookup;
 
 struct DisptachMetaData {
     // Dispatch command queue command type
@@ -128,7 +121,10 @@ private:
 
     // serialize all noc trace data into per-op json trace files
     void serializeJsonNocTraces(
-        const nlohmann::ordered_json& noc_trace_json_log, const std::filesystem::path& output_dir, chip_id_t device_id);
+        const nlohmann::ordered_json& noc_trace_json_log,
+        const std::filesystem::path& output_dir,
+        chip_id_t device_id,
+        const FabricRoutingLookup& routing_lookup);
 
     void emitCSVHeader(
         std::ofstream& log_file_ofs, const tt::ARCH& device_architecture, int device_core_frequency) const;
@@ -220,8 +216,6 @@ public:
 
     ~DeviceProfiler();
 
-    std::shared_ptr<tt::tt_metal::Program> sync_program = nullptr;
-
     // Device-core Syncdata
     std::map<CoreCoord, std::tuple<double, double, double>> device_core_sync_info;
 
@@ -275,6 +269,12 @@ public:
 
     // Read data from profiler buffer using slow dispatch
     void issueSlowDispatchReadFromProfilerBuffer(IDevice* device);
+
+    // Read data from L1 data buffer using fast dispatch
+    std::vector<uint32_t> issueFastDispatchReadFromL1DataBuffer(IDevice* device, const CoreCoord& worker_core);
+
+    // Read data from L1 data buffer using slow dispatch
+    std::vector<uint32_t> issueSlowDispatchReadFromL1DataBuffer(IDevice* device, const CoreCoord& worker_core);
 };
 
 void write_control_buffer_to_core(
@@ -283,6 +283,8 @@ void write_control_buffer_to_core(
     const HalProgrammableCoreType core_type,
     const ProfilerDumpState state,
     const std::vector<uint32_t>& control_buffer);
+
+bool onlyProfileDispatchCores(ProfilerDumpState state);
 
 }  // namespace tt_metal
 

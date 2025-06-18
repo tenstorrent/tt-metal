@@ -1,7 +1,20 @@
 # Ultra-Fast-Lane-Detection-v2
 
 ### Platforms:
-    WH N300,N150
+
+Wormhole N150, N300
+
+**Note:** On N300, make sure to use `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` with the pytest.
+
+Or, make sure to set the following environment variable in the terminal:
+```
+export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+```
+
+To obtain the perf reports through profiler, please build with following command:
+```
+./build_metal.sh -p
+```
 
 ### Introduction
 
@@ -9,38 +22,37 @@ The Ultra-Fast-Lane-Detection-v2 is a PyTorch-based implementation designed for 
 
 Resource link - [source](https://github.com/cfzd/Ultra-Fast-Lane-Detection-v2)
 
-### Model Details
+### Details
 
 - The entry point to the UFLD_v2 is located at:`models/demos/ufld_v2/ttnn/ttnn_ufld_v2.py`
 - The model picks up trained weights from the **tusimple_res34.pth** file located at:`models/demos/ufld_v2/reference/tusimple_res34.pth`
 - Batch Size :1
 - Supported Input Resolution - (320,800) (Height,Width)
 
-Export the following command before running pytests on N300:
-
-`WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml`
+### How to Run:
 
 Use the following command to run the model :
 
-`pytest tests/ttnn/integration_tests/ufld_v2/test_ttnn_ufld_v2.py::test_ufld_v2_model`
+```
+pytest --disable-warnings tests/ttnn/integration_tests/ufld_v2/test_ttnn_ufld_v2.py::test_ufld_v2_model
+```
 
-Use the following command to run the e2e perf:
+### Performant Model with Trace+2CQ
+- end-2-end perf is 302 FPS
 
-`pytest models/demos/ufld_v2/tests/test_ufld_v2_perf.py::test_ufld_v2_perf`
+Use the following command to run the performant Model with Trace+2CQs:
 
-Use the following command to run the e2e perf with trace(107 FPS):
+```
+pytest --disable-warnings models/demos/ufld_v2/tests/test_ufld_v2_e2e_performant.py
+```
 
-`pytest models/demos/ufld_v2/tests/test_ufld_v2_e2e_performant.py`
+### Performant Demo with Trace+2CQ
 
-Use the following command to generate device perf (306 FPS):
+Use the following command to run the performant Demo with Trace+2CQs:
 
-`pytest models/demos/ufld_v2/tests/test_ufld_v2_perf.py::test_perf_device_bare_metal_ufld_v2`
-
-### Demo
-
-Use the following command to run the demo :
-
-`pytest models/demos/ufld_v2/demo/demo.py`
+```
+pytest --disable-warnings models/demos/ufld_v2/demo/demo.py
+```
 
 To run the demo on your data:
 

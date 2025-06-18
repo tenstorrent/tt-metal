@@ -103,7 +103,7 @@ Tensor _isclose(
     Tensor mul_result = ttnn::multiply(ttnn::abs(value2, output_mem_config), rtol, std::nullopt, output_mem_config);
     is_close_rhs = ttnn::add(mul_result, atol, std::nullopt, output_mem_config);
     mul_result.deallocate();
-    Tensor result = ttnn::where(ttnn::le(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config), 1.0, 0.0);
+    Tensor result = ttnn::where(ttnn::le(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config), 1.f, 0.f);
     return result;
 }
 
@@ -219,8 +219,7 @@ Tensor _atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<
                 ttnn::where(
                     altz_bltz,
                     ttnn::subtract(result, M_PI, std::nullopt, output_mem_config),
-                    ttnn::where(
-                        az_bltz, -M_PI_2, ttnn::where(az_bgtz, M_PI_2, 0.0, output_mem_config), output_mem_config),
+                    ttnn::where(az_bltz, -pi_2, ttnn::where(az_bgtz, pi_2, 0.f, output_mem_config), output_mem_config),
                     output_mem_config),
                 output_mem_config),
             output_mem_config);
@@ -315,8 +314,8 @@ Tensor ExecuteDiv::invoke(
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
     output_tensor = output_tensor.value_or(ttnn::empty_like(input_a));
-    DataType input_dtype = input_a.get_dtype();
-    const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.get_dtype() == DataType::FLOAT32;
+    DataType input_dtype = input_a.dtype();
+    const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32;
     Tensor result;
 
     // No accurate_mode for FP32 div as inf/nan are handled at kernel level
@@ -378,7 +377,7 @@ Tensor _div_no_nan_overload(const Tensor& input_a, float value, const std::optio
 }
 
 Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    if (input_a.get_dtype() == DataType::FLOAT32 && input_b.get_dtype() == DataType::FLOAT32) {
+    if (input_a.dtype() == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32) {
         // Not using SFPU div op here since inf/nan handling is not required
         Tensor div_result = ttnn::multiply(input_a, ttnn::reciprocal(input_b), std::nullopt, output_mem_config);
         return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
@@ -400,8 +399,8 @@ Tensor ExecutePrelu::invoke(
 
 Tensor ExecutePrelu::invoke(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const auto s_a = input_a.get_logical_shape();
-    const auto volume = input_b.get_logical_volume();
+    const auto s_a = input_a.logical_shape();
+    const auto volume = input_b.logical_volume();
     TT_FATAL(
         s_a[1] == volume,
         "Mismatch of parameter numbers and input channel size. Found parameter numbers = {} and channel size = {}.",
@@ -439,12 +438,12 @@ Tensor run_remainder(
 // Binary remainder will be overloaded by unary remainder in another PR
 Tensor ExecuteBinaryRemainder::invoke(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    DataType input_dtype = input_a.get_dtype();
+    DataType input_dtype = input_a.dtype();
 
     float t_nan = tt::tt_metal::hal::get_nan();
 
     // No typecast for FP32 input
-    const auto do_typecast = input_dtype != DataType::FLOAT32 or input_b.get_dtype() != DataType::FLOAT32;
+    const auto do_typecast = input_dtype != DataType::FLOAT32 or input_b.dtype() != DataType::FLOAT32;
     const auto& a = do_typecast ? typecast(input_a, DataType::FLOAT32) : input_a;
     const auto& b = do_typecast ? typecast(input_b, DataType::FLOAT32) : input_b;
 
@@ -477,11 +476,11 @@ Tensor run_fmod(
 // When inputs are of data type BF16 and when input_b==0, expected is nan, but FMOD gives inf
 Tensor ExecuteBinaryFmod::invoke(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    DataType input_dtype = input_a.get_dtype();
+    DataType input_dtype = input_a.dtype();
     Tensor div_res = ttnn::divide(input_a, input_b, std::nullopt, output_mem_config);
     div_res = ttnn::trunc(div_res, output_mem_config);
     // No typecast for FP32 input
-    if (input_dtype == DataType::FLOAT32 && input_b.get_dtype() == DataType::FLOAT32) {
+    if (input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32) {
         return run_fmod(input_a, input_b, div_res, output_mem_config);
     }
     // For bfloat16 with decimal values, need to typecast to FP32 to improve precision
@@ -529,13 +528,13 @@ Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const std::optiona
     Tensor index_pad = ttnn::pad(
         ttnn::DefaultQueueId,
         ttnn::ones_like(input_a),
-        input_b.get_padded_shape().to_array_4D(),
+        input_b.padded_shape().to_array_4D(),
         start_index,
         0,
         false,
         std::nullopt);
     Tensor temp_a = ttnn::pad(
-        ttnn::DefaultQueueId, input_a, input_b.get_padded_shape().to_array_4D(), start_index, 0, false, std::nullopt);
+        ttnn::DefaultQueueId, input_a, input_b.padded_shape().to_array_4D(), start_index, 0, false, std::nullopt);
     return ttnn::where(index_pad, temp_a, input_b);
 }
 
@@ -546,8 +545,8 @@ Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const std::optiona
  *   by running reshape.
  */
 Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const ttnn::Shape s_a = input_a.get_logical_shape();
-    const ttnn::Shape s_b = input_b.get_logical_shape();
+    const ttnn::Shape s_a = input_a.logical_shape();
+    const ttnn::Shape s_b = input_b.logical_shape();
     auto num_ones = [](const ttnn::Shape& s) -> uint32_t {
         uint32_t num1s = 0;
         for (uint32_t idx = 0; idx < 4; idx++) {

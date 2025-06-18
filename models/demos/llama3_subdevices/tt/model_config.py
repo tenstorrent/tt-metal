@@ -1534,10 +1534,15 @@ class TtModelArgs:
                 )
             )
 
+            # Note PACKET_WORKER_CRS is 8 cores and it can NOT use any core in the following ranges:
+            # {1,6}-{2,7} (Reduce scatter ethernet worker cores),
+            # {1,0}-{2,0}, {1,4}-{2,5}, {1,9}-{2,9}, {5,0}-{6,2}, {5,4}-{6,7}, {5,9}-{6,9} (Matmul)
+            # {0,0}-{0,9}, {4,0}-{4,9} (Prefetcher)
+            # {3,6} (Matmul hop core)
             PACKET_WORKER_CRS = ttnn.CoreRangeSet(
                 [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 2)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 3), ttnn.CoreCoord(2, 3)),
                 ]
             )
             self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"] = ttnn.create_sharded_memory_config(
@@ -1967,12 +1972,12 @@ class TtModelArgs:
             self.model_name = "Llama3.1-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-            self.max_prefill_chunk_size = 64 * 1024
+            self.max_prefill_chunk_size = 128 * 1024
         elif "3.3-70B" in checkpoint_dir:
             self.model_name = "Llama3.3-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-            self.max_prefill_chunk_size = 64 * 1024
+            self.max_prefill_chunk_size = 128 * 1024
         else:
             logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
         self.orig_context_len = 8192
@@ -1990,13 +1995,13 @@ class TtModelArgs:
         self._set_params_from_dict(config, is_hf=True)
         self.is_70b = self.dim == 8192 and self.n_layers == 80
         if self.is_70b:
-            self.max_prefill_chunk_size = 64 * 1024
+            self.max_prefill_chunk_size = 128 * 1024
         # TODO Hack for deepseek distill 70b. generalize if needed
         if "Llama-70B" in checkpoint_dir:  # if we're using a distill version of 70B, use same settings as Llama-70b
             self.model_name = "Deepseek-R1-Distill-70B"
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-            self.max_prefill_chunk_size = 64 * 1024
+            self.max_prefill_chunk_size = 128 * 1024
             self.orig_context_len = 8192
 
     def __repr__(self):

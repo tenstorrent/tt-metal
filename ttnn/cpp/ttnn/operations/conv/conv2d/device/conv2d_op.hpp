@@ -57,7 +57,7 @@ struct Conv2dConfig {
     std::optional<CoreRangeSet> core_grid = std::nullopt;
 
     // used only if override_sharding_config is true and shard_layout is set to BLOCK_SHARDED
-    bool transpose_shards = true;
+    bool transpose_shards = false;
 
     // Useful when output is BFLOAT16.
     // BFLOAT8 is always Tile layout.

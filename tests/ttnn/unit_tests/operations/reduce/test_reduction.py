@@ -9,7 +9,7 @@ import ttnn
 import sys
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole, torch_random
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole, is_blackhole, torch_random
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -207,10 +207,13 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@skip_for_blackhole("Bad CosineSimilarity on BH. Issue #21881")
 @pytest.mark.parametrize("dim1", [1])
+# This test picks the maximum dim2 that will pick the singlecore implementation.
+# TopK multicore uses 8 cores in blackhole, so we need to add support for bitonic sort with 8 cores
+# and non power of 2 dims as compared to wormhole. Issue #23465.
 @pytest.mark.parametrize(
-    "dim2", [50257]
+    "dim2",
+    [8192 - 64, pytest.param(50257, marks=pytest.mark.xfail(condition=is_blackhole(), reason="Issue #23465"))],
 )  # Need to resolve issue #20294 to verify 128256 for OXMIQ <- will need topk_local_sort to handle uint32_t
 @pytest.mark.parametrize("dim", [1])
 @pytest.mark.parametrize("k", [50, 3200])
@@ -268,9 +271,7 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
 @pytest.mark.parametrize("dim", [3, 4])
 @pytest.mark.parametrize("k", [17, 32, 64])
 @pytest.mark.parametrize("largest", [True])
-@pytest.mark.parametrize(
-    "dtype", [ttnn.bfloat16, pytest.param(ttnn.bfloat8_b, marks=pytest.mark.xfail(reason="Issue #21438"))]
-)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2, dim3, dim4, dim5]

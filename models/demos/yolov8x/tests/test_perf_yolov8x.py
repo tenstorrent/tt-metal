@@ -17,7 +17,7 @@ from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def get_expected_times(name):
-    base = {"yolov8x": (128.267, 0.54)}
+    base = {"yolov8x": (128.267, 0.56)}
     return base[name]
 
 
@@ -100,7 +100,7 @@ def test_yolov8x(device, input_tensor, use_weights_from_ultralytics):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 48],
+        [1, 51.2],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

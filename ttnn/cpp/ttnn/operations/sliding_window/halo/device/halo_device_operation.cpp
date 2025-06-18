@@ -21,11 +21,11 @@ void HaloDeviceOperation::validate(const std::vector<Tensor>& input_tensors) con
     const auto& input_tensor = input_tensors.at(0);
 
     // validate input data tensor
-    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
         // skip the untilize, only do halo
         log_debug(tt::LogOp, "Input is ROW_MAJOR, no need to untilize.");
     } else {
-        TT_FATAL(input_tensor.volume() % tt::constants::TILE_HW == 0, "Error");
+        TT_FATAL(input_tensor.physical_volume() % tt::constants::TILE_HW == 0, "Error");
     }
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
@@ -37,7 +37,7 @@ void HaloDeviceOperation::validate(const std::vector<Tensor>& input_tensors) con
 
 std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input = input_tensors.at(0);
-    const auto& input_shape = input.get_padded_shape();
+    const auto& input_shape = input.padded_shape();
     ttnn::Shape output_shape = ttnn::Shape(input_shape.to_array_4D());
 
     uint32_t nbatch = input_shape[0];
@@ -55,7 +55,7 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     log_debug(tt::LogOp, "num_cores_nhw: {}", config_.num_cores_nhw);
 
     const auto& input_tensor = input_tensors.at(0);
-    DataType output_dtype = (input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32)
+    DataType output_dtype = (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32)
                                 ? tt::tt_metal::DataType::FLOAT32
                                 : tt::tt_metal::DataType::BFLOAT16;
 
@@ -97,7 +97,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     auto& output_tensor = outputs.at(0);
     auto device = input_tensor.device();
 
-    bool is_in_tiled = input_tensor.get_layout() == Layout::TILE;
+    bool is_in_tiled = input_tensor.layout() == Layout::TILE;
     bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
     auto pad_metadata = sliding_window::generate_pad_metadata(config_);
@@ -139,15 +139,20 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         auto remote_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
             remote_config_tensor1, parallel_config_, is_block_sharded, device);
 
-        DataType type = input_tensor.get_dtype();
+        DataType type = input_tensor.dtype();
         int num_cores = this->parallel_config_.grid.num_cores();
         int num_cores_c = conv::get_num_cores_channels_from_parallel_config(this->parallel_config_);
-        int stick_size = input_tensor.get_padded_shape()[3] / num_cores_c;
+        int stick_size = input_tensor.padded_shape()[3] / num_cores_c;
+
+        int pad_h = config_.get_pad_h() + config_.get_ceil_pad_h();
+        int pad_w = config_.get_pad_w() + config_.get_ceil_pad_w();
+        bool padding_exists = pad_h > 0 || pad_w > 0;
 
         return {data_movement::detail::inplace_untilize_with_halo_multi_core(
             program,
             input_tensor,
             pad_val_,
+            padding_exists,
             config_.num_cores_nhw,
             config_.num_cores_c,
             max_out_nsticks_per_core_,

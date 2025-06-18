@@ -1887,10 +1887,10 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
     EXPECT_EQ(recv_configs.size(), recv_logical_coords.size());
 
     const auto& sender_core_to_core_id =
-        send_socket.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
+        send_socket.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
 
     const auto& recv_core_to_core_id =
-        recv_socket.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
+        recv_socket.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
 
     for (const auto& connection : socket_connections) {
         const auto& sender = connection.sender_core;
@@ -1987,10 +1987,10 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
     auto [send_socket_dram, recv_socket_dram] = MeshSocket::create_sockets(md0, md1, socket_config_dram);
 
     const auto& sender_core_to_core_id =
-        send_socket_l1.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
+        send_socket_l1.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
 
     const auto& recv_core_to_core_id =
-        recv_socket_l1.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
+        recv_socket_l1.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
 
     std::unordered_map<MeshCoordinate, std::vector<sender_socket_md>> sender_configs_per_dev_coord;
     std::unordered_map<MeshCoordinate, std::vector<receiver_socket_md>> recv_configs_per_dev_coord;
