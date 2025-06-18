@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/tensor_ops.hpp"
+#include "tensor/tensor_ops.hpp"
 
 #include "tt_stl/overloaded.hpp"
 #include "ttnn/tensor/storage.hpp"
