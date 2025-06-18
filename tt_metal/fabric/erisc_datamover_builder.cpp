@@ -157,15 +157,22 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     std::array<size_t, num_receiver_channels>& num_receiver_buffer_slots,
     std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots,
     std::array<size_t, num_downstream_sender_channels>& num_downstream_sender_buffer_slots) {
-    static const std::vector<std::pair<size_t, size_t>> linear_buffer_slot_options = {{{8, 16}}};
-    static const std::vector<std::pair<size_t, size_t>> ring_buffer_slot_options = {{{8, 8}, {4, 8}}};
+    static const std::vector<std::vector<std::pair<size_t, size_t>>> linear_buffer_slot_options = {
+        {{8, 16}}, {{8, 16}}};
 
-    static const std::vector<std::vector<std::pair<size_t, size_t>>> ring_buffer_slot_options_dateline = {
-        {{8, 16}, {8, 8}}, {{16, 16}, {8, 16}, {8, 8}}};
-    static const std::vector<std::vector<std::pair<size_t, size_t>>> ring_buffer_slot_options_dateline_upstream = {
-        {{8, 16}, {8, 8}}, {{16, 16}, {8, 16}, {8, 8}}};
-    static const std::vector<std::vector<std::pair<size_t, size_t>>>
-        ring_buffer_slot_options_dateline_upstream_adjcent = {{{16, 8}, {8, 8}}, {{16, 8}, {8, 8}}};
+    static const std::vector<std::vector<std::pair<size_t, size_t>>> ring_buffer_slot_options = {
+        {{8, 8}, {4, 8}}, {{8, 8}, {4, 8}}};
+
+    static const std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>> ring_buffer_slot_options_dateline = {
+        {{{8, 16}, {8, 8}}, {{16, 16}, {8, 16}, {8, 8}}}, {{{8, 16}, {8, 8}}, {{16, 16}, {8, 16}, {8, 8}}}};
+
+    static const std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>>
+        ring_buffer_slot_options_dateline_upstream = {
+            {{{8, 16}, {8, 8}}, {{16, 16}, {8, 16}, {8, 8}}}, {{{8, 16}, {8, 8}}, {{16, 16}, {8, 16}, {8, 8}}}};
+
+    static const std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>>
+        ring_buffer_slot_options_dateline_upstream_adjcent = {
+            {{{16, 8}, {8, 8}}, {{16, 8}, {8, 8}}}, {{{16, 8}, {8, 8}}, {{16, 8}, {8, 8}}}};
 
     auto get_optimal_num_slots = [this](
                                      auto& buffer_slot_options,
@@ -192,13 +199,22 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     };
 
     auto axis_index = static_cast<std::size_t>(options.edm_axis);
+    auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+    size_t arch_index;
+    if (arch == tt::ARCH::WORMHOLE_B0) {
+        arch_index = 0;
+    } else if (arch == tt::ARCH::BLACKHOLE) {
+        arch_index = 1;
+    } else {
+        TT_THROW("Unsupported architecture: {}", magic_enum::enum_name(arch));
+    }
 
     if (topology == Topology::Ring) {
         size_t default_num_sender_buffer_slots;
         size_t default_num_receiver_buffer_slots;
         // get the default buffer slots
         get_optimal_num_slots(
-            ring_buffer_slot_options,
+            ring_buffer_slot_options[arch_index],
             this->num_used_sender_channels,
             this->num_used_receiver_channels,
             default_num_sender_buffer_slots,
@@ -207,7 +223,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         size_t dateline_num_sender_buffer_slots;
         size_t dateline_num_receiver_buffer_slots;
         get_optimal_num_slots(
-            ring_buffer_slot_options_dateline[axis_index],
+            ring_buffer_slot_options_dateline[arch_index][axis_index],
             this->num_used_sender_channels - 1,
             this->num_used_receiver_channels - 1,
             dateline_num_sender_buffer_slots,
@@ -217,7 +233,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         size_t dateline_upstream_num_sender_buffer_slots;
         size_t dateline_upstream_num_receiver_buffer_slots;
         get_optimal_num_slots(
-            ring_buffer_slot_options_dateline_upstream[axis_index],
+            ring_buffer_slot_options_dateline_upstream[arch_index][axis_index],
             this->num_used_sender_channels - 1,
             this->num_used_receiver_channels - 1,
             dateline_upstream_num_sender_buffer_slots,
@@ -227,7 +243,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         size_t dateline_upstream_adjcent_num_sender_buffer_slots;
         size_t dateline_upstream_adjcent_num_receiver_buffer_slots;
         get_optimal_num_slots(
-            ring_buffer_slot_options_dateline_upstream_adjcent[axis_index],
+            ring_buffer_slot_options_dateline_upstream_adjcent[arch_index][axis_index],
             this->num_used_sender_channels - 1,
             this->num_used_receiver_channels,
             dateline_upstream_adjcent_num_sender_buffer_slots,
@@ -382,7 +398,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         size_t default_num_sender_buffer_slots;
         size_t default_num_receiver_buffer_slots;
         get_optimal_num_slots(
-            linear_buffer_slot_options,
+            linear_buffer_slot_options[arch_index],
             this->num_used_sender_channels,
             this->num_used_receiver_channels,
             default_num_sender_buffer_slots,
