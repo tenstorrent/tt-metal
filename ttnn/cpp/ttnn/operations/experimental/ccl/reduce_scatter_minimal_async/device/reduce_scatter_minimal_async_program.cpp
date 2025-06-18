@@ -113,8 +113,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     // Get worker cores
     // 2 sender (reader + core + writer), 1 forward 1 backward
     uint32_t num_senders_per_link = 2;
-    const auto [sender_worker_core_range, sender_worker_cores] = choose_worker_cores(
-        num_links, num_senders_per_link, enable_persistent_fabric_mode, mesh_device, sub_device_id, core_grid_offset);
+    const auto [sender_worker_core_range, sender_worker_cores] =
+        choose_worker_cores(num_links, num_senders_per_link, mesh_device, sub_device_id, core_grid_offset);
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
 
@@ -142,17 +142,9 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
-    // Will be reworked
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t tiles_to_write_per_packet = 1;
     uint32_t tile_granularity = 4 * num_pages_per_packet;
-
-    // tile_granularity should be largest power of 2 that is less than 16 and matches the condition
-    while (batch_slice_num_pages_per_link % tile_granularity != 0 or
-           batch_slice_num_pages_per_link <= tile_granularity) {
-        tile_granularity /= 2;
-    }
-
     uint32_t cb_num_pages = 3 * tile_granularity;  // double buffering
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
@@ -192,6 +184,15 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
     auto reserved_packet_header_CB_handle =
         CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
+
+    // Tensor Info
+    const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
+    const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
+    const auto input_tensor_shape = input_tensor.get_padded_shape();
+    const auto intermediate_tensor_buffer_type = intermediate_tensor.buffer()->buffer_type();
+    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const auto num_batches = input_tensor_shape[0];
+    const auto batch_slice_num_pages = input_tensor_num_pages / ring_size / num_batches;
 
     TT_FATAL(
         !(input_tensor_shape[3] % tt::constants::TILE_WIDTH),

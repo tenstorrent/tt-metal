@@ -51,13 +51,6 @@ void kernel_main() {
     uint32_t link = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
 
-    uint32_t pages_read_in_row_0 = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t row_offset_0 = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t tiles_read_0 = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t tiles_to_read_0 = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t intermediate_packet_offset_x = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t intermediate_packet_offset_y = get_arg_val<uint32_t>(arg_idx++);
-
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 

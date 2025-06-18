@@ -46,17 +46,12 @@ void kernel_main() {
     uint32_t link = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
 
-    uint32_t pages_read_in_row_0 = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t row_offset_0 = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t tiles_read_0 = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t tiles_to_read_0 = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t intermediate_packet_offset_x = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t intermediate_packet_offset_y = get_arg_val<uint32_t>(arg_idx++);
-
     ReduceScatterOpReceiver matmul_receiver;
     if constexpr (fuse_op) {
         matmul_receiver = ReduceScatterOpReceiver(arg_idx);
     }
+
+    constexpr uint32_t slice_Wt = input_tensor_Wt / ring_size;
 
     constexpr uint32_t batch_num_pages = batch_slice_num_pages * ring_size;
 
@@ -77,11 +72,6 @@ void kernel_main() {
         }
         int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
         uint32_t batch_offset = batch_num_pages * b;
-
-        uint32_t actual_fwd_slice_id_x = my_chip_id_x;
-        uint32_t actual_fwd_slice_id_y = my_chip_id_y;
-        uint32_t actual_bwd_slice_id_x = my_chip_id_x;
-        uint32_t actual_bwd_slice_id_y = my_chip_id_y;
 
         // Loop over the slices, starting from the furthest, and working backwards until we get to ourselves
         // Read our local slice at this slice idx into cb_input_id or cb_output_id

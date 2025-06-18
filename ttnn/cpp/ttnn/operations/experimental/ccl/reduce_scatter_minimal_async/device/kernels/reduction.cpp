@@ -28,7 +28,7 @@ void MAIN {
 
             // Wait for input data once before beginning processing
             for (uint32_t packet_id = 0; packet_id < num_packets; packet_id++) {
-                uint32_t to_process = std::min(tile_granularity, tiles_per_slice - packet_id * tile_granularity);
+                uint32_t to_process = tile_granularity;
                 cb_wait_front(input_cb_id, to_process);
                 // Reserve output space once before processing
                 cb_wait_front(intermediate_cb, to_process);
