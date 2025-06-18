@@ -25,7 +25,7 @@ include(${PROJECT_SOURCE_DIR}/cmake/helper_functions.cmake)
 
 CREATE_PGM_EXAMPLES_EXE("${PROGRAMMING_EXAMPLES_SRCS}" "") # no subdir, output binaries straight to build/programming_examples
 
-CREATE_PGM_EXAMPLES_EXE("${MATMUL_SRCS}" "" "matmul") 
+CREATE_PGM_EXAMPLES_EXE("${MATMUL_SRCS}" "" "matmul")
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/profiler)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/contributed)
