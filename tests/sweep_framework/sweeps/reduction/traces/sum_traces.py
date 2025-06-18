@@ -637,7 +637,16 @@ parameters = {
 
 def run_sum(device, params):
     [input_shape, dim, keepdim] = params
-    torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
+    # torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
+    # torch_input_tensor = torch.ones(input_shape, dtype=torch.float32)
+    # 511 4095 bad optional access
+    # only 511 or 4095 bad optional access
+    h = 512
+    w = 4096
+    torch_input_tensor = (
+        torch.arange(w).reshape([1, w]).expand(h, w).reshape([1, 1, h, w])
+    )  # 0..4095 along w, all h same
+
     torch_output_tensor = torch.sum(torch_input_tensor, dim, keepdim)
 
     # input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -653,13 +662,14 @@ def run_sum(device, params):
         ),
     )
     # 512 x 4096, 4096/256 -> 16 shards: 3x5 - one wraps around
-    memory_config = ttnn.MemoryConfig(
+    memory_config2 = ttnn.MemoryConfig(
         buffer_type=ttnn.BufferType.L1,
         nd_shard_spec=ttnn.NdShardSpec(
             (1, 1, 512, 256),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 4))}),
         ),
     )
+    memory_config = memory_config2
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config
     )
@@ -667,6 +677,7 @@ def run_sum(device, params):
 
     start_time = start_measuring_time()
     op_output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
+    print(f"OP_OUTPUT {op_output_tensor}")
     output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.999

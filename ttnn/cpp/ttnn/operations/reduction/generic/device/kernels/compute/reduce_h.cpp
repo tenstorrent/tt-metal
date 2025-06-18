@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api/reduce.h"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -12,6 +13,8 @@ void MAIN {
     uint32_t Wt = get_compile_time_arg_val(1);
     uint32_t NC = get_compile_time_arg_val(2);
     uint32_t row_chunk = get_compile_time_arg_val(3);
+
+    DPRINT << "COMP " << Ht << " " << Wt << " " << NC << " " << row_chunk << ENDL();
 
     reduce_init<true>(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
     cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader
@@ -30,6 +33,7 @@ void MAIN {
     for (uint32_t nc = 0; nc < NC; ++nc) {
         for (uint32_t wt = 0; wt < Wt; wt += row_chunk) {
             uint32_t chunk_end = std::min(wt + row_chunk, Wt);
+            DPRINT << "NC WT " << nc << " " << NC << " " << wt << " / " << Wt << " " << chunk_end << ENDL();
             int reduce_dst_idx = 0;
 
             // reduction for one chunk
@@ -38,19 +42,24 @@ void MAIN {
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 reduce_dst_idx = 0;
                 for (uint32_t i = wt; i < chunk_end; ++i) {
+                    DPRINT << "IN1a " << ht << " " << i << ENDL();
                     cb_wait_front(tt::CB::c_in0, onetile);
+                    DPRINT << "IN1b " << ht << " " << i << ENDL();
                     reduce_tile(tt::CB::c_in0, tt::CB::c_in2, 0, 0, reduce_dst_idx);
                     cb_pop_front(tt::CB::c_in0, onetile);
                     ++reduce_dst_idx;
                 }
             }
             for (uint32_t i = wt; i < chunk_end; ++i) {
+                DPRINT << "IN2a " << " " << i << ENDL();
                 cb_reserve_back(tt::CBIndex::c_3, onetile);
+                DPRINT << "IN2b " << " " << i << ENDL();
                 pack_tile((i - wt), tt::CBIndex::c_3);
                 cb_push_back(tt::CBIndex::c_3, onetile);
             }
             release_dst();
         }
     }
+    DPRINT << "DONE COMPUTE" << ENDL();
 }
 }  // namespace NAMESPACE
