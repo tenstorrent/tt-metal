@@ -477,7 +477,7 @@ Single Program, Multiple Data (SPMD) execution is a common parallel computing mo
 
 For complex operations requiring specialized behavior, Metalium also supports Multiple Program, Multiple Data (MPMD) execution, where different Tensix cores run entirely different programs. An example is the data-reused matrix multiplication implementation, which places specialized kernels on specific Tensix cores to broadcast data to other cores, reducing NoC bandwidth consumption.
 
-Unlike OpenCL's `get_global_id()`, CUDA's `threadIdx`, or OpenMP's `omp_get_thread_num()`, Metalium does not provide built-in thread identification mechanisms. Instead, developers explicitly specify the data range each Tensix core processes by passing different runtime arguments to each core before kernel execution. For example:
+Unlike OpenCL's `get_global_id()`, CUDA's `threadIdx`, or OpenMP's `omp_get_thread_num()`, Metalium does not provide built-in thread and global work size identification mechanisms. Instead, developers explicitly specify the data range each Tensix core processes by passing different runtime arguments to each core before kernel execution. For example:
 
 ```c++
 CoreRange core_range = {{0, 0}, {4, 4}}; // Processors from (0,0) to (4,4)
@@ -513,46 +513,51 @@ for(uint32_t y = core_range.start.y; y < core_range.end.y; y++) {
 Metalium provides the `tt::tt_metal::split_work_to_cores` utility function to distribute work across available cores for SPMD execution. The function takes the total number of tiles and available cores, then calculates how to divide the work when it cannot be evenly distributed. The function returns two groups of cores: a primary group that handles more tiles per core, and a secondary group that handles fewer, along with the tile count for each group. Minimizing workload inbalance between cores (if work can be evenly distributed, the secondary group will be empty.)
 
 ```c++
-auto grid_size = device->compute_with_storage_grid_size();
+auto core_grid = device->compute_with_storage_grid_size();
 auto [num_cores, // number of cores utilized
     all_cores, // set of all cores used
     core_group_1, // Primary core group
     core_group_2, // Secondary core group
     num_tiles_per_core_group_1, // Number of tiles each core in the primary group processes
     num_tiles_per_core_group_2 // Number of tiles each core in the secondary group processes
-    ] = tt::tt_metal::split_work_to_cores(grid_size, n_tiles);
+    ] = tt::tt_metal::split_work_to_cores(grid_size, work_size);
+```
+
+Only create kernels on cores that have been assigned work (i.e., those in `all_cores` or `core_group_*`). Avoid creating kernels on unused cores, as this can cause undefined behavior or crashes if kernels are created but runtime arguments are not set on the core. If there is not enough work, some cores may remain idle—do not assign kernels to them.
+
+```c++
+// `all_cores` is guarenteed to be the union of `core_group_1` and `core_group_2`.
+for (const auto& core : all_cores) {
+    // Good
+    CreateKernel(program, "/path/to/reader.cpp", all_cores, DataMovementConfig{...});
+    CreateKernel(program, "/path/to/compute.cpp", all_cores, ComputeConfig{...});
+    CreateKernel(program, "/path/to/writer.cpp", all_cores, DataMovementConfig{...});
+
+    // Bad - all_cores may be smaller than core_grid
+    //                                               vvvvvvv
+    // CreateKernel(program, "/path/to/reader.cpp", core_grid, DataMovementConfig{...});
+    // CreateKernel(program, "/path/to/compute.cpp", core_grid, ComputeConfig{...});
+    // CreateKernel(program, "/path/to/writer.cpp", core_grid, DataMovementConfig{...});
+}
 ```
 
 Developers should iterate over all cores and set the runtime arguments for each kernel according to the assigned core group and tile count. The sum of tiles processed by all cores must match the original workload. If a core is not part of either group (can happen due to not enough work or other reasons), its runtime arguments MUST be set such the kernel does nothing (a no-op). Leaving runtime arguments uninitialized will lead to undefined behavior and issues during execution.
 
 ```c++
-auto cores = grid_to_cores(num_cores, num_coresgrid_size.x, grid_size.y);
-for (uint32_t i = 0, start_tile_id = 0; i < num_cores; i++) {
-    const auto& core = cores[i];
-
-    uint32_t num_tiles_per_core;
-
-    if (core_group_1.contains(core)) {
-        num_tiles_per_core = num_tiles_per_core_group_1;
+auto work_groups = {std::make_pair(core_group_1, num_tiles_per_core_group_1),
+                    std::make_pair(core_group_2, num_tiles_per_core_group_2)};
+uint32_t id = 0; // Offset for the next core in the group
+for(const auto& [group, work_per_core] : work_groups) {
+    for (const auto& range : group) {
+        for(const auto& core : range) {
+            // Set runtime arguments for each kernel based on the core and tile count
+            SetRuntimeArgs(program, reader, core, {/*reader parameters*/a->address(), b->address(), work_per_core, id});
+            SetRuntimeArgs(program, writer, core, {/*writer parameters*/c->address(), work_per_core});
+            SetRuntimeArgs(program, compute, core, {/*compute parameters*/work_per_core, id});
+            id += work_per_core;
+        }
     }
-    else if (core_group_2.contains(core)) {
-        num_tiles_per_core = num_tiles_per_core_group_2;
-    }
-    else {
-        // This core is not part of the primary or secondary group, Kernel parameters should be set so
-        // effectively performs no-op. Otherwise kernel parameters will be undefined and may cause issues.
-        // EX: by setting the number of tiles to be processed (among other parameters) to 0.
-        SetRuntimeArgs(program, reader, core, std::array<uint32_t, SOME_NUMBER_OF_PARAMETERS_READER>{0});
-        SetRuntimeArgs(program, writer, core, std::array<uint32_t, SOME_NUMBER_OF_PARAMETERS_WRITER>{0});
-        SetRuntimeArgs(program, compute, core, std::array<uint32_t, SOME_NUMBER_OF_PARAMETERS_COMPUTE>{0});
-        continue;
-    }
-
-    // Set runtime arguments for each kernel based on the core and tile count
-    SetRuntimeArgs(program, reader, core, {/*reader parameters*/a->address(), b->address(), num_tiles_per_core});
-    SetRuntimeArgs(program, writer, core, {/*writer parameters*/c->address(), num_tiles_per_core});
-    SetRuntimeArgs(program, compute, core, {/*compute parameters*/num_tiles_per_core});
-    start_tile_id += num_tiles_per_core;
 }
-// at final iteration, start_tile_id should equal n_tiles
+
+// at this point id == work_size as all cores have been assigned work
 ```
