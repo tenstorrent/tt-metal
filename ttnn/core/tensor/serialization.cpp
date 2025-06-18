@@ -379,37 +379,23 @@ void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) 
 
     Tensor cpu_tensor = tensor.cpu();
 
+    std::vector<HostBuffer> buffers;
     flatbuffers::FlatBufferBuilder builder;
-    auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder);
+    auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers);
     builder.Finish(tensor_offset);
 
     uint64_t header_size = builder.GetSize();
     safe_fwrite(&header_size, sizeof(header_size), 1, output_file);
     safe_fwrite(builder.GetBufferPointer(), header_size, 1, output_file);
 
-    std::visit(
-        tt::stl::overloaded{
-            [&output_file](const HostStorage& storage) {
-                auto buffer_view = storage.buffer.view_bytes();
-                safe_fwrite(buffer_view.data(), buffer_view.size(), 1, output_file);
-            },
-            [&output_file](const DeviceStorage&) {
-                // Unreachable - the tensor should be moved to host at this point.
-                TT_THROW("Device storage isn't supported in flatbuffer serialization");
-            },
-            [&output_file](const MultiDeviceHostStorage& storage) {
-                for (const auto& shard : storage.distributed_buffer().shard_coords()) {
-                    if (auto buffer = storage.distributed_buffer().get_shard(shard); buffer.has_value()) {
-                        auto buffer_view = buffer->view_bytes();
-                        safe_fwrite(buffer_view.data(), buffer_view.size(), 1, output_file);
-                    }
-                }
-            }},
-        cpu_tensor.storage());
+    for (const auto& buffer : buffers) {
+        auto buffer_view = buffer.view_bytes();
+        safe_fwrite(buffer_view.data(), buffer_view.size(), 1, output_file);
+    }
 }
 
 Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) {
-    int fd = open(file_name.c_str(), O_RDONLY);
+    int fd = open(file_name.c_str(), O_RDONLY | O_CLOEXEC);
     TT_FATAL(fd != -1, "Cannot open \"{}\"", file_name);
 
     struct stat file_stat;
