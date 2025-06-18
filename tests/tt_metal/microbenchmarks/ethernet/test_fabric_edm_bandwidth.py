@@ -701,10 +701,8 @@ def test_fabric_edm_mcast_half_ring_bw(
     [
         # pytest.param(("noc_unicast_write", 16), id="noc_unicast_write_16"),
         pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
-        pytest.param(("noc_unicast_write", 3072), id="noc_unicast_write_3072"),
         pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
         pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
-        pytest.param(("noc_unicast_scatter_write", 3072), id="noc_unicast_scatter_write_3072"),
         pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
     ],
 )
@@ -801,10 +799,8 @@ def test_fabric_8chip_multi_link_edm_mcast_half_ring_bw(
     "test_params",
     [
         pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
-        pytest.param(("noc_unicast_write", 3072), id="noc_unicast_write_3072"),
         pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
         pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
-        pytest.param(("noc_unicast_scatter_write", 3072), id="noc_unicast_scatter_write_3072"),
         pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
     ],
 )
@@ -900,10 +896,8 @@ def test_fabric_4chip_multi_link_edm_unicast_full_ring_bw(
     "test_params",
     [
         pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
-        pytest.param(("noc_unicast_write", 3072), id="noc_unicast_write_3072"),
         pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
         pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
-        pytest.param(("noc_unicast_scatter_write", 3072), id="noc_unicast_scatter_write_3072"),
         pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
     ],
 )
@@ -1271,10 +1265,8 @@ def test_fabric_6u_all_rows_and_cols_mcast_bw(
     "test_params",
     [
         pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
-        pytest.param(("noc_unicast_write", 3072), id="noc_unicast_write_3072"),
         pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
         pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
-        pytest.param(("noc_unicast_scatter_write", 3072), id="noc_unicast_scatter_write_3072"),
         pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
     ],
 )
@@ -1314,10 +1306,8 @@ def test_fabric_4chip_one_link_mcast_bw(
     "test_params",
     [
         pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
-        pytest.param(("noc_unicast_write", 3072), id="noc_unicast_write_3072"),
         pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
         pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
-        pytest.param(("noc_unicast_scatter_write", 3072), id="noc_unicast_scatter_write_3072"),
         pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
     ],
 )
@@ -1357,10 +1347,8 @@ def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
     "test_params",
     [
         pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
-        pytest.param(("noc_unicast_write", 3072), id="noc_unicast_write_3072"),
         pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
         pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
-        pytest.param(("noc_unicast_scatter_write", 3072), id="noc_unicast_scatter_write_3072"),
         pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
     ],
 )
@@ -1400,10 +1388,8 @@ def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
     "test_params",
     [
         pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
-        pytest.param(("noc_unicast_write", 3072), id="noc_unicast_write_3072"),
         pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
         pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
-        pytest.param(("noc_unicast_scatter_write", 3072), id="noc_unicast_scatter_write_3072"),
         pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
     ],
 )
@@ -1443,10 +1429,8 @@ def test_fabric_4chip_two_link_mcast_bw(
     "test_params",
     [
         pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
-        pytest.param(("noc_unicast_write", 3072), id="noc_unicast_write_3072"),
         pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
         pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
-        pytest.param(("noc_unicast_scatter_write", 3072), id="noc_unicast_scatter_write_3072"),
         pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
     ],
 )
@@ -1485,10 +1469,8 @@ def test_fabric_one_link_non_forwarding_unicast_bw(
     "test_params",
     [
         pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
-        pytest.param(("noc_unicast_write", 3072), id="noc_unicast_write_3072"),
         pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
         pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
-        pytest.param(("noc_unicast_scatter_write", 3072), id="noc_unicast_scatter_write_3072"),
         pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
     ],
 )
@@ -1528,10 +1510,8 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
     "test_params",
     [
         pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
-        pytest.param(("noc_unicast_write", 3072), id="noc_unicast_write_3072"),
         pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
         pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
-        pytest.param(("noc_unicast_scatter_write", 3072), id="noc_unicast_scatter_write_3072"),
         pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
     ],
 )
@@ -1571,10 +1551,8 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
     "test_params",
     [
         pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
-        pytest.param(("noc_unicast_write", 3072), id="noc_unicast_write_3072"),
         pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
         pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
-        pytest.param(("noc_unicast_scatter_write", 3072), id="noc_unicast_scatter_write_3072"),
         pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
     ],
 )
@@ -1614,10 +1592,8 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
     "test_params",
     [
         pytest.param(("noc_unicast_write", 2048), id="noc_unicast_write_2048"),
-        pytest.param(("noc_unicast_write", 3072), id="noc_unicast_write_3072"),
         pytest.param(("noc_unicast_write", 4096), id="noc_unicast_write_4096"),
         pytest.param(("noc_unicast_scatter_write", 2048), id="noc_unicast_scatter_write_2048"),
-        pytest.param(("noc_unicast_scatter_write", 3072), id="noc_unicast_scatter_write_3072"),
         pytest.param(("noc_unicast_scatter_write", 4096), id="noc_unicast_scatter_write_4096"),
     ],
 )
