@@ -465,6 +465,7 @@ class TT_CCL:
                 dtype=dtype,
                 topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
                 subdevice_id=self.worker_sub_device_id,
+                use_noc1_only=True,
             )
 
             if lm_head:
