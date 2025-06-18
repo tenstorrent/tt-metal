@@ -7,8 +7,13 @@
 #include "compute_kernel_api/eltwise_binary_st.h"
 #include "debug/dprint.h"
 #include "debug/dprint_tensix.h"
-
 #include "debug/dprint.h"
+
+#if 1
+#define DUNPACK(x) UNPACK(x)
+#else
+#define DUNPACK(x)
+#endif
 
 inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
         UNPACK(( DPRINT << "======" << ENDL() ));
@@ -24,7 +29,7 @@ void MAIN {
 
     // How many blocks of tiles to work on
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
-    
+
     // How many tiles per block
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
 
@@ -44,63 +49,62 @@ void MAIN {
         cb_wait_front(cb_in0, per_core_block_size);
         cb_wait_front(cb_in1, per_core_block_size);
 
-        UNPACK(DPRINT<< "WFD" << ENDL());	
+        DUNPACK(DPRINT << "WFD" << ENDL());
 
-	// Wait for enough space to be available in the output circular buffer
+        // Wait for enough space to be available in the output circular buffer
         cb_reserve_back_st(cb_out0, per_core_block_size);
 
-        UNPACK(DPRINT <<"RBD" <<ENDL());	
+        DUNPACK(DPRINT << "RBD" << ENDL());
 
         tile_regs_acquire_st();
-        
-        UNPACK(DPRINT <<"RACQD" <<ENDL());	
 
-	// Perform the elementwise operation on the tiles in the block 
-	// and store them in the destination register
+        DUNPACK(DPRINT << "RACQD" << ENDL());
+
+        // Perform the elementwise operation on the tiles in the block
+        // and store them in the destination register
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
             add_tiles_st(cb_in0, cb_in1, i, i, i);
         }
 
-        UNPACK(DPRINT <<"ADDD" <<ENDL());	
+        DUNPACK(DPRINT << "ADDD" << ENDL());
 
         tile_regs_commit_st();
 
-        UNPACK(DPRINT <<"RCOMMD" <<ENDL());	
+        DUNPACK(DPRINT << "RCOMMD" << ENDL());
 
         tile_regs_wait_st();
 
-        UNPACK(DPRINT <<"RWD" <<ENDL());	
+        DUNPACK(DPRINT << "RWD" << ENDL());
 
-//	print_full_tile(cb_out0);
-        // Pack all the output tiles from destination register out to 
-	// the output circular buffer that resides in L1 memory	
+        //	print_full_tile(cb_out0);
+        // Pack all the output tiles from destination register out to
+        // the output circular buffer that resides in L1 memory
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
             pack_tile_st(i, cb_out0);
         }
 
-        UNPACK(DPRINT <<"PACKD" <<ENDL());	
+        DUNPACK(DPRINT << "PACKD" << ENDL());
 
         tile_regs_release_st();
 
-        UNPACK(DPRINT <<"RRELD" <<ENDL());	
+        DUNPACK(DPRINT << "RRELD" << ENDL());
 
-
-	// Update the write pointer and counts for the output circular buffer. 
+        // Update the write pointer and counts for the output circular buffer.
         cb_push_back_st(cb_out0, per_core_block_size);
 
 //	print_full_tile(cb_out0);
 
-        UNPACK(DPRINT <<"PBD" <<ENDL());	
+        DUNPACK(DPRINT << "PBD" << ENDL());
 
-	// Pop out the used input tiles
+        // Pop out the used input tiles
         cb_pop_front(cb_in0, per_core_block_size);
         cb_pop_front(cb_in1, per_core_block_size);
 
-        UNPACK(DPRINT <<"POPD" <<ENDL());	
+        DUNPACK(DPRINT << "POPD" << ENDL());
     }
 
     UNPACK(DPRINT << "UE" << ENDL());
-    //PACK(DPRINT << "PE" << ENDL());
-    //MATH(DPRINT << "ME" << ENDL());
+    PACK(DPRINT << "PE" << ENDL());
+    MATH(DPRINT << "ME" << ENDL());
 }
 }  // namespace NAMESPACE
