@@ -86,7 +86,6 @@ HalCoreInfoType create_idle_eth_mem_map() {
     return {
         HalProgrammableCoreType::IDLE_ETH,
         CoreType::ETH,
-        static_cast<uint8_t>(EthProcessorTypes::COUNT),
         processor_classes,
         mem_map_bases,
         mem_map_sizes,

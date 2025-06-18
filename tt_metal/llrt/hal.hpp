@@ -71,7 +71,6 @@ class HalCoreInfoType {
 private:
     HalProgrammableCoreType programmable_core_type_;
     CoreType core_type_;
-    uint8_t num_processor_types_;
     // indices represents processor class and type positions, value is build configuration params
     std::vector<std::vector<HalJitBuildConfig>> processor_classes_;
     std::vector<DeviceAddr> mem_map_bases_;
@@ -84,7 +83,6 @@ public:
     HalCoreInfoType(
         HalProgrammableCoreType programmable_core_type,
         CoreType core_type,
-        uint8_t num_processor_types,
         const std::vector<std::vector<HalJitBuildConfig>>& processor_classes,
         const std::vector<DeviceAddr>& mem_map_bases,
         const std::vector<uint32_t>& mem_map_sizes,
@@ -120,8 +118,6 @@ inline uint32_t HalCoreInfoType::get_processor_types_count(uint32_t processor_cl
     TT_ASSERT(processor_class_idx < this->processor_classes_.size());
     return this->processor_classes_[processor_class_idx].size();
 }
-
-inline uint8_t HalCoreInfoType::get_processor_types_count() const { return this->num_processor_types_; }
 
 inline const HalJitBuildConfig& HalCoreInfoType::get_jit_build_config(
     uint32_t processor_class_idx, uint32_t processor_type_idx) const {
@@ -281,7 +277,7 @@ public:
 
     bool get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const;
 
-    uint8_t get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const;
+    uint32_t get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const;
 
     uint32_t get_total_num_risc_processors() const;
 
@@ -413,9 +409,16 @@ inline bool Hal::get_supports_receiving_multicasts(uint32_t programmable_core_ty
     return this->core_info_[programmable_core_type_index].supports_receiving_multicast_cmds_;
 }
 
-inline uint8_t Hal::get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const {
-    return this->core_info_[utils::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
-        .get_processor_types_count();
+inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const {
+    const uint32_t num_processor_classes =
+        this->core_info_[utils::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
+            .get_processor_classes_count();
+    uint32_t num_riscs = 0;
+    for (uint32_t processor_class_idx = 0; processor_class_idx < num_processor_classes; processor_class_idx++) {
+        num_riscs += this->core_info_[utils::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
+                         .get_processor_types_count(processor_class_idx);
+    }
+    return num_riscs;
 }
 
 inline const HalJitBuildConfig& Hal::get_jit_build_config(

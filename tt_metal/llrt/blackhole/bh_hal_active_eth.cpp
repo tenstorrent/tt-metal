@@ -113,7 +113,6 @@ HalCoreInfoType create_active_eth_mem_map() {
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,
-        static_cast<uint8_t>(EthProcessorTypes::COUNT),
         processor_classes,
         mem_map_bases,
         mem_map_sizes,

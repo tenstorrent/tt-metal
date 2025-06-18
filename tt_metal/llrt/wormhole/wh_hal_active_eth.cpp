@@ -109,7 +109,6 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,
-        static_cast<uint8_t>(EthProcessorTypes::COUNT),
         processor_classes,
         mem_map_bases,
         mem_map_sizes,

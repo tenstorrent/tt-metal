@@ -42,10 +42,7 @@ uint32_t Hal::get_programmable_core_type_index(HalProgrammableCoreType programma
 uint32_t Hal::get_total_num_risc_processors() const {
     uint32_t num_riscs = 0;
     for (uint32_t core_idx = 0; core_idx < core_info_.size(); core_idx++) {
-        uint32_t num_processor_classes = core_info_[core_idx].get_processor_classes_count();
-        for (uint32_t processor_class_idx = 0; processor_class_idx < num_processor_classes; processor_class_idx++) {
-            num_riscs += core_info_[core_idx].get_processor_types_count(processor_class_idx);
-        }
+        num_riscs += this->get_num_risc_processors(this->core_info_[core_idx].programmable_core_type_);
     }
     return num_riscs;
 }
@@ -53,7 +50,6 @@ uint32_t Hal::get_total_num_risc_processors() const {
 HalCoreInfoType::HalCoreInfoType(
     HalProgrammableCoreType programmable_core_type,
     CoreType core_type,
-    uint8_t num_processor_types,
     const std::vector<std::vector<HalJitBuildConfig>>& processor_classes,
     const std::vector<DeviceAddr>& mem_map_bases,
     const std::vector<uint32_t>& mem_map_sizes,
@@ -62,7 +58,6 @@ HalCoreInfoType::HalCoreInfoType(
     bool supports_receiving_multicast_cmds) :
     programmable_core_type_(programmable_core_type),
     core_type_(core_type),
-    num_processor_types_(num_processor_types),
     processor_classes_(processor_classes),
     mem_map_bases_(mem_map_bases),
     mem_map_sizes_(mem_map_sizes),
