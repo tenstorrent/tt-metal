@@ -246,6 +246,7 @@ jobs:
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

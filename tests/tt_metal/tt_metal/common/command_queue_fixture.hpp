@@ -23,7 +23,9 @@ class CommandQueueFixture : public DispatchFixture {
 protected:
     tt::tt_metal::IDevice* device_;
     void SetUp() override {
-        this->validate_dispatch_mode();
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_device();
     }
@@ -34,14 +36,15 @@ protected:
         }
     }
 
-    void validate_dispatch_mode() {
+    bool validate_dispatch_mode() {
         this->slow_dispatch_ = false;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
-            GTEST_SKIP();
+            return false;
         }
+        return true;
     }
 
     void create_device(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
@@ -62,7 +65,9 @@ class CommandQueueProgramFixture : public CommandQueueFixture {};
 class CommandQueueTraceFixture : public CommandQueueFixture {
 protected:
     void SetUp() override {
-        this->validate_dispatch_mode();
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     }
 
@@ -72,21 +77,28 @@ protected:
 class CommandQueueSingleCardFixture : virtual public DispatchFixture {
 protected:
     void SetUp() override {
-        this->validate_dispatch_mode();
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
     }
 
-    void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
+    void TearDown() override {
+        if (!reserved_devices_.empty()) {
+            tt::tt_metal::detail::CloseDevices(reserved_devices_);
+        }
+    }
 
-    void validate_dispatch_mode() {
+    bool validate_dispatch_mode() {
         this->slow_dispatch_ = false;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = false;
-            GTEST_SKIP();
+            return false;
         }
+        return true;
     }
 
     void create_devices(const std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
@@ -124,7 +136,9 @@ class CommandQueueSingleCardBufferFixture : public CommandQueueSingleCardFixture
 class CommandQueueSingleCardTraceFixture : virtual public CommandQueueSingleCardFixture {
 protected:
     void SetUp() override {
-        this->validate_dispatch_mode();
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices(90000000);
     }
