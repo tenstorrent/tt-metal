@@ -627,6 +627,7 @@ class TT_CCL:
             num_kv_heads=1,
             memory_config=qkv_memory_config,
             qkv_memory_config=qkv_memory_config,
+            use_noc1_only=True,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD
