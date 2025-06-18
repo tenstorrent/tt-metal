@@ -26,7 +26,7 @@ namespace ckernel {
 // clang-format on
 ALWI void binary_op_init_common_st(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
     UNPACK((llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1)));
-    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
+    // UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
 
     UNPACK((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     UNPACK((llk_math_hw_configure_disaggregated(icb0, icb1)));
@@ -53,11 +53,12 @@ ALWI void binary_op_init_common_st(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
 // clang-format on
 template <bool full_init, EltwiseBinaryType eltwise_binary_type>
 ALWI void binary_tiles_init_st(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
-    UNPACK((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY>(0 /*transpose*/, acc_to_dest)));
+    UNPACK((llk_unpack_AB_init_st(icb0, icb1, 0 /*transpose*/, acc_to_dest)));
+    //   UNPACK((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY>(0 /*transpose*/, acc_to_dest)));
 
-    if constexpr (full_init) {
-        UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/, acc_to_dest)));
-    }
+    //   if constexpr (full_init) {
+    //       UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/, acc_to_dest)));
+    //   }
 }
 
 // clang-format off
