@@ -206,6 +206,7 @@ def run_all_to_all_dispatch_test(
     topology=ttnn.Topology.Linear,
     input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    axis=1,
 ):
     mesh_device.enable_program_cache()
     devices = mesh_shape[0] * mesh_shape[1]
@@ -231,6 +232,14 @@ def run_all_to_all_dispatch_test(
 
     output_tensor_goldens_list = []
     output_metadata_goldens_list = []
+    if axis is None:
+        mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    elif axis == 1:
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=mesh_shape)
+    elif axis == 0:
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape)
+    else:
+        raise ValueError(f"Invalid axis: {axis}")
 
     for iter in range(num_iters):
         input_tokens, expert_indices, expert_mapping, sparse_output_token_tensor, metadata_tensor = gen_tensors(
@@ -264,7 +273,7 @@ def run_all_to_all_dispatch_test(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=dtype,
             memory_config=input_memory_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=mesh_shape),
+            mesh_mapper=mesh_mapper,
         )
 
         tt_expert_indices = ttnn.from_torch(
@@ -273,7 +282,7 @@ def run_all_to_all_dispatch_test(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint16,
             memory_config=input_memory_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=mesh_shape),
+            mesh_mapper=mesh_mapper,
         )
 
         tt_expert_mapping = ttnn.from_torch(
@@ -341,7 +350,7 @@ def run_all_to_all_dispatch_test(
                 input_tensors[buffer_index],
                 expert_indices_tensors[buffer_index],
                 expert_mapping_tensors[buffer_index],
-                axis=1,
+                axis=axis,
                 num_links=num_links,
                 topology=topology,
                 memory_config=output_memory_config,
@@ -530,21 +539,44 @@ def run_all_to_all_dispatch_test(
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
-def test_all_to_all_dispatch_no_trace(mesh_device, trace_mode, mesh_shape):
-    devices = mesh_shape[0] * mesh_shape[1]
-    batch = 8 * mesh_shape[1]
-    experts = 8 * devices
-    select_experts_k = 8
-    hidden_size = 7000
-    seq_len = 2
-    num_iters = 10
-    warmup_iters = 0
-    trace_mode = trace_mode
-    input_memory_config = ttnn.DRAM_MEMORY_CONFIG
-    output_memory_config = ttnn.DRAM_MEMORY_CONFIG
-    num_links = 1
-    topology = ttnn.Topology.Linear
-    dtype = ttnn.bfloat16
+@pytest.mark.parametrize("axis", [1])
+@pytest.mark.parametrize("batches_per_device", [8])
+@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("hidden_size", [7000])
+@pytest.mark.parametrize("seq_len", [2])
+@pytest.mark.parametrize("num_iters", [10])
+@pytest.mark.parametrize("warmup_iters", [0])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+def test_all_to_all_dispatch_no_trace(
+    mesh_device,
+    trace_mode,
+    mesh_shape,
+    axis,
+    batches_per_device,
+    experts_per_device,
+    select_experts_k,
+    hidden_size,
+    seq_len,
+    num_iters,
+    warmup_iters,
+    num_links,
+    topology,
+    dtype,
+    input_memory_config,
+    output_memory_config,
+):
+    if axis is None:
+        dispatch_devices = mesh_shape[0] * mesh_shape[1]
+    else:
+        dispatch_devices = mesh_shape[axis]
+
+    batch = batches_per_device * dispatch_devices
+    experts = experts_per_device * dispatch_devices
 
     run_all_to_all_dispatch_test(
         mesh_device,
@@ -563,6 +595,7 @@ def test_all_to_all_dispatch_no_trace(mesh_device, trace_mode, mesh_shape):
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
         dtype=dtype,
+        axis=axis,
     )
 
 
@@ -581,21 +614,44 @@ def test_all_to_all_dispatch_no_trace(mesh_device, trace_mode, mesh_shape):
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
-def test_all_to_all_dispatch_trace(mesh_device, trace_mode, mesh_shape):
-    devices = mesh_shape[0] * mesh_shape[1]
-    batch = 8 * mesh_shape[1]
-    experts = 8 * devices
-    select_experts_k = 8
-    hidden_size = 7000
-    seq_len = 2
-    num_iters = 75
-    warmup_iters = 10
-    trace_mode = trace_mode
-    input_memory_config = ttnn.DRAM_MEMORY_CONFIG
-    output_memory_config = ttnn.DRAM_MEMORY_CONFIG
-    num_links = 1
-    topology = ttnn.Topology.Linear
-    dtype = ttnn.bfloat16
+@pytest.mark.parametrize("axis", [1])
+@pytest.mark.parametrize("batches_per_device", [8])
+@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("hidden_size", [7000])
+@pytest.mark.parametrize("seq_len", [2])
+@pytest.mark.parametrize("num_iters", [75])
+@pytest.mark.parametrize("warmup_iters", [10])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_all_to_all_dispatch_trace(
+    mesh_device,
+    trace_mode,
+    mesh_shape,
+    axis,
+    batches_per_device,
+    experts_per_device,
+    select_experts_k,
+    hidden_size,
+    seq_len,
+    num_iters,
+    warmup_iters,
+    num_links,
+    topology,
+    dtype,
+    input_memory_config,
+    output_memory_config,
+):
+    if axis is None:
+        dispatch_devices = mesh_shape[0] * mesh_shape[1]
+    else:
+        dispatch_devices = mesh_shape[axis]
+
+    batch = batches_per_device * dispatch_devices
+    experts = experts_per_device * dispatch_devices
 
     run_all_to_all_dispatch_test(
         mesh_device,
@@ -614,6 +670,7 @@ def test_all_to_all_dispatch_trace(mesh_device, trace_mode, mesh_shape):
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
         dtype=dtype,
+        axis=axis,
     )
 
 
