@@ -692,43 +692,43 @@ void RunAsyncWriteMulticastTest(
     }
 }
 
-void RunGetNextHopRouterDirectionAllToAllTest(BaseFabricFixture* fixture) {
+void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_mesh = false) {
     CoreCoord logical_core = {0, 0};
-    CoreRangeSet logical_crs = {logical_core};
-    MeshId mesh_id{0};
 
-    // Get all available devices
     auto devices = DevicePool::instance().get_all_active_devices();
     const size_t NUM_DEVICES = devices.size();
     if (NUM_DEVICES < 2) {
-        GTEST_SKIP() << "Need at least 2 devices for All-to-All test";
+        GTEST_SKIP() << "Need at least 2 devices for routing direction test";
     }
 
     std::vector<tt::tt_metal::Program> programs(NUM_DEVICES);
-    // fabric logical id based results
     std::vector<std::shared_ptr<tt_metal::Buffer>> result_buffers(NUM_DEVICES);
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
         auto* src_device = devices[src_idx];
-        uint32_t src_fabric_chip_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device->id()).chip_id;
+        auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device->id());
+        uint32_t src_fabric_chip_id = src_fabric_node_id.chip_id;
 
-        uint32_t result_size = NUM_DEVICES * sizeof(uint32_t);  // 1xN array
+        uint32_t result_size = NUM_DEVICES * sizeof(uint32_t);
         std::vector<uint32_t> result_buffer_data(NUM_DEVICES, 0);
-        result_buffers[src_idx] = PrepareBuffer(src_device, result_size, logical_crs, result_buffer_data);
+        CoreRangeSet core_range = {logical_core};
+        result_buffers[src_idx] = PrepareBuffer(src_device, result_size, core_range, result_buffer_data);
         programs[src_idx] = tt::tt_metal::CreateProgram();
 
-        uint32_t dst_mesh_id = *mesh_id;
         uint32_t result_addr = result_buffers[src_idx]->address();
         std::vector<uint32_t> runtime_args = {
-            src_fabric_chip_id,
-            dst_mesh_id,
-            result_addr,
-            static_cast<uint32_t>(NUM_DEVICES),
+            *src_fabric_node_id.mesh_id,         // src_mesh_id
+            src_fabric_chip_id,                  // src_chip_id
+            result_addr,                         // result_addr
+            static_cast<uint32_t>(NUM_DEVICES),  // num_devices
         };
-        // Add all destination fabric logical chip ids to runtime args
+
+        // Add mesh_id and chip_id pairs for all destinations
         for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
-            runtime_args.push_back(
-                control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->id()).chip_id);
+            auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->id());
+            runtime_args.push_back(*dst_fabric_node_id.mesh_id);  // dst_mesh_id
+            runtime_args.push_back(dst_fabric_node_id.chip_id);   // dst_chip_id
         }
 
         auto kernel = tt_metal::CreateKernel(
@@ -751,91 +751,6 @@ void RunGetNextHopRouterDirectionAllToAllTest(BaseFabricFixture* fixture) {
 
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
         auto* src_device = devices[src_idx];
-        uint32_t src_fabric_chip_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device->id()).chip_id;
-        std::vector<uint32_t> result_data;
-        tt::tt_metal::detail::ReadFromBuffer(result_buffers[src_idx], result_data);
-        for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
-            uint32_t actual_direction = result_data[dst_idx];  // Read from 1xN kernel result, logical id
-            if (src_fabric_chip_id == dst_idx) {
-                EXPECT_EQ(actual_direction, (uint32_t)eth_chan_magic_values::INVALID_DIRECTION)
-                    << "Self-routing should return INVALID_DIRECTION";
-                continue;  // Skip self
-            }
-            uint32_t dst_dev_id = devices[dst_idx]->id();
-            auto expected_direction =
-                control_plane
-                    .get_forwarding_direction(FabricNodeId{mesh_id, src_fabric_chip_id}, FabricNodeId{mesh_id, dst_idx})
-                    .value_or(RoutingDirection::NONE);
-            auto forwarding_direction = expected_direction != RoutingDirection::NONE
-                                            ? control_plane.routing_direction_to_eth_direction(expected_direction)
-                                            : (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION;
-            EXPECT_EQ(actual_direction, forwarding_direction);
-        }
-    }
-}
-
-// Simplified multi-mesh test - follows same pattern as AllToAll but supports multi-mesh
-void RunGetNextHopRouterDirectionMultiMeshTest(BaseFabricFixture* fixture) {
-    CoreCoord logical_core = {0, 0};
-
-    // Get all available devices
-    auto devices = DevicePool::instance().get_all_active_devices();
-    const size_t NUM_DEVICES = devices.size();
-    if (NUM_DEVICES < 2) {
-        GTEST_SKIP() << "Need at least 2 devices for Multi-Mesh test";
-    }
-
-    std::vector<tt::tt_metal::Program> programs(NUM_DEVICES);
-    std::vector<std::shared_ptr<tt_metal::Buffer>> result_buffers(NUM_DEVICES);
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
-        auto* src_device = devices[src_idx];
-        auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device->id());
-        uint32_t src_fabric_chip_id = src_fabric_node_id.chip_id;
-
-        uint32_t result_size = NUM_DEVICES * sizeof(uint32_t);
-        std::vector<uint32_t> result_buffer_data(NUM_DEVICES, 0);
-        CoreRangeSet core_range = {logical_core};
-        result_buffers[src_idx] = PrepareBuffer(src_device, result_size, core_range, result_buffer_data);
-        programs[src_idx] = tt::tt_metal::CreateProgram();
-
-        uint32_t result_addr = result_buffers[src_idx]->address();
-        std::vector<uint32_t> runtime_args = {
-            *src_fabric_node_id.mesh_id,
-            src_fabric_chip_id,
-            result_addr,
-            static_cast<uint32_t>(NUM_DEVICES),
-        };
-
-        // Add mesh_id and chip_id pairs for all destinations
-        for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
-            auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->id());
-            runtime_args.push_back(*dst_fabric_node_id.mesh_id);  // mesh_id
-            runtime_args.push_back(dst_fabric_node_id.chip_id);   // chip_id
-        }
-
-        auto kernel = tt_metal::CreateKernel(
-            programs[src_idx],
-            "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_get_next_hop_router_direction_multi_mesh.cpp",
-            {logical_core},
-            tt_metal::DataMovementConfig{});
-
-        tt_metal::SetRuntimeArgs(programs[src_idx], kernel, logical_core, runtime_args);
-    }
-
-    for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
-        auto* src_device = devices[src_idx];
-        tt::tt_metal::EnqueueProgram(src_device->command_queue(), programs[src_idx], false);
-    }
-    for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
-        auto* src_device = devices[src_idx];
-        tt::tt_metal::Finish(src_device->command_queue());
-    }
-
-    // Validate results with multi-mesh awareness
-    for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
-        auto* src_device = devices[src_idx];
         auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device->id());
         uint32_t src_fabric_chip_id = src_fabric_node_id.chip_id;
 
@@ -850,11 +765,15 @@ void RunGetNextHopRouterDirectionMultiMeshTest(BaseFabricFixture* fixture) {
             } else {
                 auto expected_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id)
                                               .value_or(RoutingDirection::NONE);
-                auto forwarding_direction =
-                    (uint32_t)(expected_direction != RoutingDirection::NONE
-                                   ? control_plane.routing_direction_to_eth_direction(expected_direction)
-                                   : (eth_chan_directions)eth_chan_magic_values::INVALID_DIRECTION);
-                EXPECT_EQ(actual_direction, forwarding_direction);
+
+                if (expected_direction != RoutingDirection::NONE) {
+                    // Route exists - should return valid direction
+                    auto expected_eth_direction = control_plane.routing_direction_to_eth_direction(expected_direction);
+                    EXPECT_EQ(actual_direction, expected_eth_direction);
+                } else {
+                    // No route exists - should return INVALID_DIRECTION
+                    EXPECT_EQ(actual_direction, (uint32_t)eth_chan_magic_values::INVALID_DIRECTION);
+                }
             }
         }
     }
@@ -922,8 +841,6 @@ TEST_F(Fabric2DFixture, DISABLED_TestAsyncRawWriteAtomicInc) {
     RunAsyncWriteAtomicIncTest(this, fabric_mode::PUSH, true);
 }
 
-TEST_F(Fabric2DFixture, TestGetNextHopRouterDirection2ArgsAllToAll) { RunGetNextHopRouterDirectionAllToAllTest(this); }
-
 // 2D Dynamic Routing Unicast Tests
 TEST_F(Fabric2DDynamicFixture, TestUnicastRaw) {
     for (uint32_t i = 0; i < 10; i++) {
@@ -942,7 +859,7 @@ TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestUnicastRaw) {
 }
 
 TEST_F(Fabric2DDynamicFixture, TestGetNextHopRouterDirection1MeshAllToAll) {
-    RunGetNextHopRouterDirectionAllToAllTest(this);
+    RunGetNextHopRouterDirectionTest(this, false);
 }
 
 // Multi-Mesh Test - Using parameterized test with connected mesh descriptor
@@ -950,14 +867,14 @@ TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestGetNextHopRouterDirectionMu
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
     CustomMeshGraphFabric2DDynamicFixture::SetUp(
         mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
-    RunGetNextHopRouterDirectionMultiMeshTest(this);
+    RunGetNextHopRouterDirectionTest(this, true);
 }
 
 TEST_P(T3kDisjointMeshGraphFabric2DDynamicFixture, TestGetNextHopRouterDirectionDisjointMultiMesh) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
     CustomMeshGraphFabric2DDynamicFixture::SetUp(
         mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
-    RunGetNextHopRouterDirectionMultiMeshTest(this);
+    RunGetNextHopRouterDirectionTest(this, true);
 }
 
 INSTANTIATE_TEST_SUITE_P(
