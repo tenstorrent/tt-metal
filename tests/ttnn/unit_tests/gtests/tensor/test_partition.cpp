@@ -311,6 +311,7 @@ TEST(PartitionTest, ChunkNdimNonUniqueDims) {
     tensor.reshape({2, 3, 4});
 
     EXPECT_ANY_THROW(chunk_ndim(tensor, {2, 2}, {0, 0}));
+    EXPECT_ANY_THROW(chunk_ndim(tensor, {2, 2}, {2, -1}));
     EXPECT_ANY_THROW(chunk_ndim(tensor, {2, 2, 3}, {0, 1, 0}));
 }
 

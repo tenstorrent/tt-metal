@@ -27,6 +27,14 @@ tt::stl::SmallVector<int> normalize_dims(const tt::stl::SmallVector<int>& dims, 
     std::transform(dims.begin(), dims.end(), std::back_inserter(normalized_dims), [tensor_dims](int dim) {
         return dim < 0 ? dim + static_cast<int>(tensor_dims) : dim;
     });
+    TT_FATAL(
+        std::all_of(
+            normalized_dims.begin(),
+            normalized_dims.end(),
+            [tensor_dims](int dim) { return dim >= 0 && dim < tensor_dims; }),
+        "Invalid dimension index; got dims: {}, tensor dimension: {}",
+        dims,
+        tensor_dims);
     return normalized_dims;
 }
 
@@ -42,7 +50,9 @@ auto chunk_xexpression(
     }
 
     TT_FATAL(num_chunks.size() == dims.size(), "num_chunks and dims must have the same size");
-    auto sorted_dims = dims;
+
+    const auto normalized_dims = normalize_dims(dims, expr.dimension());
+    auto sorted_dims = normalized_dims;
     std::sort(sorted_dims.begin(), sorted_dims.end());
     TT_FATAL(std::unique(sorted_dims.begin(), sorted_dims.end()) == sorted_dims.end(), "dims must be unique");
 
@@ -50,16 +60,6 @@ auto chunk_xexpression(
         std::all_of(num_chunks.begin(), num_chunks.end(), [](int size) { return size > 0; }),
         "num_chunks must be > 0; got num_chunks: {}",
         num_chunks);
-
-    const auto normalized_dims = normalize_dims(dims, expr.dimension());
-    TT_FATAL(
-        std::all_of(
-            normalized_dims.begin(),
-            normalized_dims.end(),
-            [&expr](int dim) { return dim >= 0 && dim < expr.dimension(); }),
-        "invalid dimension index; got dims: {}, tensor dimension: {}",
-        dims,
-        expr.dimension());
 
     const size_t dims_size = normalized_dims.size();
     tt::stl::SmallVector<std::vector<std::pair<int, int>>> dim_ranges;
