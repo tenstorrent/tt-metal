@@ -273,6 +273,7 @@ void kernel_main() {
 
     if constexpr (padding_config_cb_id != 0) {
         if constexpr (pad_val_u32 == 0) {
+            // Use MEM_ZEROS_BASE if we are zero padded
             const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, MEM_ZEROS_BASE);
             constexpr uint32_t padding_region_size = MEM_ZEROS_SIZE;
             copy_padding<padding_config_cb_id, out_cb_id, stick_nbytes, padding_region_size>(padding_l1_addr);
