@@ -673,14 +673,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
             // Get the cores for the sender and receiver worker cores
             if (!is_linear || ring_index != ring_size - 1) {
                 auto eth_sender_core =
-                    device->get_ethernet_sockets(receiver_device_id.value()).at(sender_socket_idx + l);
+                    device->get_ethernet_sockets(receiver_device_id.value(), /*skip_reserved_fabric_cores=*/true)
+                        .at(sender_socket_idx + l);
                 eth_sender_cores.push_back(eth_sender_core);
                 log_trace(
                     tt::LogOp, "\teth_sender_core on link {}: (x={},y={})", l, eth_sender_core.x, eth_sender_core.y);
             }
             if (!is_linear || ring_index != 0) {
                 auto eth_receiver_core =
-                    device->get_ethernet_sockets(sender_device_id.value()).at(receiver_socket_idx + l);
+                    device->get_ethernet_sockets(sender_device_id.value(), /*skip_reserved_fabric_cores=*/true)
+                        .at(receiver_socket_idx + l);
                 eth_receiver_cores.push_back(eth_receiver_core);
                 log_trace(
                     tt::LogOp,

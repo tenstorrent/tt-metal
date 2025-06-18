@@ -1285,21 +1285,16 @@ int TestLoopbackEntrypoint(
     const auto& device_0 = view.get_device(MeshCoordinate(0, 0));
     const auto& device_1 = view.get_device(MeshCoordinate(0, 1));
 
-    const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
-    auto eth_sender_core_iter = active_eth_cores.begin();
-    auto eth_sender_core_iter_end = active_eth_cores.end();
-    chip_id_t device_id = std::numeric_limits<chip_id_t>::max();
-    tt_xy_pair eth_receiver_core;
     bool initialized = false;
-    tt_xy_pair eth_sender_core;
-    do {
-        TT_FATAL(eth_sender_core_iter != eth_sender_core_iter_end, "Error");
-        std::tie(device_id, eth_receiver_core) = device_0->get_connected_ethernet_core(*eth_sender_core_iter);
-        eth_sender_core = *eth_sender_core_iter;
-        eth_sender_core_iter++;
-    } while (device_id != device_1->id());
-    TT_ASSERT(device_id == device_1->id());
-    // const auto& device_1 = test_fixture.mesh_device_->get_device(device_id);
+    const auto eth_receiver_cores = device_1->get_ethernet_sockets(device_0->id(), /*skip_reserved_fabric_cores=*/true);
+    const auto eth_sender_cores = device_0->get_ethernet_sockets(device_1->id(), /*skip_reserved_fabric_cores=*/true);
+
+    TT_ASSERT(
+        !eth_receiver_cores.empty(), "No eth receiver cores found (device {} to {})", device_1->id(), device_0->id());
+    TT_ASSERT(!eth_sender_cores.empty(), "No eth sender cores found (device {} to {})", device_0->id(), device_1->id());
+
+    const auto eth_receiver_core = eth_receiver_cores[0];
+    const auto eth_sender_core = eth_sender_cores[0];
 
     std::vector<Program> programs(1);
     std::optional<std::vector<Program>> fabric_programs;
@@ -1370,6 +1365,7 @@ int TestLoopbackEntrypoint(
         test_fixture.TearDown();
         return -1;
     }
+    log_info(tt::LogTest, "Second time {} ", programs.size());
 
     {
         // Run the test twice with a single fabric invocation
@@ -2165,7 +2161,7 @@ struct Fabric1DWorkerConfig {
 std::vector<CoreCoord> compute_top_row_ethernet_cores(IDevice* device, const Fabric1DWorkerConfig& worker_config) {
     std::vector<CoreCoord> reordered_ethernet_cores;
     if (worker_config.has_forward_connection) {
-        for (auto core : device->get_ethernet_sockets(worker_config.forward_device->id())) {
+        for (auto core : device->get_ethernet_sockets(worker_config.forward_device->id(), true)) {
             auto core_virtual = device->virtual_core_from_logical_core(core, CoreType::ETH);
             reordered_ethernet_cores.push_back(core_virtual);
         }
@@ -2173,7 +2169,7 @@ std::vector<CoreCoord> compute_top_row_ethernet_cores(IDevice* device, const Fab
             return a.x < b.x;
         });
     } else if (worker_config.has_backward_connection) {
-        for (auto core : device->get_ethernet_sockets(worker_config.backward_device->id())) {
+        for (auto core : device->get_ethernet_sockets(worker_config.backward_device->id(), true)) {
             auto core_virtual = device->virtual_core_from_logical_core(core, CoreType::ETH);
             reordered_ethernet_cores.push_back(core_virtual);
         }

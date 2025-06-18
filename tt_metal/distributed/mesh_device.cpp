@@ -650,7 +650,8 @@ bool MeshDevice::is_active_ethernet_core(CoreCoord /*logical_core*/, bool /*skip
     TT_THROW("is_active_ethernet_core() is not supported on MeshDevice - use individual devices instead");
 }
 
-std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(chip_id_t /*connected_chip_id*/) const {
+std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(
+    chip_id_t /*connected_chip_id*/, bool /*skip_reserved_fabric_cores*/) const {
     TT_THROW("get_ethernet_sockets() is not supported on MeshDevice - use individual devices instead");
 }
 
