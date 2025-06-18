@@ -18,8 +18,8 @@ void kernel_main() {
     constexpr bool pad_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
 
-    const InterleavedAddrGen<src_is_dram> s0 = {.bank_base_address = src_addr, .page_size = data_size_bytes};
-    const InterleavedAddrGen<pad_is_dram> s1 = {.bank_base_address = pad_addr, .page_size = data_size_bytes};
+    const InterleavedAddrGen<src_is_dram> s0 = {.bank_base_address = src_addr, .page_size = 32};
+    const InterleavedAddrGen<pad_is_dram> s1 = {.bank_base_address = pad_addr, .page_size = 32};
 
     // pad based on page
     uint32_t src_stick_id = start_src_stick_id;
