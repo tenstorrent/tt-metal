@@ -199,18 +199,27 @@ def create_mesh_device(*args, **kwargs):
 TensorToMesh = ttnn.CppTensorToMesh
 
 
+# Deprecated. Prefer to use `ttnn.replicate_tensor_to_mesh_mapper` directly.
 def ReplicateTensorToMesh(mesh_device: MeshDevice):
     return ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
 
 
+# Deprecated. Prefer to use `ttnn.shard_tensor_to_mesh_mapper` directly.
 def ShardTensorToMesh(mesh_device: MeshDevice, dim: int):
     return ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim)
 
 
+# Deprecated. Prefer to create `ttnn.MeshMapperConfig` directly.
 def ShardTensor2dMesh(mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims: Tuple[Optional[int], Optional[int]]):
     return ttnn.create_mesh_mapper(
         mesh_device,
-        ttnn.MeshMapperConfig(shard_dim[0], shard_dim[1], ttnn.MeshShape(mesh_shape[0], mesh_shape[1])),
+        ttnn.MeshMapperConfig(
+            [
+                ttnn.PlacementShard(dims[0]) if dims[0] else ttnn.PlacementReplicate(),
+                ttnn.PlacementShard(dims[1]) if dims[1] else ttnn.PlacementReplicate(),
+            ],
+            ttnn.MeshShape(mesh_shape[0], mesh_shape[1]),
+        ),
     )
 
 
