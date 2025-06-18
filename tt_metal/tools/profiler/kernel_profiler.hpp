@@ -429,21 +429,24 @@ struct profileScopeGuaranteed {
     static constexpr uint32_t end_index = (2 * index * PROFILER_L1_MARKER_UINT32_SIZE) + GUARANTEED_MARKER_2_H;
 
     static constexpr uint32_t TRACE_ID_SET_BIT = (1 << 31);
+    static constexpr uint32_t TRACE_STARTED_BIT = (1 << 30);
     static_assert(start_index < CUSTOM_MARKERS);
     static_assert(end_index < CUSTOM_MARKERS);
     inline __attribute__((always_inline)) profileScopeGuaranteed() {
-        if constexpr (index == 0) {
-            init_profiler();
-        }
         if (profiler_control_buffer[CURRENT_TRACE_ID] & TRACE_ID_SET_BIT) {
-            profiler_control_buffer[CURRENT_TRACE_ID] = 0;
+            if constexpr (index == 0) {
+                init_profiler();
+            }
+            profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_STARTED_BIT;
             mark_time_at_index_inlined(start_index, timer_id);
         }
     }
     inline __attribute__((always_inline)) ~profileScopeGuaranteed() {
-        mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
-        if constexpr (index == 0) {
-            finish_profiler();
+        if (profiler_control_buffer[CURRENT_TRACE_ID] & TRACE_STARTED_BIT) {
+            mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
+            if constexpr (index == 0) {
+                finish_profiler();
+            }
         }
     }
 };

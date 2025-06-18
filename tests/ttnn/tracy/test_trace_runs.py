@@ -34,5 +34,10 @@ def test_with_ops(device):
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
     for i in range(5):
-        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+        ttnn.DumpDeviceProfiler(device)
+
+    for i in range(5):
+        ttnn.execute_trace(device, tid, cq_id=0)
+        ttnn.DumpDeviceProfiler(device)
     ttnn.release_trace(device, tid)

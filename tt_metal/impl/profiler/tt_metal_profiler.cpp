@@ -775,7 +775,7 @@ void DumpDeviceProfileResults(
         if (profiler_it != tt_metal_device_profiler_map.end()) {
             DeviceProfiler& profiler = profiler_it->second;
             profiler.setDeviceArchitecture(device->arch());
-            profiler.dumpResults(device, worker_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+            profiler.dumpResults(device, worker_cores, state, ProfilerDataBufferSource::L1, metadata);
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
                 profiler.pushTracyDeviceResults();
             }

@@ -1238,10 +1238,8 @@ void DeviceProfiler::dumpResults(
                     if (useSlowDispatchForReading(device, state)) {
                         core_l1_data_buffer = issueSlowDispatchReadFromL1DataBuffer(device, worker_core);
                     } else {
-                        core_l1_data_buffer = issueFastDispatchReadFromL1DataBuffer(device, worker_core);
+                        core_l1_data_buffer = issueSlowDispatchReadFromL1DataBuffer(device, worker_core);
                     }
-                } else {
-                    core_l1_data_buffer = issueSlowDispatchReadFromL1DataBuffer(device, worker_core);
                 }
 
                 readRiscProfilerResults(
