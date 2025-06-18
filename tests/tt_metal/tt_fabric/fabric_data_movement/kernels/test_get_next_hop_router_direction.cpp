@@ -13,10 +13,8 @@ void kernel_main() {
     uint32_t result_addr = get_arg_val<uint32_t>(2);
     uint32_t num_devices = get_arg_val<uint32_t>(3);
 
-    // Get pointer to result buffer (1xN array for this source device)
     volatile tt_l1_ptr uint32_t* result_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(result_addr);
 
-    // Calculate routing direction to all destination devices
     for (uint32_t dst_idx = 0; dst_idx < num_devices; dst_idx++) {
         uint32_t dst_fabric_dev_id = get_arg_val<uint32_t>(4 + dst_idx);
 
