@@ -181,15 +181,15 @@ INSTANTIATE_TEST_SUITE_P(
     T3kCustomMeshGraphControlPlaneFixture,
     ::testing::ValuesIn(t3k_mesh_descriptor_chip_mappings));
 
-TEST_F(ControlPlaneFixture, TestQuantaGalaxyControlPlaneInit) {
-    const std::filesystem::path quanta_galaxy_mesh_graph_desc_path =
+TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
+    const std::filesystem::path single_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/quanta_galaxy_mesh_graph_descriptor.yaml";
-    auto control_plane = std::make_unique<ControlPlane>(quanta_galaxy_mesh_graph_desc_path.string());
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml";
+    auto control_plane = std::make_unique<ControlPlane>(single_galaxy_mesh_graph_desc_path.string());
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 }
 
-TEST_F(ControlPlaneFixture, TestQuantaGalaxyMeshAPIs) {
+TEST_F(ControlPlaneFixture, TestSingleGalaxyMeshAPIs) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     EXPECT_EQ(user_meshes.size(), 1);
