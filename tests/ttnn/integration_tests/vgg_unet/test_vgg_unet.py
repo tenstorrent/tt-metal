@@ -41,7 +41,7 @@ def test_vgg_unet(device, reset_seeds, model_location_generator, use_pretrained_
 
     # Pre-trained weights processing
     if use_pretrained_weight:
-        weights_pth = "models/experimental/vgg_unet/vgg_unet_torch.pth"
+        weights_pth = "models/demos/vgg_unet/vgg_unet_torch.pth"
         torch_dict = torch.load(weights_pth)
         new_state_dict = dict(zip(torch_model.state_dict().keys(), torch_dict.values()))
         torch_model.load_state_dict(new_state_dict)
