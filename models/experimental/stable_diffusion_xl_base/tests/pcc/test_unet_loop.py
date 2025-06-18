@@ -424,7 +424,7 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, cla
             torch_tt_latents = torch.reshape(torch_tt_latents, (B, H, W, C))
             torch_tt_latents = torch.permute(torch_tt_latents, (0, 3, 1, 2))
 
-            _, pcc_message = comp_pcc(latents, torch_tt_latents, 0.8)
+            _, pcc_message = comp_pcc(latents, torch_tt_latents, 0.826)
             logger.info(f"PCC of {i}. iteration is: {pcc_message}")
             pcc_per_iter.append(float(pcc_message))
 
@@ -439,7 +439,7 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, cla
         plt.savefig("pcc_plot.png", dpi=300, bbox_inches="tight")
         plt.close()
 
-    assert_with_pcc(latents, torch_tt_latents, 0.82)
+    assert_with_pcc(latents, torch_tt_latents, 0.826)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
