@@ -159,14 +159,15 @@ TEST_F(N300DeviceFixture, ActiveEthValidateEthernetSockets) {
     std::vector<CoreCoord> device_0_sockets = device_0->get_ethernet_sockets(1);
     std::vector<CoreCoord> device_1_sockets = device_1->get_ethernet_sockets(0);
 
-    ASSERT_TRUE(device_0_sockets.size() == 2);
-    ASSERT_TRUE(device_1_sockets.size() == 2);
-    ASSERT_TRUE(
-        device_0->get_connected_ethernet_core(device_0_sockets.at(0)) ==
+    // There are 2 in total. But expecting 1 because 1 is used for dispatching to remote device.
+    ASSERT_EQ(device_0_sockets.size(), 1);
+    ASSERT_EQ(device_1_sockets.size(), 1);
+    ASSERT_EQ(
+        device_0->get_connected_ethernet_core(device_0_sockets.at(0)),
         std::make_tuple(device_1->id(), device_1_sockets.at(0)));
-    ASSERT_TRUE(
-        device_0->get_connected_ethernet_core(device_0_sockets.at(1)) ==
-        std::make_tuple(device_1->id(), device_1_sockets.at(1)));
+    ASSERT_EQ(
+        device_0->get_connected_ethernet_core(device_0_sockets.at(0)),
+        std::make_tuple(device_1->id(), device_1_sockets.at(0)));
     EXPECT_ANY_THROW(device_0->get_ethernet_sockets(2));
 }
 }  // namespace unit_tests::multichip::cluster
