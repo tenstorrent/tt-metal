@@ -65,7 +65,7 @@ public:
             magic_enum::enum_integer(HalProcessorClassType::DM) + magic_enum::enum_integer(config.processor);
     }
 
-    ~DataMovementKernel() {}
+    ~DataMovementKernel() override {}
 
     RISCV processor() const override;
 
@@ -102,7 +102,7 @@ public:
             magic_enum::enum_integer(HalProcessorClassType::DM) + magic_enum::enum_integer(config.processor);
     }
 
-    ~EthernetKernel() {}
+    ~EthernetKernel() override {}
 
     RISCV processor() const override;
 
@@ -137,7 +137,7 @@ public:
         this->dispatch_class_ = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
     }
 
-    ~ComputeKernel() {}
+    ~ComputeKernel() override {}
 
     RISCV processor() const override;
 

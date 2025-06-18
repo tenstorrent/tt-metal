@@ -80,7 +80,6 @@ inline auto run_with_autoformat(
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {},
     const float pad_value = 0,
     ttnn::QueueId cq_id = ttnn::DefaultQueueId) -> Tensors {
-    using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     auto operation = DeviceOperation<Tensors>(concrete_op);
     return run_with_autoformat(
         std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors, pad_value, cq_id);

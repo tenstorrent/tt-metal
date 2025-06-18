@@ -17,6 +17,10 @@ using namespace std;
 using namespace tt;
 using namespace tt::tt_metal;
 
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
+
 void golden_matmul(
     std::vector<bfloat16>& a,
     std::vector<bfloat16>& b,
@@ -249,7 +253,7 @@ void matmul_multicore_reuse(
     // Create reader and writer kernels per core
     auto reader_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_tile_layout.cpp",
+        OVERRIDE_KERNEL_PREFIX "matmul_common/kernels/dataflow/reader_bmm_tile_layout.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -258,7 +262,7 @@ void matmul_multicore_reuse(
 
     auto writer_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
+        OVERRIDE_KERNEL_PREFIX "matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -268,7 +272,7 @@ void matmul_multicore_reuse(
     // Create compute kernel
     auto mm_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_common/kernels/compute/bmm_large_block_zm.cpp",
+        OVERRIDE_KERNEL_PREFIX "matmul_common/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args});
 

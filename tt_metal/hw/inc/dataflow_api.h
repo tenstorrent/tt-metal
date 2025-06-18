@@ -837,6 +837,7 @@ inline void noc_async_write_multicast(
         noc_async_write_multicast_one_packet(src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked);
     } else {
         WAYPOINT("NMWW");
+        NOC_TRACE_QUICK_PUSH_IF_LINKED(write_cmd_buf, linked);
         DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
         ncrisc_noc_fast_write_any_len<noc_mode>(
             noc,
@@ -894,6 +895,10 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
         }
+    } else {
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+        }
     }
     WAYPOINT("NWPW");
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
@@ -910,6 +915,10 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
         if constexpr (noc_mode == DM_DEDICATED_NOC) {
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += 1;  // num_dests
+        }
+    } else {
+        if constexpr (noc_mode == DM_DEDICATED_NOC) {
+            noc_posted_writes_num_issued[noc] += 1;
         }
     }
 }
@@ -1723,9 +1732,6 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
     heartbeat++;
     ptr[0] = 0xAABB0000 | (heartbeat & 0xFFFF);
 }
-
-FORCE_INLINE
-uint32_t min(uint32_t a, uint32_t b) { return (a < b) ? a : b; }
 
 template <bool use_vc>
 FORCE_INLINE uint32_t noc_async_read_tile_dram_sharded_set_state(

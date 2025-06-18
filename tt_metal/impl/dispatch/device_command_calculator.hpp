@@ -129,6 +129,22 @@ public:
         this->cmd_write_offsetB += increment_sizeB;
     }
 
+    void add_prefetch_relay_ringbuffer(uint16_t num_sub_cmds) {
+        static_assert(sizeof(CQPrefetchRelayRingbufferSubCmd) % sizeof(uint32_t) == 0);
+
+        uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQPrefetchRelayRingbufferSubCmd);
+        uint32_t increment_sizeB = tt::align(sub_cmds_sizeB + sizeof(CQPrefetchCmd), this->pcie_alignment);
+        this->cmd_write_offsetB += increment_sizeB;
+    }
+
+    void add_prefetch_set_ringbuffer_offset() {
+        this->cmd_write_offsetB += tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
+    }
+
+    void add_prefetch_paged_to_ringbuffer() {
+        this->cmd_write_offsetB += tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
+    }
+
     template <typename PackedSubCmd>
     void add_dispatch_write_packed(
         uint16_t num_sub_cmds,

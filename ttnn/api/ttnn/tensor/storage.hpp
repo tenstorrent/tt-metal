@@ -50,9 +50,6 @@ struct DeviceStorage {
 
 class MultiDeviceHostStorage {
 public:
-    // TODO: #15840 - Remove this once `HostStorage` and `MultiDeviceHostStorage` are unified.
-    std::optional<HostBuffer> get_shard_at_origin() const;
-
     // Constructor that creates a linearized distributed host buffer from a vector of host buffers.
     // The buffer is re-shaped upon a write to device, to fit the actual shape of the device.
     // TODO: #22169 - Remove this once there are no more usages of this constructor.
