@@ -537,14 +537,13 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice 
 
 
 @ttnn.register_python_operation(name="ttnn.dump_tensor")
-def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor, distribute: Dict[str, str] = None) -> None:
+def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> None:
     """
     Dump tensor to a file.
 
     Args:
         file_name (str | pathlib.Path): The file name.
         tensor (ttnn.Tensor): the tensor to be dumped.
-        distribute (Dict[str, str], optional): The distributed strategy. Only applicable to multi-device tensors. Defaults to `None`.
 
     Returns:
         `None`: tensor saved to a specified file.
@@ -556,7 +555,7 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor, distri
     if distribute is None:
         distribute = dict()
     file_name = pathlib.Path(file_name)
-    ttnn._ttnn.tensor.dump_tensor(str(file_name), tensor, distribute)
+    ttnn._ttnn.tensor.dump_tensor(str(file_name), tensor)
 
 
 @ttnn.register_python_operation(name="ttnn.as_tensor")
@@ -661,8 +660,7 @@ def as_tensor(
                 f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
             )
             pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
-            distributed_config = mesh_mapper.config() if mesh_mapper else dict()
-            ttnn._ttnn.tensor.dump_tensor(cache_file_name, tensor, distributed_config)
+            ttnn._ttnn.tensor.dump_tensor(cache_file_name, tensor)
             return tensor
 
         if isinstance(mesh_mapper, ttnn.ReplicateTensorToMesh):
