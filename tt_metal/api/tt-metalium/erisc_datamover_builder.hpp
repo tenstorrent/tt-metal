@@ -94,6 +94,8 @@ struct FabricEriscDatamoverConfig {
     static constexpr uint32_t DEFAULT_RECEIVER_LOCAL_WRITE_NOC = 1;
     static constexpr uint32_t DEFAULT_SENDER_ACK_NOC = 0;
 
+    // If a mesh axis spans eight or more devices, use more buffer slot configuration.
+    // Threshold (8 devices) was determined empirically.
     static constexpr std::size_t MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD = 8;
 
     static constexpr std::size_t dateline_sender_channel_skip_idx = 2;
