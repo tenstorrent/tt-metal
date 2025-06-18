@@ -8,7 +8,7 @@
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
 #include "compute_kernel_api.h"
-#include "compute_common.hpp"
+#include "old_compute_common.hpp"
 #include "debug/dprint.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
@@ -44,7 +44,7 @@ void MAIN {
     constexpr uint32_t global_logical_NK_chunks = get_compile_time_arg_val(24);
     constexpr uint32_t global_padded_NK_chunks = get_compile_time_arg_val(25);
     constexpr uint32_t q_num_chunks = get_compile_time_arg_val(26);
-
+    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(27);
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
@@ -62,6 +62,7 @@ void MAIN {
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
     constexpr uint32_t cb_lse_in = tt::CBIndex::c_6;
     constexpr uint32_t cb_prev_out = tt::CBIndex::c_7;
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
@@ -81,9 +82,6 @@ void MAIN {
     // The last iteration will concatenate L, which contains the masked portion of the joint tensor.
     constexpr uint32_t L_mask_ring_id = ring_size - 1;
 
-    // UNPACK(DPRINT << "COMPUTE: N_mask_ring_id: " << N_mask_ring_id << ENDL());
-    // UNPACK(DPRINT << "COMPUTE: L_mask_ring_id: " << L_mask_ring_id << ENDL());
-
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
@@ -93,10 +91,7 @@ void MAIN {
             ring_id == ring_size - 1 ? (N_k_num_chunks_local + L_k_num_chunks) : N_k_num_chunks_local;
         const uint32_t iter_k_chunk_start = ring_id * N_k_num_chunks_local;
         const uint32_t iter_k_chunk_end = iter_k_chunk_start + iter_k_num_chunks;
-        UNPACK(
-            DPRINT << "COMPUTE: ring_id: " << ring_id << ", iter_k_num_chunks: " << iter_k_num_chunks
-                   << "iter_k_chunk_start: " << iter_k_chunk_start << "iter_k_chunk_end: " << iter_k_chunk_end
-                   << ENDL());
+
         // Iterate over KV gathered on the ring
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
             // Set up ping pong buffers
@@ -110,11 +105,9 @@ void MAIN {
             cb_wait_front(cb_q_in, q_chunk_tiles);
 
             for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < iter_k_chunk_end; ++k_chunk) {
-                // UNPACK(DPRINT << "COMPUTE: k_chunk: " << k_chunk << ENDL());
                 if (k_chunk >= global_logical_NK_chunks && k_chunk < global_padded_NK_chunks) {
                     // This is a KV chunk on spatial input beyond the chunk-padded length of the spatial input.
                     // If k_chunk >= global_padded_NK_chunks, then this is a joint KV chunk.
-                    // UNPACK(DPRINT << "COMPUTE: Skipping joint KV chunk: " << k_chunk << ENDL());
                     continue;
                 }
                 /* QK = Q_CHUNK @ K_CHUNK */
@@ -135,7 +128,7 @@ void MAIN {
                     true /*transpose*/);
 
                 /* QK *= SCALE */
-                mul_block_bcast_scalar_inplace<cb_qk_im, cb_scale_in, qk_chunk_tiles>();
+                // mul_block_bcast_scalar_inplace<cb_scale_in, qk_chunk_tiles>(cb_qk_im);
                 if constexpr (use_joint_mask) {
                     if ((ring_id == N_mask_ring_id && k_chunk == mask_chunk_0) ||
                         (ring_id == L_mask_ring_id && k_chunk == mask_chunk_1)) {
@@ -147,19 +140,15 @@ void MAIN {
                 /* Compute max and sum for softmax */
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
-                    alias_cur_max);
-                if (k_chunk > iter_k_chunk_start) {
-                    max_block_inplace<Sq_chunk_t>(alias_cur_max, alias_prev_max);
-                }
+                    alias_cur_max, alias_prev_max, k_chunk > iter_k_chunk_start);
 
                 /* QK -= cb_cur_max */
                 /* QK = exp(QK)*/
-                sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t>(alias_cur_max);
+                sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32>(
+                    alias_cur_max, alias_cur_sum);
+                matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_cur_sum);
 
-                /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
-                reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
-                    alias_cur_sum);
-
+                cb_wait_front(cb_qk_im, qk_chunk_tiles);
                 /* OUT_IM = QK @ V_CHUNK */
                 matmul_blocks(
                     cb_qk_im,
@@ -182,7 +171,7 @@ void MAIN {
                 /* OUT_ACC += OUT_IM */
                 if (k_chunk > iter_k_chunk_start) {
                     /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
-                    sub_exp_block(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                    sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
                     cb_pop_front(alias_prev_max, Sq_chunk_t);
                     /* cb_prev_sum *= cb_exp_max_diff */
                     mul_block_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
@@ -203,14 +192,15 @@ void MAIN {
             // Calculate current LSE
             // Use alias_cur_max as intermediate buffer.
             log_block(alias_prev_sum, alias_cur_max, Sq_chunk_t);
+
+            // Scale prev_max by scale_fp32
+            mul_block_bcast_scalar_inplace<cb_scale_in, Sq_chunk_t>(alias_prev_max);
             add_block_inplace(alias_prev_max, alias_cur_max, Sq_chunk_t);
 
             /* cb_cur_sum = 1.0 / cb_cur_sum */
             recip_block_inplace(alias_prev_sum, Sq_chunk_t);
-
             /* cb_out_accumulate_im *= cb_cur_sum */
             mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_mm2_prev_out, alias_prev_sum);
-
             if (ring_iter > 0) {
                 DeviceZoneScopedN("lse_update");
                 // Update output according to previous and current LSE

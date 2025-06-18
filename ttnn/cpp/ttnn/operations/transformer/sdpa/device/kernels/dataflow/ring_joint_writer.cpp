@@ -82,9 +82,11 @@ void kernel_main() {
     uint32_t barrier_count = 0;
 
     constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
 
     generate_bcast_unary_scalar(cb_scale_in, scale_val);
+    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {

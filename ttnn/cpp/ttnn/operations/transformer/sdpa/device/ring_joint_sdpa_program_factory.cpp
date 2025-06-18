@@ -386,7 +386,8 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         L_k_num_chunks,
         global_logical_NK_chunks,
         global_padded_NK_chunks,
-        q_num_chunks};
+        q_num_chunks,
+        scale_union.u};
 
     std::map<string, string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -493,6 +494,11 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     auto c_in7_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_7, im_df}})
                             .set_page_size(tt::CBIndex::c_7, im_tile_size);
     auto cb_in7_id = CreateCircularBuffer(program, core_grid, c_in7_config);
+
+    // column identity input
+    auto c_in8_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_8, scalar_df}})
+                            .set_page_size(tt::CBIndex::c_8, scalar_tile_size);
+    auto cb_in8_id = CreateCircularBuffer(program, core_grid, c_in8_config);
 
     // cb_qk_im
     auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CBIndex::c_24, im_df}})
