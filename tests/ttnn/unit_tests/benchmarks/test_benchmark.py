@@ -526,6 +526,7 @@ def test_matmul_2d_host_perf_out_of_box(
                 "dtype",
                 "math_fidelity",
                 "inference_time_avg (ns)",
+                "TFLOPs (avg)",
                 f"Host based utilization[%] (vs {grid_size[0]}x{grid_size[1]} user selected grid)",
                 f"Host based utilization[%] (vs {compute_grid_size.x}x{compute_grid_size.y} full avaialble grid)",
                 f"Device based utilization[%] (vs {grid_size[0]}x{grid_size[1]} user selected grid)",
