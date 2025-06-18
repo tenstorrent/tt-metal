@@ -10,16 +10,22 @@ set(PROGRAMMING_EXAMPLES_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/hello_world_datamovement_kernel/hello_world_datamovement_kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/hello_world_datatypes_kernel/hello_world_datatypes_kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/loopback/loopback.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/pad_multi_core/pad_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shard_data_rm/shard_data_rm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vecadd_sharding/vecadd_sharding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vecadd_multi_core/vecadd_multi_core.cpp
+)
+set(MATMUL_SRCS
+    ${CMAKE_CURRENT_SOURCE_DIR}/matmul/matmul_multi_core/matmul_multi_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/matmul/matmul_multicore_reuse/matmul_multicore_reuse.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/matmul/matmul_single_core/matmul_single_core.cpp
 )
 
 add_compile_definitions(OVERRIDE_KERNEL_PREFIX="tt_metal/programming_examples/")
 include(${PROJECT_SOURCE_DIR}/cmake/helper_functions.cmake)
 
 CREATE_PGM_EXAMPLES_EXE("${PROGRAMMING_EXAMPLES_SRCS}" "") # no subdir, output binaries straight to build/programming_examples
+
+CREATE_PGM_EXAMPLES_EXE("${MATMUL_SRCS}" "" "matmul") 
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/profiler)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/contributed)
@@ -44,7 +50,6 @@ install(
         hello_world_datatypes_kernel
         loopback
         matmul
-        pad_multi_core
         shard_data_rm
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
     # FIXME(afuller): Something funky is happening when installing files into
@@ -69,7 +74,6 @@ install(
         hello_world_datatypes_kernel
         loopback
         matmul
-        pad_multi_core
         shard_data_rm
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples

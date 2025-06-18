@@ -43,6 +43,16 @@ function(CREATE_EAGER_TEST_EXE TESTLIST)
 endfunction()
 
 function(CREATE_PGM_EXAMPLES_EXE TESTLIST SUBDIR)
+    set(options)
+    set(oneValueArgs)
+    set(multiValueArgs)
+    cmake_parse_arguments(PARSE_ARGV 2 ARG "" "" "")
+
+    set(EXTRA_INCLUDE_DIR "")
+    if(ARGC GREATER 2)
+        set(EXTRA_INCLUDE_DIR "${ARGV2}")
+    endif()
+
     foreach(TEST_SRC ${TESTLIST})
         get_filename_component(TEST_TARGET ${TEST_SRC} NAME_WE)
 
@@ -57,6 +67,11 @@ function(CREATE_PGM_EXAMPLES_EXE TESTLIST SUBDIR)
 
         target_include_directories(${TEST_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
         message(STATUS "Setting include dirs for ${TEST_TARGET} to: ${CMAKE_CURRENT_SOURCE_DIR}")
+
+        if(NOT "${EXTRA_INCLUDE_DIR}" STREQUAL "")
+            target_include_directories(${TEST_TARGET} PRIVATE ${EXTRA_INCLUDE_DIR})
+            message(STATUS "Adding extra include dir for ${TEST_TARGET}: ${EXTRA_INCLUDE_DIR}")
+        endif()
 
         set_target_properties(
             ${TEST_TARGET}
