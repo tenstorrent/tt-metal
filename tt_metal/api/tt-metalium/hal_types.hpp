@@ -43,6 +43,8 @@ enum class HalL1MemAddrType : uint8_t {
     RETRAIN_FORCE,
     FABRIC_ROUTER_CONFIG,
     ETH_FW_MAILBOX,
+    INTERMESH_ETH_LINK_CONFIG,
+    INTERMESH_ETH_LINK_STATUS,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 
