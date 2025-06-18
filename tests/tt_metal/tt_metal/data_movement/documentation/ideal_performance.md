@@ -9,5 +9,7 @@ Units are **Bytes/cycle**.
 | DRAM Write                        | 21            | 34        |
 | One To One                        | 29            | 60        |
 | One From One                      | 28            | 60        |
-| One To All (Multicast + Linked)   | 22            | 42        |
+| One To All (Unicast)              | 31            | 62
+| One To All (Multicast)            | 15            | 24
+| One To All (Multicast + Linked)   | 22            | 41        |
 | One From All                      | 30            | 60        |
