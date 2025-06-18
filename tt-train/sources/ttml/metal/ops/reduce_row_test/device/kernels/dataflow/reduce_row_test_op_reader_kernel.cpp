@@ -47,8 +47,8 @@ void kernel_main() {
         for (uint32_t j = 0; j < Wt; ++j) {
             noc_async_read_tile(idx + j, input_address_generator, l1_write_addr);
             l1_write_addr += tile_bytes;
-            noc_async_read_barrier();
         }
+        noc_async_read_barrier();
         cb_push_back(cb_input, Wt);
     }
 }

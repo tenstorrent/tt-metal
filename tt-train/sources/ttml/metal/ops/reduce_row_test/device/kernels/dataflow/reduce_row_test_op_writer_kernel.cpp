@@ -28,13 +28,15 @@ void kernel_main() {
 
     uint32_t end_row = start_row + num_rows_to_process;
 
-    cb_wait_front(cb_output, onetile);
-    uint32_t l1_read_addr = get_read_ptr(cb_output);
     for (uint32_t r = start_row; r < end_row; r++) {
-        uint32_t idx = r * Wt;
+        uint32_t idx = r;
+        cb_wait_front(cb_output, onetile);
+        uint32_t l1_read_addr = get_read_ptr(cb_output);
+
         noc_async_write_tile(idx, output_addr_generator, l1_read_addr);
         l1_read_addr += tile_bytes;
         noc_async_write_barrier();
+
+        cb_pop_front(cb_output, onetile);
     }
-    cb_pop_front(cb_output, onetile);
 }
