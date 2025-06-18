@@ -383,7 +383,7 @@ def run_all_to_all_dispatch_test(
 
         logger.info("Capturing Trace")
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        tt_outs = run_op(num_iters, store_all_results=False)
+        tt_out_tensor_list, tt_metadata_list = run_op(num_iters, store_all_results=False)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
 
@@ -507,7 +507,7 @@ def run_all_to_all_dispatch_test(
         torch.set_printoptions(threshold=1000)
     logger.info(f"Device has {mesh_device.num_program_cache_entries()} program cache entries")
     assert (
-        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
+        mesh_device.num_program_cache_entries() == 1
     ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
 
     if not metadata_passed:
@@ -588,8 +588,8 @@ def test_all_to_all_dispatch_trace(mesh_device, trace_mode, mesh_shape):
     select_experts_k = 8
     hidden_size = 7000
     seq_len = 2
-    num_iters = 30
-    warmup_iters = 1
+    num_iters = 75
+    warmup_iters = 10
     trace_mode = trace_mode
     input_memory_config = ttnn.DRAM_MEMORY_CONFIG
     output_memory_config = ttnn.DRAM_MEMORY_CONFIG

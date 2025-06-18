@@ -30,8 +30,9 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
     auto mesh_device = input_tensor.mesh_device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto sub_device_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    auto semaphore = global_semaphore.value_or(ttnn::global_semaphore::create_global_semaphore(
-        mesh_device, sub_device_cores, 0, tt::tt_metal::BufferType::L1));
+    TT_FATAL(
+        global_semaphore.has_value(),
+        "Global semaphore is required for all_to_all_dispatch due to limitations in trace");
 
     return ttnn::prim::all_to_all_dispatch(
         input_tensor,
@@ -43,7 +44,7 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
         topology,
         memory_config.value_or(input_tensor.memory_config()),
         sd_id,
-        semaphore);
+        global_semaphore.value());
 }
 
 }  // namespace ttnn::operations::ccl
