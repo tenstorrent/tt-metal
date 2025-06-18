@@ -157,8 +157,7 @@
 <p>If <code class="docutils literal notranslate"><span class="pre">largest</span></code> is True, the k largest elements are returned. Otherwise, the k smallest elements are returned.</p>
 <p>The boolean option <code class="docutils literal notranslate"><span class="pre">sorted</span></code> if True, will make sure that the returned k elements are sorted.</p>
 <p>Input tensor must have BFLOAT8 or BFLOAT16 data type and TILE_LAYOUT layout.</p>
-<p>Output value tensor will have the same data type as input tensor and output index tensor will have UINT16 data type.
-Note that when using BFLOAT8, a different set of elements than in the input may share the same exponent, causing some values to be rounded up or down.</p>
+<p>Output value tensor will have the same data type as input tensor and output index tensor will have UINT16 data type.</p>
 <p>Equivalent pytorch code:</p>
 <div class="highlight-python notranslate">
 <div class="highlight"><pre><span></span><span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">topk</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="n">dim</span><span class="p">,</span> <span class="n">largest</span><span class="o">=</span><span class="n">largest</span><span class="p">,</span> <span class="nb">sorted</span><span class="o">=</span><span class="nb">sorted</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">out</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
