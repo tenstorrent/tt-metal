@@ -128,7 +128,7 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks RingAttentionAllGatherAsync::
 
 tt::tt_metal::operation::ProgramWithCallbacks RingAttentionAllGatherAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    tt::log_debug(tt::LogOp, "DEBUG: create_program_at is called");
+    log_debug(tt::LogOp, "DEBUG: create_program_at is called");
     auto mesh_device = input_tensors[0].mesh_device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
