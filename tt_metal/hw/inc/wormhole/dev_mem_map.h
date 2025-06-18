@@ -101,9 +101,9 @@
 // Tensix routing table for fabric networking
 #define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
 #define MEM_TENSIX_ROUTING_TABLE_SIZE 2064
-static_assert(
-    MEM_TENSIX_ROUTING_TABLE_BASE % 16 == 0 && MEM_TENSIX_ROUTING_TABLE_SIZE % 16 == 0,
-    "Tensix routing table base and size must be 16-byte aligned");
+#if (MEM_TENSIX_ROUTING_TABLE_BASE % 16 != 0) || (MEM_TENSIX_ROUTING_TABLE_SIZE % 16 != 0)
+#error "Tensix routing table base and size must be 16-byte aligned"
+#endif
 
 #define MEM_MAP_END (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_TENSIX_ROUTING_TABLE_SIZE)
 
