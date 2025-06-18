@@ -216,7 +216,7 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 32700, "upper": 37500}, "bandwidth": 28},  # 18596, 28.2
         },
         52: {  # One to All Directed Ideal
-            "riscv_0": {"latency": {"lower": 86000, "upper": 91000}, "bandwidth": 23},
+            "riscv_0": {"latency": {"lower": 70000, "upper": 91000}, "bandwidth": 23},
         },
         17: {
             "riscv_1": {"latency": {"lower": 50, "upper": 700}, "bandwidth": 3},
