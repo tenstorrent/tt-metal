@@ -8,7 +8,7 @@
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
 #include "compute_kernel_api.h"
-#include "old_compute_common.hpp"
+#include "compute_common.hpp"
 #include "debug/dprint.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
@@ -187,7 +187,7 @@ void MAIN {
                     sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
                     cb_pop_front(alias_prev_max, Sq_chunk_t);
                     /* cb_prev_sum *= cb_exp_max_diff */
-                    mul_block_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                    mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
                     /* cb_cur_sum += cb_prev_sum */
                     add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);

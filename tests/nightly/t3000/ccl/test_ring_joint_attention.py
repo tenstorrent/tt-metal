@@ -287,7 +287,7 @@ def run_ring_joint_sdpa(
     [
         (1, 40, 4096, 333, 64, 64, 128),  # SD3.5
         (1, 24, 44 * 1024, 118, 128, 256, 256),  # Mochi
-        (1, 10, 4096, 333, 64, 128, 1024),  # SD3.5 on TG with 4x4 SPxTP
+        (1, 10, 4096, 333, 64, 128, 512),  # SD3.5 on TG with 4x4 SPxTP
     ],
     ids=["sd35", "mochi", "sd35_tg"],
 )
@@ -354,6 +354,8 @@ def test_ring_joint_sdpa(
     up_factor,
     all_gather_topology,
 ):
+    if nh & up_factor != 0:
+        pytest.skip("nh must be divisible by up_factor")
     if rp_factor == 8 and rp_axis == 1:
         mesh_device.reshape(ttnn.MeshShape(1, 8))
 
