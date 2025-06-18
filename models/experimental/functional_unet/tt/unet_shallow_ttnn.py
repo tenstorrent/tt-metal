@@ -168,7 +168,7 @@ class UNetConv2D:
             reshard_if_not_optimal or override_core_grid
         ), f"Cannot enable `reshard_if_not_optimal` (was {reshard_if_not_optimal}) and `override_core_grid` (was {override_core_grid}) at the same time "
 
-        self.conv_output_dtype = activation_dtype
+        self.output_dtype = activation_dtype
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
@@ -238,7 +238,7 @@ class UNetConv2D:
             return_output_dim=False,
             return_weights_and_bias=True,
             **self.get_conv2d_kwargs(),
-            dtype=self.conv_output_dtype,
+            dtype=self.output_dtype,
         )
         return x
 
