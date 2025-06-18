@@ -30,8 +30,10 @@ bool is_configured_target(uint32_t src_chip_id, uint32_t dest_chip_id) {
     // axis = 0; means we are allowed to send packets in the column direction
     // axis = -1; means we are allowed to send packets in all directions
     if (axis == 0) {  // check if they're on the same column
+        // DPRINT << "checking if " << src_chip_id << " and " << dest_chip_id << " are on the same column" << ENDL();
         return src_chip_id % mesh_cols == dest_chip_id % mesh_cols;
     } else if (axis == 1) {  // check if they're on the same row
+        // DPRINT << "checking if " << src_chip_id << " and " << dest_chip_id << " are on the same row" << ENDL();
         return src_chip_id / mesh_cols == dest_chip_id / mesh_cols;
     } else {
         return true;  // if axis is not configured, we assume the target is configured, which is the default case, which
@@ -51,15 +53,21 @@ enum eth_chan_directions {
 inline eth_chan_directions get_direction(
     uint32_t src_chip_id, uint32_t dest_chip_id, uint32_t mesh_cols, uint32_t mesh_rows) {
     // if along the same row, we go east or west
+    eth_chan_directions direction = eth_chan_directions::COUNT;
     if (src_chip_id / mesh_cols == dest_chip_id / mesh_cols) {
-        return src_chip_id < dest_chip_id ? eth_chan_directions::EAST : eth_chan_directions::WEST;
+        direction = src_chip_id < dest_chip_id ? eth_chan_directions::EAST : eth_chan_directions::WEST;
     }
     // if along the same column, we go north or south
     else if (src_chip_id % mesh_cols == dest_chip_id % mesh_cols) {
-        return src_chip_id < dest_chip_id ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
+        direction = src_chip_id > dest_chip_id ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
     }
     // if not along the same row or column, we go north or south; north if dest_chip_id is smaller than src_chip_id
-    return dest_chip_id < src_chip_id ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
+    else {
+        direction = src_chip_id > dest_chip_id ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
+    }
+    // DPRINT << "direction: " << static_cast<int>(direction) << " for " << src_chip_id << " and " << dest_chip_id <<
+    // ENDL();
+    return direction;
 }
 
 // Insert helper that handles the local-device metadata path
@@ -159,6 +167,8 @@ inline void dispatch_input_remote_device(
 
     // Populate packet header with routing information
     zero_l1_buf((uint32_t*)token_unicast_packet_header, sizeof(PACKET_HEADER_TYPE));
+    DPRINT << "setting unicast route for " << src_chip_id << " and " << dest_chip_id << " with route " << route
+           << ENDL();
     fabric_set_unicast_route(
         (LowLatencyMeshPacketHeader*)token_unicast_packet_header,
         static_cast<eth_chan_directions>(fabric_connections[route].direction),
@@ -166,24 +176,32 @@ inline void dispatch_input_remote_device(
         dest_chip_id,
         dest_mesh_id,
         mesh_cols);
+    // DPRINT << "unicast route set for " << src_chip_id << " and " << dest_chip_id << " with route " << route <<
+    // ENDL();
     while (size > 0) {
         uint32_t curr_packet_size = std::min(fabric_max_packet_size, size);
 
+        // DPRINT << "sending payload for " << src_chip_id << " and " << dest_chip_id << " with route " << route <<
+        // ENDL();
         token_unicast_packet_header->to_noc_unicast_write(
             NocUnicastCommandHeader{output_token_write_addr}, curr_packet_size);
 
         fabric_connections[route].wait_for_empty_write_slot();
-
+        // DPRINT << "payload sent for " << src_chip_id << " and " << dest_chip_id << " with route " << route << ENDL();
         fabric_connections[route].send_payload_without_header_non_blocking_from_address(
             input_token_read_addr, curr_packet_size);
-
+        // DPRINT << "tokenpayload flushed for " << src_chip_id << " and " << dest_chip_id << " with route " << route <<
+        // ENDL();
         fabric_connections[route].send_payload_flush_blocking_from_address(
             (uint32_t)token_unicast_packet_header, sizeof(PACKET_HEADER_TYPE));
+        // DPRINT << "packet header flushed for " << src_chip_id << " and " << dest_chip_id << " with route " << route
+        // << ENDL();
 
         input_token_read_addr += curr_packet_size;
         output_token_write_addr += curr_packet_size;
         size -= curr_packet_size;
     }
+    DPRINT << "dispatching input completed for " << src_chip_id << " and " << dest_chip_id << ENDL();
 }
 
 void kernel_main() {
@@ -253,7 +271,7 @@ void kernel_main() {
 #ifdef AXIS
     constexpr int axis = AXIS;
     constexpr uint32_t dispatch_devices = axis == 0 ? mesh_rows : mesh_cols;
-    constexpr uint32_t dispatch_index = axis == 0 ? src_chip_id % mesh_rows : src_chip_id % mesh_cols;
+    constexpr uint32_t dispatch_index = axis == 0 ? src_chip_id / mesh_cols : src_chip_id % mesh_cols;
 #else
     constexpr int axis = -1;
     constexpr uint32_t dispatch_devices = num_devices;
@@ -263,9 +281,13 @@ void kernel_main() {
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> fabric_connections;
     for (uint32_t i = 0; i < 4; i++) {
         if (directions[i] == true) {
+            DPRINT << "opening fabric connection for direction for src_chip_id " << src_chip_id << " and direction "
+                   << i << ENDL();
             fabric_connections[i] =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
             fabric_connections[i].open();
+            DPRINT << "fabric connection opened for " << i << " with direction "
+                   << static_cast<int>(fabric_connections[i].direction) << ENDL();
         }
     }
 
@@ -281,6 +303,7 @@ void kernel_main() {
     cb_wait_front(indices_tensor_cb_id, indices_pages);
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
 
+    DPRINT << "dispatching tokens" << ENDL();
     for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
         uint32_t b = (local_token + (tokens_per_device * dispatch_index));
         uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id) + local_token * aligned_input_page_size;
@@ -314,9 +337,10 @@ void kernel_main() {
             }
         }
     }
+    DPRINT << "dispatching tokens completed" << ENDL();
 
     // send semaphore increment to all other devices
-
+    DPRINT << "dispatching metadata" << ENDL();
     uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
     for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
         uint32_t b = (local_token + (tokens_per_device * dispatch_index));
@@ -345,6 +369,7 @@ void kernel_main() {
             }
         }
     }
+    DPRINT << "dispatching metadata completed" << ENDL();
 
     for (uint32_t i = 0; i < 4; i++) {
         if (directions[i] == true) {

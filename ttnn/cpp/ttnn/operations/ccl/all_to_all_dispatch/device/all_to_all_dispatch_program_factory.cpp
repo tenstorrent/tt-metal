@@ -172,10 +172,10 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
                     directions[3] = true;
                 }
             } else {
-                neighbors.push_back(axis_neighbors[index + 1]);
+                neighbors.push_back(axis_neighbors[index - 1]);  // north
                 directions[2] = true;
-                neighbors.push_back(axis_neighbors[index - 1]);
-                directions[3] = true;
+                neighbors.push_back(axis_neighbors[index + 1]);
+                directions[3] = true;  // south
             }
         }
     } else {
@@ -224,9 +224,9 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
                     directions[3] = true;
                 }
             } else {
-                neighbors.push_back(axis_neighbors[index + 1]);
-                directions[2] = true;
                 neighbors.push_back(axis_neighbors[index - 1]);
+                directions[2] = true;
+                neighbors.push_back(axis_neighbors[index + 1]);
                 directions[3] = true;
             }
         }
@@ -317,6 +317,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     using namespace ttnn::ccl;
 
     tt::tt_metal::Program program{};
+    std::cout << std::endl;
 
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.expert_indices_tensor;
@@ -507,7 +508,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     }
     tt::log_info(tt::LogAlways, "dest_chip_id: {}", detail::stringify_vector(dest_chip_id));
     tt::log_info(tt::LogAlways, "dest_mesh_id: {}", detail::stringify_vector(dest_mesh_id));
-    // tt::log_info(tt::LogAlways, "directions: {}", detail::stringify_array(directions));
+    tt::log_info(tt::LogAlways, "directions: {}", detail::stringify_array(directions));
 
     // TODO: add fabric node and mesh id to the compile time args
     // TODO: add an array mapping logical device id to physical device id

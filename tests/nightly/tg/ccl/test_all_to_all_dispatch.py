@@ -452,9 +452,9 @@ def run_all_to_all_dispatch_test(
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
         )
 
-        # logger.info(f"golden_metadata_tensor shape: {output_metadata_goldens_list[tensor_index].shape}")
+        logger.info(f"golden_metadata_tensor shape: {output_metadata_goldens_list[tensor_index].shape}")
         # logger.info(f"golden_metadata_tensor {output_metadata_goldens_list[tensor_index]}")
-        # logger.info(f"tt_metadata_tensor shape: {tt_metadata_tensor.shape}")
+        logger.info(f"tt_metadata_tensor shape: {tt_metadata_tensor.shape}")
         # logger.info(f"tt_metadata_tensor {tt_metadata_tensor}")
 
         batch = tt_torch_tensor.shape[1]
@@ -466,6 +466,13 @@ def run_all_to_all_dispatch_test(
             metadata_passed = False
             first_failed_metadata_index = tensor_index
             failed_metadata_indices = torch.where(tt_metadata_tensor != output_metadata_goldens_list[tensor_index])
+            torch.set_printoptions(threshold=1000)
+            logger.info(f"All failed metadata devices: {failed_metadata_indices[1]}")
+            torch.set_printoptions(threshold=10)
+            logger.info(f"Failing tt_metadata_tensor tensor {tt_metadata_tensor[failed_metadata_indices[0], 0, :, :]}")
+            logger.info(
+                f"Relevant output_metadata_goldens_list tensor {output_metadata_goldens_list[tensor_index][failed_metadata_indices[0], 0, :, :]}"
+            )
             break
 
         for b in range(batch):
@@ -539,7 +546,7 @@ def run_all_to_all_dispatch_test(
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
-@pytest.mark.parametrize("axis", [1])
+@pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -614,7 +621,7 @@ def test_all_to_all_dispatch_no_trace(
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
-@pytest.mark.parametrize("axis", [1])
+@pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
