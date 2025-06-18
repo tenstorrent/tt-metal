@@ -48,8 +48,7 @@ def run_argmax(device, height, width, dim, dtype, layout):
 @pytest.mark.parametrize("layout", parameters["pytorch"]["layout"])
 def test_pytorch(device, height, width, dim, dtype, layout):
     (result, msg), e2e_perf = run_argmax(device, height, width, dim, dtype, layout)
-    if not result:
-        assert result, msg
+    assert result, msg
     logger.info(msg)
     if e2e_perf:
         logger.info(f"E2E Performance: {e2e_perf}")

@@ -115,8 +115,7 @@ def test_reduction_sum_localrun_fail_only(
         input_shape, dim, keepdim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config, device
     )
 
-    if not result:
-        assert result, msg
+    assert result, msg
     logger.info(msg)
     if e2e_perf:
         logger.info(f"E2E Performance: {e2e_perf}")

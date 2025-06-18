@@ -373,8 +373,7 @@ def run_max(device, params, dtype, layout):
 @pytest.mark.parametrize("layout", parameters["pytorch"]["layout"])
 def test_pytorch(device, params, dtype, layout):
     (result, msg), e2e_perf = run_max(device, params, dtype, layout)
-    if not result:
-        assert result, msg
+    assert result, msg
     logger.info(msg)
     if e2e_perf:
         logger.info(f"E2E Performance: {e2e_perf}")
@@ -385,8 +384,7 @@ def test_pytorch(device, params, dtype, layout):
 @pytest.mark.parametrize("layout", parameters["forge"]["layout"])
 def test_forge(device, params, dtype, layout):
     (result, msg), e2e_perf = run_max(device, params, dtype, layout)
-    if not result:
-        assert result, msg
+    assert result, msg
     logger.info(msg)
     if e2e_perf:
         logger.info(f"E2E Performance: {e2e_perf}")

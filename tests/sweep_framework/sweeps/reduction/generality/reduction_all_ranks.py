@@ -119,8 +119,7 @@ def test_reduction(
         op,
         dtype,
     )
-    if not result:
-        assert result, msg
+    assert result, msg
     logger.info(msg)
     if e2e_perf:
         logger.info(f"E2E Performance: {e2e_perf}")

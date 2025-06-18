@@ -144,8 +144,7 @@ def test_nightly(device, params):
 
     (result, msg), e2e_perf = run_topk(**params, device=device)
 
-    if not result:
-        assert result, msg
+    assert result, msg
     logger.info(msg)
     if e2e_perf:
         logger.info(f"E2E Performance: {e2e_perf}")
@@ -161,8 +160,7 @@ def test_nightly(device, params):
 
     (result, msg), e2e_perf = run_topk(**params, device=device)
 
-    if not result:
-        assert result, msg
+    assert result, msg
     logger.info(msg)
     if e2e_perf:
         logger.info(f"E2E Performance: {e2e_perf}")

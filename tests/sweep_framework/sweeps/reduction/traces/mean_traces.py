@@ -129,8 +129,7 @@ def run_mean(device, params):
 @pytest.mark.parametrize("params", parameters["pytorch"]["params"])
 def test_pytorch(device, params):
     (result, msg), e2e_perf = run_mean(device, params)
-    if not result:
-        assert result, msg
+    assert result, msg
     logger.info(msg)
     if e2e_perf:
         logger.info(f"E2E Performance: {e2e_perf}")
