@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include "scatter_enums.hpp"
-
 #include <cstdint>
 #include <optional>
 #include "ttnn/decorators.hpp"
@@ -14,22 +12,20 @@ namespace ttnn {
 
 namespace operations::experimental {
 
-struct ScatterOperation {
+struct TOSAScatterOperation {
     static Tensor invoke(
         const QueueId& queue_id,
         const Tensor& input_tensor,
-        const int32_t& dim,
         const Tensor& index_tensor,
         const Tensor& source_tensor,
-        const std::optional<MemoryConfig>& opt_out_memory_config,
-        const std::optional<scatter::ScatterReductionType>& opt_reduction);
+        const std::optional<MemoryConfig>& opt_out_memory_config);
 };
 
 }  // namespace operations::experimental
 
 namespace experimental {
-constexpr auto scatter =
-    ttnn::register_operation<"ttnn::experimental::scatter", ttnn::operations::experimental::ScatterOperation>();
+constexpr auto tosa_scatter =
+    ttnn::register_operation<"ttnn::experimental::tosa_scatter", ttnn::operations::experimental::TOSAScatterOperation>();
 }  // namespace experimental
 
 }  // namespace ttnn
