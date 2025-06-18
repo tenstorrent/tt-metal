@@ -277,8 +277,7 @@ def test_bitwise_left_shift(device, ttnn_function, ttnn_dtype):
     z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
+    assert torch.equal(tt_out, z_torch)
 
 
 @pytest.mark.parametrize(
@@ -310,5 +309,4 @@ def test_bitwise_right_shift(device, ttnn_function, ttnn_dtype):
     z_tt_out = ttnn_function(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
+    assert torch.equal(tt_out, z_torch)
