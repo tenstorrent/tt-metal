@@ -742,12 +742,10 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
     }
 
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
-        auto* src_device = devices[src_idx];
-        tt::tt_metal::EnqueueProgram(src_device->command_queue(), programs[src_idx], false);
+        fixture->RunProgramNonblocking(devices[src_idx], programs[src_idx]);
     }
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
-        auto* src_device = devices[src_idx];
-        tt::tt_metal::Finish(src_device->command_queue());
+        fixture->WaitForSingleProgramDone(devices[src_idx], programs[src_idx]);
     }
 
     for (size_t src_idx = 0; src_idx < NUM_DEVICES; src_idx++) {
