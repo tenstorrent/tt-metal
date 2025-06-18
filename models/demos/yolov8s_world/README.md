@@ -22,7 +22,7 @@ The YOLO-World Model introduces an advanced, real-time Ultralytics YOLOv8-based 
 Resource link - [source](https://github.com/ultralytics/ultralytics/blob/main/ultralytics/models/yolo/model.py)
 
 ### Details:
-- The entry point to yolov8s_world model is TtYOLOWorld in `models/experimental/yolov8s_world/tt/ttnn_yolov8s_world.py`.
+- The entry point to yolov8s_world model is TtYOLOWorld in `models/demos/yolov8s_world/tt/ttnn_yolov8s_world.py`.
 - The model picks up certain configs and weights from Ultralytics pretrained model. We've used weights available [here](https://docs.ultralytics.com/models/yolo-world/#available-models-supported-tasks-and-operating-modes) in YOLOv8s-world row.
 - Batch size :1
 - Supported Input Resolution - (640,640) (Height,Width)
@@ -39,5 +39,12 @@ pytest --disable-warnings tests/ttnn/integration_tests/yolov8s_world/test_ttnn_y
 Use the following command to run the performant Model with Trace+2CQs:
 
 ```
-pytest --disable-warnings models/experimental/yolov8s_world/tests/test_e2e_performant.py::test_e2e_performant
+pytest --disable-warnings models/demos/yolov8s_world/tests/test_e2e_performant.py::test_e2e_performant
+```
+
+### Performant Demo with Trace+2CQ
+Use the following command to run the performant Demo with Trace+2CQs:
+
+```
+pytest --disable-warnings models/demos/yolov8s_world/demo/demo.py
 ```
