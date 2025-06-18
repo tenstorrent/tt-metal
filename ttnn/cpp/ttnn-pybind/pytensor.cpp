@@ -887,7 +887,7 @@ void pytensor_module(py::module& m_tensor) {
                 +--------------+--------------------------------+
                 | data_type    | TT Tensor data type (optional) |
                 +--------------+--------------------------------+
-                | mesh_mapper  | TTNN Mesh Mapper (optional)    |
+                | mesh_mapper  | TT-NN Mesh Mapper (optional)    |
                 +--------------+--------------------------------+
                 | tile         | TT Tile Spec (optional)        |
                 +--------------+--------------------------------+
