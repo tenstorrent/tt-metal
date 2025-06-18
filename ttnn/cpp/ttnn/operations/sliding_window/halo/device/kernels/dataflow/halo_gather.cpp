@@ -7,7 +7,7 @@
 
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG 1
+#define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -15,6 +15,14 @@
 #endif
 
 constexpr uint16_t TILE_SIZE = 32;
+
+template <uint32_t N, uint16_t PaddingValue>
+FORCE_INLINE void fill_with_val(uint32_t begin_addr) {
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(begin_addr);
+    for (uint32_t i = 0; i < N; ++i) {
+        ptr[i] = PaddingValue;
+    }
+}
 
 template <uint32_t StickNBytes, uint32_t MaxChunkSize>
 FORCE_INLINE void copy_padding_small_sticks(uint64_t padding_l1_addr, uint64_t dst_addr, uint16_t nsticks) {
@@ -80,17 +88,16 @@ FORCE_INLINE void copy_padding_large_sticks(uint64_t padding_l1_addr, uint64_t d
     }
 }
 
-template <uint32_t PaddingConfigCBId, uint32_t OutCBId, uint32_t StickNBytes, uint32_t MaxChunkSize = MEM_ZEROS_SIZE>
-FORCE_INLINE void copy_padding(uint16_t my_noc_x, uint16_t my_noc_y) {
+template <uint32_t PaddingConfigCBId, uint32_t OutCBId, uint32_t StickNBytes, uint32_t MaxChunkSize>
+FORCE_INLINE void copy_padding(uint64_t padding_l1_addr) {
     const uint32_t padding_config_l1_addr = get_read_ptr(PaddingConfigCBId);
     volatile tt_l1_ptr uint16_t* config_data = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(padding_config_l1_addr);
 
-    const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, MEM_ZEROS_BASE);
     const uint64_t dst_base_addr = get_write_ptr(OutCBId);
 
     uint16_t nsticks = 1;
     constexpr uint32_t stick_stride = StickNBytes;
-    for (uint16_t j = 0; nsticks; j += 2) {
+    for (uint16_t j = 0; nsticks != 0; j += 2) {
         uint16_t dst_local_idx = config_data[j + 0];
         nsticks = config_data[j + 1];
 
@@ -265,7 +272,19 @@ void kernel_main() {
     }
 
     if constexpr (padding_config_cb_id != 0) {
-        copy_padding<padding_config_cb_id, out_cb_id, stick_nbytes>(my_noc_x, my_noc_y);
+        if constexpr (pad_val_u32 == 0) {
+            const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, MEM_ZEROS_BASE);
+            constexpr uint32_t padding_region_size = MEM_ZEROS_SIZE;
+            copy_padding<padding_config_cb_id, out_cb_id, stick_nbytes, padding_region_size>(padding_l1_addr);
+        } else {
+            constexpr uint16_t pad_val = static_cast<uint16_t>(pad_val_u32);
+            constexpr uint32_t num_elements_to_fill = stick_nbytes / elem_nbytes;
+            fill_with_val<num_elements_to_fill, pad_val>(get_write_ptr(pad_cb_id));
+
+            const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, get_read_ptr(pad_cb_id));
+            constexpr uint32_t padding_region_size = stick_nbytes / elem_nbytes;
+            copy_padding<padding_config_cb_id, out_cb_id, stick_nbytes, padding_region_size>(padding_l1_addr);
+        }
     }
 
     if constexpr (skip_untilize) {
