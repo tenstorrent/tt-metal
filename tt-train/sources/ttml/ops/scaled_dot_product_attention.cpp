@@ -10,6 +10,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "metal/operations.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -178,7 +179,7 @@ autograd::TensorPtr scaled_dot_product_attention(
             false);
     }
     // (B, H, S, S)
-    auto attention_weights = ttnn_fixed::softmax(qk_scaled, /* axis */ 3);
+    auto attention_weights = ttml::metal::softmax(qk_scaled, /* axis */ 3);
     // TODO: add dropout here
 
     // softmax(σQ@K+mask) @ V
