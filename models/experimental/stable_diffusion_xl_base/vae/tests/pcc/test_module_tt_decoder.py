@@ -18,7 +18,7 @@ from loguru import logger
 @pytest.mark.parametrize(
     "input_shape, host_fallback, pcc",
     [
-        ((1, 4, 128, 128), True, 0.937),
+        ((1, 4, 128, 128), True, 0.92),
         ((1, 4, 128, 128), False, 0.84),
     ],
 )

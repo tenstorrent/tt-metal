@@ -18,6 +18,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -39,6 +40,8 @@ void py_module_types(py::module& module) {
 
     py::class_<MeshMapperConfig>(module, "MeshMapperConfig");
     py::class_<MeshComposerConfig>(module, "MeshComposerConfig");
+    py::class_<MeshMapperConfig::Replicate>(module, "PlacementReplicate");
+    py::class_<MeshMapperConfig::Shard>(module, "PlacementShard");
 
     py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
     py::class_<MeshShape>(module, "MeshShape", "Shape of a mesh device.");
@@ -49,22 +52,23 @@ void py_module_types(py::module& module) {
 }
 
 void py_module(py::module& module) {
-    // TODO: #17477 - Remove overloads that accept 'row' and 'col'. Instead, use generic ND terms.
     static_cast<py::class_<MeshShape>>(module.attr("MeshShape"))
         .def(
-            py::init([](size_t num_rows, size_t num_cols) { return MeshShape(num_rows, num_cols); }),
-            "Constructor with the specified number of rows and columns.",
-            py::arg("num_rows"),
-            py::arg("num_cols"))
+            py::init([](size_t s0, size_t s1) { return MeshShape(s0, s1); }),
+            "Constructor with the specified 2D shape. The value s0 is assumed to be the outer dimension.",
+            py::arg("s0"),
+            py::arg("s1"))
         .def(
-            py::init([](size_t x, size_t y, size_t z) { return MeshShape(x, y, z); }),
-            "Constructor with the specified 3D shape.",
-            py::arg("x"),
-            py::arg("y"),
-            py::arg("z"))
+            py::init([](size_t s0, size_t s1, size_t s2) { return MeshShape(s0, s1, s2); }),
+            "Constructor with the specified 3D shape. The values s0...s2 are assumed to be supplied in row-major order "
+            "(from outer dim to inner dim).",
+            py::arg("s0"),
+            py::arg("s1"),
+            py::arg("s2"))
         .def(
             py::init([](const std::vector<uint32_t>& shape) { return MeshShape(shape); }),
-            "Constructor with the specified ND shape.",
+            "Constructor with the specified ND shape. The values s0...sn are assumed to be supplied in row-major order "
+            "(from outer dim to inner dim).",
             py::arg("shape"))
         .def(
             "__repr__",
@@ -79,19 +83,21 @@ void py_module(py::module& module) {
             py::keep_alive<0, 1>());
     static_cast<py::class_<MeshCoordinate>>(module.attr("MeshCoordinate"))
         .def(
-            py::init([](size_t row, size_t col) { return MeshCoordinate(row, col); }),
-            "Constructor with specified row and column offsets.",
-            py::arg("row"),
-            py::arg("col"))
+            py::init([](size_t c0, size_t c1) { return MeshCoordinate(c0, c1); }),
+            "Constructor with the specified 2D coordinate. The value c0 is assumed to be the outer dimension.",
+            py::arg("c0"),
+            py::arg("c1"))
         .def(
-            py::init([](size_t x, size_t y, size_t z) { return MeshCoordinate(x, y, z); }),
-            "Constructor with the specified 3D coordinate.",
-            py::arg("x"),
-            py::arg("y"),
-            py::arg("z"))
+            py::init([](size_t c0, size_t c1, size_t c2) { return MeshCoordinate(c0, c1, c2); }),
+            "Constructor with the specified 3D coordinate. The values c0...c2 are assumed to be supplied in row-major "
+            "order (from outer dim to inner dim).",
+            py::arg("c0"),
+            py::arg("c1"),
+            py::arg("c2"))
         .def(
             py::init([](const std::vector<uint32_t>& coords) { return MeshCoordinate(coords); }),
-            "Constructor with the specified ND coordinate.",
+            "Constructor with the specified ND coordinate. The values c0...cn are assumed to be supplied in row-major "
+            "order (from outer dim to inner dim).",
             py::arg("coords"))
         .def(
             "__repr__",
@@ -419,24 +425,103 @@ void py_module(py::module& module) {
         py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());
 
-    // TODO: #22258 - make this more flexible and useful.
+    auto py_placement_shard = static_cast<py::class_<MeshMapperConfig::Shard>>(module.attr("PlacementShard"));
+    py_placement_shard.def(py::init([](size_t dim) { return MeshMapperConfig::Shard{dim}; }));
+    auto py_placement_replicate =
+        static_cast<py::class_<MeshMapperConfig::Replicate>>(module.attr("PlacementReplicate"));
+    py_placement_replicate.def(py::init([]() { return MeshMapperConfig::Replicate{}; }));
     auto py_mesh_mapper_config = static_cast<py::class_<MeshMapperConfig>>(module.attr("MeshMapperConfig"));
-    py_mesh_mapper_config.def(
-        py::init([](size_t row_dim, size_t col_dim) {
-            MeshMapperConfig config;
-            config.placements.push_back(MeshMapperConfig::Shard{row_dim});
-            config.placements.push_back(MeshMapperConfig::Shard{col_dim});
-            return config;
-        }),
-        py::arg("row_dim"),
-        py::arg("col_dim"));
+
+    py_mesh_mapper_config
+        .def(
+            py::init([](tt::stl::SmallVector<MeshMapperConfig::Placement> placements,
+                        const std::optional<MeshShape>& mesh_shape_override) {
+                return MeshMapperConfig{
+                    .placements = std::move(placements), .mesh_shape_override = mesh_shape_override};
+            }),
+            py::arg("placements"),
+            py::arg("mesh_shape_override") = std::nullopt,
+            R"doc(
+           Creates a MeshMapperConfig object with the given placements and mesh shape override.
+
+           Args:
+               placements (List[Placement]): A set of placements to use for the mapper.
+               mesh_shape_override (MeshShape): If provided, overrides distribution shape of the mesh device.
+               Used for distributing a tensor over ND shape that doesn't match the shape of the mesh device:
+               when the shape fits within a mesh device, the tensor shards are distributed within the submesh
+               region. Otherwise, the tensor shards are distributed across mesh in row-major order.
+           )doc")
+        .def(
+            py::init([](std::optional<size_t> row_dim,
+                        std::optional<size_t> col_dim,
+                        const std::optional<MeshShape>& mesh_shape_override) {
+                MeshMapperConfig config;
+                config.placements.push_back(
+                    row_dim ? MeshMapperConfig::Placement{MeshMapperConfig::Shard{*row_dim}}
+                            : MeshMapperConfig::Placement{MeshMapperConfig::Replicate{}});
+                config.placements.push_back(
+                    col_dim ? MeshMapperConfig::Placement{MeshMapperConfig::Shard{*col_dim}}
+                            : MeshMapperConfig::Placement{MeshMapperConfig::Replicate{}});
+                return config;
+            }),
+            py::arg("row_dim"),
+            py::arg("col_dim"),
+            py::arg("mesh_shape_override") = std::nullopt,
+            R"doc(
+           Creates a 2D MeshMapperConfig with the given placements and mesh shape override.
+
+           Placements are supplied as optional integers: when set to None, the mapper will replicate over the dimension.
+           Otherwise, the mapper will shard over the dimension.
+
+           Args:
+               row_dim Optional[int]: The row dimension to shard / replicate over.
+               col_dim Optional[int]: The column dimension to shard / replicate over.
+               mesh_shape_override Optional[MeshShape]: If provided, overrides distribution shape of the mesh device.
+               )doc")
+        .def("__repr__", [](const MeshMapperConfig& config) {
+            std::ostringstream str;
+            str << config;
+            return str.str();
+        });
     auto py_mesh_composer_config = static_cast<py::class_<MeshComposerConfig>>(module.attr("MeshComposerConfig"));
-    py_mesh_composer_config.def(py::init([](size_t row_dim, size_t col_dim) {
-        MeshComposerConfig config;
-        config.dims.push_back(row_dim);
-        config.dims.push_back(col_dim);
-        return config;
-    }));
+    py_mesh_composer_config
+        .def(
+            py::init([](tt::stl::SmallVector<int> dims, const std::optional<MeshShape>& mesh_shape_override) {
+                return MeshComposerConfig{.dims = std::move(dims), .mesh_shape_override = mesh_shape_override};
+            }),
+            py::arg("dims"),
+            py::arg("mesh_shape_override") = std::nullopt,
+            R"doc(
+           Creates a MeshComposerConfig object with the given dimensions.
+
+           Args:
+               dims (List[int]): The dimensions to concat over.
+               mesh_shape_override Optional[MeshShape]: If provided, overrides distribution shape of the mesh device.
+           )doc")
+        .def(
+            py::init([](size_t row_dim, size_t col_dim, const std::optional<MeshShape>& mesh_shape_override) {
+                MeshComposerConfig config;
+                config.dims.push_back(row_dim);
+                config.dims.push_back(col_dim);
+                config.mesh_shape_override = mesh_shape_override;
+                return config;
+            }),
+            py::arg("row_dim"),
+            py::arg("col_dim"),
+            py::arg("mesh_shape_override") = std::nullopt,
+            R"doc(
+           Creates a 2D MeshComposerConfig object with the given dimensions.
+
+           Args:
+               row_dim (int): The dimension to concat over.
+               col_dim (int): The dimension to concat over.
+               mesh_shape_override Optional[MeshShape]: If provided, overrides distribution shape of the mesh device.
+           )doc")
+        .def("__repr__", [](const MeshComposerConfig& config) {
+            std::ostringstream str;
+            str << config;
+            return str.str();
+        });
 
     module.def(
         "get_device_tensors",
@@ -487,23 +572,17 @@ void py_module(py::module& module) {
    )doc");
     module.def(
         "create_mesh_mapper",
-        [](MeshDevice& mesh_device,
-           const MeshMapperConfig& config,
-           const std::optional<MeshShape>& mesh_shape = std::nullopt) -> std::unique_ptr<TensorToMesh> {
-            return create_mesh_mapper(mesh_device, config, mesh_shape);
+        [](MeshDevice& mesh_device, const MeshMapperConfig& config) -> std::unique_ptr<TensorToMesh> {
+            return create_mesh_mapper(mesh_device, config);
         },
         py::arg("mesh_device"),
         py::arg("config"),
-        py::arg("mesh_shape") = std::nullopt,
         R"doc(
        Returns an ND mapper for sharding and replicating a tensor over the given dimensions for the given mesh.
 
        Args:
            mesh_device (MeshDevice): The mesh to create the mapper for.
            config (MeshMapperConfig): A config object representing a set of placements.
-           mesh_shape (MeshShape): If provided, provides overrides the logical shape for the mapper.
-            Useful for distributing a tensor over ND shape that exceeds the number of physical dimensions
-            in the mesh device.
 
        Returns:
            TensorToMesh: A mapper providing the desired sharding.
@@ -517,11 +596,11 @@ void py_module(py::module& module) {
         py::arg("dim"));
     module.def(
         "create_mesh_composer",
-        [](MeshDevice& mesh_device, const MeshComposerConfig& config, const std::optional<MeshShape>& shape)
-            -> std::unique_ptr<MeshToTensor> { return create_mesh_composer(mesh_device, config, shape); },
+        [](MeshDevice& mesh_device, const MeshComposerConfig& config) -> std::unique_ptr<MeshToTensor> {
+            return create_mesh_composer(mesh_device, config);
+        },
         py::arg("mesh_device"),
         py::arg("config"),
-        py::arg("shape") = std::nullopt,
         R"doc(
             Returns an ND composer that concatenates a tensor across the given dimensions.
 
