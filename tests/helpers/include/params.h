@@ -9,6 +9,7 @@
 
 // Include auto-generated build configuration
 #include "build.h"
+#include "ckernel_defs.h"
 #include "ckernel_sfpu_binary.h"
 #include "ckernel_sfpu_log.h"
 #include "ckernel_sfpu_sqrt.h"
@@ -71,16 +72,22 @@ constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::ELWLESS;
 #endif
 
 #ifdef SFPU_ELWADD
-constexpr auto SFPU_BINARY_OPERATION = ckernel::sfpu::BinaryOp::ADD;
+constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::ADD;
 #endif
 #ifdef SFPU_ELWSUB
-constexpr auto SFPU_BINARY_OPERATION = ckernel::sfpu::BinaryOp::SUB;
+constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::SUB;
 #endif
 #ifdef SFPU_ELWMUL
-constexpr auto SFPU_BINARY_OPERATION = ckernel::sfpu::BinaryOp::MUL;
+constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::MUL;
 #endif
 #ifdef SFPU_OP_XLOGY
-constexpr auto SFPU_BINARY_OPERATION = ckernel::sfpu::BinaryOp::XLOGY;
+constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::XLOGY;
+#endif
+#ifdef SFPU_OP_RSHFT
+constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::RSHFT;
+#endif
+#ifdef SFPU_OP_LSHFT
+constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::LSHFT;
 #endif
 
 #ifdef SFPU_OP_SQRT
