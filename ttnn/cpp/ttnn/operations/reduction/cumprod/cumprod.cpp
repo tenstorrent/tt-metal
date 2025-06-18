@@ -19,7 +19,7 @@
 #include "tt-metalium/assert.hpp"
 #include "cumprod.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::operations::reduction {
 
 Tensor CumprodOperation::invoke(
     const Tensor& input_tensor,
@@ -103,4 +103,4 @@ Tensor CumprodOperation::invoke(
         queue_id);
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::operations::reduction
