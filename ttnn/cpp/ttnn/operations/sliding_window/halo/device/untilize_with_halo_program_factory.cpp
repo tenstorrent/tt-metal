@@ -133,10 +133,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     auto out_cb = create_circular_buffer(
         program, all_cores, cb_indices.out_cb_id, out_df, out_cb_npages, out_cb_pagesize, dst_buffer);
 
-    // Used for storing padding immediate values (TODO: use zeroed memory region instead)
+    // Used for storing padding immediate values (only used if not zero padding)
     uint32_t pad_cb_pagesize = out_stick_nbytes;
-    log_info(tt::LogOp, "pad stick size {}", out_stick_nbytes);
-
     uint32_t pad_cb_npages = 1;
     cb_indices.pad_cb_id0 = cb_indices.get_next_cb_id();
     auto pad_cb0 =
