@@ -301,8 +301,9 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     if (edm_fwd.my_noc_x < edm_bwd.my_noc_x) {
                         log_info(
                             tt::LogOp,
-                            "device {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
-                            edm_fwd.my_chip_id,
+                            "Fabric MeshId {} ChipId {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
+                            *(edm_fwd.local_fabric_node_id.mesh_id),
+                            edm_fwd.local_fabric_node_id.chip_id,
                             edm_fwd.my_noc_x,
                             edm_fwd.my_noc_y,
                             edm_bwd.my_noc_x,
@@ -323,8 +324,9 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     } else if (edm_fwd.my_noc_x > edm_bwd.my_noc_x) {
                         log_info(
                             tt::LogOp,
-                            "device {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
-                            edm_fwd.my_chip_id,
+                            "Fabric MeshId {} ChipId {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
+                            *(edm_fwd.local_fabric_node_id.mesh_id),
+                            edm_fwd.local_fabric_node_id.chip_id,
                             edm_fwd.my_noc_x,
                             edm_fwd.my_noc_y,
                             edm_bwd.my_noc_x,
