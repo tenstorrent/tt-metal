@@ -83,7 +83,6 @@ std::vector<tt::tt_metal::IDevice*> get_axis_devices(
 std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbors(
     const MeshDeviceView& mesh_view,
     const MeshCoordinate& mesh_coordinate,
-<<<<<<< HEAD
     tt::tt_fabric::Topology& topology,
     const std::optional<uint32_t> axis) {
     // For readability use symbolic indices instead of raw numbers when accessing the

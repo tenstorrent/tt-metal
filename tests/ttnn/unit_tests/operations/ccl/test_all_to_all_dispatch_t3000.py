@@ -53,10 +53,15 @@ def gen_tokens(batch, hidden_size, seq_len, mesh_shape, devices, scheme="random"
 
 
 def gen_expert_mapping(experts, devices, scheme="random"):
+    assert experts % devices == 0
+
     expert_mapping = torch.zeros(1, 1, experts, devices, dtype=torch.int16)
+    device_id = 0
+    experts_per_devices = experts // devices
     for i in range(experts):
         if scheme == "sequential":
-            device_id = i // devices
+            if i > 0 and i % experts_per_devices == 0:
+                device_id += 1
             expert_mapping[0, 0, i, device_id] = 1
         elif scheme == "random":
             device_id = torch.randint(0, devices, (1,))
