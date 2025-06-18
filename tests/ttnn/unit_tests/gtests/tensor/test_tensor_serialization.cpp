@@ -206,8 +206,6 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard1DFewerShardsThanDevicesRoun
 
     Tensor input_tensor = Tensor::from_vector(
         test_data, get_tensor_spec(ttnn::Shape{1, num_devices - 1, kNumElements, 1}, DataType::FLOAT32));
-    Tensor::from_vector(
-        test_data, get_tensor_spec(ttnn::Shape{1, num_devices - 1, kNumElements, 1}, DataType::FLOAT32));
 
     auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*mesh_device_, 1);
     Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper);
