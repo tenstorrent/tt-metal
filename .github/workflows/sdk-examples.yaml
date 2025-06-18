@@ -53,10 +53,15 @@ jobs:
           CXX: g++-12
         run: |
           set -euo pipefail
+          set -x
           echo "::group::Building examples"
           echo "Found example directories:"
           ls -1d /usr/share/${{ inputs.product }}/examples/*/
           for example in /usr/share/${{ inputs.product }}/examples/*; do
+            echo "looking at example: $example"
+            echo "example has contents:"
+            ls -la "$example"
+
             [ -f "$example/CMakeLists.txt" ] || continue
 
             # Check if this is a parent directory (no kernels folder)
