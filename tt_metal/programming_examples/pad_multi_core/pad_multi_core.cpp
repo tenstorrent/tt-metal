@@ -12,9 +12,11 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
+
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
+
 int main() {
     // get program/device
     int device_id = 0;
@@ -41,7 +43,7 @@ int main() {
     // create pad vector
     bfloat16 pad_value = bfloat16(2);
     std::vector<uint32_t> pad_vec(
-        8, pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(pad_value, pad_value)));
+        1, pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(pad_value, pad_value)));
 
     // create destination vector
     constexpr uint32_t dst_M = 8;
@@ -56,15 +58,12 @@ int main() {
     CoreRange cores(start_core, end_core);
     uint32_t num_cores = cores.size();
 
-    uint32_t dram_page_size = 32;
-
     // configure and create DRAM buffers for input, pad, output
     uint32_t src_buffer_size = packed_data_size * src_num_values_packed;
-
     tt_metal::InterleavedBufferConfig input_dram_config{
         .device = device,
         .size = src_buffer_size,
-        .page_size = dram_page_size,
+        .page_size = packed_data_size,
         .buffer_type = tt_metal::BufferType::DRAM};
     std::shared_ptr<tt::tt_metal::Buffer> src_buffer = CreateBuffer(input_dram_config);
     uint32_t src_addr = src_buffer->address();
@@ -72,19 +71,17 @@ int main() {
     uint32_t pad_buffer_size = packed_data_size * pad_vec.size();
     tt_metal::InterleavedBufferConfig pad_dram_config{
         .device = device,
-        .size =
-            pad_buffer_size * 8,  // apparently the buffer size needs to be a multiple of the page size, so we need this
-        .page_size = dram_page_size,
+        .size = pad_buffer_size,
+        .page_size = packed_data_size,
         .buffer_type = tt_metal::BufferType::DRAM};
     std::shared_ptr<tt::tt_metal::Buffer> pad_buffer = CreateBuffer(pad_dram_config);
     uint32_t pad_addr = pad_buffer->address();
 
     uint32_t dst_buffer_size = packed_data_size * dst_num_values_packed;
-
     tt_metal::InterleavedBufferConfig output_dram_config{
         .device = device,
         .size = dst_buffer_size,
-        .page_size = dram_page_size,
+        .page_size = packed_data_size,
         .buffer_type = tt_metal::BufferType::DRAM};
     std::shared_ptr<tt::tt_metal::Buffer> dst_buffer = CreateBuffer(output_dram_config);
     uint32_t dst_addr = dst_buffer->address();

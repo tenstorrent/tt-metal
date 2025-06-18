@@ -11,15 +11,15 @@ void kernel_main() {
     const uint32_t start_src_stick_id = get_arg_val<uint32_t>(2);
     const uint32_t row_size_diff = get_arg_val<uint32_t>(3);
     const uint32_t dst_N = get_arg_val<uint32_t>(4);
-    const uint32_t data_size_bytes = get_arg_val<uint32_t>(5) * 8;
+    const uint32_t data_size_bytes = get_arg_val<uint32_t>(5);
     const uint32_t num_rows_per_core = get_arg_val<uint32_t>(6);
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool pad_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
 
-    const InterleavedAddrGen<src_is_dram> s0 = {.bank_base_address = src_addr, .page_size = 32};
-    const InterleavedAddrGen<pad_is_dram> s1 = {.bank_base_address = pad_addr, .page_size = 32};
+    const InterleavedAddrGen<src_is_dram> s0 = {.bank_base_address = src_addr, .page_size = data_size_bytes};
+    const InterleavedAddrGen<pad_is_dram> s1 = {.bank_base_address = pad_addr, .page_size = data_size_bytes};
 
     // pad based on page
     uint32_t src_stick_id = start_src_stick_id;
