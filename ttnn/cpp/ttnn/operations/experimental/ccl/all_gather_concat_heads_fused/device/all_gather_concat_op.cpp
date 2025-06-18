@@ -127,7 +127,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program_at
         this->topology,
         this->semaphore,
         this->sub_device_id,
-        this->num_heads);
+        this->num_heads,
+        this->use_noc1_only);
 }
 
 tt::tt_metal::operation::Hash AllGatherConcat::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
@@ -148,7 +149,8 @@ tt::tt_metal::operation::Hash AllGatherConcat::compute_program_hash(const std::v
         input_memory_layout,
         input_dtype,
         input_memory_config,
-        this->num_heads);
+        this->num_heads,
+        this->use_noc1_only);
 }
 
 namespace operations {
@@ -163,6 +165,7 @@ Tensor all_gather_concat(
     const MeshDevice& mesh_device,
     const GlobalSemaphore& global_semaphore,
     const uint32_t num_heads,
+    const bool use_noc1_only,
     const MemoryConfig& memory_config,
     const std::optional<uint32_t> num_links,
     const ttnn::ccl::Topology topology,
@@ -190,6 +193,7 @@ Tensor all_gather_concat(
                    global_semaphore,
                    sub_device_id,
                    num_heads,
+                   use_noc1_only,
                    cluster_axis},
                {input_tensor, buffer_tensor})
         .at(0);

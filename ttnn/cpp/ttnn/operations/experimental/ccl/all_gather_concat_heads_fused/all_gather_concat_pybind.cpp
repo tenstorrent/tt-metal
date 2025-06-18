@@ -35,6 +35,7 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
                const GlobalSemaphore& global_semaphore,
                const uint32_t num_heads,
                const ttnn::MemoryConfig& memory_config,
+               const bool use_noc1_only,
                const std::optional<uint32_t> num_links,
                const ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
@@ -49,6 +50,7 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
                     global_semaphore,
                     num_heads,
                     memory_config,
+                    use_noc1_only,
                     num_links,
                     topology,
                     subdevice_id);
@@ -62,6 +64,7 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
             py::arg("num_heads").noconvert(),
             py::arg("memory_config"),
             py::kw_only(),
+            py::arg("use_noc1_only") = false,
             py::arg("num_links") = 1,
             py::arg("topology") = ttnn::ccl::Topology::Linear,
             py::arg("subdevice_id") = std::nullopt,
