@@ -128,7 +128,6 @@ void MAIN {
                     true /*transpose*/);
 
                 /* QK *= SCALE */
-                // mul_block_bcast_scalar_inplace<cb_scale_in, qk_chunk_tiles>(cb_qk_im);
                 if constexpr (use_joint_mask) {
                     if ((ring_id == N_mask_ring_id && k_chunk == mask_chunk_0) ||
                         (ring_id == L_mask_ring_id && k_chunk == mask_chunk_1)) {
@@ -137,16 +136,30 @@ void MAIN {
                         add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
                     }
                 }
-                /* Compute max and sum for softmax */
+
+                /**
+                 * reduce_c can perform both reduce_max and eltwise max with previous result.
+                 * if do_eltwise_max:
+                 *  cur_max = eltwise_max(prev_max, max(qk, dim=-1))
+                 * else:
+                 *  cur_max = max(qk, dim=-1)
+                 */
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
                     alias_cur_max, alias_prev_max, k_chunk > iter_k_chunk_start);
 
-                /* QK -= cb_cur_max */
-                /* QK = exp(QK)*/
+                /**
+                 * sub_exp fuses a few operations.
+                 * In-place it performs `QK = exp((QK - cur_max) * scale)`
+                 *
+                 * It also partially performs reduce_sum on the output using L1 accumulation.
+                 * `cur_sum = sum_tiles(exp((QK - cur_max) * scale), dim=-1)`
+                 *
+                 * Partial reduce_sum is used to push the final row_reduction within a tile
+                 * outside of the loop over K chunks.
+                 */
                 sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32>(
                     alias_cur_max, alias_cur_sum);
-                matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_cur_sum);
 
                 cb_wait_front(cb_qk_im, qk_chunk_tiles);
                 /* OUT_IM = QK @ V_CHUNK */
@@ -174,13 +187,14 @@ void MAIN {
                     sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
                     cb_pop_front(alias_prev_max, Sq_chunk_t);
                     /* cb_prev_sum *= cb_exp_max_diff */
-                    mul_block_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                    mul_block_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+
                     /* cb_cur_sum += cb_prev_sum */
                     add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
 
                     /* cb_out_accumulate_im *= cb_exp_max_diff */
-                    mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_mm2_prev_out, cb_exp_max_diff);
-                    add_block_inplace(alias_mm2_cur_out, alias_mm2_prev_out, out_chunk_tiles);
+
+                    mul_block_bcast_cols<Sq_chunk_t, DHt>(alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out, true);
                 }
 
                 // Swap ping-pong buffers
@@ -191,6 +205,8 @@ void MAIN {
 
             // Calculate current LSE
             // Use alias_cur_max as intermediate buffer.
+            matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
+
             log_block(alias_prev_sum, alias_cur_max, Sq_chunk_t);
 
             // Scale prev_max by scale_fp32
