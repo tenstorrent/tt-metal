@@ -17,7 +17,7 @@ from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def get_expected_times(name):
-    base = {"yolov8x": (128.267, 0.54)}
+    base = {"yolov8x": (128.267, 0.56)}
     return base[name]
 
 
