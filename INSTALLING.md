@@ -233,6 +233,8 @@ To try our pre-built models in `models/`, you must:
   sudo apt-get install cpufrequtils
   sudo cpupower frequency-set -g performance
   ```
+
+  - You are all set! See which models you can bring-up at the [TT-Metal GitHub repository](https://github.com/tenstorrent/tt-metal/tree/main?tab=readme-ov-file#llms) next.
   
 ---
 
