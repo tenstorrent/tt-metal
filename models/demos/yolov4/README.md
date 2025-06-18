@@ -35,12 +35,12 @@ pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[1-pretrain
 ### Model performant running with Trace+2CQ
 
 #### For 320x320:
-- end-2-end perf is 80 FPS
+- end-2-end perf is 98 FPS
   ```
   pytest models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution0-1-act_dtype0-weight_dtype0-device_params0]
   ```
 #### For 640x640:
-- end-2-end perf is 30 FPS
+- end-2-end perf is 44 FPS
   ```
   pytest models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution1-1-act_dtype0-weight_dtype0-device_params0]
   ```

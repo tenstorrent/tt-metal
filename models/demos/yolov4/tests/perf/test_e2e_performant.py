@@ -49,7 +49,7 @@ def test_e2e_performant(
 
     inference_times = []
     for _ in range(10):
-        input_shape = (1, *resolution, 3)
+        input_shape = (1, 3, *resolution)
         torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
 
         t0 = time.time()
