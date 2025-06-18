@@ -122,6 +122,7 @@ class TtAttention(nn.Module):
             ) = ttnn.experimental.nlp_create_qkv_heads(
                 qkv_fused, num_heads=self.heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
+            ttnn.deallocate(qkv_fused)
         else:
             q_heads = ttnn.matmul(
                 hidden_states,
