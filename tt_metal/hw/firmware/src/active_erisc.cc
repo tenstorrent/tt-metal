@@ -98,6 +98,17 @@ int _start() {
 	.option pop
 	)ASM");
 #endif
+// Remove when base FW is updated to save/restore local memory
+{
+  auto save_state_ptr = reinterpret_cast<volatile uint32_t*>(MEM_ERISC_SYSENG_LOCAL_MEM_STATE);
+  auto local_mem_ptr = reinterpret_cast<volatile uint32_t*>(MEM_LOCAL_BASE);
+  uint32_t local_mem_end = MEM_LOCAL_BASE + MEM_ERISC_LOCAL_SIZE;
+  while ((uint32_t)local_mem_ptr < local_mem_end) {
+      *save_state_ptr = *local_mem_ptr;
+      ++local_mem_ptr;
+      ++save_state_ptr;
+  }
+}
     configure_csr();
     WAYPOINT("I");
     do_crt1((uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH);
@@ -195,6 +206,16 @@ int _start() {
 
         invalidate_l1_cache();
     }
-
+// Remove when base FW is updated to save/restore local memory
+{
+    auto save_state_ptr = reinterpret_cast<volatile uint32_t*>(MEM_ERISC_SYSENG_LOCAL_MEM_STATE);
+    auto local_mem_ptr = reinterpret_cast<volatile uint32_t*>(MEM_LOCAL_BASE);
+    auto local_mem_end = MEM_LOCAL_BASE + MEM_ERISC_LOCAL_SIZE;
+    while ((uint32_t)local_mem_ptr < local_mem_end) {
+        *local_mem_ptr = *save_state_ptr;
+        ++local_mem_ptr;
+        ++save_state_ptr;
+    }
+}
     return 0;
 }
