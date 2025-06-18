@@ -157,6 +157,10 @@
 // Common Misc
 #define MEM_RETRAIN_COUNT_ADDR 0x7CC10
 #define MEM_RETRAIN_FORCE_ADDR 0x1EFC
+// These values are taken from WH, These may need to be updated when BH needs to support
+// intermesh routing.
+#define MEM_INTERMESH_ETH_LINK_CONFIG_ADDR 0x104C
+#define MEM_INTERMESH_ETH_LINK_STATUS_ADDR 0x1104
 #define MEM_SYSENG_ETH_RESULTS_BASE_ADDR 0x7CC00
 #define MEM_SYSENG_ETH_MAILBOX_BASE_ADDR 0x7D000
 
