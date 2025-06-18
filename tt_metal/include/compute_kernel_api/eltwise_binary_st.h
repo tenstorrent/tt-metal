@@ -80,9 +80,12 @@ ALWI void binary_tiles_init_st(uint32_t icb0, uint32_t icb1, bool acc_to_dest = 
  */
 // clang-format on
 ALWI void add_tiles_st(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
-    UNPACK((llk_math_eltwise_binary<ELWADD, NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE, DST_ACCUM_MODE>(
-        icb0, icb1, idst)));
+    UNPACK((llk_unpack_AB_st(icb0, icb1, itile0, itile1, idst)));
+    /*
+        UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
+        UNPACK((llk_math_eltwise_binary<ELWADD, NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE, DST_ACCUM_MODE>(
+            icb0, icb1, idst)));
+    */
 }
 
 }  // namespace ckernel
