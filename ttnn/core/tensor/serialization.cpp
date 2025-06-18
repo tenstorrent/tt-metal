@@ -425,12 +425,13 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) 
     std::shared_ptr<void> mmap_ptr(mmap_addr, [file_size, file_name](void* addr) { munmap(addr, file_size); });
     MemoryPin memory_pin(mmap_ptr);
 
-    std::byte* file_data = static_cast<std::byte*>(mmap_addr);
-
+    auto* file_data = static_cast<std::byte*>(mmap_addr);
     uint64_t header_size = 0;
     std::memcpy(&header_size, file_data, sizeof(header_size));
 
-    std::byte* header_start = file_data + sizeof(header_size);
+    const auto* header_start = reinterpret_cast<const std::uint8_t*>(file_data) + sizeof(header_size);
+    flatbuffers::Verifier verifier(header_start, header_size);
+    TT_FATAL(ttnn::flatbuffer::VerifyTensorBuffer(verifier), "Tensor deserialization failed: invalid buffer");
     auto fb_tensor = ttnn::flatbuffer::GetTensor(header_start);
 
     const uint64_t data_offset = sizeof(header_size) + header_size;
