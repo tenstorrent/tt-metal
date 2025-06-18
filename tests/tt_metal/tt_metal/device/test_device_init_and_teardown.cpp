@@ -123,4 +123,65 @@ TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
     }
 }
 
+// Test equivalent to Python test_readback function
+// Creates a large tensor, writes to device, reads back, and verifies data integrity
+TEST_P(DeviceParamFixture, TensixTestReadback) {
+    unsigned int num_devices = GetParam();
+    if (arch == tt::ARCH::GRAYSKULL && num_devices > 1) {
+        GTEST_SKIP();
+    }
+
+    ASSERT_TRUE(num_devices > 0);
+    vector<chip_id_t> ids;
+    for (unsigned int id = 0; id < num_devices; id++) {
+        ids.push_back(id);
+    }
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
+    const auto devices = tt::DevicePool::instance().get_all_active_devices();
+
+    // Create tensor with same dimensions as Python test: [96 * 96, 1, 32 * 228]
+    constexpr uint32_t dim0 = 96 * 96;  // 9216
+    constexpr uint32_t dim1 = 1;
+    constexpr uint32_t dim2 = 32 * 228;  // 7296
+    constexpr uint32_t total_elements = dim0 * dim1 * dim2;
+    constexpr uint32_t size_bytes = total_elements * sizeof(uint16_t);  // bfloat16 is 16-bit
+    // Create input data filled with 1.0 in bfloat16 format
+    // bfloat16 1.0 = 0x3F80 (upper 16 bits of IEEE 754 float32 0x3F800000)
+    std::vector<uint16_t> input_data(total_elements, 0x3F80);  // bfloat16 representation of 1.0
+
+    for (auto& device : devices) {
+        // Allocate buffer on device
+        auto buffer_config = BufferConfig{
+            .device = device,
+            .size = size_bytes,
+            .page_size = size_bytes,
+            .buffer_layout = TensorMemoryLayout::INTERLEAVED};
+
+        auto buffer = CreateBuffer(buffer_config);
+
+        // Write data to device buffer
+        EnqueueWriteBuffer(device->command_queue(0), *buffer, input_data.data(), true);
+
+        // Read data back from device buffer
+        std::vector<uint16_t> output_data(total_elements);
+        EnqueueReadBuffer(device->command_queue(0), *buffer, output_data.data(), true);
+
+        // Verify that input and output data match (equivalent to Python's torch.all(torch_tensor == output_tensor))
+        bool data_matches = (input_data == output_data);
+        EXPECT_TRUE(data_matches) << "Device " << device->id() << ": Readback data does not match input data";
+
+        // Additional verification: check specific values
+        for (size_t i = 0; i < std::min(10ul, static_cast<size_t>(total_elements)); i++) {
+            EXPECT_EQ(input_data[i], output_data[i])
+                << "Device " << device->id() << ": Mismatch at index " << i << ", expected: 0x" << std::hex
+                << input_data[i] << ", got: 0x" << std::hex << output_data[i];
+        }
+
+        log_info(LogTest, "Device {}: Successfully verified readback of {} elements", device->id(), total_elements);
+    }
+    for (auto device : devices) {
+        ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+    }
+}
 }  // namespace tt::tt_metal
