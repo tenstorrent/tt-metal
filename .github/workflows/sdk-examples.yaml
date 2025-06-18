@@ -53,6 +53,8 @@ jobs:
           CXX: g++-12
         run: |
           set -euo pipefail
+          echo "::group::Building examples"
+          ls -d /usr/share/${{ inputs.product }}/examples/*/
           for example in /usr/share/${{ inputs.product }}/examples/*; do
             [ -f "$example/CMakeLists.txt" ] || continue
 
@@ -89,8 +91,6 @@ jobs:
               done
             else
               example_name=$(basename "$example")
-              # Wouldn't it be nice if we could have nested groups?
-              # Yeah, others thought so, too. https://github.com/actions/toolkit/issues/1001
               echo "::group::${example_name} - build"
               cd `mktemp -d`
               cmake -G Ninja -S "$example" -B .
