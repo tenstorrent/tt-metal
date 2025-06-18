@@ -130,18 +130,11 @@ Tensor TOSAScatterOperation::invoke(
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config) {
-    CMAKE_UNIQUE_NAMESPACE::validate_tensors(input_tensor.get_logical_shape(), index_tensor.get_logical_shape(), source_tensor.get_logical_shape());
-
-    const ttnn::Shape original_input_tensor_lshape = input_tensor.logical_shape();
-    const auto input_tensor_rank = input_tensor.padded_shape().rank();
-
-    const auto original_index_tensor_lshape = index_tensor.logical_shape();
-    if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
-        return input_tensor;
-    }
-
     const auto& input_shape{input_tensor.get_logical_shape()};
     const auto& index_shape{index_tensor.get_logical_shape()};
+    const auto& source_shape{source_tensor.get_logical_shape()};
+
+    CMAKE_UNIQUE_NAMESPACE::validate_tensors(input_shape, index_shape, source_shape);
 
     const uint32_t N = input_shape[0];
     const uint32_t K = input_shape[1];
