@@ -42,8 +42,16 @@ def run_yolov4(device, reset_seeds, model_location_generator, use_pretrained_wei
     img = load_image(imgfile, resolution)
     torch_input = image_to_tensor(img)
 
-    # input_tensor = torch.permute(torch_input, (0, 2, 3, 1))
-    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    n, c, h, w = torch_input.shape
+    if c == 3:
+        c = 8
+    input_mem_config = ttnn.create_sharded_memory_config(
+        [n, c, h, w],
+        ttnn.CoreGrid(x=8, y=8),
+        ttnn.ShardStrategy.HEIGHT,
+    )
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_input = ttnn_input.to(device, input_mem_config)
 
     torch_output_tensor = torch_model(torch_input)
 
@@ -70,21 +78,21 @@ def run_yolov4(device, reset_seeds, model_location_generator, use_pretrained_wei
 )
 @pytest.mark.parametrize(
     "use_pretrained_weight",
-    [True],
+    [True, False],
     ids=[
         "pretrained_weight_true",
-        # "pretrained_weight_false",
+        "pretrained_weight_false",
     ],
 )
 @pytest.mark.parametrize(
     "resolution",
     [
         (320, 320),
-        # (640, 640),
+        (640, 640),
     ],
     ids=[
         "0",
-        # "1",
+        "1",
     ],
 )
 def test_yolov4(device, reset_seeds, model_location_generator, use_pretrained_weight, resolution):
