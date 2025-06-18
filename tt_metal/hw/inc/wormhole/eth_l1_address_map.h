@@ -116,5 +116,8 @@ struct address_map {
 
     static constexpr std::uint32_t RETRAIN_COUNT_ADDR = 0x1EDC;
     static constexpr std::uint32_t RETRAIN_FORCE_ADDR = 0x1EFC;
+
+    static constexpr std::uint32_t INTERMESH_ETH_LINK_CONFIG_ADDR = 0x104C;
+    static constexpr std::uint32_t INTERMESH_ETH_LINK_STATUS_ADDR = 0x1104;
 };
 }  // namespace eth_l1_mem
