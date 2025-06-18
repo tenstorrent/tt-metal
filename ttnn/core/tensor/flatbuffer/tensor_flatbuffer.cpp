@@ -49,33 +49,34 @@ tt::tt_metal::distributed::MeshShape from_flatbuffer(const flatbuffer::MeshShape
         std::vector<uint32_t>(shape->dimensions()->begin(), shape->dimensions()->end()));
 }
 
-tt::tt_metal::HostBuffer create_host_buffer_from_bytes(uint64_t size_bytes, const TensorSpec& spec) {
+tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
+    uint64_t size_bytes, const TensorSpec& spec, tt::stl::Span<std::byte> data, tt::tt_metal::MemoryPin memory_pin) {
     switch (spec.data_type()) {
         case tt::tt_metal::DataType::UINT32:
         case tt::tt_metal::DataType::BFLOAT8_B:
         case tt::tt_metal::DataType::BFLOAT4_B: {
-            std::vector<uint32_t> data(size_bytes / sizeof(uint32_t));
-            return tt::tt_metal::HostBuffer(std::move(data));
+            tt::stl::Span<uint32_t> typed_span(reinterpret_cast<uint32_t*>(data.data()), size_bytes / sizeof(uint32_t));
+            return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
         case tt::tt_metal::DataType::INT32: {
-            std::vector<int32_t> data(size_bytes / sizeof(int32_t));
-            return tt::tt_metal::HostBuffer(std::move(data));
+            tt::stl::Span<int32_t> typed_span(reinterpret_cast<int32_t*>(data.data()), size_bytes / sizeof(int32_t));
+            return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
         case tt::tt_metal::DataType::UINT8: {
-            std::vector<uint8_t> data(size_bytes / sizeof(uint8_t));
-            return tt::tt_metal::HostBuffer(std::move(data));
+            tt::stl::Span<uint8_t> typed_span(reinterpret_cast<uint8_t*>(data.data()), size_bytes / sizeof(uint8_t));
+            return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
         case tt::tt_metal::DataType::UINT16: {
-            std::vector<uint16_t> data(size_bytes / sizeof(uint16_t));
-            return tt::tt_metal::HostBuffer(std::move(data));
+            tt::stl::Span<uint16_t> typed_span(reinterpret_cast<uint16_t*>(data.data()), size_bytes / sizeof(uint16_t));
+            return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
         case tt::tt_metal::DataType::FLOAT32: {
-            std::vector<float> data(size_bytes / sizeof(float));
-            return tt::tt_metal::HostBuffer(std::move(data));
+            tt::stl::Span<float> typed_span(reinterpret_cast<float*>(data.data()), size_bytes / sizeof(float));
+            return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
         case tt::tt_metal::DataType::BFLOAT16: {
-            std::vector<bfloat16> data(size_bytes / sizeof(bfloat16));
-            return tt::tt_metal::HostBuffer(std::move(data));
+            tt::stl::Span<bfloat16> typed_span(reinterpret_cast<bfloat16*>(data.data()), size_bytes / sizeof(bfloat16));
+            return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
         case tt::tt_metal::DataType::INVALID: TT_THROW("Unsupported DataType");
     }
@@ -150,7 +151,10 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     }
 }
 
-Tensor from_flatbuffer(const ttnn::flatbuffer::Tensor* fb_tensor, tt::stl::Span<std::byte> tensor_data) {
+Tensor from_flatbuffer(
+    const ttnn::flatbuffer::Tensor* fb_tensor,
+    tt::stl::Span<std::byte> tensor_data,
+    tt::tt_metal::MemoryPin memory_pin) {
     auto spec = ttnn::from_flatbuffer(fb_tensor->tensor_spec());
 
     switch (fb_tensor->tensor_type_type()) {
@@ -164,10 +168,8 @@ Tensor from_flatbuffer(const ttnn::flatbuffer::Tensor* fb_tensor, tt::stl::Span<
             const uint64_t offset = inline_storage->offset();
             const uint64_t size = inline_storage->size();
 
-            tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(size, spec);
-            TT_FATAL(offset + size <= tensor_data.size(), "Tensor data out of bounds");
-            std::memcpy(host_buffer.view_bytes().data(), tensor_data.data() + offset, size);
-
+            tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(
+                size, spec, tt::stl::Span<std::byte>(tensor_data.data() + offset, size), memory_pin);
             return Tensor(std::move(host_buffer), spec);
         }
         case ttnn::flatbuffer::TensorType::ShardedTensor: {
@@ -196,13 +198,13 @@ Tensor from_flatbuffer(const ttnn::flatbuffer::Tensor* fb_tensor, tt::stl::Span<
                 const uint64_t offset = inline_storage->offset();
                 const uint64_t size = inline_storage->size();
 
-                tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(size, spec);
-                TT_FATAL(offset + size <= tensor_data.size(), "Tensor data out of bounds for shard {}", i);
-                std::memcpy(static_cast<void*>(host_buffer.view_bytes().data()), tensor_data.data() + offset, size);
+                tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(
+                    size, spec, tt::stl::Span<std::byte>(tensor_data.data() + offset, size), memory_pin);
 
                 TT_FATAL(shard->mesh_coordinate() != nullptr, "Mesh coordinate is required for each shard");
                 const auto coord = from_flatbuffer(shard->mesh_coordinate());
-                distributed_buffer.emplace_shard(coord, [&host_buffer]() { return std::move(host_buffer); });
+                distributed_buffer.emplace_shard(
+                    coord, [host_buffer = std::move(host_buffer)]() mutable { return std::move(host_buffer); });
             }
 
             tt::tt_metal::MultiDeviceHostStorage multi_device_storage{std::move(distributed_buffer)};
