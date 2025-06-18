@@ -51,6 +51,6 @@ struct ScatterDeviceOperation {
 }  // namespace ttnn::operations::experimental::scatter
 
 namespace ttnn::prim {
-constexpr auto scatter_ =
-    ttnn::register_operation<"ttnn::prim::scatter_", ttnn::operations::experimental::scatter::ScatterDeviceOperation>();
+constexpr auto scatter =
+    ttnn::register_operation<"ttnn::prim::scatter", ttnn::operations::experimental::scatter::ScatterDeviceOperation>();
 }
