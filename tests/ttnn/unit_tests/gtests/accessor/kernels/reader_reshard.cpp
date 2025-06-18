@@ -15,7 +15,7 @@ void kernel_main() {
 
     auto args = nd_sharding::make_args<base_idx_cta, base_idx_crta>();
     constexpr uint32_t new_base_idx_cta = base_idx_cta + args.compile_time_args_skip();
-    constexpr uint32_t new_base_idx_crta = base_idx_crta + args.runtime_args_skip();
+    uint32_t new_base_idx_crta = base_idx_crta + args.runtime_args_skip();
 
     constexpr uint32_t cb_id = get_compile_time_arg_val(new_base_idx_cta);
     // TODO: Expose generic interface to get page size for cb operand
