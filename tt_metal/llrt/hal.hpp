@@ -95,7 +95,6 @@ public:
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
     uint32_t get_processor_classes_count() const;
     uint32_t get_processor_types_count(uint32_t processor_class_idx) const;
-    uint8_t get_processor_types_count() const;
     const HalJitBuildConfig& get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 };
 
@@ -256,7 +255,6 @@ public:
     uint32_t get_processor_classes_count(std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type) const;
     uint32_t get_processor_types_count(
         std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type, uint32_t processor_class_idx) const;
-    uint8_t get_processor_types_count(HalProgrammableCoreType programmable_core_type) const;
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
@@ -330,12 +328,6 @@ inline uint32_t Hal::get_processor_types_count(
             return this->core_info_[index].get_processor_types_count(processor_class_idx);
         },
         programmable_core_type);
-}
-
-inline uint8_t Hal::get_processor_types_count(HalProgrammableCoreType programmable_core_type) const {
-    uint32_t index = utils::underlying_type<HalProgrammableCoreType>(programmable_core_type);
-    TT_ASSERT(index < this->core_info_.size());
-    return this->core_info_[index].get_processor_types_count();
 }
 
 inline HalProgrammableCoreType Hal::get_programmable_core_type(uint32_t core_type_index) const {
