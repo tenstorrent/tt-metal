@@ -58,10 +58,10 @@ void call_binary_sfpu_operation(BinaryOp operation)
             _calculate_sfpu_binary_<false, SFPU_BINARY_OPERATION, 32>(1);
             break;
         case BinaryOp::RSHFT:
-            _calculate_binary_right_shift_<false, 32>(1);
+            _calculate_binary_right_shift_<false, 32, INT32, false>(1);
             break;
         case BinaryOp::LSHFT:
-            _calculate_binary_left_shift_<false, 32>(1);
+            _calculate_binary_left_shift_<false, 32, INT32, false>(1);
             break;
         default:
             return;
