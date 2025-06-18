@@ -78,7 +78,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    bool use_noc1_only) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
     bool skip_write_back = output.shard_spec().value() == a.shard_spec().value();
@@ -88,8 +89,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     ttnn::MeshDevice* mesh_device = a.mesh_device();
     tt::tt_metal::Program program{};
-    bool use_noc1_only = false;
-    // Setting to True causes a kernel hang in fabric creation to be investigated
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     uint32_t output_page_size = 0;
@@ -768,6 +767,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = reader_noc,
+            .noc_mode =
+                (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = reader_mcast_sender_compile_time_args,
             .defines = reader_mcast_sender_defines});
     KernelHandle reader_mcast_receiver_kernels_id_all_to_all = -1;
@@ -780,6 +781,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = reader_noc,
+                .noc_mode =
+                    (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
                 .compile_args = reader_mcast_receiver_all_to_all_compile_time_args,
                 .defines = reader_mcast_receiver_defines});
     }
@@ -791,6 +794,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = reader_noc,
+                .noc_mode =
+                    (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
                 .compile_args = reader_mcast_receiver_compile_time_args,
                 .defines = reader_mcast_receiver_defines});
     }
@@ -805,6 +810,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = writer_noc,
+            .noc_mode =
+                (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = writer_compile_time_args,
             .defines = writer_defines});
     KernelHandle writer_mcast_receiver_kernels_id = -1;
@@ -817,6 +824,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = writer_noc,
+                .noc_mode =
+                    (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
                 .compile_args = writer_compile_time_args,
                 .defines = writer_defines});
     }
