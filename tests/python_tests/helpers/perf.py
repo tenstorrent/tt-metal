@@ -90,6 +90,12 @@ RUN_COUNT = 8
 
 
 def _build_l1_to_l1(test_config):
+    test_config["perf_run_type"] = PerfRunType.L1_TO_L1
+    return build_with_profiler(test_config)
+
+
+def _build_unpack_isolate(test_config):
+    test_config["perf_run_type"] = PerfRunType.UNPACK_ISOLATE
     return build_with_profiler(test_config)
 
 
@@ -115,11 +121,11 @@ class PerfRunType(Enum):
 
 def perf_benchmark(test_config, run_types: list[PerfRunType]):
     # todo: support all types of runs
-    SUPPORTED_RUNS = {PerfRunType.L1_TO_L1}
+    SUPPORTED_RUNS = {PerfRunType.L1_TO_L1, PerfRunType.UNPACK_ISOLATE}
     RUN_CONFIGURATIONS = {
         PerfRunType.L1_TO_L1: (_build_l1_to_l1, timing_l1_to_l1),
+        PerfRunType.UNPACK_ISOLATE: (_build_unpack_isolate, timing_unpack),
         # Add new run types here as they're implemented:
-        # PerfRunType.UNPACK_ISOLATE: (_build_unpack_isolate, timing_unpack),
         # PerfRunType.MATH_ISOLATE: (_build_math_isolate, timing_math),
         # PerfRunType.PACK_ISOLATE: (_build_pack_isolate, timing_pack),
         # PerfRunType.L1_CONGESTION: (_build_l1_congestion, timing_l1_congestion),

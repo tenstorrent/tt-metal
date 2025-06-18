@@ -11,6 +11,7 @@
 #include "ckernel_defs.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "perf.h"
 #include "profiler.h"
 
 // Globals
@@ -62,11 +63,19 @@ void run_kernel()
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        for (uint32_t tile = 0; tile < TILE_CNT; tile++)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, DstSync::SyncHalf, is_fp32_dest_acc_en, MATH_FIDELITY>(TILE_NUM_FACES, 0, false);
-            _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+            return _perf_math_loop_clear_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
+        }
+        else
+        {
+            for (uint32_t tile = 0; tile < TILE_CNT; tile++)
+            {
+                _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+                _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, DstSync::SyncHalf, is_fp32_dest_acc_en, MATH_FIDELITY>(
+                    TILE_NUM_FACES, 0, false);
+                _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+            }
         }
         tensix_sync(); // -> perf
     }
@@ -91,12 +100,20 @@ void run_kernel()
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        for (uint32_t tile = 0; tile < TILE_CNT; tile++)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _llk_packer_wait_for_math_done_();
-            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, L1_ADDRESS(dst + (tile % 8) * 0x1000));
-            _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+            return;
         }
+        else
+        {
+            for (uint32_t tile = 0; tile < TILE_CNT; tile++)
+            {
+                _llk_packer_wait_for_math_done_();
+                _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, L1_ADDRESS(dst + (tile % 8) * 0x1000));
+                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+            }
+        }
+
         tensix_sync(); // -> perf
     }
 }
