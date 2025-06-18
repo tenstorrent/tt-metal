@@ -313,7 +313,7 @@ class Generator:
         page_table=None,
         kv_cache=None,
         enable_trace=True,
-        read_from_device=False,
+        read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
         reset_inputs=True,
     ):
