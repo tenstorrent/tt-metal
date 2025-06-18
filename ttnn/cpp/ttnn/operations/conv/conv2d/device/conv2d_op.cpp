@@ -284,7 +284,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             .enable_split_reader = enable_split_reader,
             .enable_subblock_padding = enable_subblock_padding},
         input_tensor_a.dtype(),
-        output_tensor.dtype(),  // TODO check if dtype from the parent struct should be used instead?
+        this->dtype,
         this->memory_config,
         has_bias,
         is_1d_deptwise_conv(
