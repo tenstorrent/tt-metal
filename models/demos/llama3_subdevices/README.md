@@ -99,8 +99,3 @@ The demo includes built-in profiling and throughput analysis:
 - **Tokens/sec/user**: Measured at each iteration and summarized at the end.
 - **TSU Thresholds**: Configurable per model/layer count; demo will assert if throughput falls below target.
 - **Stress Testing**: Run with long context and high token generation to validate stability.
-
-## License
-
-SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-SPDX-License-Identifier: Apache-2.0
