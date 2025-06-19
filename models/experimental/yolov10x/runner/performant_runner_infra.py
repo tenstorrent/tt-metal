@@ -7,16 +7,15 @@ import ttnn
 import torch
 import requests
 from loguru import logger
-import torch.nn.functional as F
 
 
-from models.experimental.yolov10.tests.common import (
+from models.experimental.yolov10x.tests.common import (
     load_torch_model,
 )
-from models.experimental.yolov10.tt.model_preprocessing import (
+from models.experimental.yolov10x.tt.model_preprocessing import (
     create_yolov10x_model_parameters,
 )
-from models.experimental.yolov10.tt.yolov10 import TtnnYolov10
+from models.experimental.yolov10x.tt.yolov10x import TtnnYolov10
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -48,6 +47,7 @@ class YOLOv10PerformanceRunnerInfra:
         model_location_generator=None,
         resolution=(640, 640),
         torch_input_tensor=None,
+        use_pretrained_weight=True,
     ):
         torch.manual_seed(0)
         self.resolution = resolution
@@ -60,7 +60,7 @@ class YOLOv10PerformanceRunnerInfra:
         self.model_location_generator = model_location_generator
         self.torch_input_tensor = torch_input_tensor
 
-        self.torch_model = load_torch_model()
+        self.torch_model = load_torch_model(use_weights_from_ultralytics=use_pretrained_weight)
 
         self.torch_input_tensor = (
             torch.randn((1, 3, 640, 640), dtype=torch.float32)
@@ -93,14 +93,13 @@ class YOLOv10PerformanceRunnerInfra:
 
         n, c, h, w = torch_input_tensor.shape
 
-        torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
-        torch_input_tensor = F.pad(torch_input_tensor, (0, 29))
+        ## Converting from image based channels (3) to min channels (16)
+        if c == 3:
+            c = 16
         input_mem_config = ttnn.create_sharded_memory_config(
-            [6400, 32],
-            core_grid=device.core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
+            [n, c, h, w],
+            ttnn.CoreGrid(x=8, y=8),
+            ttnn.ShardStrategy.HEIGHT,
         )
         tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 

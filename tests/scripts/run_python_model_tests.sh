@@ -55,7 +55,7 @@ run_python_model_tests_wormhole_b0() {
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv tests/ttnn/integration_tests/mobilenetv2/test_mobilenetv2.py
 
     #Yolov10
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv tests/ttnn/integration_tests/yolov10/test_ttnn_yolov10.py::test_yolov10x
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv tests/ttnn/integration_tests/yolov10x/test_ttnn_yolov10x.py::test_yolov10x
 
     #Yolov7
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv tests/ttnn/integration_tests/yolov7/test_ttnn_yolov7.py

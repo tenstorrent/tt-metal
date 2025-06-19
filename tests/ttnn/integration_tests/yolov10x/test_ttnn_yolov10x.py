@@ -7,22 +7,23 @@ import torch
 import pytest
 from ultralytics import YOLO
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.yolov10.reference.yolov10 import YOLOv10
-from models.experimental.yolov10.tt.bottleneck import TtnnBottleNeck
-from models.experimental.yolov10.tt.scdown import TtnnSCDown
-from models.experimental.yolov10.tt.sppf import TtnnSPPF
-from models.experimental.yolov10.tt.cib import TtnnCIB
-from models.experimental.yolov10.tt.psa import TtnnPSA
-from models.experimental.yolov10.tt.c2f import TtnnC2f
-from models.experimental.yolov10.tt.attention import TtnnAttention
-from models.experimental.yolov10.tt.c2fcib import TtnnC2fCIB
-from models.experimental.yolov10.tt.v10detect import TtnnV10Detect
-from models.experimental.yolov10.tt.yolov10 import TtnnYolov10
+from models.experimental.yolov10x.reference.yolov10x import YOLOv10
+from models.experimental.yolov10x.tt.bottleneck import TtnnBottleNeck
+from models.experimental.yolov10x.tt.scdown import TtnnSCDown
+from models.experimental.yolov10x.tt.sppf import TtnnSPPF
+from models.experimental.yolov10x.tt.cib import TtnnCIB
+from models.experimental.yolov10x.tt.psa import TtnnPSA
+from models.experimental.yolov10x.tt.c2f import TtnnC2f
+from models.experimental.yolov10x.tt.attention import TtnnAttention
+from models.experimental.yolov10x.tt.c2fcib import TtnnC2fCIB
+from models.experimental.yolov10x.tt.v10detect import TtnnV10Detect
+from models.experimental.yolov10x.tt.yolov10x import TtnnYolov10
 
-from models.experimental.yolov10.tt.model_preprocessing import (
+from models.experimental.yolov10x.tt.model_preprocessing import (
     create_yolov10x_input_tensors,
     create_yolov10x_model_parameters,
     create_yolov10_model_parameters_detect,
+    create_yolov10x_input_tensors_submodules,
 )
 
 
@@ -160,7 +161,7 @@ def test_yolov10x_SCDown(device, reset_seeds, index, fwd_input_shape, use_weight
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_yolov10x_SPPF(device, reset_seeds, use_weights_from_ultralytics):
     fwd_input_shape = [1, 640, 20, 20]
-    torch_input, ttnn_input = create_yolov10x_input_tensors(
+    torch_input, ttnn_input = create_yolov10x_input_tensors_submodules(
         device,
         batch_size=fwd_input_shape[0],
         input_channels=fwd_input_shape[1],
@@ -277,7 +278,7 @@ def test_yolov10x_CIB(device, reset_seeds, index, fwd_input_shape, use_weights_f
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_yolov10x_Attention(device, reset_seeds, use_weights_from_ultralytics):
     fwd_input_shape = [1, 320, 20, 20]
-    torch_input, ttnn_input = create_yolov10x_input_tensors(
+    torch_input, ttnn_input = create_yolov10x_input_tensors_submodules(
         device,
         batch_size=fwd_input_shape[0],
         input_channels=fwd_input_shape[1],
@@ -334,7 +335,7 @@ def test_yolov10x_Attention(device, reset_seeds, use_weights_from_ultralytics):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_yolov10x_PSA(device, reset_seeds, use_weights_from_ultralytics):
     fwd_input_shape = [1, 640, 20, 20]
-    torch_input, ttnn_input = create_yolov10x_input_tensors(
+    torch_input, ttnn_input = create_yolov10x_input_tensors_submodules(
         device,
         batch_size=fwd_input_shape[0],
         input_channels=fwd_input_shape[1],
@@ -404,7 +405,7 @@ def test_yolov10x_C2f(
     use_weights_from_ultralytics,
     memory_config,
 ):
-    torch_input, ttnn_input = create_yolov10x_input_tensors(
+    torch_input, ttnn_input = create_yolov10x_input_tensors_submodules(
         device,
         batch_size=fwd_input_shape[0],
         input_channels=fwd_input_shape[1],
@@ -461,21 +462,21 @@ def test_yolov10x_C2f(
 def test_yolov10x_v10Detect(
     device, reset_seeds, index, fwd_input_shape, num_layers, shortcut, use_weights_from_ultralytics
 ):
-    torch_input_1, ttnn_input_1 = create_yolov10x_input_tensors(
+    torch_input_1, ttnn_input_1 = create_yolov10x_input_tensors_submodules(
         device,
         batch_size=fwd_input_shape[0][0],
         input_channels=fwd_input_shape[0][1],
         input_height=fwd_input_shape[0][2],
         input_width=fwd_input_shape[0][3],
     )
-    torch_input_2, ttnn_input_2 = create_yolov10x_input_tensors(
+    torch_input_2, ttnn_input_2 = create_yolov10x_input_tensors_submodules(
         device,
         batch_size=fwd_input_shape[1][0],
         input_channels=fwd_input_shape[1][1],
         input_height=fwd_input_shape[1][2],
         input_width=fwd_input_shape[1][3],
     )
-    torch_input_3, ttnn_input_3 = create_yolov10x_input_tensors(
+    torch_input_3, ttnn_input_3 = create_yolov10x_input_tensors_submodules(
         device,
         batch_size=fwd_input_shape[2][0],
         input_channels=fwd_input_shape[2][1],
