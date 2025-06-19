@@ -109,7 +109,11 @@ public:
 
     std::set<chip_id_t> all_chip_ids() const { return this->driver_->get_target_device_ids(); };
 
+    std::set<chip_id_t> mmio_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
+
     size_t number_of_pci_devices() const { return this->driver_->get_target_mmio_device_ids().size(); }
+
+    std::set<chip_id_t> all_pci_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
 
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in

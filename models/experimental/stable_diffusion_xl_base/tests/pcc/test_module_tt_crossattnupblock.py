@@ -26,7 +26,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
             20,
             1280,
             0,
-            0.973,
+            0.976,
         ),
         (
             (1, 1280, 64, 64),
