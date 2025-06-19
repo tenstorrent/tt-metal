@@ -142,7 +142,7 @@ JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t /*device_i
 
     // Prepare the container for build states
     const auto& hal = MetalContext::instance().hal();
-    uint32_t num_build_states = hal.get_num_risc_processors();
+    uint32_t num_build_states = hal.get_total_num_risc_processors();
     std::vector<std::shared_ptr<JitBuildState>> build_states(num_build_states);
 
     // Helper lambda to create a build state based on the core type and processor info.
