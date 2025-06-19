@@ -9,6 +9,7 @@
 
 namespace ttnn::operations::rand {
 Tensor Rand::invoke(
+    QueueId queue_id,
     const std::vector<uint32_t>& size,
     std::optional<std::reference_wrapper<MeshDevice>> device,
     const DataType dtype,
