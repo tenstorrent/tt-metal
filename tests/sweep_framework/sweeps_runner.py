@@ -6,7 +6,7 @@ import argparse
 import sys
 import pathlib
 import importlib
-import datetime
+import datetime as dt
 import os
 import json
 import enlighten
@@ -22,6 +22,8 @@ from elasticsearch import Elasticsearch, NotFoundError
 from framework.elastic_config import *
 from framework.sweeps_logger import sweeps_logger as logger
 from sweep_utils.roofline_utils import get_updated_message
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 ARCH = os.getenv("ARCH_NAME")
 
@@ -203,7 +205,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                 reset_util.reset()
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
-        result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         result["host"] = get_hostname()
         result["user"] = get_username()
 
@@ -307,8 +309,8 @@ def run_sweeps_json(module_name, suite_name):
             results = execute_suite(test_module, test_vectors, pbar_manager, suite)
             logger.info(f"Completed tests for module {module_name}, suite {suite}.")
             logger.info(f"Tests Executed - {len(results)}")
-            logger.info("Dumping results to JSON file.")
-            export_test_results_json(header_info, results)
+            logger.info("Dumping results to PostgreSQL database.")
+            export_test_results_postgres(header_info, results)
 
 
 def run_sweeps(module_name, suite_name, vector_id):
@@ -363,7 +365,10 @@ def run_sweeps(module_name, suite_name, vector_id):
                     results = execute_suite(test_module, test_vectors, pbar_manager, suite)
                     logger.info(f"Completed tests for module {sweep_name}, suite {suite}.")
                     logger.info(f"Tests Executed - {len(results)}")
-                    export_test_results(header_info, results)
+                    if DATABASE_BACKEND == "postgres":
+                        export_test_results_postgres(header_info, results)
+                    else:
+                        export_test_results(header_info, results)
                     module_pbar.update()
                 module_pbar.close()
             except NotFoundError as e:
@@ -409,14 +414,20 @@ def run_sweeps(module_name, suite_name, vector_id):
                         results = execute_suite(test_module, test_vectors, pbar_manager, suite)
                         logger.info(f"Completed tests for module {module_name}, suite {suite}.")
                         logger.info(f"Tests Executed - {len(results)}")
-                        export_test_results(header_info, results)
+                        if DATABASE_BACKEND == "postgres":
+                            export_test_results_postgres(header_info, results)
+                        else:
+                            export_test_results(header_info, results)
                 else:
                     logger.info(f"Executing tests for module {module_name}, suite {suite_name}.")
                     header_info, test_vectors = get_suite_vectors(client, vector_index, suite_name)
                     results = execute_suite(test_module, test_vectors, pbar_manager, suite_name)
                     logger.info(f"Completed tests for module {module_name}, suite {suite_name}.")
                     logger.info(f"Tests Executed - {len(results)}")
-                    export_test_results(header_info, results)
+                    if DATABASE_BACKEND == "postgres":
+                        export_test_results_postgres(header_info, results)
+                    else:
+                        export_test_results(header_info, results)
             except Exception as e:
                 logger.info(e)
 
@@ -447,6 +458,86 @@ def export_test_results(header_info, results):
     client.close()
 
 
+def export_test_results_postgres(header_info, results):
+    """Export test results to PostgreSQL database"""
+    if len(results) == 0:
+        return
+
+    # Get PostgreSQL connection
+    pg_config = get_postgres_config(POSTGRES_ENV)
+
+    try:
+        conn = psycopg2.connect(**pg_config)
+        cursor = conn.cursor()
+
+        sweep_name = header_info[0]["sweep_name"]
+        curr_git_hash = git_hash()
+
+        # Prepare the insert statement
+        insert_query = """
+        INSERT INTO sweep_results (
+            sweep_name, suite_name, vector_id, input_hash, status, message,
+            exception, e2e_perf, device_perf, timestamp, host, user_name,
+            git_hash, test_parameters
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        )
+        """
+
+        for i in range(len(results)):
+            # Prepare the data
+            header = header_info[i]
+            result = results[i]
+
+            # Extract test parameters from the original vector
+            test_parameters = {}
+            for key, value in result.items():
+                if key not in [
+                    "status",
+                    "message",
+                    "exception",
+                    "e2e_perf",
+                    "device_perf",
+                    "timestamp",
+                    "host",
+                    "user",
+                ]:
+                    test_parameters[key] = serialize(value) if hasattr(value, "__dict__") else value
+
+            # Prepare values for insertion
+            values = (
+                header.get("sweep_name"),
+                header.get("suite_name"),
+                header.get("vector_id"),
+                header.get("input_hash"),
+                str(result.get("status")),
+                result.get("message"),
+                result.get("exception"),
+                result.get("e2e_perf"),
+                json.dumps(result.get("device_perf")) if result.get("device_perf") else None,
+                dt.datetime.strptime(result.get("timestamp"), "%Y-%m-%d_%H-%M-%S"),
+                result.get("host"),
+                result.get("user"),
+                curr_git_hash,
+                json.dumps(test_parameters),
+            )
+
+            cursor.execute(insert_query, values)
+
+        conn.commit()
+        logger.info(f"Successfully exported {len(results)} results to PostgreSQL")
+
+    except Exception as e:
+        logger.error(f"Failed to export results to PostgreSQL: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
 def enable_watcher():
     logger.info("Enabling Watcher")
     os.environ["TT_METAL_WATCHER"] = "120"
@@ -469,6 +560,27 @@ def disable_profiler():
     logger.info("Disabling Device Profiler")
     os.environ.pop("TT_METAL_DEVICE_PROFILER")
     os.environ.pop("ENABLE_TRACY")
+
+
+def get_postgres_config(env="cloud"):
+    if env == "corp":
+        return {
+            "host": "corp_postgres_host",
+            "port": 5432,
+            "database": "sweeps_results",
+            "user": "username",
+            "password": "password",
+        }
+    elif env == "cloud":
+        return {
+            "host": "ep-misty-surf-a5lm1q6p-pooler.us-east-2.aws.neon.tech",
+            "port": 5432,
+            "database": "sweeps",
+            "user": "sweeps_owner",
+            "password": "npg_TEBDYL0pUXs4",
+        }
+    else:
+        raise ValueError(f"Unknown PostgreSQL environment: {env}")
 
 
 if __name__ == "__main__":
@@ -521,6 +633,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "--read-file", required=False, help="Read and execute test vectors from a specified file path instead of ES."
     )
+    parser.add_argument(
+        "--database",
+        required=False,
+        default="postgres",
+        choices=["elasticsearch", "postgres"],
+        help="Database backend for storing results. Available options: ['elasticsearch', 'postgres']",
+    )
+    parser.add_argument(
+        "--postgres-env",
+        required=False,
+        default="cloud",
+        choices=["corp", "cloud"],
+        help="PostgreSQL environment configuration. Available options: ['corp', 'cloud']",
+    )
 
     args = parser.parse_args(sys.argv[1:])
     if not args.module_name and args.vector_id:
@@ -554,7 +680,13 @@ if __name__ == "__main__":
     global SWEEPS_TAG
     SWEEPS_TAG = args.tag
 
-    logger.info(f"Running current sweeps with tag: {SWEEPS_TAG}.")
+    global DATABASE_BACKEND
+    DATABASE_BACKEND = args.database
+
+    global POSTGRES_ENV
+    POSTGRES_ENV = args.postgres_env
+
+    logger.info(f"Running current sweeps with tag: {SWEEPS_TAG} using {DATABASE_BACKEND} backend.")
 
     if args.watcher:
         enable_watcher()
