@@ -359,6 +359,7 @@ def test_all_gather_only(
 @pytest.mark.parametrize("num_iters, warmup_iters", [[200, 20]])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize("fused_add", [True])
+@pytest.mark.parametrize("use_noc1_only", [False])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -382,6 +383,7 @@ def test_tg_trace_rms_fuse(
     input_shard_grid,
     output_shard_grid,
     trace_mode,
+    use_noc1_only,
     use_new_version,
     fused_add,
 ):
@@ -397,6 +399,7 @@ def test_tg_trace_rms_fuse(
         output_shard_grid,
         ttnn.Topology.Linear,
         fused_add,
+        use_noc1_only=use_noc1_only,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
         profiler=profiler,
@@ -436,6 +439,7 @@ def test_tg_trace_rms_fuse(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("num_iters", [20])
 @pytest.mark.parametrize("fused_add", [True, False])
+@pytest.mark.parametrize("use_noc1_only", [True, False])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("residual_dtype", [ttnn.bfloat16])
@@ -457,6 +461,7 @@ def test_rms_fuse(
     input_shard_grid,
     output_shard_grid,
     fused_add,
+    use_noc1_only,
     input_dtype,
     residual_dtype,
     output_dtype,
@@ -473,6 +478,7 @@ def test_rms_fuse(
         output_shard_grid,
         topology,
         fused_add,
+        use_noc1_only=use_noc1_only,
         output_dtype=output_dtype,
         num_iters=num_iters,
         input_dtype=input_dtype,
