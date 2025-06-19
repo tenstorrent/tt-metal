@@ -33,8 +33,8 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
 
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.logical_shape();
-    auto output_shape = output_tensor.logical_shape();
+    auto input_shape = input_tensor.padded_shape();
+    auto output_shape = output_tensor.padded_shape();
 
     TT_FATAL(
         input_tensor.element_size() == output_tensor.element_size(),

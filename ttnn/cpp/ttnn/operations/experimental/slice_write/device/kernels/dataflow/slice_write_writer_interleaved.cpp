@@ -58,7 +58,7 @@ void kernel_main() {
                 }
             }
         }
-        noc_async_read_barrier();
+        noc_async_write_barrier();
         cb_pop_front(cb_id_out0, num_read_per_barrier);
     }
 }
