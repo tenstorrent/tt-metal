@@ -245,6 +245,12 @@ CPMAddPackage(
         "TF_BUILD_EXAMPLES OFF"
 )
 if(Taskflow_ADDED AND NOT TARGET Taskflow::Taskflow)
+    target_compile_options(
+        Taskflow
+        INTERFACE
+            -isystem
+            ${Taskflow_SOURCE_DIR}
+    )
     add_library(Taskflow::Taskflow ALIAS Taskflow)
 endif()
 
@@ -302,7 +308,7 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 CPMAddPackage(
     NAME tt-logger
     GITHUB_REPOSITORY tenstorrent/tt-logger
-    VERSION 1.0.7
+    VERSION 1.1.3
     OPTIONS
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"

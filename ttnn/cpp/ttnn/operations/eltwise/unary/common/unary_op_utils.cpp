@@ -36,6 +36,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::IDENTITY_UINT32: return "SFPU_OP_IDENTITY_INCLUDE";
         case UnaryOpType::FLOOR:
         case UnaryOpType::CEIL:
+        case UnaryOpType::TRUNC:
         case UnaryOpType::ROUND: return "SFPU_OP_ROUND_FAMILY_INCLUDE";
         case UnaryOpType::RDIV:
         case UnaryOpType::RSUB: return "SFPU_OP_REVERSE_FAMILY_INCLUDE";
@@ -336,7 +337,12 @@ std::pair<string, string> get_op_init_and_func_default(
             break;
         case UnaryOpType::ISNAN: op_init_and_name = {"isnan_tile_init();", fmt::format("isnan_tile({});", idst)}; break;
         case UnaryOpType::LOGICAL_NOT_UNARY:
-            op_init_and_name = {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile({});", idst)};
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {
+                    "logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile_int32({});", idst)};
+            } else {
+                op_init_and_name = {"logical_not_unary_tile_init();", fmt::format("logical_not_unary_tile({});", idst)};
+            }
             break;
         case UnaryOpType::I0: op_init_and_name = {"i0_tile_init();", fmt::format("i0_tile({});", idst)}; break;
         case UnaryOpType::I1: op_init_and_name = {"i1_tile_init();", fmt::format("i1_tile({});", idst)}; break;
@@ -450,6 +456,15 @@ std::pair<string, string> get_op_init_and_func_default(
                 op_init_and_name = {"rounding_op_tile_init();", fmt::format("ceil_tile_float32({});", idst)};
             } else {
                 op_init_and_name = {"rounding_op_tile_init();", fmt::format("ceil_tile({});", idst)};
+            }
+            break;
+        case UnaryOpType::TRUNC:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::FLOAT32) {
+                op_init_and_name = {"rounding_op_tile_init();", fmt::format("trunc_tile_float32({});", idst)};
+            } else {
+                op_init_and_name = {"rounding_op_tile_init();", fmt::format("trunc_tile({});", idst)};
             }
             break;
         case UnaryOpType::RELU6:

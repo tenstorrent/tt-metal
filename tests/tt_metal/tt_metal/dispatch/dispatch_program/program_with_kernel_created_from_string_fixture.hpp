@@ -19,8 +19,6 @@ protected:
         }
     }
 
-    void TearDown() override { detail::CloseDevices(this->device_ids_to_devices_); }
-
 private:
     std::map<chip_id_t, IDevice*> device_ids_to_devices_;
 };

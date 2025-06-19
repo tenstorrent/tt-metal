@@ -320,7 +320,6 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program_at(
             } else {
                 TT_FATAL(false, "Program Config does not match");
 
-                using ProgramConfigType = std::decay_t<decltype(program_config)>;
                 uint32_t num_cores_x = 1;
                 uint32_t num_cores_y = 1;
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
