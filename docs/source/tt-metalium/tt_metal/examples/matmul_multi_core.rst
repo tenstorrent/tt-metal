@@ -25,15 +25,11 @@ Building the example can be done by adding a ``--build-programming-examples`` fl
     ./build/programming_examples/matmul_multi_core
 
 .. note::
-    Efficiently parallelizing matrix multiplication across multiple cores - using SPMD (Single Program, Multiple Data) or other parallelization strategies - is a broad and advanced topic, often covered in depth in advanced computer science courses. While this tutorial demonstrates how to use our API to distribute work across cores, it does not attempt to teach the fundamentals of parallel programming or SPMD concepts themselves.
+    Efficiently parallelizing matrix multiplication across multiple cores—using SPMD (Single Program, Multiple Data) or other parallelization strategies - is a broad and advanced topic, often covered in depth in advanced computer science courses. While this tutorial demonstrates how to use our API to distribute work across cores, it does not attempt to teach the fundamentals of parallel programming or SPMD concepts themselves.
 
     If you are new to these topics, we recommend consulting external resources or textbooks on parallel computing for a deeper understanding. This will help you make the most of our platform and adapt these examples to your own use cases.
 
-    For those interested in learning more about parallel programming concepts, we recommend the following resource:
-
-    - `Intel OpenMP Tutorial <https://www.youtube.com/playlist?list=PLLbPZJxtMs4ZHSamRRYCtvowRS0qIwC-I>`_ - A comprehensive YouTube series covering OpenMP as well as fundamental parallel programming concepts.
-
-    - `A "Hands-On" Introduction to OpenMP <https://www.openmp.org/wp-content/uploads/omp-hands-on-SC08.pdf>`_ - A detailed PDF guide that provides a practical introduction to OpenMP, which is a widely used API for parallel programming in C/C++ and Fortran.
+    For further reading on parallel programming and SPMD, see the References section at the end of this document.
 
 Device Initialization & Program Setup
 -------------------------------------
@@ -437,3 +433,12 @@ This concludes the multi-core matmul example and the basic usage of the Metalium
 * Create kernels on the cores that will be used in the operation and handle edge cases like uneven work distribution or fewer cores than work
 
 Explore :ref:`MatMul_Multi_Core_example` for further optimizations, including data reuse and data multicast to truly harness the power of the Tenstorrent architecture.
+
+References
+----------
+
+For those interested in learning more about parallel programming concepts, we recommend the following resources:
+
+- `Intel OpenMP Tutorial <https://www.youtube.com/playlist?list=PLLbPZJxtMs4ZHSamRRYCtvowRS0qIwC-I>`_ — A comprehensive YouTube series covering OpenMP as well as fundamental parallel programming concepts.
+
+- `A "Hands-On" Introduction to OpenMP <https://www.openmp.org/wp-content/uploads/omp-hands-on-SC08.pdf>`_ — A detailed PDF guide that provides a practical introduction to OpenMP, which is a widely used API for parallel programming in C/C++ and Fortran.
