@@ -7,9 +7,6 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_pool)
 target_sources(
     ttnn_op_pool
     PRIVATE
-        downsample/device/downsample_op.cpp
-        downsample/device/downsample_program_factory.cpp
-        downsample/downsample.cpp
         generic/device/pool_multi_core_program_factory.cpp
         generic/device/pool_op.cpp
         generic/generic_pools.cpp
