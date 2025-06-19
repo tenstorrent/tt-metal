@@ -551,14 +551,18 @@ def run_all_to_all_dispatch_test(
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7000])
-@pytest.mark.parametrize("seq_len", [2])
-@pytest.mark.parametrize("num_iters", [10])
-@pytest.mark.parametrize("warmup_iters", [0])
+@pytest.mark.parametrize(
+    "seq_len, num_iters, warmup_iters",
+    [
+        (2, 5, 1),
+    ],
+    ids=["s2"],
+)
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
-@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
 def test_all_to_all_dispatch_no_trace(
     mesh_device,
     trace_mode,
@@ -626,11 +630,16 @@ def test_all_to_all_dispatch_no_trace(
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7000])
-@pytest.mark.parametrize("seq_len", [2])
-@pytest.mark.parametrize("num_iters", [75])
-@pytest.mark.parametrize("warmup_iters", [10])
-@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
-@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize(
+    "seq_len, num_iters, warmup_iters",
+    [
+        (128, 3, 2),
+        (1, 40, 10),
+    ],
+    ids=["s128", "s1"],
+)
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -709,10 +718,10 @@ def test_simple_tensor_gen(mesh_device, mesh_shape):
     assert expert_mapping.shape == (1, 1, experts, devices)
     assert sparse_output_token_tensor.shape == (devices, batch, sequence_length, hidden_size)
     assert metadata_tensor.shape == (devices, batch, sequence_length, select_experts_k)
-    # logger.info(f"Input tokens {input_tokens}")
+    logger.info(f"Input tokens {input_tokens}")
     logger.info(f"Expert indices {expert_indices}")
     logger.info(f"Expert mapping {expert_mapping}")
-    # logger.info(f"Sparse output token tensor {sparse_output_token_tensor}")
+    logger.info(f"Sparse output token tensor {sparse_output_token_tensor}")
     logger.info(f"Metadata tensor {metadata_tensor[0, :, :, :]}")
 
     compare_results(

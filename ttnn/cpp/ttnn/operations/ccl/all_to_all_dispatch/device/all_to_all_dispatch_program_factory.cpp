@@ -444,7 +444,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     tt::tt_metal::CircularBufferConfig cb_input_tensor_config =
         tt::tt_metal::CircularBufferConfig(
-            input_pages * aligned_input_page_size, {{input_tensor_cb_id, input_data_format}})
+            buffering_factor * aligned_input_page_size, {{input_tensor_cb_id, input_data_format}})
             .set_page_size(input_tensor_cb_id, aligned_input_page_size);
 
     tt::tt_metal::CircularBufferConfig cb_indices_tensor_config =
@@ -464,13 +464,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
             {{packet_header_cb_id, tt::DataFormat::RawUInt32}})
             .set_page_size(packet_header_cb_id, packet_header_size_bytes);
-
-    uint32_t send_preparation_buffer_size = num_devices * tokens_per_device * aligned_metadata_page_size;
-
-    tt::tt_metal::CircularBufferConfig send_preparation_buffer_config =
-        tt::tt_metal::CircularBufferConfig(
-            send_preparation_buffer_size, {{send_preparation_buffer_id, tt::DataFormat::UInt16}})
-            .set_page_size(send_preparation_buffer_id, send_preparation_buffer_size);
 
     auto subdevice_core_range_set =
         mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.subdevice_id);
@@ -496,8 +489,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto indices_tensor_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_indices_tensor_config);
     auto mapping_tensor_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, cb_mapping_tensor_config);
     auto packet_header_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core, packet_header_cb_config);
-    auto send_preparation_buffer =
-        tt::tt_metal::CreateCircularBuffer(program, sender_core, send_preparation_buffer_config);
 
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord : tensor_coords.coords()) {

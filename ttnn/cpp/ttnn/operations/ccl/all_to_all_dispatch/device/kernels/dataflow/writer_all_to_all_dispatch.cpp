@@ -299,14 +299,15 @@ void kernel_main() {
     auto* metadata_packet_header =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
 
-    cb_wait_front(input_tensor_cb_id, input_pages);
     cb_wait_front(indices_tensor_cb_id, indices_pages);
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
 
     DPRINT << "dispatching tokens" << ENDL();
     for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
         uint32_t b = (local_token + (tokens_per_device * dispatch_index));
-        uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id) + local_token * aligned_input_page_size;
+        cb_wait_front(input_tensor_cb_id, 1);
+        // uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id) + local_token * aligned_input_page_size;
+        uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
         uint16_t* token_indices =
             (uint16_t*)(get_read_ptr(indices_tensor_cb_id) + (local_token * aligned_indices_page_size));
         uint64_t output_token_write_addr = get_noc_addr(b, output_addr_gen);
@@ -336,6 +337,7 @@ void kernel_main() {
                 }
             }
         }
+        cb_pop_front(input_tensor_cb_id, 1);
     }
     DPRINT << "dispatching tokens completed" << ENDL();
 
@@ -370,6 +372,8 @@ void kernel_main() {
         }
     }
     DPRINT << "dispatching metadata completed" << ENDL();
+    cb_pop_front(indices_tensor_cb_id, indices_pages);
+    cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
     for (uint32_t i = 0; i < 4; i++) {
         if (directions[i] == true) {

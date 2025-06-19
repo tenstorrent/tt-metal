@@ -78,20 +78,20 @@ void kernel_main() {
 
     // read in expert indices
 
-    for (uint32_t i = 0; i < indices_pages; i++) {
-        cb_reserve_back(indices_tensor_cb_id, 1);
-        uint32_t l1_write_addr = get_write_ptr(indices_tensor_cb_id);
-        noc_async_read_page(i, indices_addr_gen, l1_write_addr);
-        noc_async_read_barrier();
-        cb_push_back(indices_tensor_cb_id, 1);
-    }
-
     for (uint32_t i = 0; i < mapping_pages; i++) {
         cb_reserve_back(mapping_tensor_cb_id, 1);
         uint32_t l1_write_addr = get_write_ptr(mapping_tensor_cb_id);
         noc_async_read_page(i, mapping_addr_gen, l1_write_addr);
         noc_async_read_barrier();
         cb_push_back(mapping_tensor_cb_id, 1);
+    }
+
+    for (uint32_t i = 0; i < indices_pages; i++) {
+        cb_reserve_back(indices_tensor_cb_id, 1);
+        uint32_t l1_write_addr = get_write_ptr(indices_tensor_cb_id);
+        noc_async_read_page(i, indices_addr_gen, l1_write_addr);
+        noc_async_read_barrier();
+        cb_push_back(indices_tensor_cb_id, 1);
     }
 
     for (uint32_t i = 0; i < input_pages; i++) {
