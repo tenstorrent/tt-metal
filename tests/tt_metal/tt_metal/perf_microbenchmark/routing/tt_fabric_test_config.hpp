@@ -27,54 +27,14 @@
 #include <tt-metalium/routing_table_generator.hpp>
 
 #include "tt_fabric_test_interfaces.hpp"
+#include "tt_fabric_test_common_types.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
-// A map to hold various parametrization options parsed from the YAML.
-using ParametrizationValues = std::variant<std::vector<std::string>, std::vector<uint32_t>>;
-using ParametrizationOptionsMap = std::unordered_map<std::string, ParametrizationValues>;
-
-struct DestinationConfig {
-    std::optional<FabricNodeId> device;
-    std::optional<CoreCoord> core;
-    std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
-};
-
-struct TrafficPatternConfig {
-    std::optional<ChipSendType> ftype;
-    std::optional<NocSendType> ntype;
-    std::optional<uint32_t> size;
-    std::optional<DestinationConfig> destination;
-    std::optional<uint32_t> num_packets;
-};
-
-struct SenderConfig {
-    FabricNodeId device = FabricNodeId(MeshId{0}, 0);
-    std::optional<CoreCoord> core;
-    std::vector<TrafficPatternConfig> patterns;
-};
-
-struct TestFabricSetup {
-    tt::tt_fabric::Topology topology;
-};
-
-struct HighLevelPatternConfig {
-    std::string type;
-    std::optional<uint32_t> iterations;
-};
-
-struct TestConfig {
-    std::string name;
-    TestFabricSetup fabric_setup;
-    std::optional<std::string> on_missing_param_policy;
-    std::optional<TrafficPatternConfig> defaults;
-    std::optional<ParametrizationOptionsMap> parametrization_params;
-    // A test can be defined by either a concrete list of senders or a high-level pattern.
-    std::optional<std::vector<HighLevelPatternConfig>> patterns;
-    std::vector<SenderConfig> senders;
-    std::optional<std::string> bw_calc_func;
-    uint32_t seed;
+struct ParsedYamlConfig {
+    std::vector<TestConfig> test_configs;
+    std::optional<AllocatorPolicies> allocation_policies;
 };
 
 inline TrafficPatternConfig merge_patterns(const TrafficPatternConfig& base, const TrafficPatternConfig& specific) {
@@ -109,7 +69,7 @@ class YamlConfigParser {
 public:
     YamlConfigParser(IDeviceInfoProvider& device_info_provider) : device_info_provider_(device_info_provider) {}
 
-    std::vector<TestConfig> parse_file(const std::string& yaml_config_path);
+    ParsedYamlConfig parse_file(const std::string& yaml_config_path);
 
 private:
     IDeviceInfoProvider& device_info_provider_;
@@ -120,6 +80,8 @@ private:
     SenderConfig parse_sender_config(const YAML::Node& sender_yaml, const TrafficPatternConfig& defaults);
     TestFabricSetup parse_fabric_setup(const YAML::Node& fabric_setup_yaml);
     TestConfig parse_test_config(const YAML::Node& test_yaml);
+    AllocatorPolicies parse_allocator_policies(const YAML::Node& policies_yaml);
+    CoreAllocationConfig parse_core_allocation_config(const YAML::Node& config_yaml, CoreAllocationConfig base_config);
 
     // Parsing helpers
     CoreCoord parse_core_coord(const YAML::Node& node);
@@ -206,36 +168,45 @@ static const StringEnumMapper<NocSendType> noc_send_type_mapper({
     {"fused_atomic_inc", NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC},
 });
 
-static const StringEnumMapper<tt::tt_fabric::RoutingDirection> routing_direction_mapper({
-    {"N", tt::tt_fabric::RoutingDirection::N},
-    {"S", tt::tt_fabric::RoutingDirection::S},
-    {"E", tt::tt_fabric::RoutingDirection::E},
-    {"W", tt::tt_fabric::RoutingDirection::W},
+static const StringEnumMapper<RoutingDirection> routing_direction_mapper({
+    {"N", RoutingDirection::N},
+    {"S", RoutingDirection::S},
+    {"E", RoutingDirection::E},
+    {"W", RoutingDirection::W},
 });
 
-static const StringEnumMapper<tt::tt_fabric::Topology> topology_mapper({
-    {"Ring", tt::tt_fabric::Topology::Ring},
-    {"Linear", tt::tt_fabric::Topology::Linear},
-    {"Mesh", tt::tt_fabric::Topology::Mesh},
+static const StringEnumMapper<Topology> topology_mapper({
+    {"Ring", Topology::Ring},
+    {"Linear", Topology::Linear},
+    {"Mesh", Topology::Mesh},
+});
+
+static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mapper({
+    {"RoundRobin", CoreAllocationPolicy::RoundRobin},
+    {"ExhaustFirst", CoreAllocationPolicy::ExhaustFirst},
 });
 
 }  // namespace detail
 
-inline std::vector<TestConfig> YamlConfigParser::parse_file(const std::string& yaml_config_path) {
+inline ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_config_path) {
     std::ifstream yaml_config(yaml_config_path);
     TT_FATAL(not yaml_config.fail(), "Failed to open file: {}", yaml_config_path);
 
     YAML::Node yaml = YAML::LoadFile(yaml_config_path);
 
+    ParsedYamlConfig result;
+    if (yaml["allocation_policies"]) {
+        result.allocation_policies = parse_allocator_policies(yaml["allocation_policies"]);
+    }
+
     TT_FATAL(yaml["Tests"].IsSequence(), "Expected 'Tests' to be a sequence at the root of the YAML file.");
 
-    std::vector<TestConfig> test_configs;
     for (const auto& test_yaml : yaml["Tests"]) {
         TT_FATAL(test_yaml.IsMap(), "Expected each test in Tests to be a map");
 
-        test_configs.emplace_back(parse_test_config(test_yaml));
+        result.test_configs.emplace_back(parse_test_config(test_yaml));
     }
-    return test_configs;
+    return result;
 }
 
 inline FabricNodeId YamlConfigParser::parse_device_identifier(const YAML::Node& node) {
@@ -266,6 +237,9 @@ inline DestinationConfig YamlConfigParser::parse_destination_config(const YAML::
             hops_map[dir] = num_hops;
         }
         config.hops = hops_map;
+    }
+    if (dest_yaml["target_address"]) {
+        config.target_address = parse_scalar<uint32_t>(dest_yaml["target_address"]);
     }
     return config;
 }
@@ -365,6 +339,40 @@ inline TestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yam
     }
 
     return test_config;
+}
+
+inline AllocatorPolicies YamlConfigParser::parse_allocator_policies(const YAML::Node& policies_yaml) {
+    TT_FATAL(policies_yaml.IsMap(), "Expected 'allocation_policies' to be a map.");
+    AllocatorPolicies policies;  // this will get defaults from constructor
+    if (policies_yaml["sender"]) {
+        policies.sender_config = parse_core_allocation_config(policies_yaml["sender"], policies.sender_config);
+    }
+    if (policies_yaml["receiver"]) {
+        policies.receiver_config = parse_core_allocation_config(policies_yaml["receiver"], policies.receiver_config);
+    }
+    return policies;
+}
+
+inline CoreAllocationConfig YamlConfigParser::parse_core_allocation_config(
+    const YAML::Node& config_yaml, CoreAllocationConfig base_config) {
+    CoreAllocationConfig config = base_config;
+    if (config_yaml["policy"]) {
+        config.policy = detail::core_allocation_policy_mapper.from_string(
+            parse_scalar<std::string>(config_yaml["policy"]), "CoreAllocationPolicy");
+    }
+    if (config_yaml["max_workers_per_core"]) {
+        config.max_workers_per_core = parse_scalar<uint32_t>(config_yaml["max_workers_per_core"]);
+    }
+    if (config_yaml["default_payload_chunk_size"]) {
+        config.default_payload_chunk_size = parse_scalar<uint32_t>(config_yaml["default_payload_chunk_size"]);
+    }
+    if (config_yaml["initial_pool_size"]) {
+        config.initial_pool_size = parse_scalar<uint32_t>(config_yaml["initial_pool_size"]);
+    }
+    if (config_yaml["pool_refill_size"]) {
+        config.pool_refill_size = parse_scalar<uint32_t>(config_yaml["pool_refill_size"]);
+    }
+    return config;
 }
 
 // CmdlineParser methods
@@ -873,9 +881,15 @@ private:
 
 class YamlTestConfigSerializer {
 public:
-    static void dump(const std::vector<TestConfig>& test_configs, const std::string& dump_path) {
+    static void dump(
+        const std::vector<TestConfig>& test_configs, const AllocatorPolicies& policies, const std::string& dump_path) {
         YAML::Emitter out;
         out << YAML::BeginMap;
+
+        out << YAML::Key << "allocation_policies";
+        out << YAML::Value;
+        to_yaml(out, policies);
+
         out << YAML::Key << "Tests";
         out << YAML::Value;
 
@@ -923,6 +937,10 @@ private:
                 out << YAML::Value << count;
             }
             out << YAML::EndMap;
+        }
+        if (config.target_address) {
+            out << YAML::Key << "target_address";
+            out << YAML::Value << config.target_address.value();
         }
         out << YAML::EndMap;
     }
@@ -1022,6 +1040,38 @@ private:
         }
         out << YAML::EndSeq;
 
+        out << YAML::EndMap;
+    }
+
+    static std::string to_string(CoreAllocationPolicy policy) {
+        return detail::core_allocation_policy_mapper.to_string(policy, "CoreAllocationPolicy");
+    }
+
+    static void to_yaml(YAML::Emitter& out, const CoreAllocationConfig& config) {
+        out << YAML::BeginMap;
+        out << YAML::Key << "policy";
+        out << YAML::Value << to_string(config.policy);
+        out << YAML::Key << "max_workers_per_core";
+        out << YAML::Value << config.max_workers_per_core;
+        if (config.default_payload_chunk_size.has_value()) {
+            out << YAML::Key << "default_payload_chunk_size";
+            out << YAML::Value << config.default_payload_chunk_size.value();
+        }
+        out << YAML::Key << "initial_pool_size";
+        out << YAML::Value << config.initial_pool_size;
+        out << YAML::Key << "pool_refill_size";
+        out << YAML::Value << config.pool_refill_size;
+        out << YAML::EndMap;
+    }
+
+    static void to_yaml(YAML::Emitter& out, const AllocatorPolicies& policies) {
+        out << YAML::BeginMap;
+        out << YAML::Key << "sender";
+        out << YAML::Value;
+        to_yaml(out, policies.sender_config);
+        out << YAML::Key << "receiver";
+        out << YAML::Value;
+        to_yaml(out, policies.receiver_config);
         out << YAML::EndMap;
     }
 };

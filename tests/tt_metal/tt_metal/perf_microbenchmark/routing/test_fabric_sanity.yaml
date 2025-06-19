@@ -4,11 +4,11 @@ Tests:
       topology: Linear
 
     senders:
-      - device: 1
+      - device: [0, 0]
         patterns:
           - ftype: unicast
             ntype: unicast_write
             size: 1024
             num_packets: 10
             destination:
-              device: 2
+              device: [0, 1]

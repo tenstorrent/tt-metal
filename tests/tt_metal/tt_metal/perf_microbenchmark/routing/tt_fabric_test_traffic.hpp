@@ -201,8 +201,7 @@ struct TestTrafficConfig {
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
     std::optional<CoreCoord> src_logical_core;
     std::optional<CoreCoord> dst_logical_core;
-    std::optional<std::string_view> sender_kernel_src;
-    std::optional<std::string_view> receiver_kernel_src;
+    std::optional<uint32_t> target_address;
     // TODO: add later
     // mode - BW, latency etc
 };

@@ -1,6 +1,24 @@
 # This YAML file demonstrates the various features of the fabric performance test framework.
 # It will be updated as new features are added.
 
+# ======================================================================================
+# Optional Top-Level Configuration: Allocation Policies
+# This block allows you to globally configure how sender and receiver worker cores
+# are allocated across all tests in this file.
+# ======================================================================================
+allocation_policies:
+  sender:
+    # Policy can be 'RoundRobin' or 'ExhaustFirst'.
+    # 'ExhaustFirst' will fill up one core with workers before moving to the next.
+    # 'RoundRobin' will distribute workers one by one across available cores.
+    policy: ExhaustFirst
+    max_workers_per_core: 2
+  receiver:
+    policy: RoundRobin
+    max_workers_per_core: 8
+    # You can also specify memory allocation parameters for workers on a core.
+    default_payload_chunk_size: 4096
+
 Tests:
   # ======================================================================================
   # Test 1: A simple, fully specified unicast test.

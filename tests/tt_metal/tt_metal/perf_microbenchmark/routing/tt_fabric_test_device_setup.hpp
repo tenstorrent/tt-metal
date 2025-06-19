@@ -21,6 +21,11 @@
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common.hpp"
 
+const std::string default_sender_kernel_src =
+    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_sender.cpp";
+const std::string default_receiver_kernel_src =
+    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_receiver.cpp";
+
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 
 namespace tt::tt_fabric {
@@ -152,19 +157,6 @@ public:
     std::vector<TestTrafficSenderConfig> configs_;
 };
 
-struct TestReceiverAllocator {
-public:
-    void init(uint32_t start_address, uint32_t end_address, uint32_t chunk_size);
-    uint32_t allocate();
-
-private:
-    uint32_t start_address_;
-    uint32_t end_address_;
-    uint32_t total_size_;
-    uint32_t chunk_size_;
-    std::vector<uint32_t> available_addresses_;
-};
-
 struct TestReceiver : TestWorker {
 public:
     TestReceiver(
@@ -174,10 +166,8 @@ public:
         std::optional<std::string_view> kernel_src);
     void add_config(TestTrafficReceiverConfig config);
     bool is_shared_receiver();
-    uint32_t allocate_address_for_sender();
 
     TestWorkerMemoryMap memory_map_;
-    TestReceiverAllocator allocator_;
     bool is_shared_;
     std::vector<TestTrafficReceiverConfig> configs_;
 };
@@ -187,17 +177,12 @@ public:
     TestDevice(const MeshCoordinate& coord, IDeviceInfoProvider& device_info_provider, IRouteManager& route_manager);
     tt::tt_metal::Program& get_program_handle();
     const FabricNodeId& get_node_id();
-    void reserve_core_for_worker(
-        TestWorkerType worker_type, CoreCoord logical_core, std::optional<std::string_view> kernel_src);
-    CoreCoord allocate_worker_core() const;
-    std::vector<CoreCoord> get_available_worker_cores() const;
-    uint32_t allocate_address_for_sender(CoreCoord receiver_core);
     void add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config);
     void add_receiver_traffic_config(CoreCoord logical_core, TestTrafficReceiverConfig config);
     void create_kernels();
 
 private:
-    void reserve_worker_core(CoreCoord logical_core);
+    void add_worker(TestWorkerType worker_type, CoreCoord logical_core);
     void create_sender_kernels();
     void create_receiver_kernels();
 
@@ -208,12 +193,6 @@ private:
     FabricNodeId fabric_node_id_ = FabricNodeId(MeshId{0}, 0);
 
     tt_metal::Program program_handle_;
-
-    std::vector<CoreCoord> avaialble_worker_logical_cores_;
-
-    // For now instead of moving to a new worker for the receiver every time, just pick one and exhaust it
-    // if can no longer allocate, fetch a new core (as per policy)
-    std::optional<CoreCoord> current_receiver_logical_core_;
 
     std::unordered_map<CoreCoord, TestSender> senders_;
     std::unordered_map<CoreCoord, TestReceiver> receivers_;
@@ -483,36 +462,6 @@ inline void TestSender::add_config(TestTrafficSenderConfig config) { this->confi
 
 inline void TestSender::connect_to_fabric_router() {}
 
-/* *******************************
- * TestReceiverAllocator Methods *
- *********************************/
-inline void TestReceiverAllocator::init(uint32_t start_address, uint32_t end_address, uint32_t chunk_size) {
-    // TODO: sanity check on start and end addresses
-
-    this->start_address_ = start_address;
-    this->end_address_ = end_address;
-    this->total_size_ = end_address - start_address;
-    this->chunk_size_ = chunk_size;
-
-    // for now initialize the addresses in a contiguous fashion
-    uint32_t next_avaialable_address = this->start_address_;
-    while (next_avaialable_address + this->chunk_size_ <= this->end_address_) {
-        this->available_addresses_.push_back(next_avaialable_address);
-        next_avaialable_address += this->chunk_size_;
-    }
-}
-
-inline uint32_t TestReceiverAllocator::allocate() {
-    // TODO: can have a policy for allocator as well. For now, just allocate the next available
-    if (this->available_addresses_.empty()) {
-        return 0;
-    }
-
-    uint32_t avaialble_address = this->available_addresses_.back();
-    this->available_addresses_.pop_back();
-    return avaialble_address;
-}
-
 /* **********************
  * TestReceiver Methods *
  ************************/
@@ -520,51 +469,20 @@ inline TestReceiver::TestReceiver(
     CoreCoord logical_core, TestDevice* test_device_ptr, bool is_shared, std::optional<std::string_view> kernel_src) :
     TestWorker(logical_core, test_device_ptr, kernel_src), is_shared_(is_shared) {
     // TODO: init mem map?
-    // TODO: get these from the mem map
-    uint32_t start_address = 0x30000;
-    uint32_t end_address = 0x100000;
-    uint32_t chunk_size = 0x10000;  // TODO: get this from the config/settings
-    this->allocator_.init(start_address, end_address, chunk_size);
 }
 
 inline void TestReceiver::add_config(TestTrafficReceiverConfig config) { this->configs_.push_back(config); }
 
 inline bool TestReceiver::is_shared_receiver() { return this->is_shared_; }
 
-inline uint32_t TestReceiver::allocate_address_for_sender() { return this->allocator_.allocate(); }
-
 /* ********************
  * TestDevice Methods *
  **********************/
-inline void TestDevice::reserve_worker_core(CoreCoord logical_core) {
-    if (this->senders_.find(logical_core) != this->senders_.end() ||
-        this->receivers_.find(logical_core) != this->receivers_.end()) {
-        log_fatal(tt::LogTest, "On chip coord: {}, requested core: {} is already reserved", this->coord_, logical_core);
-        throw std::runtime_error("Failed to reserve worker core");
-    }
-
-    auto it = std::find(
-        this->avaialble_worker_logical_cores_.begin(), this->avaialble_worker_logical_cores_.end(), logical_core);
-    if (it == this->avaialble_worker_logical_cores_.end()) {
-        log_fatal(tt::LogTest, "On chip coord: {}, requested core: {} not found", this->coord_, logical_core);
-        throw std::runtime_error("Failed to reserve worker core");
-    }
-    this->avaialble_worker_logical_cores_.erase(it);
-}
-
 inline TestDevice::TestDevice(
     const MeshCoordinate& coord, IDeviceInfoProvider& device_info_provider, IRouteManager& route_manager) :
     coord_(coord), device_info_provider_(device_info_provider), route_manager_(route_manager) {
     program_handle_ = tt::tt_metal::CreateProgram();
     fabric_node_id_ = device_info_provider_.get_fabric_node_id(coord);
-    const auto grid_size = this->device_info_provider_.get_worker_grid_size();
-    for (auto i = 0; i < grid_size.x; i++) {
-        for (auto j = 0; j < grid_size.y; j++) {
-            this->avaialble_worker_logical_cores_.push_back(CoreCoord({i, j}));
-        }
-    }
-
-    this->current_receiver_logical_core_ = std::nullopt;
 
     // TODO: init routers
 }
@@ -573,55 +491,33 @@ inline tt::tt_metal::Program& TestDevice::get_program_handle() { return this->pr
 
 inline const FabricNodeId& TestDevice::get_node_id() { return this->fabric_node_id_; }
 
-inline void TestDevice::reserve_core_for_worker(
-    TestWorkerType worker_type, CoreCoord logical_core, std::optional<std::string_view> kernel_src) {
-    this->reserve_worker_core(logical_core);
-
+inline void TestDevice::add_worker(TestWorkerType worker_type, CoreCoord logical_core) {
     if (worker_type == TestWorkerType::SENDER) {
-        this->senders_.insert(std::make_pair(logical_core, TestSender(logical_core, this, kernel_src)));
+        if (this->senders_.count(logical_core)) {
+            log_fatal(
+                tt::LogTest,
+                "On node: {}, trying to add a sender worker to an already occupied core: {}",
+                this->fabric_node_id_,
+                logical_core);
+            throw std::runtime_error("Core already has a sender worker");
+        }
+        this->senders_.insert(std::make_pair(logical_core, TestSender(logical_core, this, default_sender_kernel_src)));
     } else if (worker_type == TestWorkerType::RECEIVER) {
+        if (this->receivers_.count(logical_core)) {
+            log_fatal(
+                tt::LogTest,
+                "On node: {}, trying to add a receiver worker to an already occupied core: {}",
+                this->fabric_node_id_,
+                logical_core);
+            throw std::runtime_error("Core already has a receiver worker");
+        }
         bool is_shared_receiver = false;
-        this->receivers_.insert(
-            std::make_pair(logical_core, TestReceiver(logical_core, this, is_shared_receiver, kernel_src)));
+        this->receivers_.insert(std::make_pair(
+            logical_core, TestReceiver(logical_core, this, is_shared_receiver, default_receiver_kernel_src)));
     } else {
         log_fatal(tt::LogTest, "Unknown worker type for core reservation: {}", worker_type);
         throw std::runtime_error("Unknown worker type");
     }
-}
-
-inline CoreCoord TestDevice::allocate_worker_core() const {
-    // currently pick from last -> can be configured as a policy (random, optimized etc)
-    if (this->avaialble_worker_logical_cores_.empty()) {
-        log_fatal(tt::LogTest, "On node: {}, no more worker cores avaialble", fabric_node_id_);
-        throw std::runtime_error("Failed to allocate worker core");
-    }
-
-    CoreCoord worker_core = this->avaialble_worker_logical_cores_.back();
-    return worker_core;
-}
-
-inline std::vector<CoreCoord> TestDevice::get_available_worker_cores() const {
-    return this->avaialble_worker_logical_cores_;
-}
-
-inline uint32_t TestDevice::allocate_address_for_sender(CoreCoord receiver_core) {
-    auto it = this->receivers_.find(receiver_core);
-    if (it == this->receivers_.end()) {
-        log_fatal(tt::LogTest, "On node: {}, for logical core: {}, no receiver found", fabric_node_id_, receiver_core);
-        throw std::runtime_error("Failed to allocate address for sender");
-    }
-
-    uint32_t address = it->second.allocate_address_for_sender();
-    if (address == 0) {
-        log_fatal(
-            tt::LogTest,
-            "On node: {}, for logical core: {}, no space available for sender",
-            fabric_node_id_,
-            receiver_core);
-        throw std::runtime_error("Failed to allocate address for sender");
-    }
-
-    return address;
 }
 
 inline void TestDevice::create_sender_kernels() {
@@ -712,22 +608,18 @@ inline void TestDevice::create_kernels() {
     this->create_receiver_kernels();
 }
 
-inline void TestDevice::add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config) {
-    auto it = this->senders_.find(logical_core);
-    if (it == this->senders_.end()) {
-        log_fatal(tt::LogTest, "On node: {}, for logical core: {}, no sender found", fabric_node_id_, logical_core);
-        throw std::runtime_error("Failed to add traffic config for sender");
+inline void TestDevice::add_receiver_traffic_config(CoreCoord logical_core, TestTrafficReceiverConfig config) {
+    if (this->receivers_.find(logical_core) == this->receivers_.end()) {
+        this->add_worker(TestWorkerType::RECEIVER, logical_core);
     }
-    it->second.add_config(config);
+    this->receivers_.at(logical_core).add_config(config);
 }
 
-inline void TestDevice::add_receiver_traffic_config(CoreCoord logical_core, TestTrafficReceiverConfig config) {
-    auto it = this->receivers_.find(logical_core);
-    if (it == this->receivers_.end()) {
-        log_fatal(tt::LogTest, "On node: {}, for logical core: {}, no receiver found", fabric_node_id_, logical_core);
-        throw std::runtime_error("Failed to add traffic config for receiver");
+inline void TestDevice::add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config) {
+    if (this->senders_.find(logical_core) == this->senders_.end()) {
+        this->add_worker(TestWorkerType::SENDER, logical_core);
     }
-    it->second.add_config(config);
+    this->senders_.at(logical_core).add_config(config);
 }
 
 }  // namespace fabric_tests

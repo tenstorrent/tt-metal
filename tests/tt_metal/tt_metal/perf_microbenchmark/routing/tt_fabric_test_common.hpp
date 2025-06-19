@@ -14,13 +14,15 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tt_fabric_test_config.hpp"
 #include "tt_fabric_test_interfaces.hpp"
 
 using MeshDevice = tt::tt_metal::distributed::MeshDevice;
@@ -29,6 +31,8 @@ using MeshShape = tt::tt_metal::distributed::MeshShape;
 using MeshWorkload = tt::tt_metal::distributed::MeshWorkload;
 using MeshCoordinateRange = tt::tt_metal::distributed::MeshCoordinateRange;
 
+using Topology = tt::tt_fabric::Topology;
+
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
@@ -36,6 +40,16 @@ class TestFixture : public IDeviceInfoProvider, public IRouteManager {
     // mapping to convert coords to directions
     static constexpr uint32_t EW_DIM = 1;
     static constexpr uint32_t NS_DIM = 0;
+
+    static constexpr uint32_t NE_IDX = 0;
+    static constexpr uint32_t NW_IDX = 1;
+    static constexpr uint32_t SE_IDX = 2;
+    static constexpr uint32_t SW_IDX = 3;
+
+    static constexpr uint32_t N_IDX = 0;
+    static constexpr uint32_t S_IDX = 1;
+    static constexpr uint32_t E_IDX = 2;
+    static constexpr uint32_t W_IDX = 3;
 
 public:
     void init() {
@@ -73,6 +87,7 @@ public:
         }
 
         mesh_workload_ = std::make_unique<MeshWorkload>();
+        topology_ = control_plane_ptr_->get_fabric_context().get_fabric_topology();
     }
 
     void enqueue_program(const MeshCoordinate& mesh_coord, tt::tt_metal::Program& program) {
@@ -128,6 +143,16 @@ public:
 
     std::vector<FabricNodeId> get_all_node_ids() const override { return available_node_ids_; }
 
+    uint32_t get_l1_unreserved_base(const FabricNodeId& node_id) const override {
+        const auto& device_coord = get_device_coord(node_id);
+        auto* device = mesh_device_->get_device(device_coord);
+        return device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    }
+
+    uint32_t get_l1_alignment() const override {
+        return tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    }
+
     // ======================================================================================
     // IRouteManager methods
     // ======================================================================================
@@ -135,12 +160,35 @@ public:
     // or capturing every device in the path or not
     std::vector<FabricNodeId> get_dst_node_ids_from_hops(
         FabricNodeId src_node,
-        const std::unordered_map<RoutingDirection, uint32_t>& hops,
+        std::unordered_map<RoutingDirection, uint32_t>& hops,
         ChipSendType chip_send_type) const override {
-        // TODO: get src mesh coord
-        // TODO: add a private method to get dst coord for each increment from the src coord
+        std::vector<FabricNodeId> dst_nodes;
+        const MeshCoordinate& src_coord = get_device_coord(src_node);
+        auto displacements = convert_hops_to_displacement(hops);
 
-        return {};
+        for (const auto& displacement : displacements) {
+            // Ignore zero-length displacements that can occur for some directions in the hops map
+            if (displacement == MeshCoordinate::zero_coordinate(displacement.dims())) {
+                continue;
+            }
+
+            const auto dst_coord = get_coord_from_displacement(src_coord, displacement);
+
+            if (chip_send_type == ChipSendType::CHIP_UNICAST) {
+                // For unicast, we only care about the final destination of each displacement vector.
+                dst_nodes.push_back(get_fabric_node_id(dst_coord));
+            } else if (chip_send_type == ChipSendType::CHIP_MULTICAST) {
+                // For multicast, we care about all nodes along the path.
+                const auto coords_in_path = get_coords_from_range(src_coord, dst_coord);
+                for (const auto& coord : coords_in_path) {
+                    if (coord == src_coord) {
+                        continue;  // Don't include the source itself
+                    }
+                    dst_nodes.push_back(get_fabric_node_id(coord));
+                }
+            }
+        }
+        return dst_nodes;
     }
 
     bool are_devices_linear(const std::vector<FabricNodeId>& node_ids) const override {
@@ -174,32 +222,13 @@ public:
         const auto& src_coord = get_device_coord(src_node_id);
         const auto& dst_coord = get_device_coord(dst_node_id);
 
-        const auto distance = get_distance(src_coord, dst_coord);
-        return get_hops_from_distance(distance);
-    }
-
-    std::vector<chip_id_t> get_chips_from_hops(
-        chip_id_t src_chip,
-        const std::unordered_map<RoutingDirection, uint32_t>& hops,
-        ChipSendType chip_send_type) const {
-        std::vector<chip_id_t> dst_chips;
-        /*
-        if (chip_send_type == ChipSendType::CHIP_UNICAST) {
-            dst_chips.push_back(get_chip_from_hops_map(src_chip, hops));
-        } else if (chip_send_type == ChipSendType::CHIP_MULTICAST) {
-            for (const auto& direction : FabricContext::routing_directions) {
-                if (hops.at(direction) > 0) {
-                    for (uint32_t hop = 1; hop <= hops.at(direction); hop++) {
-                        dst_chips.push_back(get_chip_from_hop_count(src_chip, direction, hop));
-                    }
-                }
-            }
-        }*/
-        return dst_chips;
+        const auto displacement = get_displacement(src_coord, dst_coord);
+        return get_hops_from_displacement(displacement);
     }
 
 private:
     ControlPlane* control_plane_ptr_;
+    Topology topology_;
     MeshShape mesh_shape_;
     std::vector<MeshCoordinate> available_device_coordinates_;
     std::vector<FabricNodeId> available_node_ids_;
@@ -208,68 +237,98 @@ private:
     std::unordered_map<FabricNodeId, MeshCoordinate> node_id_to_mesh_coordinate_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
 
-    MeshCoordinate get_distance(const MeshCoordinate& src_coords, const MeshCoordinate& dst_coords) const {
+    MeshCoordinate get_displacement(const MeshCoordinate& src_coords, const MeshCoordinate& dst_coords) const {
         TT_FATAL(
             src_coords.dims() == dst_coords.dims(),
             "Cannot find distance from coords with different dimensions: {} != {}",
             src_coords.dims(),
             dst_coords.dims());
 
-        std::vector<uint32_t> coords(src_coords.dims());
+        std::vector<uint32_t> coords(src_coords.dims(), 0);
         for (size_t i = 0; i < src_coords.dims(); ++i) {
             coords[i] = dst_coords[i] - src_coords[i];
         }
         return MeshCoordinate(coords);
     }
 
-    std::unordered_map<RoutingDirection, uint32_t> get_hops_from_distance(const MeshCoordinate& distance) const {
+    MeshCoordinate get_coord_from_displacement(
+        const MeshCoordinate& src_coords, const MeshCoordinate& displacement) const {
+        std::vector<uint32_t> coords(src_coords.dims(), 0);
+        for (size_t i = 0; i < src_coords.dims(); ++i) {
+            coords[i] = src_coords[i] + displacement[i];
+        }
+        return MeshCoordinate(coords);
+    }
+
+    MeshCoordinateRange get_coords_from_range(
+        const MeshCoordinate& src_coords, const MeshCoordinate& dst_coords) const {
+        return MeshCoordinateRange(src_coords, dst_coords);
+    }
+
+    std::unordered_map<RoutingDirection, uint32_t> get_hops_from_displacement(
+        const MeshCoordinate& displacement) const {
         std::unordered_map<RoutingDirection, uint32_t> hops;
         for (const auto& direction : FabricContext::routing_directions) {
             hops[direction] = 0;
         }
 
-        if (distance[EW_DIM] >= mesh_shape_[EW_DIM]) {
+        if (displacement[EW_DIM] >= mesh_shape_[EW_DIM]) {
             // wrapped around, negative distance
-            hops[RoutingDirection::W] = std::numeric_limits<uint32_t>::max() - distance[EW_DIM] + 1;
+            hops[RoutingDirection::W] = std::numeric_limits<uint32_t>::max() - displacement[EW_DIM] + 1;
         } else {
-            hops[RoutingDirection::E] = distance[EW_DIM];
+            hops[RoutingDirection::E] = displacement[EW_DIM];
         }
 
         // positive y is south direction in ctrl plane
-        if (distance[NS_DIM] >= mesh_shape_[NS_DIM]) {
+        if (displacement[NS_DIM] >= mesh_shape_[NS_DIM]) {
             // wrapped around, negative distance
-            hops[RoutingDirection::N] = std::numeric_limits<uint32_t>::max() - distance[NS_DIM] + 1;
+            hops[RoutingDirection::N] = std::numeric_limits<uint32_t>::max() - displacement[NS_DIM] + 1;
         } else {
-            hops[RoutingDirection::S] = distance[NS_DIM];
+            hops[RoutingDirection::S] = displacement[NS_DIM];
         }
 
         return hops;
     }
 
-    chip_id_t get_chip_from_hop_count(chip_id_t src_chip, RoutingDirection direction, uint32_t hop_count) const {
-        /*
-        tt::MeshCoordinate dst_coord = this->mesh_device_->get_device_coord(src_chip);
-        switch (direction) {
-            case RoutingDirection::N: dst_coord.y -= hop_count; break;
-            case RoutingDirection::S: dst_coord.y += hop_count; break;
-            case RoutingDirection::E: dst_coord.x += hop_count; break;
-            case RoutingDirection::W: dst_coord.x -= hop_count; break;
-            default: break;
+    MeshCoordinate get_coords_from_hops(const std::vector<std::pair<RoutingDirection, uint32_t>>& hops) const {
+        std::vector<uint32_t> displacement(mesh_shape_.dims(), 0);
+        for (const auto& [direction, hop] : hops) {
+            switch (direction) {
+                case RoutingDirection::N: displacement[NS_DIM] -= hop; break;
+                case RoutingDirection::S: displacement[NS_DIM] += hop; break;
+                case RoutingDirection::E: displacement[EW_DIM] += hop; break;
+                case RoutingDirection::W: displacement[EW_DIM] -= hop; break;
+                default: break;
+            }
         }
-        return this->mesh_device_->get_chip_id(dst_coord); */
-        return src_chip;
+        return MeshCoordinate(displacement);
     }
 
-    chip_id_t get_chip_from_hops_map(
-        chip_id_t src_chip, const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
-        /*
-    tt::MeshCoordinate dst_coord = this->mesh_device_->get_device_coord(src_chip);
-    dst_coord.x += hops.at(RoutingDirection::E);
-    dst_coord.x -= hops.at(RoutingDirection::W);
-    dst_coord.y += hops.at(RoutingDirection::S);
-    dst_coord.y -= hops.at(RoutingDirection::N);
-    return this->mesh_device_->get_chip_id(dst_coord); */
-        return src_chip;
+    // this depends on the fabric topology
+    // for 1D, we handle each direction separately
+    // for 2D, we look at the combination of directions
+    std::vector<MeshCoordinate> convert_hops_to_displacement(
+        std::unordered_map<RoutingDirection, uint32_t>& hops) const {
+        std::vector<MeshCoordinate> displacements;
+
+        if (topology_ == Topology::Linear) {
+            displacements.push_back(get_coords_from_hops({{RoutingDirection::N, hops[RoutingDirection::N]}}));
+            displacements.push_back(get_coords_from_hops({{RoutingDirection::S, hops[RoutingDirection::S]}}));
+            displacements.push_back(get_coords_from_hops({{RoutingDirection::E, hops[RoutingDirection::E]}}));
+            displacements.push_back(get_coords_from_hops({{RoutingDirection::W, hops[RoutingDirection::W]}}));
+        } else if (topology_ == Topology::Mesh) {
+            displacements.push_back(get_coords_from_hops(
+                {{RoutingDirection::N, hops[RoutingDirection::N]}, {RoutingDirection::E, hops[RoutingDirection::E]}}));
+            displacements.push_back(get_coords_from_hops(
+                {{RoutingDirection::N, hops[RoutingDirection::N]}, {RoutingDirection::W, hops[RoutingDirection::W]}}));
+            displacements.push_back(get_coords_from_hops(
+                {{RoutingDirection::S, hops[RoutingDirection::S]}, {RoutingDirection::E, hops[RoutingDirection::E]}}));
+            displacements.push_back(get_coords_from_hops(
+                {{RoutingDirection::S, hops[RoutingDirection::S]}, {RoutingDirection::W, hops[RoutingDirection::W]}}));
+        } else {
+            TT_FATAL(false, "Unsupported topology: {}", topology_);
+        }
+        return displacements;
     }
 };
 

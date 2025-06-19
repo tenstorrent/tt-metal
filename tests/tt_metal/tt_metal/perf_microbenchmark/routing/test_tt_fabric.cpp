@@ -15,6 +15,7 @@
 #include "tt_fabric_test_common.hpp"
 #include "tt_fabric_test_device_setup.hpp"
 #include "tt_fabric_test_traffic.hpp"
+#include "tt_fabric_test_allocator.hpp"
 
 using TestFixture = tt::tt_fabric::fabric_tests::TestFixture;
 using TestDevice = tt::tt_fabric::fabric_tests::TestDevice;
@@ -37,20 +38,15 @@ using YamlConfigParser = tt::tt_fabric::fabric_tests::YamlConfigParser;
 using CmdlineParser = tt::tt_fabric::fabric_tests::CmdlineParser;
 using YamlTestConfigSerializer = tt::tt_fabric::fabric_tests::YamlTestConfigSerializer;
 
-const std::string default_sender_kernel_src =
-    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_sender.cpp";
-const std::string default_receiver_kernel_src =
-    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_receiver.cpp";
-
 // TODO: move this to generated directory
 const std::string default_built_tests_dump_file = "built_tests.yaml";
 
 class TestContext {
 public:
-    void init(TestFixture& fixture);
+    void init(TestFixture& fixture, const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies);
     void setup_devices();
     void reset_devices();
-    void process_traffic_config(const TestConfig& config);
+    void process_traffic_config(TestConfig& config);
     void open_devices(tt::tt_metal::FabricConfig fabric_config);
     void compile_programs();
     void launch_programs();
@@ -58,49 +54,28 @@ public:
     void close_devices();
 
 private:
-    CoreCoord find_receiver_core(const std::vector<FabricNodeId>& phys_chip_ids);
     void add_traffic_config(const TestTrafficConfig& traffic_config);
 
     TestFixture* fixture_;
     std::unordered_map<MeshCoordinate, TestDevice> test_devices_;
+    std::unique_ptr<tt::tt_fabric::fabric_tests::GlobalAllocator> allocator_;
 };
 
-// TODO: this mapping should come from a global allocator that is multi-host aware
-CoreCoord TestContext::find_receiver_core(const std::vector<FabricNodeId>& node_ids) {
-    std::unordered_map<CoreCoord, uint32_t> available_cores_histogram;
-    for (const auto& node_id : node_ids) {
-        const auto& coord = this->fixture_->get_device_coord(node_id);
-        const auto& available_cores = this->test_devices_.at(coord).get_available_worker_cores();
-        for (const auto& core : available_cores) {
-            available_cores_histogram[core]++;
-        }
-    }
-
-    std::optional<CoreCoord> available_core;
-    for (const auto& [core, count] : available_cores_histogram) {
-        // for now return the first core that is avaialble across all the chips
-        if (count == node_ids.size()) {
-            available_core = core;
-            break;
-        }
-    }
-
-    if (!available_core.has_value()) {
-        log_fatal(tt::LogTest, "Unable to find a common recv core from chips");
-        throw std::runtime_error("No common cores found for allocation");
-    }
-
-    return available_core.value();
-}
-
 void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
-    // by this point assume that the traffic config is well formed/massaged
-    // for now assume that the cores are not shared
-    // later we can grab the available address/core pairs
-
+    // This function now assumes all allocation has been done by the GlobalAllocator.
+    // It is responsible for taking the planned config and setting up the TestDevice objects.
     const auto& src_node_id = traffic_config.src_node_id;
     const auto& src_coord = this->fixture_->get_device_coord(src_node_id);
     auto& src_test_device = this->test_devices_.at(src_coord);
+
+    // All these fields MUST have a value after the allocator has run.
+    TT_FATAL(traffic_config.src_logical_core.has_value(), "Missing src_logical_core in planned traffic config");
+    TT_FATAL(traffic_config.dst_logical_core.has_value(), "Missing dst_logical_core in planned traffic config");
+    TT_FATAL(traffic_config.target_address.has_value(), "Missing target_address in planned traffic config");
+
+    CoreCoord src_logical_core = traffic_config.src_logical_core.value();
+    CoreCoord dst_logical_core = traffic_config.dst_logical_core.value();
+    uint32_t target_address = traffic_config.target_address.value();
 
     std::vector<FabricNodeId> dst_node_ids;
     std::unordered_map<RoutingDirection, uint32_t> hops;
@@ -111,42 +86,10 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
             traffic_config.src_node_id, hops, traffic_config.data_config.chip_send_type);
     } else {
         dst_node_ids = traffic_config.dst_node_ids.value();
-        // TODO: this shouldnt be needed here since the config should be well-formed by now
-        TT_FATAL(dst_node_ids.size() == 1, "Expected only a single dst node id when hops are not specified");
         hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
     }
 
-    // TODO: any handling of the src/dst should be host local
-    // Add logic to skip if a srd/dst doesnt belong to one of the local chips
-
-    // this is only a representative of the dst devices used for common operations for dst devices
     const auto& dst_rep_coord = this->fixture_->get_device_coord(dst_node_ids[0]);
-    auto& dst_rep_test_device = this->test_devices_.at(dst_rep_coord);
-
-    CoreCoord src_logical_core;
-    if (traffic_config.src_logical_core.has_value()) {
-        src_logical_core = traffic_config.src_logical_core.value();
-    } else {
-        // TODO: this allocation should move to a global allocator
-        src_logical_core = src_test_device.allocate_worker_core();
-    }
-    src_test_device.reserve_core_for_worker(TestWorkerType::SENDER, src_logical_core, traffic_config.sender_kernel_src);
-
-    CoreCoord dst_logical_core;
-    if (traffic_config.dst_logical_core.has_value()) {
-        dst_logical_core = traffic_config.dst_logical_core.value();
-    } else {
-        dst_logical_core = this->find_receiver_core(dst_node_ids);
-    }
-    for (const auto& dst_node_id : dst_node_ids) {
-        // TODO: this allocation should move to a global allocator
-        const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
-        this->test_devices_.at(dst_coord).reserve_core_for_worker(
-            TestWorkerType::RECEIVER, dst_logical_core, traffic_config.receiver_kernel_src);
-    }
-
-    // TODO: this allocation should move to a global allocator
-    size_t target_address = dst_rep_test_device.allocate_address_for_sender(dst_logical_core);
     uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(dst_rep_coord, dst_logical_core);
     uint32_t sender_id = fixture_->get_worker_id(traffic_config.src_node_id, src_logical_core);
 
@@ -161,7 +104,6 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
     TestTrafficReceiverConfig receiver_config = {
         .data_config = traffic_config.data_config, .sender_id = sender_id, .target_address = target_address};
 
-    // TODO: make this host aware
     src_test_device.add_sender_traffic_config(src_logical_core, sender_config);
     for (const auto& dst_node_id : dst_node_ids) {
         const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
@@ -169,7 +111,11 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
     }
 }
 
-void TestContext::init(TestFixture& fixture) { fixture_ = &fixture; }
+void TestContext::init(TestFixture& fixture, const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies) {
+    fixture_ = &fixture;
+    this->allocator_ =
+        std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(*this->fixture_, *this->fixture_, policies);
+}
 
 void TestContext::setup_devices() {
     const auto& available_coords = this->fixture_->get_available_device_coordinates();
@@ -199,31 +145,14 @@ void TestContext::wait_for_prorgams() { fixture_->wait_for_programs(); }
 
 void TestContext::close_devices() { fixture_->close_devices(); }
 
-void TestContext::process_traffic_config(const TestConfig& config) {
+void TestContext::process_traffic_config(TestConfig& config) {
+    this->allocator_->allocate_resources(config);
+
     for (const auto& sender : config.senders) {
         for (const auto& pattern : sender.patterns) {
-            // After merging, these fields must have a value.
-            TT_FATAL(
-                pattern.ftype.has_value(), "Missing 'ftype' in traffic pattern for sender on device {}", sender.device);
-            TT_FATAL(
-                pattern.ntype.has_value(), "Missing 'ntype' in traffic pattern for sender on device {}", sender.device);
-            TT_FATAL(
-                pattern.size.has_value(), "Missing 'size' in traffic pattern for sender on device {}", sender.device);
-            TT_FATAL(
-                pattern.destination.has_value(),
-                "Missing 'destination' in traffic pattern for sender on device {}",
-                sender.device);
-            TT_FATAL(
-                pattern.destination->device.has_value() || pattern.destination->hops.has_value(),
-                "Missing 'device' or 'hops' in destination for sender on device {}",
-                sender.device);
-            TT_FATAL(
-                !pattern.destination->device.has_value() || !pattern.destination->hops.has_value(),
-                "Only one of 'device' and 'hops' should be provided as destination");
-            TT_FATAL(
-                pattern.num_packets.has_value(),
-                "Missing 'num_packets' in traffic pattern for sender on device {}",
-                sender.device);
+            // The allocator has already filled in all the necessary details.
+            // We just need to construct the TrafficConfig and pass it to add_traffic_config.
+            const auto& dest = pattern.destination.value();
 
             TestTrafficDataConfig data_config = {
                 .chip_send_type = pattern.ftype.value(),
@@ -237,20 +166,15 @@ void TestContext::process_traffic_config(const TestConfig& config) {
                 .data_config = data_config,
                 .src_node_id = sender.device,
                 .src_logical_core = sender.core,
-                // TODO: take this as input?
-                .sender_kernel_src = default_sender_kernel_src,
-                .receiver_kernel_src = default_receiver_kernel_src};
+                .dst_logical_core = dest.core,
+                .target_address = dest.target_address,
+            };
 
-            if (pattern.destination.has_value()) {
-                if (pattern.destination->device.has_value()) {
-                    traffic_config.dst_node_ids = {pattern.destination->device.value()};
-                }
-                if (pattern.destination->core.has_value()) {
-                    traffic_config.dst_logical_core = pattern.destination->core;
-                }
-                if (pattern.destination->hops.has_value()) {
-                    traffic_config.hops = pattern.destination->hops;
-                }
+            if (dest.device.has_value()) {
+                traffic_config.dst_node_ids = {dest.device.value()};
+            }
+            if (dest.hops.has_value()) {
+                traffic_config.hops = dest.hops;
             }
 
             this->add_traffic_config(traffic_config);
@@ -264,20 +188,25 @@ int main(int argc, char** argv) {
     TestFixture fixture;
     fixture.init();
 
-    TestContext test_context;
-    test_context.init(fixture);
-
     // fixture is passed to both the parsers since it implements the device interface
 
     CmdlineParser cmdline_parser(input_args, fixture);
     std::vector<TestConfig> raw_test_configs;
+    tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies;
 
     if (auto yaml_path = cmdline_parser.get_yaml_config_path()) {
         YamlConfigParser yaml_parser(fixture);
-        raw_test_configs = yaml_parser.parse_file(yaml_path.value());
+        auto parsed_yaml = yaml_parser.parse_file(yaml_path.value());
+        raw_test_configs = parsed_yaml.test_configs;
+        if (parsed_yaml.allocation_policies.has_value()) {
+            allocation_policies = parsed_yaml.allocation_policies.value();
+        }
     } else {
         raw_test_configs = cmdline_parser.generate_default_configs();
     }
+
+    TestContext test_context;
+    test_context.init(fixture, allocation_policies);
 
     cmdline_parser.apply_overrides(raw_test_configs);
 
@@ -301,14 +230,14 @@ int main(int argc, char** argv) {
 
     if (cmdline_parser.dump_built_tests()) {
         auto dump_path = cmdline_parser.get_built_tests_dump_file_path(default_built_tests_dump_file);
-        YamlTestConfigSerializer::dump(built_tests, dump_path);
+        YamlTestConfigSerializer::dump(built_tests, allocation_policies, dump_path);
     }
 
     // TODO: for now assume we are working with the same fabric config, later we need to close and re-open with
     // different config
     test_context.open_devices(tt::tt_metal::FabricConfig::FABRIC_1D);
 
-    for (const auto& test_config : built_tests) {
+    for (auto& test_config : built_tests) {
         log_info(tt::LogTest, "Running Test: {}", test_config.name);
 
         test_context.setup_devices();

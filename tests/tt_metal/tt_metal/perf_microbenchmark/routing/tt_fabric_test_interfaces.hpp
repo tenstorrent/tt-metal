@@ -31,6 +31,8 @@ public:
     virtual CoreCoord get_worker_grid_size() const = 0;
     virtual uint32_t get_worker_id(const FabricNodeId& node_id, CoreCoord logical_core) const = 0;
     virtual std::vector<FabricNodeId> get_all_node_ids() const = 0;
+    virtual uint32_t get_l1_unreserved_base(const FabricNodeId& node_id) const = 0;
+    virtual uint32_t get_l1_alignment() const = 0;
 };
 
 class IRouteManager {
@@ -38,7 +40,7 @@ public:
     virtual ~IRouteManager() = default;
     virtual std::vector<FabricNodeId> get_dst_node_ids_from_hops(
         FabricNodeId src_node_id,
-        const std::unordered_map<RoutingDirection, uint32_t>& hops,
+        std::unordered_map<RoutingDirection, uint32_t>& hops,
         ChipSendType chip_send_type) const = 0;
     virtual std::unordered_map<RoutingDirection, uint32_t> get_hops_to_chip(
         FabricNodeId src_node_id, FabricNodeId dst_node_id) const = 0;
