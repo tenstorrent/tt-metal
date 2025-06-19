@@ -590,9 +590,9 @@ class ModelOptimisations:
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
-        self.compute_configs["LOFI_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
+        self.compute_configs["MATH_APPROX_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
@@ -737,7 +737,7 @@ class ModelOptimisations:
     def get_mm_compute_config(self, module_path):
         # for now, return default config
         if ".to_q" in module_path:
-            return self.compute_configs["LOFI_MM_COMPUTE_CONFIG"]
+            return self.compute_configs["MATH_APPROX_MM_COMPUTE_CONFIG"]
         return self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"]
 
     def get_conv_config(self, conv_path):
