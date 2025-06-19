@@ -9,27 +9,12 @@
 
 #include "ttnn/operations/functions.hpp"
 
-#include <thread>
+#include <taskflow/taskflow.hpp>
+#include <taskflow/algorithm/for_each.hpp>
 
 namespace {
 
 // much faster than ttnn::random::random which uses uniform_real_distribution for floats
-template <typename ElemType>
-static tt::tt_metal::Tensor genSmallRandomTensor(const ttnn::Shape& shape, const tt::tt_metal::Layout layout) {
-    constexpr ttnn::DataType data_type = tt::tt_metal::convert_to_data_type<ElemType>();
-
-    ttnn::TensorSpec spec(shape, ttnn::TensorLayout(data_type, ttnn::PageConfig(layout), tt::tt_metal::MemoryConfig{}));
-    auto output_buffer = std::vector<ElemType>(spec.padded_shape().volume());
-
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int> dist(0, 100);
-    for (size_t i = 0; i < output_buffer.size(); ++i) {
-        output_buffer[i] = ElemType(dist(rng));
-    }
-
-    return tt::tt_metal::Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec).to_layout(layout);
-}
-
 template <typename ElemType>
 static tt::tt_metal::Tensor genRandomTensor(const ttnn::Shape& shape, const tt::tt_metal::Layout layout) {
     const unsigned num_threads = std::thread::hardware_concurrency();
@@ -38,31 +23,28 @@ static tt::tt_metal::Tensor genRandomTensor(const ttnn::Shape& shape, const tt::
     ttnn::TensorSpec spec(shape, ttnn::TensorLayout(data_type, ttnn::PageConfig(layout), tt::tt_metal::MemoryConfig{}));
     auto output_buffer = std::vector<ElemType>(spec.padded_shape().volume());
 
+    auto init_rand_elem = [](auto& elem) {
+        thread_local std::mt19937 rng(std::random_device{}());
+        std::uniform_int_distribution<int> dist(0, 100);
+        elem = ElemType(dist(rng));
+    };
+
     const size_t total = output_buffer.size();
     if (total < 2048 * 2048) {
-        return genSmallRandomTensor<ElemType>(shape, layout);
+        std::ranges::for_each(output_buffer, init_rand_elem);
+        return tt::tt_metal::Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec).to_layout(layout);
     } else {
-        const size_t chunk_size = (total + num_threads - 1) / num_threads;
-        std::vector<std::jthread> threads;
+        tf::Executor executor;
+        tf::Taskflow taskflow;
 
-        for (unsigned t = 0; t < num_threads; ++t) {
-            size_t start = t * chunk_size;
-            size_t end = std::min(start + chunk_size, total);
-
-            threads.emplace_back([start, end, &output_buffer]() {
-                std::mt19937 rng(std::random_device{}());
-                std::uniform_int_distribution<int> dist(0, 100);
-                for (size_t i = start; i < end; ++i) {
-                    output_buffer[i] = ElemType(dist(rng));
-                }
-            });
-        }
+        taskflow.for_each(output_buffer.begin(), output_buffer.end(), init_rand_elem);
+        executor.run(taskflow).wait();
     }
 
     return tt::tt_metal::Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec).to_layout(layout);
 }
 
-void BM_where_experimental_ttt(benchmark::State& state) {
+void BM_where_experimental_bf16_ttt(benchmark::State& state) {
     using namespace ttnn::types;
 
     auto shape = ttnn::Shape({state.range(0), state.range(0)});
@@ -93,7 +75,7 @@ void BM_where_experimental_ttt(benchmark::State& state) {
     ttnn::device::close_device(*device);
 }
 
-void BM_where_ttt(benchmark::State& state) {
+void BM_where_bf16_ttt(benchmark::State& state) {
     using namespace ttnn::types;
 
     auto shape = ttnn::Shape({state.range(0), state.range(0)});
@@ -124,8 +106,12 @@ void BM_where_ttt(benchmark::State& state) {
     ttnn::device::close_device(*device);
 }
 
-BENCHMARK(BM_where_experimental_ttt)->Unit(benchmark::kMillisecond)->RangeMultiplier(2)->Range(32, 16384)->Complexity();
-BENCHMARK(BM_where_ttt)->Unit(benchmark::kMillisecond)->RangeMultiplier(2)->Range(32, 16384)->Complexity();
+BENCHMARK(BM_where_experimental_bf16_ttt)
+    ->Unit(benchmark::kMillisecond)
+    ->RangeMultiplier(2)
+    ->Range(32, 16384)
+    ->Complexity();
+BENCHMARK(BM_where_bf16_ttt)->Unit(benchmark::kMillisecond)->RangeMultiplier(2)->Range(32, 16384)->Complexity();
 
 }  // namespace
 
