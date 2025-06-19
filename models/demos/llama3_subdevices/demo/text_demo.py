@@ -486,7 +486,7 @@ def test_demo_text(
         if pcc_check:
             vocab_size = 128256
             if is_ci_env:
-                ref_output_path = f"/mnt/MLPerf/tt_dnn-models/llama/llama3.3_70b_text_demo_ref_outputs/llama3.3_70b_ref_outputs_{num_layers}L_decode.refpt"
+                ref_output_path = f"/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/llama3.3_70b_text_demo_ref_outputs/llama3.3_70b_ref_outputs_{num_layers}L_decode.refpt"
             else:
                 ref_output_path = f"/proj_sw/user_dev/llama3.3_70b_text_demo_ref_outputs/llama3.3_70b_ref_outputs_{num_layers}L_decode.refpt"
             assert os.path.exists(ref_output_path), f"Reference output file with path {ref_output_path} does not exist!"
@@ -536,12 +536,14 @@ def test_demo_text(
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
             try:
-                toks, _ = generator.prefill_forward_text(
+                tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
+                toks = generator.prefill_forward_text(
                     input_tokens_prefill_pt,  # Just warmup prefill for 1 user
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     prompt_lens=decoding_pos,
                     enable_trace=prefill_enable_trace,
+                    tt_out_logits_all_users=tt_out_logits_all_users,
                 )
             except Exception as e:
                 logger.error(f"Error during prefill warmup: {str(e)}")
@@ -554,12 +556,14 @@ def test_demo_text(
         profiler.start(f"inference_prefill", iteration=batch_idx)
 
         try:
-            toks, logits = generator.prefill_forward_text(
+            tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
+            toks = generator.prefill_forward_text(
                 input_tokens_prefill_pt,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 prompt_lens=decoding_pos,
                 enable_trace=prefill_enable_trace,
+                tt_out_logits_all_users=tt_out_logits_all_users,
             )
         except Exception as e:
             logger.error(f"Error during prefill: {str(e)}")
@@ -568,7 +572,7 @@ def test_demo_text(
         # Check the output tokens after prefill
         if pcc_check:
             torch_output_logits = torch_output[0]
-            logits = logits[0, 0, :vocab_size]
+            logits = tt_out_logits_all_users[0, 0, :vocab_size]
             does_pass, pcc_message = comp_pcc(logits, torch_output_logits, 0.91)
             logger.info(f"PCC: {pcc_message}")
             logger.info(
@@ -629,15 +633,17 @@ def test_demo_text(
 
             # Run decode forward
             try:
-                tt_out_logits, tt_out_tok = generator.decode_forward_text(
+                tt_out_logits_saved = torch.zeros(vocab_size) if pcc_check else None
+                tt_out_tok = generator.decode_forward_text(
                     out_tok,
                     current_pos,
-                    enable_trace=False,
+                    enable_trace=enable_trace if not pcc_check else False,
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     read_from_device=True,
                     sampling_params=device_sampling_params,
                     reset_inputs=True,
+                    tt_out_logits_saved=tt_out_logits_saved,
                 )
             except Exception as e:
                 logger.error(f"Error during decoding: {str(e)}")
@@ -657,20 +663,15 @@ def test_demo_text(
             out_tok = tt_out_tok[0] if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
             if out_tok.shape == torch.Size([]):
                 out_tok = out_tok.repeat(batch_size, 1)
-            tt_out_logits = ttnn.to_torch(
-                tt_out_logits[0],
-                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape),
-            )
-            tt_out_logits = tt_out_logits[0, 0, 0, :vocab_size]
 
             if teacher_forcing:
                 torch_output_logits = torch_output[iteration + 1]
-                does_pass, pcc_message = comp_pcc(tt_out_logits, torch_output_logits, 0.91)
+                does_pass, pcc_message = comp_pcc(tt_out_logits_saved, torch_output_logits, 0.91)
                 logger.info(f"PCC: {pcc_message}")
                 logger.info(
                     f"Teacher forced token at decode iteration {iteration} {'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
                 )
-                _, tt_top5_tokens = torch.topk(tt_out_logits, k=5, dim=-1)
+                _, tt_top5_tokens = torch.topk(tt_out_logits_saved, k=5, dim=-1)
                 _, ref_top5_tokens = torch.topk(torch_output_logits, k=5, dim=-1)
                 top_1_acc = tt_top5_tokens[0] == ref_top5_tokens[0]
                 top_5_acc = torch.any(tt_top5_tokens == ref_top5_tokens)
