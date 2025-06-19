@@ -12,6 +12,7 @@
 #include "core_config.h"
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
+#include "llrt_common/mailbox.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
 #include <umd/device/tt_core_coordinates.h>
@@ -126,10 +127,7 @@ HalCoreInfoType create_tensix_mem_map() {
         }
         processor_classes[processor_class_idx] = processor_types;
     }
-    constexpr uint32_t mailbox_size =
-        sizeof(mailboxes_t) - sizeof(profiler_msg_t::buffer) +
-        sizeof(profiler_msg_t::buffer) / PROFILER_RISC_COUNT * static_cast<uint8_t>(TensixProcessorTypes::COUNT);
-    static_assert(mailbox_size <= MEM_MAILBOX_SIZE);
+    static_assert(llrt_common::k_SingleProcessorMailboxSize<TensixProcessorTypes> <= MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::TENSIX,
         CoreType::WORKER,
