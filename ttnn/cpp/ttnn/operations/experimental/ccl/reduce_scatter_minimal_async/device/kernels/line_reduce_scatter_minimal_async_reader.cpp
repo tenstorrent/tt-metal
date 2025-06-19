@@ -253,13 +253,12 @@ void kernel_main() {
             if (accumulate_output) {
                 input_tile_id_start = b * batch_slice_num_pages;  // output batch offset
                 pages_read_in_row = (link * batch_slice_num_pages / num_links) % slice_Wt;
-                row_offset = (link * batch_slice_num_pages / num_links);
+                row_offset = (link * batch_slice_num_pages / num_links) / slice_Wt * slice_Wt;
                 stride_Wt = slice_Wt;
             }
             // Wait on output semaphore
             noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), num_targets_in_direction + 1);
-
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
 

@@ -13,9 +13,11 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
 
-def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
+def create_global_semaphores(mesh_device, num_devices, cores, initial_value, num_links):
     # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(3)]
+    ccl_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(3 * num_links)
+    ]
     return ccl_semaphore_handles
 
 
@@ -56,7 +58,8 @@ def run_reduce_scatter_impl(
 
     # create global semaphore handles
     ccl_semaphore_handles = [
-        create_global_semaphores(t3k_mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(num_iters)
+        create_global_semaphores(t3k_mesh_device, num_devices, ccl_sub_device_crs, 0, num_links)
+        for _ in range(num_iters)
     ]
 
     ### Create persistent output buffers
@@ -205,11 +208,20 @@ def run_reduce_scatter_impl(
         #     1,
         # ),  # Full SD3.5 shape, when reduce scatter unfused
         (8, 1, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (8, 3, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (8, 1, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (8, 1, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (8, 1, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (8, 3, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
     ],
-    ids=["batch_8", "batch_4", "batch_2", "batch_1"],
+    ids=[
+        "batch_8_links_1",
+        "batch_8_links_3",
+        "batch_4_links_1",
+        "batch_2_links_1",
+        "batch_1_links_1",
+        "batch_1_links_3",
+    ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_rs",

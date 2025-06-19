@@ -595,6 +595,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     // Reader
     std::vector<KernelHandle> reader_kernel_ids;
     std::vector<KernelHandle> writer_kernel_ids;
+    std::vector<KernelHandle> reduce_kernel_ids;
     for (uint32_t core_idx = 0; core_idx < num_senders_per_link; core_idx++) {
         const bool is_forward = core_idx % num_senders_per_link;
 
@@ -700,6 +701,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             "line_reduction.cpp",
             is_forward ? sender_forward_core_ranges : sender_backward_core_ranges,
             sender_reduce_kernel_config);
+        reduce_kernel_ids.push_back(reduce_kernel_id);
     }
 
     if (fuse_op) {
@@ -763,6 +765,9 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 }
             }
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel_ids[core_idx], {core}, writer_rt_args);
+
+            std::vector<uint32_t> reduce_rt_args = {link};
+            tt::tt_metal::SetRuntimeArgs(program, reduce_kernel_ids[core_idx], {core}, reduce_rt_args);
         }
     }
 
