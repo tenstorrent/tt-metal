@@ -1,10 +1,12 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 
 import subprocess
 import time
 import os
 import json
 import pandas as pd
+import argparse
 
 # Update this to the location of the RESET file
 RESET_SCRIPT_PATH = "/proj_sw/user_dev/yalrawwash/reset/reset-1.json"
@@ -137,8 +139,7 @@ def generate_perf_json(
 
 
 def automate_perf_collection(
-    num_runs: int = 18,
-    sleep_between_resets: int = 10,
+    num_runs: int = 5,
     generate_json: bool = True,
 ):
     """Main automation loop for running perf data collection and generating JSON."""
@@ -149,14 +150,14 @@ def automate_perf_collection(
         print(f"\n===== Run {i}/{num_runs} =====")
 
         reset_device()
-        print(f"Sleeping {sleep_between_resets} seconds to allow hardware reset...")
-        time.sleep(sleep_between_resets)
+        print(f"Sleeping 20 seconds to allow hardware reset...")
+        time.sleep(20)
 
         run_test(decoder_test)
 
         reset_device()
-        print(f"Sleeping {sleep_between_resets} seconds to allow hardware reset...")
-        time.sleep(sleep_between_resets)
+        print(f"Sleeping 20 seconds to allow hardware reset...")
+        time.sleep(20)
 
         run_test(dispatch_test)
 
@@ -165,12 +166,9 @@ def automate_perf_collection(
 
 
 if __name__ == "__main__":
-    import argparse
-
     parser = argparse.ArgumentParser(description="Automate LLaMA performance data collection")
     parser.add_argument("--runs", type=int, default=5, help="Number of times to repeat each test")
-    parser.add_argument("--sleep", type=int, default=10, help="Sleep time between resets")
     parser.add_argument("--no-json", action="store_true", help="Skip generating JSON")
     args = parser.parse_args()
 
-    automate_perf_collection(num_runs=args.runs, sleep_between_resets=args.sleep, generate_json=not args.no_json)
+    automate_perf_collection(num_runs=args.runs, generate_json=not args.no_json)

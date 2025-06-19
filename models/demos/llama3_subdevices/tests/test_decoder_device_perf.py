@@ -886,11 +886,6 @@ def test_llama_TG_perf_device(
     assert all_passing
 
 
-import csv
-import os
-from datetime import datetime
-
-
 def append_non_overlapped_dispatch_data_to_csv(
     avg_dispatch_duration_model_tail,
     min_dispatch_duration_model_tail,
@@ -1042,13 +1037,6 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     print_dict(avg_dispatch_duration_mid_layers, "avg_dispatch_duration_mid_layers")
     print_dict(avg_dispatch_duration_model_tail, "avg_dispatch_duration_model_tail")
 
-    assert len(avg_dispatch_duration_mid_layers) == len(
-        perf_targets["decoder"]
-    ), f"Expected {len(perf_targets['decoder'])} operations in decoder, got {len(avg_dispatch_duration_mid_layers)}. If the number or type of operations changed, expected times must be updated."
-    assert len(avg_dispatch_duration_model_tail) == len(
-        perf_targets["model_tail"]
-    ), f"Expected {len(perf_targets['model_tail'])} operations in model tail, got {len(avg_dispatch_duration_model_tail)}. If the number or type of operations changed, expected times must be updated."
-
     append_non_overlapped_dispatch_data_to_csv(
         avg_dispatch_duration_model_tail=avg_dispatch_duration_model_tail,
         min_dispatch_duration_model_tail=min_dispatch_duration_model_tail,
@@ -1058,6 +1046,13 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
         max_dispatch_duration_mid_layers=max_dispatch_duration_mid_layers,
         csv_filename="out-non-dispatched.csv",
     )
+
+    assert len(avg_dispatch_duration_mid_layers) == len(
+        perf_targets["decoder"]
+    ), f"Expected {len(perf_targets['decoder'])} operations in decoder, got {len(avg_dispatch_duration_mid_layers)}. If the number or type of operations changed, expected times must be updated."
+    assert len(avg_dispatch_duration_model_tail) == len(
+        perf_targets["model_tail"]
+    ), f"Expected {len(perf_targets['model_tail'])} operations in model tail, got {len(avg_dispatch_duration_model_tail)}. If the number or type of operations changed, expected times must be updated."
 
     print("Decoder")
     passing = True
