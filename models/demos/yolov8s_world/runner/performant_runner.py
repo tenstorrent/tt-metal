@@ -4,34 +4,10 @@
 
 
 import torch.nn.functional as F
-import torch
 
 import ttnn
-from models.experimental.yolov8s_world.runner.performant_runner_infra import YOLOv8sWorldPerformanceRunnerInfra
-
+from models.demos.yolov8s_world.runner.performant_runner_infra import YOLOv8sWorldPerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-def create_yolov8s_world_input_tensors(
-    device, batch_size=1, input_channels=3, input_height=640, input_width=640, model=False
-):
-    torch_input_tensor = torch.randn(batch_size, input_channels, input_height, input_width)
-    ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-    memory_config = None
-    if model:
-        ttnn_input_tensor = F.pad(ttnn_input_tensor, (0, 29))
-        memory_config = ttnn.create_sharded_memory_config(
-            [6400, 32],
-            core_grid=device.core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-    memory_config = memory_config if memory_config else ttnn.L1_MEMORY_CONFIG
-    ttnn_input_tensor = ttnn.from_torch(
-        ttnn_input_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config
-    )
-    return torch_input_tensor, ttnn_input_tensor
 
 
 class YOLOv8sWorldPerformantRunner:
@@ -108,7 +84,7 @@ class YOLOv8sWorldPerformantRunner:
     def _execute_yolov8s_world_trace_2cqs_inference(self, tt_inputs_host=None):
         tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
         ttnn.wait_for_event(1, self.op_event)
-        ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
+        ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
         # TODO: Add in place support to ttnn to_memory_config
@@ -124,7 +100,8 @@ class YOLOv8sWorldPerformantRunner:
         assert_with_pcc(torch_output_tensor, result_output_tensor, 0.99)
 
     def run(self, torch_input_tensor, check_pcc=False):
-        n, h, w, c = torch_input_tensor.shape
+        n, c, h, w = torch_input_tensor.shape
+        torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
         torch_input_tensor = F.pad(torch_input_tensor, (0, 29), mode="constant", value=0)
         tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 

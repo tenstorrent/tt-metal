@@ -57,6 +57,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
       - name: ${{ matrix.test-info.name }} tests
+        id: generate-device-perf-report
         timeout-minutes: ${{ matrix.test-info.timeout }}
         env:
           TRACY_NO_INVARIANT_CHECK: 1
@@ -93,7 +94,7 @@ jobs:
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov8x/tests -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov8s/tests -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_vanilla_unet/test -m models_device_performance_bare_metal
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov8s_world/tests -m models_device_performance_bare_metal
+            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov8s_world/tests -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/vgg_unet/tests -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov10/tests -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/ufld_v2/tests -m models_device_performance_bare_metal
@@ -101,24 +102,23 @@ jobs:
             WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
           fi
 
-          python3 models/perf/merge_device_perf_results.py
+          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_$(date +%Y_%m_%d).csv
+          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
       - name: Check device perf report exists
         id: check-device-perf-report
         if: ${{ !cancelled() }}
         run: |
-          ls -hal
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_$(date +%Y_%m_%d).csv
-          ls -hal $DEVICE_PERF_REPORT_FILENAME
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+          ls -hal ${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
 
       - name: Upload device perf report
         timeout-minutes: 5
         if: ${{ !cancelled() && steps.check-device-perf-report.conclusion == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: device-perf-report-csv-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
-          path: /work/${{ steps.check-device-perf-report.outputs.device_perf_report_filename }}
+          name: device-perf-report-csv-${{ matrix.test-info.test-type }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
+          path: /work/${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

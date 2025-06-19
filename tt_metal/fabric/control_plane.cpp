@@ -61,7 +61,7 @@ std::vector<chan_id_t> extract_intermesh_eth_links(uint32_t config_value, chip_i
     const auto& soc_desc = cluster.get_soc_desc(chip_id);
     uint32_t intermesh_eth_links_bits = (config_value >> intermesh_constants::INTERMESH_ETH_LINK_BITS_SHIFT) &
                                         intermesh_constants::INTERMESH_ETH_LINK_BITS_MASK;
-    for (chan_id_t link = 0; link < soc_desc.get_num_eth_channels(); ++link) {
+    for (chan_id_t link = 0; link < static_cast<chan_id_t>(soc_desc.get_num_eth_channels()); ++link) {
         if (intermesh_eth_links_bits & (1 << link)) {
             intermesh_eth_links.push_back(link);
         }
