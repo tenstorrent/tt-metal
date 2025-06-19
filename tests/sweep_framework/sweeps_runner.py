@@ -486,9 +486,9 @@ def export_test_results_postgres(header_info, results):
         INSERT INTO sweep_results (
             sweep_name, suite_name, vector_id, input_hash, status, message,
             exception, e2e_perf, device_perf, timestamp, host, user_name,
-            git_hash, test_parameters
+            git_hash, test_parameters, vector_data_jsonb
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
         """
 
@@ -528,6 +528,7 @@ def export_test_results_postgres(header_info, results):
                 result.get("user"),
                 curr_git_hash,
                 json.dumps(test_parameters),
+                json.dumps(result.get("original_vector_data")),
             )
 
             cursor.execute(insert_query, values)
