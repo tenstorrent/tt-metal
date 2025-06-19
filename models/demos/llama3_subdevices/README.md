@@ -33,6 +33,25 @@ The demo supports a variety of configurations, including different model sizes, 
 - **Stress Testing**: Long-context and high-throughput stress test modes.
 - **Sampling Controls**: Supports temperature, top-p, and top-k sampling.
 
+## Weights
+
+The Llama 3 demo supports two methods for loading model weights: Meta-style local checkpoints and Hugging Face-hosted models.
+
+### Meta Checkpoints
+
+To use a local Meta-style checkpoint, set the following environment variable:
+```
+export LLAMA_DIR=/path/to/llama3.2-3b-instruct
+```
+
+### Hugging Face Models (HF_MODEL)
+To load weights and tokenizer files from Hugging Face, set:
+```
+export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
+```
+
+**Note**: Only one of LLAMA_DIR or HF_MODEL should be set.
+
 ## Running the Demo
 
 To run the Llama 3 demo:
