@@ -8,15 +8,21 @@ The demo supports a variety of configurations, including different model sizes, 
 
 ## Supported Platforms
 
-- TG (4U & 6U)
+- n150
+- n300
+- TG
+- T3K
 
 ## Model Architectures
 
-- Llama 3.3-1B
-- Llama 3.3-3B
+- Llama 3.2-1B
+- Llama 3.2-3B
 - Llama 3.1-8B
 - Llama 3.2-11B
 - Llama 3.1-70B
+- Llama 3.3-70B
+
+**Note**: the 70B models are only supported on TG
 
 ## Key Features
 
