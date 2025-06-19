@@ -39,15 +39,12 @@ def convert_torch_to_ttnn_tensor(
     mem_config,
 ):
     return [
-        ttnn.to_device(
-            ttnn.from_torch(
-                tensor,
-                layout=layout,
-                dtype=tt_dtype,
-                memory_config=mem_config,
-                device=device,
-            ),
-            device,
+        ttnn.from_torch(
+            tensor,
+            layout=layout,
+            dtype=tt_dtype,
+            memory_config=mem_config,
+            device=device,
         )
         for tensor in torch_tensors
     ]
