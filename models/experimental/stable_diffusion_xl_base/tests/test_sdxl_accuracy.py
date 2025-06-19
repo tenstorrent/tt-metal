@@ -120,9 +120,10 @@ def test_accuracy_sdxl(
         },
     }
 
-    os.makedirs("generated/test_reports", exist_ok=True)
+    out_root, file_name = "test_reports", "sdxl_test_results.json"
+    os.makedirs(out_root, exist_ok=True)
 
-    with open("generated/test_reports/sdxl_test_results.json", "w") as f:
+    with open(f"{out_root}/{file_name}", "w") as f:
         json.dump(data, f, indent=4)
 
-    logger.info("Test results saved to generated/test_reports/sdxl_test_results.json")
+    logger.info(f"Test results saved to {out_root}/{file_name}")
