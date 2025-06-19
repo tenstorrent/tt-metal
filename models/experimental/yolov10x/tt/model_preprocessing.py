@@ -6,7 +6,7 @@ import ttnn
 import torch
 import torch.nn as nn
 from ttnn.model_preprocessing import preprocess_model_parameters, fold_batch_norm2d_into_conv2d, infer_ttnn_module_args
-from models.experimental.yolov10.reference.yolov10 import YOLOv10, Conv
+from models.experimental.yolov10x.reference.yolov10x import YOLOv10, Conv
 
 
 def make_anchors(device, feats, strides, grid_cell_offset=0.5):
@@ -101,6 +101,28 @@ def create_yolov10x_input_tensors(
     device, batch_size=1, input_channels=3, input_height=640, input_width=640, input_dtype=ttnn.bfloat8_b
 ):
     torch_input_tensor = torch.randn(batch_size, input_channels, input_height, input_width)
+    n, c, h, w = torch_input_tensor.shape
+    if c == 3:
+        c = 16
+    input_mem_config = ttnn.create_sharded_memory_config(
+        [n, c, h, w],
+        ttnn.CoreGrid(x=8, y=8),
+        ttnn.ShardStrategy.HEIGHT,
+    )
+    ttnn_input_host = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+    )
+    return torch_input_tensor, ttnn_input_host
+
+
+def create_yolov10x_input_tensors_submodules(
+    device, batch_size=1, input_channels=3, input_height=640, input_width=640, input_dtype=ttnn.bfloat8_b
+):
+    torch_input_tensor = torch.randn(batch_size, input_channels, input_height, input_width)
     ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
     ttnn_input_tensor = ttnn_input_tensor.reshape(
         1,
@@ -115,5 +137,3 @@ def create_yolov10x_input_tensors(
         layout=ttnn.TILE_LAYOUT,
     )
     return torch_input_tensor, ttnn_input_tensor
-
-    return parameters

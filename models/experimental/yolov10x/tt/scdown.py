@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.experimental.yolov10.tt.common import Conv
+from models.experimental.yolov10x.tt.common import Conv
 import ttnn
 
 
