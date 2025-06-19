@@ -14,7 +14,6 @@
 #include <tt-metalium/erisc_datamover_builder.hpp>
 
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/host_api.hpp>
 
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
