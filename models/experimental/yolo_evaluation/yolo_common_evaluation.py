@@ -169,11 +169,19 @@ def evaluation(
 ):
     disable_persistent_kernel_cache()
 
+    num_iterations = 500
+
+    if model_type == "torch_model":
+        if model_name == "YOLOv10":
+            num_iterations = 105
+        elif model_name == "YOLOv9c":
+            num_iterations = 20
+
     dataset_name = "coco-2017"
     dataset = fiftyone.zoo.load_zoo_dataset(
         dataset_name,
         split="validation",
-        max_samples=500,
+        max_samples=num_iterations,
     )
 
     source_list = [i["filepath"] for i in dataset]

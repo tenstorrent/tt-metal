@@ -59,8 +59,8 @@ The following model is evaluated(mAPval 50-95) for 500 samples.:-
 -   YOLOv4(640x640 resolution) - **0.8029**
 -   YOLOv8s_World(640x640 resolution) - **0.7102**
 -   YOLOv8x(640x640 resolution) - **0.8116**
--   YOLOv10x(640x640 resolution) - **KILLED**
--   YOLOv9c(640x640 resolution) - **KILLED**
+-   YOLOv10x(640x640 resolution) - **0.7800** #Ran for 105 samples, since running 500 samples requires more memory
+-   YOLOv9c(640x640 resolution) - **0.6702**#Ran for 20 samples, since running 500 samples requires more memory
 
 To run the test of ttnn vs ground truth, please follow the following commands:
 
