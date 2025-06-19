@@ -51,7 +51,7 @@ void MAIN {
         // transpose input
         cb_wait_front(cb_tilize, 1);
 
-        transpose_wh_init_short(cb_tilize);
+        transpose_init(cb_tilize);
         pack_untilize_dst_init<1>(cb_out);
 
         tile_regs_acquire();

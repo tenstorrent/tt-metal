@@ -40,7 +40,7 @@ void MAIN {
         tile_regs_acquire();
         tile_regs_wait();
 
-        transpose_wh_init_short(cb_id_in0);
+        transpose_init(cb_id_in0);
         reconfig_data_format_srca(cb_out_transposed, cb_id_in0);
         pack_reconfig_data_format(cb_id_out, cb_in0_transposed);
         transpose_wh_tile(cb_id_in0, 0, 0);
@@ -78,7 +78,7 @@ void MAIN {
             cb_push_back(cb_id_out, onetile);
             cb_pop_front(cb_id_in1, onetile);
 #else
-            transpose_wh_init_short(cb_id_in1);
+            transpose_init(cb_id_in1);
             reconfig_data_format_srca(cb_id_in1);
             pack_reconfig_data_format(cb_in1_transposed);
             transpose_wh_tile(cb_id_in1, 0, 0);
@@ -99,7 +99,7 @@ void MAIN {
                 tile_regs_acquire();
                 tile_regs_wait();
 
-                transpose_wh_init_short(cb_id_in0);
+                transpose_init(cb_id_in0);
                 reconfig_data_format_srca(cb_id_in0);
                 pack_reconfig_data_format(cb_in0_transposed);
                 transpose_wh_tile(cb_id_in0, 0, 0);
@@ -140,7 +140,7 @@ void MAIN {
                 tile_regs_acquire();
                 tile_regs_wait();
 
-                transpose_wh_init_short(cb_out_transposed);
+                transpose_init(cb_out_transposed);
                 reconfig_data_format(cb_in0_transposed, cb_out_transposed);
                 pack_reconfig_data_format(cb_out_transposed, cb_id_out);
                 transpose_wh_tile(cb_out_transposed, 0, 0);

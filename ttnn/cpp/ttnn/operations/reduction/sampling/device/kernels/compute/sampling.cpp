@@ -210,7 +210,8 @@ void top_k() {
     ckernel::topk_tile_init();
 
     if (first_call) {
-        transpose_wh_init(input_cb_index, input_transposed_cb_index);
+        compute_kernel_hw_startup(input_cb_index, index_transposed_cb_index);
+        transpose_init(input_cb_index);
     }
     for (uint32_t ht = 0; ht < Ht; ++ht) {
         bool ascending = false;
@@ -225,12 +226,12 @@ void top_k() {
             cb_wait_front(index_cb_index, 2);
 
             reconfig_data_format_srca(input_cb_index);
-            transpose_wh_init_short(input_cb_index);
+            transpose_init(input_cb_index);
             transpose_wh_tile(input_cb_index, 0, 0);
             transpose_wh_tile(input_cb_index, 1, 1);
 
             reconfig_data_format_srca(index_cb_index);
-            transpose_wh_init_short(index_cb_index);
+            transpose_init(index_cb_index);
             transpose_wh_tile(index_cb_index, 0, 2);
             transpose_wh_tile(index_cb_index, 1, 3);
 
@@ -309,7 +310,7 @@ void top_k() {
 
         // transpose value tiles and pack into output buffer
         reconfig_data_format_srca(input_transposed_cb_index);
-        transpose_wh_init_short(input_transposed_cb_index);
+        transpose_init(input_transposed_cb_index);
         pack_reconfig_data_format(input_transposed_cb_index);
         cb_wait_front(input_transposed_cb_index, Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
@@ -325,7 +326,7 @@ void top_k() {
 
         // transpose index tiles and pack into output buffer
         reconfig_data_format_srca(index_transposed_cb_index);
-        transpose_wh_init_short(index_transposed_cb_index);
+        transpose_init(index_transposed_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);
         cb_wait_front(index_transposed_cb_index, Kt);
         for (uint32_t i = 0; i < Kt; ++i) {

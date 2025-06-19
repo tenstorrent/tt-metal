@@ -18,7 +18,7 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
     tile_regs_acquire();
     tile_regs_wait();
 
-    transpose_wh_init_short(cb_in);
+    transpose_init(cb_in);
     transpose_wh_tile(cb_in, 0, 0);
 
     cb_reserve_back(cb_out, ONE_TILE);

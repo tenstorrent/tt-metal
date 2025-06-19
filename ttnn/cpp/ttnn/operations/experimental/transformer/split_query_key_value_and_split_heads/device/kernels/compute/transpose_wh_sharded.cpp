@@ -10,7 +10,8 @@ namespace NAMESPACE {
 void MAIN {
     uint32_t num_tiles = get_compile_time_arg_val(0);
 
-    transpose_wh_init(tt::CBIndex::c_24, tt::CBIndex::c_17);
+    compute_kernel_hw_startup(tt::CBIndex::c_24, tt::CBIndex::c_17);
+    transpose_init(tt::CBIndex::c_24);
 
     constexpr uint32_t cb_im0 = tt::CBIndex::c_24;
     constexpr uint32_t cb_out1 = tt::CBIndex::c_17;

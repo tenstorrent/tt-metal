@@ -15,7 +15,7 @@ ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint
     uint32_t tile_idx = 0;
 
     for (uint32_t w = 0; w < Wt; ++w) {
-        transpose_wh_init_short(cb_tilize);
+        transpose_init(cb_tilize);
         cb_reserve_back(cb_untilize, Ht);
         for (uint32_t h = 0; h < Ht; ++h) {
             tile_regs_acquire();
@@ -51,7 +51,7 @@ template <
 ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, uint32_t cb_out) {
     uint32_t tile_idx = 0;
 
-    transpose_wh_init_short(cb_tilize);
+    transpose_init(cb_tilize);
     pack_untilize_dst_init<Ht, Ht, use_narrow_row, row_size>(cb_out);
     for (uint32_t w = 0; w < Wt; ++w) {
         tile_regs_acquire();
@@ -84,7 +84,7 @@ template <uint32_t Wt, uint32_t Ht, uint32_t HtWt>
 ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, uint32_t cb_out) {
     uint32_t tile_idx = 0;
 
-    transpose_wh_init_short(cb_tilize);
+    transpose_init(cb_tilize);
     pack_untilize_dst_init<Ht>(cb_out);
     for (uint32_t w = 0; w < Wt; ++w) {
         tile_regs_acquire();

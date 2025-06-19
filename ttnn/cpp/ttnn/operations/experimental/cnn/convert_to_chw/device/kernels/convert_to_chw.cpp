@@ -36,7 +36,7 @@ void MAIN {
 
     compute_kernel_hw_startup(cb_in, cb_transpose_in);
     pack_untilize_init(cb_in, cb_transpose_in);
-    transpose_wh_init(cb_in, cb_transpose_in);
+    transpose_init(cb_in);
 
     pack_untilize_dst_init<1>(cb_transpose_in);
 

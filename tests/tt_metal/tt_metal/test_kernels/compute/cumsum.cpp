@@ -22,7 +22,8 @@ void MAIN {
 #ifndef ROWWISE
     init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_16);
 #else
-    transpose_wh_init(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    transpose_init(tt::CBIndex::c_0);
 #endif
     cumsum_tile_init();
 
@@ -36,7 +37,7 @@ void MAIN {
 #ifndef ROWWISE
                 copy_tile(tt::CBIndex::c_0, 0, 0);
 #else
-                transpose_wh_init_short(tt::CBIndex::c_0);
+                transpose_init(tt::CBIndex::c_0);
                 transpose_wh_tile(tt::CBIndex::c_0, 0, 0);
 #endif
                 cumsum_tile(0, ht == 0);
