@@ -106,6 +106,9 @@ class RunTimeOptions {
     std::string kernel_dir;
     std::string system_kernel_dir;
 
+    bool is_visible_device_env_var_set = false;
+    uint32_t visible_device;
+
     bool build_map_enabled = false;
 
     WatcherSettings watcher_settings;
@@ -190,6 +193,9 @@ public:
     const std::string& get_kernel_dir() const;
     // Location where kernels are installed via package manager.
     const std::string& get_system_kernel_dir() const;
+
+    inline bool is_visible_device_specified() const { return this->is_visible_device_env_var_set; }
+    inline uint32_t get_visible_device() const { return this->visible_device; }
 
     inline bool get_build_map_enabled() const { return build_map_enabled; }
 
