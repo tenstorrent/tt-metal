@@ -2567,32 +2567,60 @@ Fabric1DWorkerConfig get_fabric_1d_worker_config(
 }
 
 tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_wormhole(
-    tt::ClusterType cluster_type, FabricTestMode fabric_mode) {
+    tt::ClusterType cluster_type, FabricTestMode fabric_mode, size_t line_size) {
     tt::tt_fabric::FabricRouterBufferConfig buffer_config{};
     switch (cluster_type) {
         case tt::ClusterType::TG:
         case tt::ClusterType::GALAXY:
-            if (fabric_mode == FabricTestMode::HalfRing) {
-                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
-            } else if (fabric_mode == FabricTestMode::FullRing) {
-                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{false, true, true, false, true};
-            } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
-                // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
-                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, false, false};
-            } else if (fabric_mode == FabricTestMode::RingAsLinear) {
-                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
+            // long axis, more buffering.
+            if (line_size >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
+                if (fabric_mode == FabricTestMode::HalfRing) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, true};
+                } else if (fabric_mode == FabricTestMode::FullRing) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{false, true, true, false, true};
+                } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
+                    // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, false, false};
+                } else if (fabric_mode == FabricTestMode::RingAsLinear) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
+                }
+            } else {
+                if (fabric_mode == FabricTestMode::HalfRing) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
+                } else if (fabric_mode == FabricTestMode::FullRing) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, false, true};
+                } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
+                    // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, false, false};
+                } else if (fabric_mode == FabricTestMode::RingAsLinear) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
+                }
             }
             break;
         case tt::ClusterType::T3K:
-            if (fabric_mode == FabricTestMode::HalfRing) {
-                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, true, true};
-            } else if (fabric_mode == FabricTestMode::FullRing) {
-                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{false, true, true, false, true};
-            } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
-                // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
-                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, false, false};
-            } else if (fabric_mode == FabricTestMode::RingAsLinear) {
-                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
+            // Need more tunning on T3K, for now keep the long/short axis the same.
+            if (line_size >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
+                if (fabric_mode == FabricTestMode::HalfRing) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, true, true};
+                } else if (fabric_mode == FabricTestMode::FullRing) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{false, true, true, false, true};
+                } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
+                    // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, false, false};
+                } else if (fabric_mode == FabricTestMode::RingAsLinear) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
+                }
+            } else {
+                if (fabric_mode == FabricTestMode::HalfRing) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, true, true};
+                } else if (fabric_mode == FabricTestMode::FullRing) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{false, true, true, false, true};
+                } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
+                    // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, false, false};
+                } else if (fabric_mode == FabricTestMode::RingAsLinear) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
+                }
             }
             break;
         default: break;
@@ -2601,20 +2629,33 @@ tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_wormhole(
 }
 
 tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_blackhole(
-    tt::ClusterType cluster_type, FabricTestMode fabric_mode) {
+    tt::ClusterType cluster_type, FabricTestMode fabric_mode, size_t line_size) {
     tt::tt_fabric::FabricRouterBufferConfig buffer_config{};
     switch (cluster_type) {
         // For now just copy the galaxy config to BH since we don't have any data points.
         case tt::ClusterType::P150_X4:
-            if (fabric_mode == FabricTestMode::HalfRing) {
-                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
-            } else if (fabric_mode == FabricTestMode::FullRing) {
-                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{false, true, true, false, true};
-            } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
-                // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
-                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, false, false};
-            } else if (fabric_mode == FabricTestMode::RingAsLinear) {
-                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
+            if (line_size >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
+                if (fabric_mode == FabricTestMode::HalfRing) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
+                } else if (fabric_mode == FabricTestMode::FullRing) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{false, true, true, false, true};
+                } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
+                    // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, false, false};
+                } else if (fabric_mode == FabricTestMode::RingAsLinear) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
+                }
+            } else {
+                if (fabric_mode == FabricTestMode::HalfRing) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
+                } else if (fabric_mode == FabricTestMode::FullRing) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{false, true, true, false, true};
+                } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
+                    // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, false, false};
+                } else if (fabric_mode == FabricTestMode::RingAsLinear) {
+                    buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
+                }
             }
             break;
         // the other BH cluster type P150_X2 only has 2 devices, not suitable for ring.
@@ -2623,12 +2664,12 @@ tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_blackhole(
     return buffer_config;
 }
 
-tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_helper(FabricTestMode fabric_mode) {
+tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_helper(FabricTestMode fabric_mode, size_t line_size) {
     const auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
     const auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
     switch (arch) {
-        case tt::ARCH::WORMHOLE_B0: return get_edm_buffer_config_wormhole(cluster_type, fabric_mode);
-        case tt::ARCH::BLACKHOLE: return get_edm_buffer_config_blackhole(cluster_type, fabric_mode);
+        case tt::ARCH::WORMHOLE_B0: return get_edm_buffer_config_wormhole(cluster_type, fabric_mode, line_size);
+        case tt::ARCH::BLACKHOLE: return get_edm_buffer_config_blackhole(cluster_type, fabric_mode, line_size);
         default: return tt::tt_fabric::FabricRouterBufferConfig{};
     }
 }
@@ -2687,7 +2728,7 @@ void Run1DFabricPacketSendTest(
         case FabricTestMode::RingAsLinear: topology = ttnn::ccl::Topology::Ring; break;
     }
 
-    const auto edm_buffer_config = get_edm_buffer_config_helper(fabric_mode);
+    const auto edm_buffer_config = get_edm_buffer_config_helper(fabric_mode, line_size);
 
     auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
 
