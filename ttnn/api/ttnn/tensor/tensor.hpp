@@ -54,32 +54,32 @@ public:
     // ======================================================================================
     //                                  Hi Level APIs
     // ======================================================================================
-    explicit Tensor() = default;
-    Tensor(const Tensor& other);
+    [[nodiscard]] explicit Tensor() = default;
+    [[nodiscard]] Tensor(const Tensor& other);
+    [[nodiscard]] Tensor(Tensor&& other) noexcept = default;
     Tensor& operator=(const Tensor& other);
-    Tensor(Tensor&& other) noexcept = default;
     Tensor& operator=(Tensor&& other) noexcept;
     ~Tensor();
 
     // Constructs a tensor with `Storage` and `TensorSpec`.
-    Tensor(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config);
+    [[nodiscard]] Tensor(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
-    Tensor(
+    [[nodiscard]] Tensor(
         HostBuffer buffer,
         const ttnn::Shape& shape,
         DataType dtype,
         Layout layout,
         const std::optional<Tile>& tile = std::nullopt);
-    Tensor(
+    [[nodiscard]] Tensor(
         HostBuffer buffer,
         const ttnn::Shape& logical_shape,
         const ttnn::Shape& padded_shape,
         DataType dtype,
         Layout layout,
         const std::optional<Tile>& tile = std::nullopt);
-    Tensor(HostBuffer buffer, TensorSpec tensor_spec);
+    [[nodiscard]] Tensor(HostBuffer buffer, TensorSpec tensor_spec);
 
     // Converts a buffer of elements of type `T` to a `Tensor`.
     // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
@@ -87,7 +87,7 @@ public:
     //
     // The data in the buffer is copied into a tensor with host storage.
     template <typename T>
-    static Tensor from_span(
+    [[nodiscard]] static Tensor from_span(
         tt::stl::Span<const T> buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
@@ -107,7 +107,7 @@ public:
     // When working in C++, prefer creating owned tensors, and retaining a reference to the internal buffer, if
     // necessary.
     template <typename T>
-    static Tensor from_borrowed_data(
+    [[nodiscard]] static Tensor from_borrowed_data(
         tt::stl::Span<T> buffer,
         const ttnn::Shape& shape,
         const std::function<void()>& on_creation_callback,
@@ -116,7 +116,7 @@ public:
 
     // Same as `from_span`, but operates on a vector instead.
     template <typename T>
-    static Tensor from_vector(
+    [[nodiscard]] static Tensor from_vector(
         const std::vector<T>& buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
@@ -128,7 +128,7 @@ public:
     // Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major,
     // physical shape matches logical shape, and no type conversion is needed.
     template <typename T>
-    static Tensor from_vector(
+    [[nodiscard]] static Tensor from_vector(
         std::vector<T>&& buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
@@ -141,47 +141,48 @@ public:
     //
     // If the tensor resides on a device, it will be brough back to host.
     template <typename T>
-    std::vector<T> to_vector(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+    [[nodiscard]] std::vector<T> to_vector(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
-    Tensor to_device(
+    [[nodiscard]] Tensor to_device(
         IDevice* target_device,
         const MemoryConfig& mem_config = MemoryConfig{},
         ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
-    Tensor to_device(
+    [[nodiscard]] Tensor to_device(
         distributed::MeshDevice* mesh_device,
         const MemoryConfig& mem_config = MemoryConfig{},
         ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
-    Tensor to_layout(Layout target_layout, IDevice* worker = nullptr) const;
+    [[nodiscard]] Tensor to_layout(Layout target_layout, IDevice* worker = nullptr) const;
 
-    Tensor to_layout(Layout target_layout, distributed::MeshDevice* mesh_device) const;
+    [[nodiscard]] Tensor to_layout(Layout target_layout, distributed::MeshDevice* mesh_device) const;
 
-    Tensor pad(const ttnn::Shape& output_padded_shape, const ttnn::Shape& input_tensor_start, float pad_value) const;
+    [[nodiscard]] Tensor pad(
+        const ttnn::Shape& output_padded_shape, const ttnn::Shape& input_tensor_start, float pad_value) const;
 
-    Tensor cpu(bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+    [[nodiscard]] Tensor cpu(bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
-    Tensor unpad(const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) const;
+    [[nodiscard]] Tensor unpad(const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) const;
 
-    Tensor pad_to_tile(float pad_value) const;
+    [[nodiscard]] Tensor pad_to_tile(float pad_value) const;
 
-    Tensor unpad_from_tile(const ttnn::Shape& output_tensor_shape) const;
+    [[nodiscard]] Tensor unpad_from_tile(const ttnn::Shape& output_tensor_shape) const;
 
-    std::string write_to_string() const;
+    [[nodiscard]] std::string write_to_string() const;
     void print() const;
 
     // Deallocates device-side Tensor storage.
     // If the tensor is on host, does nothing.
     void deallocate(bool force = false);
 
-    Tensor extract_shard(const CoreCoord& core) const;
-    Tensor extract_shard(const uint32_t& core_id) const;
+    [[nodiscard]] Tensor extract_shard(const CoreCoord& core) const;
+    [[nodiscard]] Tensor extract_shard(const uint32_t& core_id) const;
 
     // ======================================================================================
     //                                  Low Level APIs
     // ======================================================================================
-    Tensor reshape(const ttnn::Shape& new_shape) const;
-    Tensor reshape(const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) const;
+    [[nodiscard]] Tensor reshape(const ttnn::Shape& new_shape) const;
+    [[nodiscard]] Tensor reshape(const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) const;
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
