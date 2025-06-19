@@ -16,11 +16,10 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Initializes the hardware and internal state for the untilize operation. This function should be called before
- * performing any untilize operations in the compute kernel. The circular buffer (CB) ID provided must correspond
- * to the buffer containing the input data to be untilized. If the data format or properties of the input operand
- * differ from those previously configured, ensure that the appropriate reconfiguration functions are called before
- * this initialization.
+ * Performs the necessary hardware and software initialization for the untilize operation. This function should be
+ * called before performing untilize operation in the compute kernel. If the data format or properties of the input
+ * operand differ from those previously configured, ensure that the appropriate reconfiguration functions are called
+ * before this initialization.
  *
  * Return value: None
  *

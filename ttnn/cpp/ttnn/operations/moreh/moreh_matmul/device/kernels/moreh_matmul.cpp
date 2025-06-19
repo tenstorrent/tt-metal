@@ -45,7 +45,7 @@ FORCE_INLINE void transpose_wh_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t i
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format_srca(icb);
 #endif
-    transpose_wh_init_short(icb);
+    transpose_init(icb);
     tile_regs_acquire();
     transpose_wh_tile(icb, itile, idst);
     tile_regs_commit();
@@ -200,7 +200,8 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
     // TODO: checking required when the input cb format and intermediate cb format are different.
     mm_init(cb_in0, cb_in1, cb_out0);
     if (transpose_input || transpose_other) {
-        transpose_wh_init(cb_in0, cb_out0);
+        compute_kernel_hw_startup(cb_in0, cb_out0);
+        transpose_init(cb_in0);
     }
 
     if (need_input_mask_h || need_input_mask_w) {
