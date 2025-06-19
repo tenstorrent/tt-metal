@@ -1,8 +1,12 @@
-.. Create and Add Two Tensors Example:
+.. Basic Operations with TT-NN:
 
 Basic Operations with TT-NN
 ###########################
 
+We will review a simple example that demonstrates how to create various tensors and
+perform basic arithmetic operations on them using TT-NN, a high-level Python API.  These
+operations include addition, multiplication, and matrix multiplication, as well as simulating
+broadcasting of a row vector across a tile.
 
 Lets create the example file,
 ``ttnn_basic_operations.py``
@@ -100,7 +104,7 @@ Lets simulated broadcasting a row vector across a tile. This is useful for opera
    broadcast_add_result = ttnn.add(tt_t4, broadcast_tt)
 
 
-ull example and output
+Full example and output
 -----------------------
 
 Lets put everything together in a complete example that can be run directly. This example will open a Tenstorrent device, create some input tensors and perform operations on them, print the output tensors, and close the device.

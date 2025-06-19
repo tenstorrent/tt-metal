@@ -22,3 +22,4 @@ With the recommended virtual environment activated, you can run these tutorials 
 
    tutorials/ttnn_add_tensors.rst
    tutorials/ttnn_basic_operations.rst
+   tutorials/ttnn_mlp_inference.rst
