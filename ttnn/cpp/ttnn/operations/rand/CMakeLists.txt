@@ -12,6 +12,7 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TTNN::Core
+        Taskflow::Taskflow
 )
 
 install(TARGETS ttnn_op_rand LIBRARY COMPONENT tar)
