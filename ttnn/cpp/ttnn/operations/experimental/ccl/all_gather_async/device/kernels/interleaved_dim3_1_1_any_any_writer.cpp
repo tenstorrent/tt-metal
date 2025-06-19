@@ -98,52 +98,129 @@ void kernel_main() {
         tile_id_start = my_chip_id * input_tensor_Ht * input_tensor_Wt;
     }
     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
-        while (tiles_read < tiles_to_read) {
-            uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-            cb_wait_front(cb_output_id, packet_size_in_pages);
-            size_t l1_read_addr = get_read_ptr(cb_output_id);
+        // Tiles are interleaved, so no two pages will be contiguous in memory.
+        // Will always pack two pages into a single packet, except for possibly the
+        // very last packet which would have a single page (if we have an uneven number of tiles).
+        // Can't pack 3+ pages into a single packet since tiles are interleaved (non-contiguous in memory) and
+        // the scatter-write currently just supports 2 distinct memory addresses for the packet contents.
 
-            for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
+        // When packing two pages into a packet need to be careful as to calculate tile_id wrt row_offset
+        while (tiles_read < tiles_to_read) {
+            uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+            if (tiles_remaining_to_read == 1) {
+                // Last tile to read
+                cb_wait_front(cb_output_id, 1);
+                size_t l1_read_addr = get_read_ptr(cb_output_id);
+
                 uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
                 uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
                 if (direction == 1) {
                     noc_async_write_tile(tile_id, output_addrgen, l1_read_addr);
                     if (num_targets_backward_direction) {
                         write_and_advance_local_read_address_for_fabric_write_backward(
-                            noc0_dest_noc_addr,
-                            pkt_hdr,
-                            fabric_connection,
-                            l1_read_addr,
-                            output_page_size * contig_pages_advanced);
-                    } else {
-                        l1_read_addr += output_page_size * contig_pages_advanced;
-                    }
+                            noc0_dest_noc_addr, pkt_hdr, fabric_connection, l1_read_addr, output_page_size);
                 } else {
                     if (num_targets_forward_direction) {
                         write_and_advance_local_read_address_for_fabric_write_forward(
-                            noc0_dest_noc_addr,
-                            pkt_hdr,
-                            fabric_connection,
-                            l1_read_addr,
-                            output_page_size * contig_pages_advanced);
-                    } else {
-                        l1_read_addr += output_page_size * contig_pages_advanced;
+                            noc0_dest_noc_addr, pkt_hdr, fabric_connection, l1_read_addr, output_page_size);
                     }
                 }
-                pages_read_in_row += 1;
-                if (pages_read_in_row >= input_tensor_Wt) {
-                    row_offset += output_tensor_Wt;
-                    pages_read_in_row = 0;
+                cb_pop_front(cb_output_id, 1);
+                tiles_read++;
+                // Don't need to increment other id counters since this is the last page
+                } else {
+                    // 2+ tiles remaining to read, pack 2 into a packet
+                    cb_wait_front(cb_output_id, 2);
+                    size_t l1_read_addr = get_read_ptr(cb_output_id);
+
+                    uint32_t tile_one_id = tile_id_start + row_offset + pages_read_in_row;
+                    pages_read_in_row++;
+                    if (pages_read_in_row >= input_tensor_Wt) {
+                        row_offset += output_tensor_Wt;
+                        pages_read_in_row = 0;
+                    }
+
+                    uint32_t tile_two_id = tile_id_start + row_offset + pages_read_in_row;
+                    pages_read_in_row++;
+                    if (pages_read_in_row >= input_tensor_Wt) {
+                        row_offset += output_tensor_Wt;
+                        pages_read_in_row = 0;
+                    }
+
+                    uint64_t noc0_dest_noc_addr_tile_one =
+                        get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                    uint64_t noc0_dest_noc_addr_tile_two =
+                        get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+
+                    if (direction == 1) {
+                        noc_async_write_tile(tile_one_id, output_addrgen, l1_read_addr);
+                        noc_async_write_tile(tile_two_id, output_addrgen, l1_read_addr + output_page_size);
+                        if (num_targets_backward_direction) {
+                            // TODO: (GR) Update with scatter API
+                            write_and_advance_local_read_address_for_fabric_write_backward(
+                                noc0_dest_noc_addr, pkt_hdr, fabric_connection, l1_read_addr, output_page_size);
+                        }
+                    } else {
+                        if (num_targets_forward_direction) {
+                            // TODO: (GR) Update with scatter API
+                            write_and_advance_local_read_address_for_fabric_write_forward(
+                                noc0_dest_noc_addr, pkt_hdr, fabric_connection, l1_read_addr, output_page_size);
+                        }
+                    }
+
+                    cb_pop_front(cb_output_id, 2);
+                    tiles_read += 2;
                 }
-                tiles_read += contig_pages_advanced;
             }
-            cb_pop_front(cb_output_id, packet_size_in_pages);
-        }
-        tile_id_start += output_tensor_Wt * output_tensor_Ht;
-        tiles_read = input_tile_id_start;
-        tiles_to_read = input_tile_id_end;
-        pages_read_in_row = start_pages_read_in_row;
-        row_offset = start_row_offset;
+
+            // TODO: (GR) Old implementation (non scatter write)
+            // while (tiles_read < tiles_to_read) {
+            //     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
+            //     cb_wait_front(cb_output_id, num_pages_to_read);
+            //     size_t l1_read_addr = get_read_ptr(cb_output_id);
+
+            //     for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
+            //         uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
+            //         uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+            //         if (direction == 1) {
+            //             noc_async_write_tile(tile_id, output_addrgen, l1_read_addr);
+            //             if (num_targets_backward_direction) {
+            //                 write_and_advance_local_read_address_for_fabric_write_backward(
+            //                     noc0_dest_noc_addr,
+            //                     pkt_hdr,
+            //                     fabric_connection,
+            //                     l1_read_addr,
+            //                     output_page_size * contig_pages_advanced);
+            //             } else {
+            //                 l1_read_addr += output_page_size * contig_pages_advanced;
+            //             }
+            //         } else {
+            //             if (num_targets_forward_direction) {
+            //                 write_and_advance_local_read_address_for_fabric_write_forward(
+            //                     noc0_dest_noc_addr,
+            //                     pkt_hdr,
+            //                     fabric_connection,
+            //                     l1_read_addr,
+            //                     output_page_size * contig_pages_advanced);
+            //             } else {
+            //                 l1_read_addr += output_page_size * contig_pages_advanced;
+            //             }
+            //         }
+            //         pages_read_in_row += 1;
+            //         if (pages_read_in_row >= input_tensor_Wt) {
+            //             row_offset += output_tensor_Wt;
+            //             pages_read_in_row = 0;
+            //         }
+            //         tiles_read += contig_pages_advanced;
+            //     }
+            //     cb_pop_front(cb_output_id, num_pages_to_read);
+            // }
+
+            tile_id_start += output_tensor_Wt * output_tensor_Ht;
+            tiles_read = input_tile_id_start;
+            tiles_to_read = input_tile_id_end;
+            pages_read_in_row = input_tile_id_start % input_tensor_Wt;
+            row_offset = (input_tile_id_start / input_tensor_Wt) * output_tensor_Wt;
     }
 
     // 2. unicast output ready semaphore
@@ -225,6 +302,7 @@ void kernel_main() {
         } else {
             tile_id_start = actual_slice_chip_id * input_tensor_Ht * input_tensor_Wt;
         }
+        // TODO: (GR) Replicate logic here
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
