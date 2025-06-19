@@ -619,15 +619,15 @@ def test_mnist_max_pool_s2i(
 @pytest.mark.parametrize(
     "shape, orientation, core_grid_1, core_grid_2",
     [
-        # ([1, 1, 224, 384], ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=1, x=3), ttnn.CoreGrid(y=1, x=4)),
+        ([1, 1, 224, 384], ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=1, x=3), ttnn.CoreGrid(y=1, x=4)),
         ([1, 1, 64, 384], ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=1, x=3), ttnn.CoreGrid(y=1, x=4)),
-        # ([1, 8, 224, 768], ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=8, x=6), ttnn.CoreGrid(y=8, x=8)),
+        ([1, 8, 224, 768], ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=8, x=6), ttnn.CoreGrid(y=8, x=8)),
     ],
 )
 def test_reshard_conv(device, shape, orientation, core_grid_1, core_grid_2):
     torch.manual_seed(0)
 
-    debug = True
+    debug = False
     if not debug:
         torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
     else:
