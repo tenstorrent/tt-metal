@@ -43,7 +43,11 @@ param_ids = generate_param_ids(all_params)
     ids=param_ids,
 )
 def test_perf_eltwise_binary_fpu(testname, formats, dest_acc, mathop, math_fidelity):
-    RUN_TYPES = [PerfRunType.L1_TO_L1, PerfRunType.UNPACK_ISOLATE]
+    RUN_TYPES = [
+        PerfRunType.L1_TO_L1,
+        PerfRunType.UNPACK_ISOLATE,
+        PerfRunType.MATH_ISOLATE,
+    ]
 
     # MathFidelity is only used for Elwmul
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
