@@ -198,15 +198,11 @@ def _golden_function_acos(input_tensor_a, *args, device, **kwargs):
 ttnn.attach_golden_function(ttnn.acos, golden_function=_golden_function_acos)
 
 
-def _golden_function_acosh(input_tensor_a, *args, device, **kwargs):
+def _golden_function_acosh(input_tensor_a, *args, **kwargs):
     import torch
 
     result = torch.acosh(input_tensor_a)
-    return (
-        result.masked_fill_(input_tensor_a < 1, float("inf"))
-        if input_tensor_a.dtype == torch.bfloat16 and os.getenv("ARCH_NAME") == "wormhole_b0"
-        else result
-    )
+    return result.masked_fill_(input_tensor_a < 1, float("inf")) if input_tensor_a.dtype == torch.bfloat16 else result
 
 
 ttnn.attach_golden_function(ttnn.acosh, golden_function=_golden_function_acosh)

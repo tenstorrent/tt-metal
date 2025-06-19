@@ -115,8 +115,7 @@ def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
     output_tensor = ttnn_function(input_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    print(output_tensor)
-    print(torch_output_tensor)
+
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
