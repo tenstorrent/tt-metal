@@ -73,6 +73,7 @@
 <li class="toctree-l4 current"><a class="current reference internal" href="#">noc_semaphore_inc</a></li>
 <li class="toctree-l4"><a class="reference internal" href="get_noc_addr.html">get_noc_addr</a></li>
 <li class="toctree-l4"><a class="reference internal" href="get_noc_addr_from_bank_id.html">get_noc_addr_from_bank_id</a></li>
+<li class="toctree-l4"><a class="reference internal" href="get_noc_multicast_addr.html">get_noc_multicast_addr</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ordering.html">Ordering (NOC, CMD_BUF, VC)</a></li>
 </ul>
 </li>
@@ -147,7 +148,7 @@
 <td><p>addr   </p></td>
 <td><p>Encoding of the destination location (x,y)+address   </p></td>
 <td><p>uint64_t   </p></td>
-<td><p>DOX-TODO(insert a reference to what constitutes valid coords)   </p></td>
+<td><p>Results of <em>get_noc_addr</em> calls   </p></td>
 <td><p>True    </p></td>
 </tr>
 <tr class="row-odd">
@@ -165,6 +166,13 @@
 <td><p>False    </p></td>
 </tr>
 <tr class="row-odd">
+<td><p>vc   </p></td>
+<td><p>Which NOC to use for the transaction   </p></td>
+<td><p>uint8_t   </p></td>
+<td><p>0-3 (Unicast VCs)   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-even">
 <td><p>posted (template argument)   </p></td>
 <td><p>Whether the call is posted or nonposted (i.e. needs to be acked)   </p></td>
 <td><p>uint32_t   </p></td>

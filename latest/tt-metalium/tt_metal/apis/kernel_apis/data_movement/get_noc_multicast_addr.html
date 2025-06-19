@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>noc_async_write &mdash; TT-Metalium  documentation</title>
+  <title>get_noc_multicast_addr &mdash; TT-Metalium  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/data_movement/noc_async_write.html" />
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/data_movement/get_noc_multicast_addr.html" />
   <!--[if lt IE 9]>
     <script src="../../../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -23,8 +23,8 @@
     <script src="../../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../../genindex.html" />
     <link rel="search" title="Search" href="../../../../search.html" />
-    <link rel="next" title="noc_async_read_barrier" href="noc_async_read_barrier.html" />
-    <link rel="prev" title="noc_async_read" href="noc_async_read.html" /> 
+    <link rel="next" title="Ordering (NOC, CMD_BUF, VC)" href="ordering.html" />
+    <link rel="prev" title="get_noc_addr_from_bank_id" href="get_noc_addr_from_bank_id.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -63,7 +63,7 @@
 <li class="toctree-l2 current"><a class="reference internal" href="../../kernel_apis.html">Kernel APIs</a><ul class="current">
 <li class="toctree-l3 current"><a class="reference internal" href="data_movement.html">Data Movement APIs</a><ul class="current">
 <li class="toctree-l4"><a class="reference internal" href="noc_async_read.html">noc_async_read</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">noc_async_write</a></li>
+<li class="toctree-l4"><a class="reference internal" href="noc_async_write.html">noc_async_write</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_async_read_barrier.html">noc_async_read_barrier</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_async_write_barrier.html">noc_async_write_barrier</a></li>
 <li class="toctree-l4"><a class="reference internal" href="noc_async_write_multicast.html">noc_async_write_multicast</a></li>
@@ -73,7 +73,7 @@
 <li class="toctree-l4"><a class="reference internal" href="noc_semaphore_inc.html">noc_semaphore_inc</a></li>
 <li class="toctree-l4"><a class="reference internal" href="get_noc_addr.html">get_noc_addr</a></li>
 <li class="toctree-l4"><a class="reference internal" href="get_noc_addr_from_bank_id.html">get_noc_addr_from_bank_id</a></li>
-<li class="toctree-l4"><a class="reference internal" href="get_noc_multicast_addr.html">get_noc_multicast_addr</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">get_noc_multicast_addr</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ordering.html">Ordering (NOC, CMD_BUF, VC)</a></li>
 </ul>
 </li>
@@ -112,9 +112,9 @@
           <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
           <li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li>
           <li class="breadcrumb-item"><a href="data_movement.html">Data Movement APIs</a></li>
-      <li class="breadcrumb-item active">noc_async_write</li>
+      <li class="breadcrumb-item active">get_noc_multicast_addr</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../../_sources/tt_metal/apis/kernel_apis/data_movement/noc_async_write.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../../../_sources/tt_metal/apis/kernel_apis/data_movement/get_noc_multicast_addr.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -122,46 +122,59 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="noc-async-write">
-<h1>noc_async_write<a class="headerlink" href="#noc-async-write" title="Permalink to this heading"></a>
+  <section id="get-noc-multicast-addr">
+<h1>get_noc_multicast_addr<a class="headerlink" href="#get-noc-multicast-addr" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_8uint32_tE15noc_async_writev8uint32_t8uint64_t8uint32_t7uint8_t">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">max_page_size</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">NOC_MAX_BURST_SIZE</span></span><span class="w"> </span><span class="o"><span class="pre">+</span></span><span class="w"> </span><span class="m"><span class="pre">1</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="dataflow__api_8h_1ad49af0b11b548c2b841f104d85a64a2a"></span><span class="k"><span class="pre">inline</span></span><span class="w"> </span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">noc_async_write</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">src_local_l1_addr</span></span>, <span class="n"><span class="pre">uint64_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">dst_noc_addr</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">size</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">noc_index</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_8uint32_tE15noc_async_writev8uint32_t8uint64_t8uint32_t7uint8_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv422get_noc_multicast_addr8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t7uint8_t">
+<span class="target" id="dataflow__api__addrgen_8h_1a79bc95e174a329d12ffc7a752b65919f"></span><span class="n"><span class="pre">uint64_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">get_noc_multicast_addr</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc_x_start</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc_y_start</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc_x_end</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc_y_end</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">addr</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">noc_index</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv422get_noc_multicast_addr8uint32_t8uint32_t8uint32_t8uint32_t8uint32_t7uint8_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Initiates an asynchronous write from a source address in L1 memory on the Tensix core executing this function call. The destination is specified using a uint64_t encoding referencing an on-chip node located at NOC coordinates (x,y) and a local address created using get_noc_addr function. Also, see <em>noc_async_write_barrier</em>.</p>
-<p>The destination node can be either a DRAM bank, Tensix core+L1 memory address or a PCIe controller.</p>
-<p>Return value: None</p>
+<p>Get an encoding for a noc address which contains Tensix core grid and L1 address.</p>
+<p>Return value: uint64_t</p>
 <p></p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
 <th class="head"><p>Argument   </p></th>
 <th class="head"><p>Description   </p></th>
-<th class="head"><p>Type   </p></th>
-<th class="head"><p>Valid Range   </p></th>
-<th class="head"><p>Required    </p></th>
+<th class="head"><p>Data type   </p></th>
+<th class="head"><p>Valid range   </p></th>
+<th class="head"><p>required    </p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>src_local_l1_addr   </p></td>
-<td><p>Source address in local L1 memory   </p></td>
+<td><p>noc_x_start   </p></td>
+<td><p>Physical x coordinate of the start core   </p></td>
 <td><p>uint32_t   </p></td>
-<td><p>0..1MB   </p></td>
+<td><p>WH: 0-9, BH: 0-16   </p></td>
 <td><p>True    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>dst_noc_addr   </p></td>
-<td><p>Encoding of the destination NOC location (x,y)+address   </p></td>
-<td><p>uint64_t   </p></td>
-<td><p>Results of <em>get_noc_addr</em> calls   </p></td>
+<td><p>noc_y_start   </p></td>
+<td><p>Physical y coordinate of the start core   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>WH: 0-11, BH: 0-11   </p></td>
 <td><p>True    </p></td>
 </tr>
 <tr class="row-even">
-<td><p>size   </p></td>
-<td><p>Size of data transfer in bytes   </p></td>
+<td><p>noc_x_end   </p></td>
+<td><p>Physical x coordinate of the end core   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>WH: 0-9, BH: 0-16   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>noc_y_end   </p></td>
+<td><p>Physical y coordinate of the end core   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>WH: 0-11, BH: 0-11   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>addr   </p></td>
+<td><p>Address in local L1 memory   </p></td>
 <td><p>uint32_t   </p></td>
 <td><p>0..1MB   </p></td>
 <td><p>True    </p></td>
@@ -171,13 +184,6 @@
 <td><p>Which NOC to use for the transaction   </p></td>
 <td><p>uint8_t   </p></td>
 <td><p>0 or 1   </p></td>
-<td><p>False    </p></td>
-</tr>
-<tr class="row-even">
-<td><p>max_page_size (template argument)   </p></td>
-<td><p>Maximum size of a single transaction in bytes   </p></td>
-<td><p>uint32_t   </p></td>
-<td><p>Any uint32_t number   </p></td>
 <td><p>False   </p></td>
 </tr>
 </tbody>
@@ -193,8 +199,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="noc_async_read.html" class="btn btn-neutral float-left" title="noc_async_read" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="noc_async_read_barrier.html" class="btn btn-neutral float-right" title="noc_async_read_barrier" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="get_noc_addr_from_bank_id.html" class="btn btn-neutral float-left" title="get_noc_addr_from_bank_id" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ordering.html" class="btn btn-neutral float-right" title="Ordering (NOC, CMD_BUF, VC)" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
