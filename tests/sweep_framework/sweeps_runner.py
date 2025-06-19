@@ -466,10 +466,73 @@ def export_test_results(header_info, results):
     client.close()
 
 
+def initialize_postgres_database():
+    """Initialize PostgreSQL database with required tables"""
+    pg_config = get_postgres_config(POSTGRES_ENV)
+
+    try:
+        conn = psycopg2.connect(**pg_config)
+        cursor = conn.cursor()
+
+        # Create the sweep_results table if it doesn't exist
+        create_table_query = """
+        CREATE TABLE IF NOT EXISTS sweep_results (
+            id SERIAL PRIMARY KEY,
+            sweep_name VARCHAR(255) NOT NULL,
+            suite_name VARCHAR(255) NOT NULL,
+            vector_id VARCHAR(255) NOT NULL,
+            input_hash VARCHAR(255) NOT NULL,
+            status VARCHAR(100) NOT NULL,
+            message TEXT,
+            exception TEXT,
+            e2e_perf FLOAT,
+            device_perf JSONB,
+            timestamp TIMESTAMP NOT NULL,
+            host VARCHAR(255) NOT NULL,
+            user_name VARCHAR(255) NOT NULL,
+            git_hash VARCHAR(50) NOT NULL,
+            test_parameters JSONB,
+            vector_data_jsonb JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+
+        cursor.execute(create_table_query)
+
+        # Create indexes for better query performance
+        create_indexes_query = """
+        CREATE INDEX IF NOT EXISTS idx_sweep_results_sweep_name ON sweep_results(sweep_name);
+        CREATE INDEX IF NOT EXISTS idx_sweep_results_suite_name ON sweep_results(suite_name);
+        CREATE INDEX IF NOT EXISTS idx_sweep_results_vector_id ON sweep_results(vector_id);
+        CREATE INDEX IF NOT EXISTS idx_sweep_results_status ON sweep_results(status);
+        CREATE INDEX IF NOT EXISTS idx_sweep_results_timestamp ON sweep_results(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_sweep_results_git_hash ON sweep_results(git_hash);
+        """
+
+        cursor.execute(create_indexes_query)
+
+        conn.commit()
+        logger.info("Successfully initialized PostgreSQL database with sweep_results table")
+
+    except Exception as e:
+        logger.error(f"Failed to initialize PostgreSQL database: {e}")
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
 def export_test_results_postgres(header_info, results):
     """Export test results to PostgreSQL database"""
     if len(results) == 0:
         return
+
+    # Initialize database if needed
+    initialize_postgres_database()
 
     # Get PostgreSQL connection
     pg_config = get_postgres_config(POSTGRES_ENV)
