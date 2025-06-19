@@ -142,6 +142,11 @@ FORCE_INLINE constexpr uint32_t round_up() {
     return b * div_up<a, b>();
 }
 
+// Utility functions
+FORCE_INLINE uint32_t div_up(const uint32_t a, const uint32_t b) { return static_cast<uint32_t>((a + b - 1) / b); }
+
+FORCE_INLINE uint32_t round_up(const uint32_t a, const uint32_t b) { return b * div_up(a, b); }
+
 // Function template to swap two elements in a uint32_t array
 template <size_t N>
 FORCE_INLINE void swap_elements(uint32_t (&array)[N], size_t i, size_t j) {
