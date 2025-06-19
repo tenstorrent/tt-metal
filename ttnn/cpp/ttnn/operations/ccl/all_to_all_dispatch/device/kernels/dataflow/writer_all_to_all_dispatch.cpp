@@ -30,10 +30,8 @@ bool is_configured_target(uint32_t src_chip_id, uint32_t dest_chip_id) {
     // axis = 0; means we are allowed to send packets in the column direction
     // axis = -1; means we are allowed to send packets in all directions
     if (axis == 0) {  // check if they're on the same column
-        // DPRINT << "checking if " << src_chip_id << " and " << dest_chip_id << " are on the same column" << ENDL();
         return src_chip_id % mesh_cols == dest_chip_id % mesh_cols;
     } else if (axis == 1) {  // check if they're on the same row
-        // DPRINT << "checking if " << src_chip_id << " and " << dest_chip_id << " are on the same row" << ENDL();
         return src_chip_id / mesh_cols == dest_chip_id / mesh_cols;
     } else {
         return true;  // if axis is not configured, we assume the target is configured, which is the default case, which
@@ -65,8 +63,6 @@ inline eth_chan_directions get_direction(
     else {
         direction = src_chip_id > dest_chip_id ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
     }
-    // DPRINT << "direction: " << static_cast<int>(direction) << " for " << src_chip_id << " and " << dest_chip_id <<
-    // ENDL();
     return direction;
 }
 
@@ -81,24 +77,6 @@ inline void dispatch_metadata_local_device(
     noc_async_write_barrier();
     noc_semaphore_inc(global_noc_semaphore_address, 1);
     noc_async_atomic_barrier();
-}
-
-// Debug-only helper that reads back metadata from L1 and prints its contents
-template <typename MetadataAddrGenT>
-inline void debug_print_local_metadata(
-    uint32_t send_preparation_buffer_cb_id,
-    uint32_t batch_idx,
-    MetadataAddrGenT& metadata_addr_gen,
-    uint32_t selected_experts_k) {
-    uint32_t metaread_cb_l1_addr = get_read_ptr(send_preparation_buffer_cb_id);
-    noc_async_read_page(batch_idx, metadata_addr_gen, metaread_cb_l1_addr);
-    noc_async_read_barrier();
-    DPRINT << "Metadata read from L1" << ENDL();
-    uint16_t* metadata_read_ptr = reinterpret_cast<uint16_t*>(metaread_cb_l1_addr);
-    for (uint32_t i = 0; i < selected_experts_k; i++) {
-        DPRINT << "Expert " << i << " is " << metadata_read_ptr[i] << ENDL();
-    }
-    DPRINT << "Metadata read from L1 completed" << ENDL();
 }
 
 // Insert helper that handles the remote-device metadata path with fused atomic increment
@@ -166,9 +144,6 @@ inline void dispatch_input_remote_device(
     uint32_t route = static_cast<uint32_t>(get_direction(src_chip_id, dest_chip_id, mesh_cols, mesh_rows));
 
     // Populate packet header with routing information
-    zero_l1_buf((uint32_t*)token_unicast_packet_header, sizeof(PACKET_HEADER_TYPE));
-    DPRINT << "setting unicast route for " << src_chip_id << " and " << dest_chip_id << " with route " << route
-           << ENDL();
     fabric_set_unicast_route(
         (LowLatencyMeshPacketHeader*)token_unicast_packet_header,
         static_cast<eth_chan_directions>(fabric_connections[route].direction),
@@ -176,32 +151,21 @@ inline void dispatch_input_remote_device(
         dest_chip_id,
         dest_mesh_id,
         mesh_cols);
-    // DPRINT << "unicast route set for " << src_chip_id << " and " << dest_chip_id << " with route " << route <<
-    // ENDL();
     while (size > 0) {
         uint32_t curr_packet_size = std::min(fabric_max_packet_size, size);
-
-        // DPRINT << "sending payload for " << src_chip_id << " and " << dest_chip_id << " with route " << route <<
-        // ENDL();
         token_unicast_packet_header->to_noc_unicast_write(
             NocUnicastCommandHeader{output_token_write_addr}, curr_packet_size);
 
         fabric_connections[route].wait_for_empty_write_slot();
-        // DPRINT << "payload sent for " << src_chip_id << " and " << dest_chip_id << " with route " << route << ENDL();
         fabric_connections[route].send_payload_without_header_non_blocking_from_address(
             input_token_read_addr, curr_packet_size);
-        // DPRINT << "tokenpayload flushed for " << src_chip_id << " and " << dest_chip_id << " with route " << route <<
-        // ENDL();
         fabric_connections[route].send_payload_flush_blocking_from_address(
             (uint32_t)token_unicast_packet_header, sizeof(PACKET_HEADER_TYPE));
-        // DPRINT << "packet header flushed for " << src_chip_id << " and " << dest_chip_id << " with route " << route
-        // << ENDL();
 
         input_token_read_addr += curr_packet_size;
         output_token_write_addr += curr_packet_size;
         size -= curr_packet_size;
     }
-    DPRINT << "dispatching input completed for " << src_chip_id << " and " << dest_chip_id << ENDL();
 }
 
 void kernel_main() {
@@ -254,8 +218,6 @@ void kernel_main() {
 
     constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(37);
 
-    DPRINT << "Kernel started" << ENDL();
-
     size_t rt_args_idx = 0;
     uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -281,13 +243,9 @@ void kernel_main() {
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> fabric_connections;
     for (uint32_t i = 0; i < 4; i++) {
         if (directions[i] == true) {
-            DPRINT << "opening fabric connection for direction for src_chip_id " << src_chip_id << " and direction "
-                   << i << ENDL();
             fabric_connections[i] =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
             fabric_connections[i].open();
-            DPRINT << "fabric connection opened for " << i << " with direction "
-                   << static_cast<int>(fabric_connections[i].direction) << ENDL();
         }
     }
 
@@ -301,22 +259,29 @@ void kernel_main() {
 
     uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
 
+    // Based on the selected experts, we dispatch the input tokens to the corresponding devices
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
-
-    DPRINT << "dispatching tokens" << ENDL();
     for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
-        uint32_t b = (local_token + (tokens_per_device * dispatch_index));
+        // global_token is the global token index for the current token
+        // we need the global token index to write to the output buffer – each global token that could potentially be
+        // sent has a unique output buffer address to ensure that it is not overwritten by another token
+        uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
+        uint64_t output_token_write_addr = get_noc_addr(global_token, output_addr_gen);
         cb_wait_front(indices_tensor_cb_id, 1);
         cb_wait_front(input_tensor_cb_id, 1);
-        // uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id) + local_token * aligned_input_page_size;
         uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
         uint16_t* token_indices = (uint16_t*)(get_read_ptr(indices_tensor_cb_id));
-        uint64_t output_token_write_addr = get_noc_addr(b, output_addr_gen);
+
         for (uint32_t k = 0; k < selected_experts_k; k++) {
+            // get the expert that is chosen for the current token
             uint16_t expert_chosen = token_indices[k];
             uint32_t expert_offset = expert_chosen * aligned_mapping_page_size;
             uint16_t* devices_for_expert = (uint16_t*)(get_read_ptr(mapping_tensor_cb_id) + expert_offset);
+
+            // find the devices that the expert lives on and dispatch the input tokens to them
+            // if there is no tensor parallelism, then the token will only be sent to one device
             for (uint32_t d = 0; d < num_devices; d++) {
+                // if the expert lives on the current device, we dispatch the input token to it
                 if (devices_for_expert[d] == 1) {
                     if (dest_chip_ids[d] == src_chip_id) {
                         // simply write via local noc
@@ -341,21 +306,20 @@ void kernel_main() {
         cb_pop_front(indices_tensor_cb_id, 1);
         cb_pop_front(input_tensor_cb_id, 1);
     }
-    DPRINT << "dispatching tokens completed" << ENDL();
 
     // send semaphore increment to all other devices
-    DPRINT << "dispatching metadata" << ENDL();
     uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
     for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
-        uint32_t b = (local_token + (tokens_per_device * dispatch_index));
-        uint64_t metadata_write_addr = get_noc_addr(b, metadata_addr_gen);
+        uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
+        uint64_t metadata_write_addr = get_noc_addr(global_token, metadata_addr_gen);
         uint32_t token_indices_address = base_indices_addr + (local_token * aligned_indices_page_size);
         for (uint32_t d = 0; d < num_devices; d++) {
             if (dest_chip_ids[d] == src_chip_id) {
                 dispatch_metadata_local_device(
                     token_indices_address, metadata_write_addr, metadata_page_size, global_noc_semaphore_address);
 
-                // debug_print_local_metadata(send_preparation_buffer_cb_id, b, metadata_addr_gen, selected_experts_k);
+                // debug_print_local_metadata(send_preparation_buffer_cb_id, global_token, metadata_addr_gen,
+                // selected_experts_k);
 
             } else if (is_configured_target<mesh_cols, mesh_rows, axis>(src_chip_id, dest_chip_ids[d])) {
                 dispatch_metadata_remote_device(
@@ -373,7 +337,6 @@ void kernel_main() {
             }
         }
     }
-    DPRINT << "dispatching metadata completed" << ENDL();
     cb_pop_front(indices_tensor_cb_id, indices_pages);
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
@@ -382,5 +345,4 @@ void kernel_main() {
             fabric_connections[i].close();
         }
     }
-    DPRINT << "Kernel finished" << ENDL();
 }

@@ -6,7 +6,6 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    DPRINT << "Kernel started" << ENDL();
     constexpr bool input_is_dram = (bool)get_compile_time_arg_val(0);
     constexpr bool indices_is_dram = (bool)get_compile_time_arg_val(1);
     constexpr bool mapping_is_dram = (bool)get_compile_time_arg_val(2);
@@ -104,7 +103,4 @@ void kernel_main() {
 
     noc_semaphore_wait((uint32_t*)global_semaphore_address, tokens_per_device * dispatch_devices);
     noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
-    // wait(30000000000);
-
-    DPRINT << "Kernel finished" << ENDL();
 }

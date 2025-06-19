@@ -375,13 +375,9 @@ def run_all_to_all_dispatch_test(
         if warmup_iters > 0:
             logger.info(f"Capturing Warmup {warmup_iters} iterations")
             trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            logger.info(f"Trace capture started")
             run_op(warmup_iters, store_all_results=False)
-            logger.info(f"Op run for {warmup_iters} iterations completed")
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
-            logger.info(f"Warmup trace capture completed")
             ttnn.synchronize_device(mesh_device)
-            logger.info(f"Device synchronized")
 
         logger.info("Capturing Trace")
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -435,20 +431,10 @@ def run_all_to_all_dispatch_test(
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
         )
 
-        # logger.info(f"golden_output_tensor shape: {output_tensor_goldens_list[tensor_index].shape}")
-        # logger.info(f"golden_output_tensor {output_tensor_goldens_list[tensor_index]}")
-        # logger.info(f"tt_torch_tensor shape: {tt_torch_tensor.shape}")
-        # logger.info(f"tt_torch_tensor {tt_torch_tensor}")
-
         tt_metadata_tensor = ttnn.to_torch(
             tt_metadata_list[tensor_index],
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
         )
-
-        logger.info(f"golden_metadata_tensor shape: {output_metadata_goldens_list[tensor_index].shape}")
-        # logger.info(f"golden_metadata_tensor {output_metadata_goldens_list[tensor_index]}")
-        logger.info(f"tt_metadata_tensor shape: {tt_metadata_tensor.shape}")
-        # logger.info(f"tt_metadata_tensor {tt_metadata_tensor}")
 
         batch = tt_torch_tensor.shape[1]
         devices = tt_metadata_tensor.shape[0]
@@ -459,12 +445,10 @@ def run_all_to_all_dispatch_test(
             metadata_passed = False
             first_failed_metadata_index = tensor_index
             failed_metadata_indices = torch.where(tt_metadata_tensor != output_metadata_goldens_list[tensor_index])
-            torch.set_printoptions(threshold=1000)
-            logger.info(f"All failed metadata devices: {failed_metadata_indices[1]}")
-            torch.set_printoptions(threshold=10)
-            logger.info(f"Failing tt_metadata_tensor tensor {tt_metadata_tensor[failed_metadata_indices[0], 0, :, :]}")
+            logger.info(f"All failed metadata devices: {failed_metadata_indices}")
+            logger.info(f"Failing tt_metadata_tensor tensor {tt_metadata_tensor[failed_metadata_indices]}")
             logger.info(
-                f"Relevant output_metadata_goldens_list tensor {output_metadata_goldens_list[tensor_index][failed_metadata_indices[0], 0, :, :]}"
+                f"Relevant output_metadata_goldens_list tensor {output_metadata_goldens_list[tensor_index][failed_metadata_indices]}"
             )
             break
 
@@ -479,15 +463,12 @@ def run_all_to_all_dispatch_test(
                                 output_tensor_goldens_list[tensor_index][d, b, s, :],
                                 expected_pcc,
                             )
-                            logger.info(
-                                f"Output tensor {tensor_index} at batch {b}, sequence {s}, expert {expert_id}, device {d} has result {output_results}"
-                            )
                             is_all_close = torch.allclose(
                                 tt_torch_tensor[d, b, s, :], output_tensor_goldens_list[tensor_index][d, b, s, :]
                             )
                             if not is_all_close:
                                 logger.info(
-                                    f"Output tensor mismatch at batch {b}, sequence {s}, expert {expert_id}, device {d}"
+                                    f"Output tensor {tensor_index} mismatch at batch {b}, sequence {s}, expert {expert_id}, device {d}"
                                 )
 
                             if not eq or not is_all_close:
@@ -711,11 +692,6 @@ def test_simple_tensor_gen(mesh_device, mesh_shape):
     assert expert_mapping.shape == (1, 1, experts, devices)
     assert sparse_output_token_tensor.shape == (devices, batch, sequence_length, hidden_size)
     assert metadata_tensor.shape == (devices, batch, sequence_length, select_experts_k)
-    logger.info(f"Input tokens {input_tokens}")
-    logger.info(f"Expert indices {expert_indices}")
-    logger.info(f"Expert mapping {expert_mapping}")
-    logger.info(f"Sparse output token tensor {sparse_output_token_tensor}")
-    logger.info(f"Metadata tensor {metadata_tensor[0, :, :, :]}")
 
     compare_results(
         sparse_output_token_tensor,

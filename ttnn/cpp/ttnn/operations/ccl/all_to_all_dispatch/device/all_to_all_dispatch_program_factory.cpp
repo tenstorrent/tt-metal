@@ -19,6 +19,7 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
+
 namespace tt::tt_fabric {
 class FabricContext {
 public:
@@ -317,7 +318,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     using namespace ttnn::ccl;
 
     tt::tt_metal::Program program{};
-    std::cout << std::endl;
 
     auto input_tensor = tensor_args.input_tensor;
     auto indices_tensor = tensor_args.expert_indices_tensor;
@@ -337,9 +337,9 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     uint32_t src_mesh_id = *fabric_node_id.mesh_id;
     uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
-    tt::log_info(
+    tt::log_debug(
         tt::LogAlways,
-        "Creating all to all dispatch program for mesh coordinate: ({}, {}) with physical device id: {} mesh id: {} "
+        "\nCreating all to all dispatch program for mesh coordinate: ({}, {}) with physical device id: {} mesh id: {} "
         "chip id: {}",
         mesh_coordinate[0],
         mesh_coordinate[1],
@@ -398,7 +398,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     uint32_t send_preparation_buffer_id = tt::CBIndex::c_4;
 
     uint32_t aligned_input_page_size = detail::get_aligned_page_size(input_tensor);
-    tt::log_info(
+    tt::log_debug(
         tt::LogAlways,
         "input shape: {}, input_pages: {}, input_page_size: {}, aligned_input_page_size: {}",
         input_tensor.logical_shape(),
@@ -407,7 +407,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         aligned_input_page_size);
 
     uint32_t aligned_indices_page_size = detail::get_aligned_page_size(indices_tensor);
-    tt::log_info(
+    tt::log_debug(
         tt::LogAlways,
         "indices shape: {}, indices_pages: {}, indices_page_size: {}, aligned_indices_page_size: {}",
         indices_tensor.logical_shape(),
@@ -416,7 +416,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         aligned_indices_page_size);
 
     uint32_t aligned_mapping_page_size = detail::get_aligned_page_size(mapping_tensor);
-    tt::log_info(
+    tt::log_debug(
         tt::LogAlways,
         "mapping shape: {}, mapping_pages: {}, mapping_page_size: {}, aligned_mapping_page_size: {}",
         mapping_tensor.logical_shape(),
@@ -425,7 +425,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         aligned_mapping_page_size);
 
     uint32_t aligned_output_page_size = detail::get_aligned_page_size(output_tensor);
-    tt::log_info(
+    tt::log_debug(
         tt::LogAlways,
         "output shape: {}, output_pages: {}, output_page_size: {}, aligned_output_page_size: {}",
         output_tensor.logical_shape(),
@@ -434,7 +434,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         aligned_output_page_size);
 
     uint32_t aligned_metadata_page_size = detail::get_aligned_page_size(metadata_tensor);
-    tt::log_info(
+    tt::log_debug(
         tt::LogAlways,
         "metadata shape: {}, metadata_pages: {}, metadata_page_size: {}, aligned_metadata_page_size: {}",
         metadata_tensor.logical_shape(),
@@ -497,9 +497,9 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         dest_mesh_id.push_back(*fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)fabric_node_id.chip_id);
     }
-    tt::log_info(tt::LogAlways, "dest_chip_id: {}", detail::stringify_vector(dest_chip_id));
-    tt::log_info(tt::LogAlways, "dest_mesh_id: {}", detail::stringify_vector(dest_mesh_id));
-    tt::log_info(tt::LogAlways, "directions: {}", detail::stringify_array(directions));
+    tt::log_debug(tt::LogAlways, "dest_chip_id: {}", detail::stringify_vector(dest_chip_id));
+    tt::log_debug(tt::LogAlways, "dest_mesh_id: {}", detail::stringify_vector(dest_mesh_id));
+    tt::log_debug(tt::LogAlways, "directions: {}", detail::stringify_array(directions));
 
     // TODO: add fabric node and mesh id to the compile time args
     // TODO: add an array mapping logical device id to physical device id
@@ -597,7 +597,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             .compile_args = writer_compile_time_args,
             .defines = writer_defines});
 
-    tt::log_info(tt::LogAlways, "metadata tensor address: {}", metadata_tensor.buffer()->address());
     std::vector<uint32_t> reader_runtime_args = {
         input_tensor.buffer()->address(),
         indices_tensor.buffer()->address(),
@@ -619,7 +618,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     for (auto& neighbor : neighbors) {
         auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
         uint32_t link_id = detail::select_link(mesh_view, mesh_coordinate, neighbor_coordinate, num_links, topology);
-        tt::log_info(
+        tt::log_debug(
             tt::LogAlways,
             "Connection between ({}, {}) and ({}, {}) will choose link_id: {}",
             mesh_coordinate[0],
