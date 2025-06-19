@@ -47,6 +47,7 @@ def test_perf_eltwise_binary_fpu(testname, formats, dest_acc, mathop, math_fidel
         PerfRunType.L1_TO_L1,
         PerfRunType.UNPACK_ISOLATE,
         PerfRunType.MATH_ISOLATE,
+        PerfRunType.PACK_ISOLATE,
     ]
 
     # MathFidelity is only used for Elwmul

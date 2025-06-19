@@ -86,24 +86,6 @@ def timing_l1_congestion(perf_data: PerfData) -> int:
     )
 
 
-RUN_COUNT = 8
-
-
-def _build_l1_to_l1(test_config):
-    test_config["perf_run_type"] = PerfRunType.L1_TO_L1
-    return build_with_profiler(test_config)
-
-
-def _build_unpack_isolate(test_config):
-    test_config["perf_run_type"] = PerfRunType.UNPACK_ISOLATE
-    return build_with_profiler(test_config)
-
-
-def _build_math_isolate(test_config):
-    test_config["perf_run_type"] = PerfRunType.MATH_ISOLATE
-    return build_with_profiler(test_config)
-
-
 def process_runs(runs, test_config):
     tile_cnt = test_config.get("tile_cnt", 1)
 
@@ -124,15 +106,18 @@ class PerfRunType(Enum):
     L1_CONGESTION = 5
 
 
+RUN_COUNT = 8
+
+
 def perf_benchmark(test_config, run_types: list[PerfRunType]):
     # todo: support all types of runs
     RUN_CONFIGURATIONS = {
-        PerfRunType.L1_TO_L1: (_build_l1_to_l1, timing_l1_to_l1),
-        PerfRunType.UNPACK_ISOLATE: (_build_unpack_isolate, timing_unpack),
-        PerfRunType.MATH_ISOLATE: (_build_math_isolate, timing_math),
+        PerfRunType.L1_TO_L1: timing_l1_to_l1,
+        PerfRunType.UNPACK_ISOLATE: timing_unpack,
+        PerfRunType.MATH_ISOLATE: timing_math,
+        PerfRunType.PACK_ISOLATE: timing_pack,
         # Add new run types here as they're implemented:
-        # PerfRunType.PACK_ISOLATE: (_build_pack_isolate, timing_pack),
-        # PerfRunType.L1_CONGESTION: (_build_l1_congestion, timing_l1_congestion),
+        # PerfRunType.L1_CONGESTION: timing_l1_congestion,
     }
     SUPPORTED_RUNS = RUN_CONFIGURATIONS.keys()
 
@@ -140,9 +125,10 @@ def perf_benchmark(test_config, run_types: list[PerfRunType]):
 
     for type in run_types:
         assert type in SUPPORTED_RUNS, f"ERROR: run_type={type} not implemented"
-        build, get_timing = RUN_CONFIGURATIONS[type]
+        get_timing = RUN_CONFIGURATIONS[type]
 
-        profiler_meta = build(test_config)
+        test_config["perf_run_type"] = type
+        profiler_meta = build_with_profiler(test_config)
 
         runs = []
         for _ in range(RUN_COUNT):
