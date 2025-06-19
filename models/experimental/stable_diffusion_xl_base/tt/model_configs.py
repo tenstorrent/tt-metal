@@ -488,7 +488,7 @@ class ModelOptimisations:
             out_subblock_h=out_subblock_h_geglu_640,
             out_subblock_w=out_subblock_w_geglu_640,
             transpose_mcast=False,
-            fused_activation=[ttnn.UnaryOpType.GELU, False],
+            fused_activation=[ttnn.UnaryOpType.GELU, True],
         )
 
         in_0_block_w_geglu_1280 = 5
@@ -515,7 +515,7 @@ class ModelOptimisations:
             out_subblock_h=out_subblock_h_geglu_1280,
             out_subblock_w=out_subblock_w_geglu_1280,
             transpose_mcast=False,
-            fused_activation=[ttnn.UnaryOpType.GELU, False],
+            fused_activation=[ttnn.UnaryOpType.GELU, True],
         )
 
         self.matmul_configs["2D_TM_LINEAR_640"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
