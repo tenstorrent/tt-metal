@@ -140,6 +140,10 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
             print(f"Would have executed test for vector {test_vector}")
             continue
         result = dict()
+
+        # Capture the original test vector data BEFORE any modifications
+        original_vector_data = test_vector.copy()
+
         if deserialize(test_vector["validity"]) == VectorValidity.INVALID:
             result["status"] = TestStatus.NOT_RUN
             result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
@@ -205,6 +209,10 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                 reset_util.reset()
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
+
+        # Add the original test vector data to the result
+        result["original_vector_data"] = original_vector_data
+
         result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         result["host"] = get_hostname()
         result["user"] = get_username()
