@@ -18,13 +18,22 @@ def main():
         testloader = torch.utils.data.DataLoader(testset, batch_size=1, shuffle=False)
 
         # Pretrained weights
-        torch.manual_seed(0)
-        W1 = torch.randn((128, 28 * 28), dtype=torch.float32)
-        b1 = torch.randn((128,), dtype=torch.float32)
-        W2 = torch.randn((64, 128), dtype=torch.float32)
-        b2 = torch.randn((64,), dtype=torch.float32)
-        W3 = torch.randn((10, 64), dtype=torch.float32)
-        b3 = torch.randn((10,), dtype=torch.float32)
+        weights = torch.load("mlp_mnist_weights.pt")
+        W1 = weights["W1"]
+        b1 = weights["b1"]
+        W2 = weights["W2"]
+        b2 = weights["b2"]
+        W3 = weights["W3"]
+        b3 = weights["b3"]
+
+        # Random weights for MLP - will not predict correctly
+        # torch.manual_seed(0)
+        # W1 = torch.randn((128, 28 * 28), dtype=torch.float32)
+        # b1 = torch.randn((128,), dtype=torch.float32)
+        # W2 = torch.randn((64, 128), dtype=torch.float32)
+        # b2 = torch.randn((64,), dtype=torch.float32)
+        # W3 = torch.randn((10, 64), dtype=torch.float32)
+        # b3 = torch.randn((10,), dtype=torch.float32)
 
         correct = 0
         total = 0
