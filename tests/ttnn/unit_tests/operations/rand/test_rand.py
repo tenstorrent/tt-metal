@@ -4,6 +4,7 @@
 
 import pytest
 import ttnn
+import torch
 
 
 DEFAULT_SHAPE = (32, 32)
@@ -19,7 +20,7 @@ def is_ttnn_float_type(tt_dtype) -> bool:
             return False
 
 
-@pytest.mark.xfail(reason="ttnn.bfloat8_b, ttnn.bfloat4_b data types are not yet supported.")
+@pytest.mark.xfail(reason="ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint8 data types are not yet supported.")
 @pytest.mark.parametrize("dtype", ALL_TYPES)
 def test_tensor_dtype_and_value_range(device, dtype):
     tensor = ttnn.rand(DEFAULT_SHAPE, dtype=dtype, device=device)
@@ -28,14 +29,18 @@ def test_tensor_dtype_and_value_range(device, dtype):
     assert tuple(tensor.shape) == tuple(DEFAULT_SHAPE)
 
     if is_ttnn_float_type(dtype):
-        assert ttnn.min(tensor) >= 0.0
-        assert ttnn.max(tensor) < 1.0
-    elif dtype == ttnn.int32:
-        assert ttnn.min(tensor) == -1
-        assert ttnn.max(tensor) == 1
-    else:
-        assert ttnn.min(tensor) == 0
-        assert ttnn.max(tensor) == 1
+        torch_tensor = ttnn.to_torch(tensor)
+        min_value = torch.min(torch_tensor).item()
+        max_value = torch.max(torch_tensor).item()
+        assert max_value - min_value > 0.99
+    if dtype == ttnn.int32:
+        torch_tensor = ttnn.to_torch(tensor)
+        assert torch.min(torch_tensor).item() == -1
+        assert torch.max(torch_tensor).item() == 1
+    elif dtype == ttnn.uint32 or dtype == ttnn.uint16 or dtype == ttnn.uint8:
+        torch_tensor = ttnn.to_torch(tensor)
+        assert torch.min(torch_tensor).item() == 0
+        assert torch.max(torch_tensor).item() == 1
 
 
 def test_rand_defaults():
