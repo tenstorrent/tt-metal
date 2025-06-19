@@ -72,9 +72,7 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     }
 
     // Close devices/context to trigger watcher check on teardown.
-    for (IDevice* device : this->devices_) {
-        tt::tt_metal::CloseDevice(device);
-    }
+    TearDown();
     MetalContext::instance().teardown();
     EXPECT_TRUE(FileContainsAllStrings(this->log_file_name, expected_strings));
 }
