@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 TenstorrentAI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
+#include "ttnn/operations/sharding_utilities.hpp"
 
 using namespace tt::constants;
 using uint32_t = std::uint32_t;
@@ -44,6 +45,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     tt_metal::IDevice* device = a.device();
 
     bool in_sharded = a.is_sharded();
+    bool use_nd_sharding = in_sharded && !a.shard_spec().has_value();
     bool out_sharded = output.is_sharded();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -53,7 +55,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_cols);
 
     // Current sharding only supports width, and that input and output are sharded
-    if (in_sharded) {
+    if (in_sharded && !use_nd_sharding) {
         all_cores = a.shard_spec().value().grid;
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
@@ -65,7 +67,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     uint32_t src0_cb_index = CBIndex::c_0;
     uint32_t src1_cb_index = CBIndex::c_1;
     CBHandle cb_src1 = 0;
-    if (in_sharded) {
+    if (in_sharded && !use_nd_sharding) {
         uint32_t num_shard_tiles = a.shard_spec().value().numel() / TILE_HW;
         uint32_t num_input_tiles = 2;
         tt_metal::CircularBufferConfig cb_src0_config =
@@ -97,7 +99,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
     uint32_t output_cb_index = CBIndex::c_3;
     CBHandle cb_output;
-    if (out_sharded) {
+    if (out_sharded && !use_nd_sharding) {
         uint32_t num_output_tiles = output.shard_spec().value().numel() / TILE_HW;
         tt_metal::CircularBufferConfig cb_output_config =
             tt_metal::CircularBufferConfig(
@@ -119,9 +121,9 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     bfloat16 bfloat_scaler_value = bfloat16(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
 
-    uint32_t chunk_size = out_sharded ? 1 : ttnn::get_dest_reg_count(compute_kernel_config);
+    uint32_t chunk_size = (out_sharded && !use_nd_sharding) ? 1 : ttnn::get_dest_reg_count(compute_kernel_config);
 
-    if (in_sharded) {
+    if (in_sharded && !use_nd_sharding) {
         std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index};
         std::map<string, string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
@@ -137,7 +139,23 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             (std::uint32_t)src0_is_dram, Ht, Wt, HtWt, chunk_size, packed_scaler_value};
 
         std::map<string, string> reader_defines;
-        reader_defines["REDUCE_SCALER"] = "1";
+        if (use_nd_sharding) {
+            auto tile = a.tensor_spec().tile().get_tile_shape();
+            int tile_elements = tile[0] * tile[1];
+            int aligned_page_size = src0_buffer->aligned_page_size();
+            const auto input_buffer_distribution_spec = src0_buffer->buffer_distribution_spec().value();
+            const auto input_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
+                *device->get_mesh_device().get(), input_buffer_distribution_spec, src0_buffer->core_type());
+            reader_defines["USE_ND_SHARDING"] = "1";
+            reader_compile_time_args.push_back((uint32_t)tile_elements);
+            reader_compile_time_args.push_back(aligned_page_size);
+            reader_compile_time_args.push_back(input_sharded_accessor_args.rank);
+            reader_compile_time_args.push_back(input_sharded_accessor_args.num_banks);
+            reader_compile_time_args.insert(
+                reader_compile_time_args.end(),
+                input_sharded_accessor_args.shapes_and_bank_coords.cbegin(),
+                input_sharded_accessor_args.shapes_and_bank_coords.cend());
+        }
 
         reader_kernel_id = tt_metal::CreateKernel(
             program,
@@ -150,7 +168,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     tt_metal::Buffer* dst_buffer = output.buffer();
     tt_metal::KernelHandle writer_kernel_id;
 
-    if (out_sharded) {
+    if (out_sharded && !use_nd_sharding) {
         std::vector<uint32_t> writer_ct_args = {
             output_cb_index,
         };
@@ -159,6 +177,30 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
+    } else if (use_nd_sharding) {
+        int output_aligned_page_size = dst_buffer->aligned_page_size();
+        auto output_tile = output.tensor_spec().tile().get_tile_shape();
+        uint32_t output_tile_elements = output_tile[0] * output_tile[1];
+        const auto output_buffer_distribution_spec = dst_buffer->buffer_distribution_spec().value();
+        const auto output_bank_base_address = output.mesh_buffer()->address();
+        const auto output_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
+            *device->get_mesh_device().get(), output_buffer_distribution_spec, dst_buffer->core_type());
+
+        std::vector<uint32_t> writer_compile_time_args = {
+            output_cb_index,
+            (uint32_t)output_tile_elements,
+            output_aligned_page_size,
+            output_sharded_accessor_args.rank,
+            output_sharded_accessor_args.num_banks};
+        writer_compile_time_args.insert(
+            writer_compile_time_args.end(),
+            output_sharded_accessor_args.shapes_and_bank_coords.cbegin(),
+            output_sharded_accessor_args.shapes_and_bank_coords.cend());
+        writer_kernel_id = CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/writer_unary_nd_shard_start_id.cpp",
+            all_cores,
+            WriterDataMovementConfig(writer_compile_time_args));
     } else {
         bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
@@ -208,7 +250,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
     const auto& cores =
         grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
-    if (in_sharded && out_sharded) {
+    if (in_sharded && !use_nd_sharding && out_sharded) {
         uint32_t shard_Wt = num_cols_per_core_group_1 / NC;
         uint32_t shard_row_size = shard_Wt * src0_single_tile_size;
         uint32_t shard_batch_size = shard_row_size * Ht;
@@ -219,6 +261,8 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         std::vector<uint32_t> writer_rt_args = {num_cols_per_core_group_1};
         tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores, writer_rt_args);
     } else {
+        const auto input_bank_base_address = a.mesh_buffer()->address();
+        const auto output_bank_base_address = output.mesh_buffer()->address();
         for (uint32_t i = 0, num_cols_read = 0; i < num_cores; i++) {
             const CoreCoord& core = cores[i];
             uint32_t num_cols_per_core = 0;
@@ -233,7 +277,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
                 program,
                 reader_kernel_id,
                 core,
-                {a.buffer()->address(),
+                {use_nd_sharding ? input_bank_base_address : a.buffer()->address(),
                  num_cols_read / Wt * HtWt + num_cols_read % Wt,
                  num_cols_read % Wt,
                  num_cols_per_core});
@@ -243,7 +287,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
                 writer_kernel_id,
                 core,
                 {
-                    output.buffer()->address(),
+                    use_nd_sharding ? output_bank_base_address : output.buffer()->address(),
                     num_cols_per_core,  // number of tiles to write
                     num_cols_read       // output tile start index
                 });
@@ -255,6 +299,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
                                                 writer_kernel_id = writer_kernel_id,
                                                 cb_src1 = cb_src1,
                                                 cb_output = cb_output,
+                                                use_nd_sharding = use_nd_sharding,
                                                 cores = cores](
                                                    const void* operation,
                                                    Program& program,
@@ -267,21 +312,23 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         bool src_sharded = input_tensors.at(0).memory_config().is_sharded();
         bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 
-        if (src_sharded && out_sharded) {
+        if (src_sharded && out_sharded && !use_nd_sharding) {
             UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer);
             UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
         } else {
             auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
             auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+            const auto input_bank_base_address = input_tensors.at(0).mesh_buffer()->address();
+            const auto output_bank_base_address = output_tensors.at(0).mesh_buffer()->address();
             for (const auto& core : cores) {
                 {
                     auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = src_buffer->address();
+                    runtime_args[0] = use_nd_sharding ? input_bank_base_address : src_buffer->address();
                 }
 
                 {
                     auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = dst_buffer->address();
+                    runtime_args[0] = use_nd_sharding ? output_bank_base_address : dst_buffer->address();
                 }
             }
         }
