@@ -10,18 +10,29 @@ struct Rand {
     static Tensor invoke(
         QueueId queue_id,
         const ttnn::Shape& size,
-        std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
+        MeshDevice& device,
         const DataType dtype = DataType::BFLOAT16,
         const Layout layout = Layout::TILE,
         const MemoryConfig& memory_config = types::DRAM_MEMORY_CONFIG);
 
     static Tensor invoke(
         const ttnn::Shape& size,
-        std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
+        MeshDevice& device,
         const DataType dtype = DataType::BFLOAT16,
         const Layout layout = Layout::TILE,
         const MemoryConfig& memory_config = types::DRAM_MEMORY_CONFIG) {
-        return invoke(DefaultQueueId, size, std::move(device), dtype, layout, memory_config);
+        return invoke(DefaultQueueId, size, device, dtype, layout, memory_config);
+    }
+
+    static Tensor invoke(
+        QueueId queue_id,
+        const ttnn::Shape& size,
+        const DataType dtype = DataType::BFLOAT16,
+        const Layout layout = Layout::TILE);
+
+    static Tensor invoke(
+        const ttnn::Shape& size, const DataType dtype = DataType::BFLOAT16, const Layout layout = Layout::TILE) {
+        return invoke(DefaultQueueId, size, dtype, layout);
     }
 };
 }  // namespace ttnn::operations::rand
