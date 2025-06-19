@@ -43,17 +43,25 @@ void bind_rand_operation(py::module& pymodule) {
             >>> input_tensor_b = ttnn.rand((N, N), device=device)
         )doc";
 
+    using OperationType = decltype(ttnn::rand);
     bind_registered_operation(
         pymodule,
         ttnn::rand,
         doc,
-        ttnn::pybind_arguments_t{
+        ttnn::pybind_overload_t{
+            [](const OperationType& self,
+               const ttnn::Shape& size,
+               std::optional<std::reference_wrapper<MeshDevice>> device,
+               const DataType dtype,
+               const Layout layout,
+               const MemoryConfig& memory_config,
+               QueueId queue_id) { return self(queue_id, size, device, dtype, layout, memory_config); },
             py::arg("shape"),
             py::kw_only(),
             py::arg("device") = std::nullopt,
             py::arg("dtype") = DataType::BFLOAT16,
             py::arg("layout") = Layout::TILE,
             py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
-        });
+            py::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace ttnn::operations::rand
