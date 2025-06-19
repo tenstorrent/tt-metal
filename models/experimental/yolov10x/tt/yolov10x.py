@@ -3,13 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.yolov10.tt.scdown import TtnnSCDown
-from models.experimental.yolov10.tt.sppf import TtnnSPPF
-from models.experimental.yolov10.tt.psa import TtnnPSA
-from models.experimental.yolov10.tt.c2f import TtnnC2f
-from models.experimental.yolov10.tt.c2fcib import TtnnC2fCIB
-from models.experimental.yolov10.tt.v10detect import TtnnV10Detect
-from models.experimental.yolov10.tt.common import interleaved_to_sharded, Conv
+from models.experimental.yolov10x.tt.scdown import TtnnSCDown
+from models.experimental.yolov10x.tt.sppf import TtnnSPPF
+from models.experimental.yolov10x.tt.psa import TtnnPSA
+from models.experimental.yolov10x.tt.c2f import TtnnC2f
+from models.experimental.yolov10x.tt.c2fcib import TtnnC2fCIB
+from models.experimental.yolov10x.tt.v10detect import TtnnV10Detect
+from models.experimental.yolov10x.tt.common import interleaved_to_sharded, Conv
 from models.experimental.yolo_common.yolo_utils import concat
 
 
@@ -46,6 +46,19 @@ class TtnnYolov10:
         )
 
     def __call__(self, input_tensor):
+        N, C, H, W = input_tensor.shape
+        min_channels = 16  # Padding from image channels (3) to min channels (16)
+        if C < min_channels:
+            channel_padding_needed = min_channels - C
+            nchw = ttnn.pad(input_tensor, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+        else:
+            nchw = input_tensor
+        nhwc = ttnn.permute(nchw, (0, 2, 3, 1))
+        ttnn.deallocate(nchw)
+        ttnn.deallocate(input_tensor)
+        nhwc = ttnn.reallocate(nhwc)
+        input_tensor = ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])
+
         conv1_out = self.conv1(input_tensor)
         conv2_out = self.conv2(conv1_out)
         ttnn.deallocate(conv1_out)
@@ -75,6 +88,7 @@ class TtnnYolov10:
 
         attention_out = interleaved_to_sharded(attention_out)
         up1 = ttnn.upsample(attention_out, scale_factor=2)
+        attention_out = ttnn.to_memory_config(attention_out, ttnn.DRAM_MEMORY_CONFIG)
 
         if up1.is_sharded():
             up1 = ttnn.sharded_to_interleaved(up1, memory_config=ttnn.L1_MEMORY_CONFIG)
