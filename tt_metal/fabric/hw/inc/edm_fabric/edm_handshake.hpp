@@ -50,7 +50,7 @@ struct handshake_info_t {
     uint32_t scratch[4];   // TODO: This can be removed if we use a stream register for handshaking.
 };
 
-FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(std::uint32_t handshake_register_address) {
+FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(uint32_t handshake_register_address) {
     volatile tt_l1_ptr handshake_info_t* handshake_info =
         reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_register_address);
     handshake_info->local_value = 0;
@@ -59,7 +59,7 @@ FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(std::uint3
 }
 
 FORCE_INLINE void sender_side_handshake(
-    std::uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
+    uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
     volatile tt_l1_ptr handshake_info_t* handshake_info = init_handshake_info(handshake_register_address);
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
@@ -77,7 +77,7 @@ FORCE_INLINE void sender_side_handshake(
 }
 
 FORCE_INLINE void receiver_side_handshake(
-    std::uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
+    uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
     volatile tt_l1_ptr handshake_info_t* handshake_info = init_handshake_info(handshake_register_address);
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
@@ -118,7 +118,7 @@ namespace deprecated {
  *
  * See ChannelBuffer::eth_receiver_channel_ack for more information
  */
-FORCE_INLINE void initialize_edm_common_datastructures(std::uint32_t handshake_register_address) {
+FORCE_INLINE void initialize_edm_common_datastructures(uint32_t handshake_register_address) {
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[4] = 1;
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[5] = 1;
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_register_address)[6] = 0x1c0ffee1;
@@ -137,7 +137,7 @@ FORCE_INLINE void initialize_edm_common_datastructures(std::uint32_t handshake_r
  * memory region.
  */
 FORCE_INLINE void sender_side_start(
-    std::uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
+    uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
     initialize_edm_common_datastructures(handshake_register_address);
     eth_wait_receiver_done(HS_CONTEXT_SWITCH_TIMEOUT);
     while (eth_txq_is_busy()) {
@@ -150,11 +150,11 @@ FORCE_INLINE void sender_side_start(
  * As the designated master EDM core, wait for the acknowledgement from the subordinate EDM core
  */
 FORCE_INLINE void sender_side_finish(
-    std::uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
+    uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
     eth_wait_for_receiver_done(HS_CONTEXT_SWITCH_TIMEOUT);
 }
 
-FORCE_INLINE void receiver_side_start(std::uint32_t handshake_register_address) {
+FORCE_INLINE void receiver_side_start(uint32_t handshake_register_address) {
     initialize_edm_common_datastructures(handshake_register_address);
 }
 
@@ -170,7 +170,7 @@ FORCE_INLINE bool receiver_side_can_finish() { return eth_bytes_are_available_on
  * from the master EDM core.
  */
 FORCE_INLINE void receiver_side_finish(
-    std::uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
+    uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
     eth_wait_for_bytes(16, HS_CONTEXT_SWITCH_TIMEOUT);
     while (eth_txq_is_busy()) {
         asm volatile("nop");
