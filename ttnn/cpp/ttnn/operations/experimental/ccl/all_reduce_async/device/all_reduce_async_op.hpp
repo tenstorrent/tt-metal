@@ -87,11 +87,11 @@ namespace ccl {
 namespace all_reduce_async_detail {
 AllReduceAsync create_all_reduce_async_struct(
     const Tensor& input_tensor,
-    const uint32_t num_links,
-    const std::optional<const DataType> dtype,
+    uint32_t num_links,
+    std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<IDevice*>& devices,
-    const ccl::Topology topology,
+    ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
 
@@ -109,9 +109,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
     DataType output_dtype,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
@@ -123,25 +123,25 @@ namespace ccl {
 Tensor all_reduce_async(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
-    const uint32_t cluster_axis,
+    uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const ttnn::ccl::Topology topology,
+    ttnn::ccl::Topology topology,
     const GlobalSemaphore& multi_device_global_semaphore,
-    const std::optional<DataType> dtype = std::nullopt,
+    std::optional<DataType> dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<size_t> num_preferred_links = std::nullopt,
+    std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
 std::vector<Tensor> all_reduce_async(
     const std::vector<Tensor>& input_tensors,
     Tensor& buffer_tensor,
-    const uint32_t cluster_axis,
+    uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const ttnn::ccl::Topology topology,
+    ttnn::ccl::Topology topology,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
-    const std::optional<const DataType> dtype = std::nullopt,
+    std::optional<const DataType> dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<size_t> num_preferred_links = std::nullopt,
+    std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
 }  // namespace ccl

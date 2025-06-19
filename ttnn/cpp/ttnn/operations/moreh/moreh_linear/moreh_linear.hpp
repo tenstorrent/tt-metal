@@ -15,7 +15,7 @@ struct MorehLinear {
         const std::optional<Tensor>& bias,
         const std::optional<Tensor>& output,
         const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig> compute_kernel_config);
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_linear
 
