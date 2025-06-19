@@ -151,6 +151,7 @@ class TtLlamaMLP(LightweightModule):
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+            use_noc1_only=True,
         )
         ttnn.deallocate(x)
         try:
