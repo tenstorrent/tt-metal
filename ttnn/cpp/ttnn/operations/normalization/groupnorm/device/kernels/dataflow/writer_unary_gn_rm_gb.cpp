@@ -141,6 +141,7 @@ void kernel_main() {
                     auto gamma = get_interleaved_addr_gen<gamma_is_dram, page_size>(gamma_addr);
 
                     cb_reserve_back(cb_gamma, num_cols_tile_gamma_beta);
+
                     const uint32_t base_l1_write_addr_gamma = get_write_ptr(cb_gamma);
                     uint32_t l1_write_addr_gamma = base_l1_write_addr_gamma;
 
@@ -157,23 +158,26 @@ void kernel_main() {
                         uint32_t tile_id = gamma_tile_start_id + w;
                         uint64_t gamma_noc_addr = get_noc_addr(tile_id, gamma);
 
-                        //  noc_async_read(gamma_noc_addr, l1_write_addr_gamma, 64);
-                        //  l1_write_addr_gamma += gamma_tile_bytes;
-
-                        noc_async_read(gamma_noc_addr, l1_write_addr_gamma, 32);
-                        gamma_noc_addr += 32;
-                        noc_async_read(gamma_noc_addr, l1_write_addr_gamma + 512, 32);
+                        noc_async_read(gamma_noc_addr, l1_write_addr_gamma, 64);
                         l1_write_addr_gamma += gamma_tile_bytes;
+
+                        // noc_async_read(gamma_noc_addr, l1_write_addr_gamma, 32);
+                        // gamma_noc_addr += 32;
+                        // noc_async_read(gamma_noc_addr, l1_write_addr_gamma + 512, 32);
+                        // l1_write_addr_gamma += gamma_tile_bytes;
                     }
                     noc_async_read_barrier();
 
                     // Copy the second set of 32 bytes into the second face
-                    // l1_write_addr_gamma = base_l1_write_addr_gamma;
-                    // for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-                    //     noc_async_read(l1_write_addr_gamma+32, l1_write_addr_gamma+512, 32);
-                    //     l1_write_addr_gamma += gamma_tile_bytes;
-                    // }
-                    // noc_async_read_barrier();
+                    l1_write_addr_gamma = base_l1_write_addr_gamma;
+
+                    for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
+                        uint64_t noc_read_addr = get_noc_addr(l1_write_addr_gamma + 32);
+                        noc_async_read(noc_read_addr, l1_write_addr_gamma + 512, 32);
+                        l1_write_addr_gamma += gamma_tile_bytes;
+                    }
+
+                    noc_async_read_barrier();
                     cb_push_back(cb_gamma, num_cols_tile_gamma_beta);
                 }
 
@@ -184,36 +188,27 @@ void kernel_main() {
                     const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
                     auto beta = get_interleaved_addr_gen<beta_is_dram, page_size>(beta_addr);
 
+                    cb_reserve_back(cb_beta, num_cols_tile_gamma_beta);
+
                     const uint32_t base_l1_write_addr_beta = get_write_ptr(cb_beta);
                     uint32_t l1_write_addr_beta = base_l1_write_addr_beta;
 
-                    cb_reserve_back(cb_beta, num_cols_tile_gamma_beta);
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
                         uint32_t tile_id = beta_tile_start_id + w;
                         uint64_t beta_noc_addr = get_noc_addr(tile_id, beta);
-
                         noc_async_read(beta_noc_addr, l1_write_addr_beta, 64);
-
-                        // noc_async_read(beta_noc_addr, l1_write_addr_beta, 32);
-                        // beta_noc_addr += 32;
-                        // // noc_async_read(beta_noc_addr, l1_write_addr_beta + 512, 32);
                         l1_write_addr_beta += beta_tile_bytes;
                     }
                     noc_async_read_barrier();
 
+                    // Copy the second set of 32 bytes into the second face
                     l1_write_addr_beta = base_l1_write_addr_beta;
 
                     for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-                        noc_async_read(l1_write_addr_beta + 32, l1_write_addr_beta + 512, 32);
+                        uint64_t noc_read_addr = get_noc_addr(l1_write_addr_beta + 32);
+                        noc_async_read(noc_read_addr, l1_write_addr_beta + 512, 32);
                         l1_write_addr_beta += beta_tile_bytes;
                     }
-                    noc_async_read_barrier();
-
-                    // l1_write_addr_beta = base_l1_write_addr_beta;
-                    // for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-                    //     noc_async_read(l1_write_addr_beta+64, l1_write_addr_beta+32, 32);
-                    //     l1_write_addr_beta += beta_tile_bytes;
-                    // }
 
                     noc_async_read_barrier();
                     cb_push_back(cb_beta, num_cols_tile_gamma_beta);
