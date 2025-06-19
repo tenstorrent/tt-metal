@@ -35,7 +35,7 @@ Create necessary device on which we will run our program.
 
 
 Load MNIST Test Data
--------------------------------
+--------------------
 
 Load and convert the MNIST 28x28 grayscale images to tensors and normalize them.  Subsequently, lets create a DataLoader to iterate through the dataset.
 This will allow us to perform inference on each image in the dataset.
@@ -63,8 +63,8 @@ Load the pretrained MLP weights from a file.
    W3 = weights["W3"]
    b3 = weights["b3"]
 
-Basic accuracy tracking, inference, loop, and image flatteing
--------------------------------------------------------------
+Basic accuracy tracking, inference, loop, and image flattening
+--------------------------------------------------------------
 
 Loop through the first 5 images in the data set, and convert the image from 1x28x28 to 1x784 by flattening it.
 This is done to match the input shape of the MLP model.
@@ -81,7 +81,7 @@ This is done to match the input shape of the MLP model.
          image = image.view(1, -1).to(torch.float32)
 
 Convert to TT-NN Tensor
-----------------------
+-----------------------
 
 Convert the PyTorch tensor to TT-NN format with bfloat16 data type and TILE_LAYOUT.
 This is necessary for efficient computation on the Tenstorrent device.
@@ -123,7 +123,7 @@ Same pattern as Layer 1, but with different weights and biases.
    out2 = ttnn.relu(out2)
 
 Layer 3 (Output Layer)
------------------------
+----------------------
 
 Final layer with 10 output (for digits 0-9). No ReLU activation here, as this is the output layer.
 
