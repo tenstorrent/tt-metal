@@ -52,6 +52,10 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] = MEM_ERISC_APP_ROUTING_INFO_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = MEM_RETRAIN_COUNT_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = MEM_RETRAIN_FORCE_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::INTERMESH_ETH_LINK_CONFIG)] =
+        MEM_INTERMESH_ETH_LINK_CONFIG_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::INTERMESH_ETH_LINK_STATUS)] =
+        MEM_INTERMESH_ETH_LINK_STATUS_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         MEM_ERISC_FABRIC_ROUTER_CONFIG_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] = MEM_SYSENG_ETH_MAILBOX_ADDR;
@@ -104,8 +108,7 @@ HalCoreInfoType create_active_eth_mem_map() {
         };
         processor_classes[processor_class_idx] = processor_types;
     }
-    // TODO: Review if this should  be 2 (the number of eth processors)
-    // Hardcode to 1 to keep size as before
+
     static_assert(llrt_common::k_SingleProcessorMailboxSize<EthProcessorTypes> <= MEM_AERISC_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
