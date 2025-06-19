@@ -250,7 +250,7 @@ def prepare_generator_args(
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy",
     [
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -265,6 +265,7 @@ def prepare_generator_args(
             True,  # stop_at_eos
             False,  # ci_only
             1,
+            False,  # token_accuracy
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -279,6 +280,7 @@ def prepare_generator_args(
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
+            False,  # token_accuracy
         ),
         (  # Long-context 64k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
@@ -293,6 +295,7 @@ def prepare_generator_args(
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
+            False,  # token_accuracy
         ),
         (  # Long-context 32k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
@@ -307,6 +310,7 @@ def prepare_generator_args(
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
+            False,  # token_accuracy
         ),
         (  # Long-context 16k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
@@ -321,6 +325,7 @@ def prepare_generator_args(
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
+            False,  # token_accuracy
         ),
         (  # Batch-1 run (Reasoning) - single user, small prompt, long thinking time
             "models/tt_transformers/demo/input_data_questions_reasoning.json",  # input_prompts
@@ -338,6 +343,7 @@ def prepare_generator_args(
             False,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
+            False,  # token_accuracy
         ),
         (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -352,6 +358,7 @@ def prepare_generator_args(
             False,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
+            False,  # token_accuracy
         ),
         (  # CI Batch-32 run - Measures the performance of a 32 users over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -366,6 +373,7 @@ def prepare_generator_args(
             False,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
+            False,  # token_accuracy
         ),
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -380,6 +388,7 @@ def prepare_generator_args(
             True,  # stop_at_eos
             False,  # ci_only
             4,  # data_parallel
+            False,  # token_accuracy
         ),
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -394,6 +403,7 @@ def prepare_generator_args(
             True,  # stop_at_eos
             False,  # ci_only
             8,  # data_parallel
+            False,  # token_accuracy
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -408,6 +418,7 @@ def prepare_generator_args(
             True,  # stop_at_eos
             False,  # ci_only
             4,  # data_parallel
+            False,  # token_accuracy
         ),
         (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -422,6 +433,7 @@ def prepare_generator_args(
             False,  # stop_at_eos
             True,  # ci_only
             4,  # data_parallel
+            False,  # token_accuracy
         ),
         (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -436,6 +448,7 @@ def prepare_generator_args(
             False,  # stop_at_eos
             True,  # ci_only
             8,  # data_parallel
+            False,  # token_accuracy
         ),
         (  # CI Batch-1 run - Measures the performance of a single user over 200 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -450,6 +463,7 @@ def prepare_generator_args(
             True,  # stop_at_eos
             True,  # ci_only
             16,  # data_parallel
+            False,  # token_accuracy
         ),
         (  # CI Batch-1 run - Measures the performance of a single user over 200 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -464,6 +478,7 @@ def prepare_generator_args(
             True,  # stop_at_eos
             True,  # ci_only
             32,  # data_parallel
+            False,  # token_accuracy
         ),
         (  # CI stress test batch-1 run - Runs a short prefill (128) and exhaust the KV cache (128K), by running 50000 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -478,6 +493,22 @@ def prepare_generator_args(
             False,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
+            False,  # token_accuracy
+        ),
+        (  # CI stress test batch-1 run - Runs a short prefill (128) and exhaust the KV cache (128K), by running 50000 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            True,  # token_accuracy
         ),
     ],
     ids=[
@@ -497,6 +528,7 @@ def prepare_generator_args(
         "ci-b1-DP-16",  # CI DP 16 batch 1
         "ci-b1-DP-32",  # CI DP 32 batch 1
         "ci-stress-1",  # CI Stress test batch-1
+        "ci-token-accuracy",  # CI token accuracy
     ],
 )
 @pytest.mark.parametrize(
@@ -535,7 +567,7 @@ def test_demo_text(
     data_parallel,
     reset_seeds,
     request,
-    token_accuracy=False,
+    token_accuracy,
 ):
     """
     Simple demo with limited dependence on reference code.
