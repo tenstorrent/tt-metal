@@ -27,14 +27,14 @@ struct UpSample {
 };
 
 tt::tt_metal::operation::ProgramWithCallbacks upsample_single_core(
-    const Tensor& input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w);
+    const Tensor& input, Tensor& output, uint32_t scale_factor_h, uint32_t scale_factor_w);
 tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core(
-    const Tensor& input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w);
+    const Tensor& input, Tensor& output, uint32_t scale_factor_h, uint32_t scale_factor_w);
 tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     const Tensor& input,
     Tensor& output,
-    const uint32_t scale_factor_h,
-    const uint32_t scale_factor_w,
-    const DeviceComputeKernelConfig compute_kernel_config_);
+    uint32_t scale_factor_h,
+    uint32_t scale_factor_w,
+    DeviceComputeKernelConfig compute_kernel_config_);
 
 }  // namespace ttnn::operations::upsample

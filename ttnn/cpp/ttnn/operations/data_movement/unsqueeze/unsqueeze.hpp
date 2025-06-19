@@ -10,7 +10,7 @@ namespace ttnn {
 namespace operations::data_movement {
 
 struct UnsqueezeOperation {
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const int dim);
+    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, int dim);
 };
 
 }  // namespace operations::data_movement

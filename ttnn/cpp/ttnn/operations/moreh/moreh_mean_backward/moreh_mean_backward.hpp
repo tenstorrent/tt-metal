@@ -10,7 +10,7 @@ struct MorehMeanBackward {
     static Tensor invoke(
         const Tensor& output_grad,
         std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> dim,
-        const bool keepdim,
+        bool keepdim,
         const std::optional<ttnn::Shape>& input_grad_shape,
         const std::optional<Tensor>& input_grad,
         const std::optional<MemoryConfig>& memory_config,

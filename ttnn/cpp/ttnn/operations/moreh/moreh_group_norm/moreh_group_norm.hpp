@@ -10,8 +10,8 @@ namespace ttnn::operations::moreh::moreh_group_norm {
 struct MorehGroupNorm {
     static std::vector<std::optional<Tensor>> invoke(
         const Tensor& input,
-        const uint32_t num_groups,
-        const float eps,
+        uint32_t num_groups,
+        float eps,
         const std::optional<const Tensor>& gamma,
         const std::optional<const Tensor>& beta,
         const std::vector<bool>& are_required_outputs,

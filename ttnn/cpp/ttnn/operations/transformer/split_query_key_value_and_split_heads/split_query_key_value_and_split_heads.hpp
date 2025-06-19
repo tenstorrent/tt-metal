@@ -13,9 +13,9 @@ struct SplitQueryKeyValueAndSplitHeadsOperation {
     static std::tuple<Tensor, Tensor, Tensor> invoke(
         const Tensor& input_tensor,
         const std::optional<Tensor>& input_tensor_kv,
-        const uint32_t num_heads,
-        const std::optional<uint32_t> num_kv_heads,
-        const bool transpose_key,
+        uint32_t num_heads,
+        std::optional<uint32_t> num_kv_heads,
+        bool transpose_key,
         const std::optional<MemoryConfig>& memory_config);
 };
 

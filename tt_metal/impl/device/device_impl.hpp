@@ -32,7 +32,7 @@ public:
     Device () = delete;
     Device(
         chip_id_t device_id,
-        const uint8_t num_hw_cqs,
+        uint8_t num_hw_cqs,
         std::size_t l1_small_size,
         std::size_t trace_region_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
@@ -121,14 +121,10 @@ public:
     CommandQueue& command_queue(size_t cq_id = 0) override;
 
     // Metal trace device capture mode
-    void begin_trace(const uint8_t cq_id, const uint32_t tid) override;
-    void end_trace(const uint8_t cq_id, const uint32_t tid) override;
-    void replay_trace(
-        const uint8_t cq_id,
-        const uint32_t tid,
-        const bool block_on_device,
-        const bool block_on_worker_thread) override;
-    void release_trace(const uint32_t tid) override;
+    void begin_trace(uint8_t cq_id, uint32_t tid) override;
+    void end_trace(uint8_t cq_id, uint32_t tid) override;
+    void replay_trace(uint8_t cq_id, uint32_t tid, bool block_on_device, bool block_on_worker_thread) override;
+    void release_trace(uint32_t tid) override;
     std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
     uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }
     void set_trace_buffers_size(uint32_t size) override { trace_buffers_size_ = size; }
@@ -141,7 +137,7 @@ public:
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
     bool initialize(
-        const uint8_t num_hw_cqs,
+        uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_size,
