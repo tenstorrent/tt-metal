@@ -63,6 +63,17 @@ struct ExecuteUnaryWithFloatParameter {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+template <UnaryOpType unary_op_type>
+struct ExecuteUnaryWithVariantFloatIntParameter {
+    template <typename T>
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        const T parameter,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct LogSigmoid {
     static Tensor invoke(
         QueueId queue_id,
