@@ -659,7 +659,7 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
     const auto expected_resource_usage_map = ResourceUsageMap{
         {BoardType::N300,
          ttnn::graph::ResourceUsage{
-             .cb_peak_size_per_core = 229440, .l1_buffers_peak_per_core = 190568, .l1_output_buffer_per_core = 0}}};
+             .cb_peak_size_per_core = 229440, .l1_buffers_peak_per_core = 190572, .l1_output_buffer_per_core = 0}}};
     const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (expected_resource_usage_map.count(board_type) == 0) {
         GTEST_SKIP();
