@@ -10,6 +10,8 @@ import sys
 from loguru import logger  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import itertools
+import matplotlib.ticker as mticker
+import numpy as np
 
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
@@ -693,7 +695,7 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
             ]
             if riscv_1_grouped:
                 sizes, bws = zip(*riscv_1_grouped)
-                ax.plot(sizes, bws, label=f"RISCV 1 (Transactions={num_transactions})", marker="o")
+                ax.plot(sizes, bws, label=f"Receiver (Number of Transactions={num_transactions})", marker="o")
 
             # Group and plot RISCV 0 data
             riscv_0_grouped = [
@@ -703,17 +705,18 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
             ]
             if riscv_0_grouped:
                 sizes, bws = zip(*riscv_0_grouped)
-                ax.plot(sizes, bws, label=f"RISCV 0 (Transactions={num_transactions})", marker="o")
+                ax.plot(sizes, bws, label=f"Sender (Number of Transactions={num_transactions})", marker="o")
 
         # Add theoretical max bandwidth curve
         transaction_sizes = sorted(set(riscv_1_data_sizes + riscv_0_data_sizes))
         max_bandwidths = [noc_width * ((size / noc_width) / ((size / noc_width) + 1)) for size in transaction_sizes]
         ax.plot(transaction_sizes, max_bandwidths, label="Theoretical Max BW", linestyle="--", color="black")
 
-        ax.set_xlabel("Transaction Size (bytes)")
+        ax.set_xlabel("Log2 of Transaction Size (bytes)")
         ax.set_ylabel("Bandwidth (bytes/cycle)")
         ax.set_title("Data Size vs Bandwidth")
         ax.set_xscale("log", base=2)
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(np.log2(x))}" if x > 0 else ""))
         ax.legend()
         ax.grid()
 
