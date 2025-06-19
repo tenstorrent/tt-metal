@@ -193,7 +193,10 @@ Result conv2d_DRAM(
     std::optional<ttnn::Tensor> bias_tensor_on_device;
     TT_FATAL(!memory_config_.has_value(), "Setting Memory config for Conv2D with DRAM Slicing is not supported.");
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
-    TT_FATAL(conv_config.dtype != tt::tt_metal::DataType::BFLOAT8_B, "Conv DRAM currently doesn't support BFLOAT8_B");
+    Layout output_layout = dram_slice_config.output_layout.value_or(input_tensor_on_device.layout());
+    if (conv_config.dtype == tt::tt_metal::DataType::BFLOAT8_B) {
+        output_layout = tt::tt_metal::Layout::TILE;
+    }
 
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -204,7 +207,7 @@ Result conv2d_DRAM(
             ttnn::Shape({batch_size, output_height, output_width, out_channels}),
             tt_metal::TensorLayout(
                 conv_config.dtype,
-                tt_metal::PageConfig(tt_metal::Layout::ROW_MAJOR),
+                tt_metal::PageConfig(output_layout),
                 MemoryConfig{
                     TensorMemoryLayout::INTERLEAVED,
                     BufferType::DRAM,
