@@ -212,8 +212,9 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
             ttnn::relu, device, input_spec, output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 0);
-        EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 0);
+        // Ensure some real usage is reported
+        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
     }
@@ -265,9 +266,10 @@ TEST_P(SoftmaxOpIfTest, Softmax) {
             ttnn::softmax, device, input_spec, dim_arg, output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 0);
-        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 0);
-        EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 0);
+        // Ensure some real usage is reported
+        EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 1024);
+        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
     }
 }
@@ -330,8 +332,9 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
             false);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 0);
-        EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 0);
+        // Ensure some real usage is reported
+        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
     }
 }
 
@@ -437,9 +440,10 @@ TEST_P(MatmulOpIfTest, Matmul) {
             tt::LogTest, "query status = {}, error_message = {}", query.status, query.error_message.value_or("none"));
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 0);
-        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 0);
-        EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 0);
+        // Ensure some real usage is reported
+        EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 1024);
+        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
+        EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
     }
@@ -544,8 +548,9 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
             output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 0);
-        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 0);
+        // Ensure some real usage is reported
+        EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 10000);
+        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 10000);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
     }
