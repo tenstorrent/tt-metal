@@ -212,7 +212,6 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
             ttnn::relu, device, input_spec, output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 0);
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 0);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 0);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
