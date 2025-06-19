@@ -13,6 +13,15 @@
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
 
+// TODO: w/ the hal, this can come from core specific defines
+constexpr static std::uint32_t MAX_RISCV_PER_CORE = 5;
+
+template <uint32_t RiscCount>
+struct profiler_msg_template_t {
+    uint32_t control_vector[kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE];
+    uint32_t buffer[RiscCount][kernel_profiler::PROFILER_L1_VECTOR_SIZE];
+};  // struct profiler_msg_template_t
+
 // TODO: move these to processor specific files
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 
@@ -44,8 +53,9 @@ static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(EthProcess
 #else
 static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif
+using profiler_msg_t = profiler_msg_template_t<PROFILER_RISC_COUNT>;
 #else
-static constexpr uint32_t PROFILER_RISC_COUNT = 5;
+using profiler_msg_t = profiler_msg_template_t<MAX_RISCV_PER_CORE>;
 #endif
 
 // Messages for host to tell brisc to go
@@ -292,7 +302,6 @@ enum watcher_enable_msg_t {
 };
 
 // TODO: w/ the hal, this can come from core specific defines
-constexpr static std::uint32_t MAX_RISCV_PER_CORE = 5;
 constexpr static std::uint32_t MAX_NUM_NOCS_PER_CORE = 2;
 
 struct watcher_msg_t {
@@ -315,11 +324,6 @@ struct dprint_buf_msg_t {
 static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 
 static constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 4;
-
-struct profiler_msg_t {
-    uint32_t control_vector[kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE];
-    uint32_t buffer[PROFILER_RISC_COUNT][kernel_profiler::PROFILER_L1_VECTOR_SIZE];
-};
 
 enum class AddressableCoreType : uint8_t {
     TENSIX = 0,
@@ -377,7 +381,7 @@ struct mailboxes_t {
     struct core_info_msg_t core_info;
     // Keep profiler last since it's size is dynamic per core type
     uint32_t pads_2[PROFILER_NOC_ALIGNMENT_PAD_COUNT];
-    struct profiler_msg_t profiler;
+    profiler_msg_t profiler;
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_hex_vec_to_core().
