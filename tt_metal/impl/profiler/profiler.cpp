@@ -1245,7 +1245,9 @@ bool isSyncInfoNewer(
     double new_cpu_time = get<0>(new_info);
     double new_device_time = get<1>(new_info);
     double new_frequency = get<2>(new_info);
-    return (old_cpu_time < new_cpu_time && old_device_time / old_frequency < new_device_time / new_frequency);
+    return (
+        (old_frequency == 0 && new_frequency != 0) ||
+        (old_cpu_time < new_cpu_time) && ((old_device_time / old_frequency) < (new_device_time / new_frequency)));
 }
 
 void sortDeviceEvents(std::vector<std::reference_wrapper<const tracy::TTDeviceEvent>>& device_events) {
