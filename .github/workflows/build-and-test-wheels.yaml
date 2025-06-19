@@ -49,5 +49,5 @@ jobs:
           found_wheel_files=$(find ./wheels -type f -name "*.whl" -exec realpath {} \;)
           for wheel in $found_wheel_files; do
             echo "Publishing wheel: $wheel"
-            s3pypi upload "$wheel" --put-root-index --force --bucket ${{ secrets.PYPI_BUCKET }}
+            s3pypi upload "$wheel" --put-root-index --bucket ${{ secrets.PYPI_BUCKET }}
           done
