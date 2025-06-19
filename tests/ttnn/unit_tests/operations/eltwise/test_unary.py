@@ -88,7 +88,7 @@ def run_unary_test_fixed(device, h, w, fill_value, ttnn_function, pcc=0.9999):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
-def run_identity_test(device, h, w, data_type, pcc=0.9999):
+def run_identity_test(device, h, w, data_type):
     torch.manual_seed(0)
     ttnn_function = ttnn.identity
     if data_type == ttnn.uint8:
@@ -110,7 +110,7 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
         assert_equal(torch_output_tensor, output_tensor)
     elif data_type == ttnn.uint16:
         # init value
-        torch_input_tensor = torch.randint(0, 60000, (1, 1, h, w), dtype=torch.uint16)
+        torch_input_tensor = torch.randint(0, 60000, (1, 1, h, w), dtype=torch.int32)
         bias = 2000
 
         # run torch
@@ -162,7 +162,7 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
         # compare result
         assert_equal(torch_output_tensor, output_tensor)
 
-    else:
+    elif data_type == ttnn.bfloat16:
         # init value
         torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
 
@@ -177,16 +177,31 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
         output_tensor = ttnn.to_torch(output_tensor)
 
         # compare result
-        assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+        assert_equal(torch_output_tensor, output_tensor)
+
+    else:
+        # init value
+        torch_input_tensor = torch.rand((1, 1, h, w))
+
+        # run torch
+        torch_input_tensor = torch_input_tensor
+        golden_function = ttnn.get_golden_function(ttnn_function)
+        torch_output_tensor = golden_function(torch_input_tensor)
+
+        # run tt
+        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
+        output_tensor = ttnn.identity(input_tensor)
+        output_tensor = ttnn.to_torch(output_tensor)
+
+        # compare result
+        assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint8, ttnn.uint32, ttnn.int32, ttnn.float32])
 def test_fp32_uint32(device, h, w, dtype):
-    if dtype == ttnn.uint8 or dtype == ttnn.int32:
-        pytest.skip("Test case failing assert_equal() - see #22482")
-    run_identity_test(device, h, w, dtype, pcc=0.9998)
+    run_identity_test(device, h, w, dtype)
 
 
 @pytest.mark.parametrize("h", [64])
