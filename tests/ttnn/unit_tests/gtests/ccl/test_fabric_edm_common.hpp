@@ -172,14 +172,7 @@ public:
     std::shared_ptr<MeshDevice> mesh_device_;
 
     // Gets the appropriate mesh shape based on device configuration
-    MeshShape GetDeterminedMeshShape() const {
-        return SystemMesh::instance().get_shape();
-        // if (num_devices_ == TG_NUM_DEVICES || num_devices_ == GALAXY_6U_NUM_DEVICES) {
-        //     return MeshShape{8, 4};
-        // } else {
-        //     return MeshShape{2, 4};
-        // }
-    }
+    MeshShape GetDeterminedMeshShape() const { return SystemMesh::instance().get_shape(); }
 
     // Validates environment and hardware for tests
     void ValidateEnvironment() {
