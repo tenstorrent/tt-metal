@@ -1486,7 +1486,7 @@ void build_tt_fabric_program(
                 edm_builder2.connect_to_downstream_edm(edm_builder1);
 
                 // select VC based on the current link
-                auto edm_noc_vc = link & edm_builder1.config.MAX_EDM_NOC_VC;
+                auto edm_noc_vc = edm_builder1.config.DEFAULT_NOC_VC + (link % edm_builder1.config.NUM_EDM_NOC_VCS);
                 edm_builder1.config.edm_noc_vc = edm_noc_vc;
                 edm_builder2.config.edm_noc_vc = edm_noc_vc;
 

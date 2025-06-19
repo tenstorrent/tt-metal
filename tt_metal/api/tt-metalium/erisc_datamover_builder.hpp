@@ -88,7 +88,7 @@ struct FabricEriscDatamoverConfig {
     static constexpr uint32_t WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
     static constexpr uint32_t AT_CMD_BUF = 3;      // for atomics
     static constexpr uint32_t DEFAULT_NOC_VC = 2;
-    static constexpr uint32_t MAX_EDM_NOC_VC = 3;
+    static constexpr uint32_t NUM_EDM_NOC_VCS = 2;
 
     static constexpr uint32_t DEFAULT_RECEIVER_FORWARDING_NOC = 1;
     static constexpr uint32_t DEFAULT_RECEIVER_LOCAL_WRITE_NOC = 1;

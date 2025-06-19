@@ -99,14 +99,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const uint32_t num_heads);
+    uint32_t num_heads);
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded_subgrids(
     const Tensor& input_tensor,
@@ -114,14 +114,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded_su
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const uint32_t num_heads);
+    uint32_t num_heads);
 
 namespace operations {
 namespace experimental {
@@ -130,14 +130,14 @@ namespace ccl {
 Tensor all_gather_concat(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
-    const uint32_t dim,
-    const uint32_t cluster_axis,
+    uint32_t dim,
+    uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const GlobalSemaphore& global_semaphore,
-    const uint32_t num_heads,
+    uint32_t num_heads,
     const MemoryConfig& memory_config,
-    const std::optional<uint32_t> num_links = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
+    std::optional<uint32_t> num_links = std::nullopt,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
 }  // namespace ccl
