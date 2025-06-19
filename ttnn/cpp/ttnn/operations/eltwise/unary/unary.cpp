@@ -24,15 +24,19 @@ inline Tensor unary_impl(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
     TT_FATAL(op_chain.size() > 0, "Op chain cannot be empty");
-    DataType output_dtype = (op_chain[0].op_type == UnaryOpType::TYPECAST)
-                                ? static_cast<DataType>(op_chain[0].params[1])
-                                : input_tensor.dtype();
-    bool preserve_fp32_precision = input_tensor.dtype() == DataType::FLOAT32;
+    DataType input_dtype = input_tensor.dtype();
+    DataType output_dtype =
+        (op_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(op_chain[0].params[1]) : input_dtype;
+    bool preserve_fp32_precision = input_dtype == DataType::FLOAT32;
     bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
                             output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
-                            input_tensor.dtype() == DataType::UINT32 or input_tensor.dtype() == DataType::INT32;
+                            input_dtype == DataType::UINT32 or input_dtype == DataType::INT32;
     bool bfp8_pack_precise = (op_chain[0].op_type == UnaryOpType::TYPECAST && output_dtype == DataType::BFLOAT8_B);
-
+    if (op_chain[0].op_type == UnaryOpType::TYPECAST && op_chain[1].op_type == UnaryOpType::IDENTITY &&
+        op_chain[2].op_type == UnaryOpType::TYPECAST && input_dtype == DataType::UINT8) {
+        output_dtype = DataType::UINT8;
+        preserve_fp32_precision = true;
+    }
     auto output_memory_config = optional_output_tensor.has_value()
                                     ? optional_output_tensor.value().memory_config()
                                     : memory_config.value_or(input_tensor.memory_config());
@@ -307,11 +311,23 @@ Tensor Identity::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::IDENTITY;
-    if (input_tensor.dtype() == DataType::UINT32) {
-        op_type = UnaryOpType::IDENTITY_UINT32;
-    }
+    DataType input_dtype = input_tensor.get_dtype();
 
-    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    if (input_dtype != DataType::UINT8) {
+        return detail::unary_impl(
+            queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    } else {
+        DataType output_dtype = DataType::UINT32;
+        return detail::unary_impl(
+            queue_id,
+            input_tensor,
+            {UnaryWithParam{UnaryOpType::TYPECAST, {static_cast<float>(input_dtype), static_cast<float>(output_dtype)}},
+             UnaryWithParam{op_type},
+             UnaryWithParam{
+                 UnaryOpType::TYPECAST, {static_cast<float>(output_dtype), static_cast<float>(input_dtype)}}},
+            memory_config,
+            optional_output_tensor);
+    }
 }
 
 Tensor Abs::invoke(
