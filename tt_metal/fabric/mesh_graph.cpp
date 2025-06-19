@@ -232,10 +232,22 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             "MeshGraph: Board not found: {}",
             mesh["board"].as<std::string>());
 
-        std::uint32_t mesh_board_ew_size = mesh["topology"][1].as<std::uint32_t>();
-        std::uint32_t mesh_board_ns_size = mesh["topology"][0].as<std::uint32_t>();
-        std::uint32_t mesh_ew_size = mesh_board_ew_size * board_name_to_topology[mesh_board][1];
-        std::uint32_t mesh_ns_size = mesh_board_ns_size * board_name_to_topology[mesh_board][0];
+        std::uint32_t mesh_ew_size = mesh["topology"][1].as<std::uint32_t>();
+        std::uint32_t mesh_ns_size = mesh["topology"][0].as<std::uint32_t>();
+
+        std::uint32_t board_ew_size = board_name_to_topology[mesh_board][1];
+        std::uint32_t board_ns_size = board_name_to_topology[mesh_board][0];
+
+        TT_FATAL(
+            mesh_ew_size % board_ew_size == 0 and mesh_ns_size % board_ns_size == 0,
+            "MeshGraph: Mesh topology of {}x{} is not divisible by board topology of {}x{}",
+            mesh_ew_size,
+            mesh_ns_size,
+            board_ew_size,
+            board_ns_size);
+
+        std::uint32_t mesh_board_ew_size = mesh_ew_size / board_ew_size;
+        std::uint32_t mesh_board_ns_size = mesh_ns_size / board_ns_size;
 
         std::uint32_t mesh_size = mesh_ew_size * mesh_ns_size;
         std::vector<chip_id_t> chip_ids(mesh_size);
