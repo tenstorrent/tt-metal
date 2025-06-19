@@ -1,0 +1,8 @@
+﻿ttnn.nez
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.nez:
+
+.. autodata:: ttnn.nez

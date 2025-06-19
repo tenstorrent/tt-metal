@@ -1,0 +1,8 @@
+﻿ttnn.multiply
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.multiply:
+
+.. autodata:: ttnn.multiply

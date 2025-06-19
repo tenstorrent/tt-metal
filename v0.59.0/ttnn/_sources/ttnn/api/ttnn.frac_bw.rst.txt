@@ -1,0 +1,8 @@
+﻿ttnn.frac\_bw
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.frac_bw:
+
+.. autodata:: ttnn.frac_bw

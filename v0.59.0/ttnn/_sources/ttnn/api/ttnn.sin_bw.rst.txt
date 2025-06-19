@@ -1,0 +1,8 @@
+﻿ttnn.sin\_bw
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.sin_bw:
+
+.. autodata:: ttnn.sin_bw

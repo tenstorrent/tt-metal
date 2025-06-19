@@ -1,0 +1,8 @@
+﻿ttnn.lerp\_bw
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.lerp_bw:
+
+.. autodata:: ttnn.lerp_bw

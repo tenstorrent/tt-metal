@@ -1,0 +1,8 @@
+﻿ttnn.hardshrink\_bw
+===================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.hardshrink_bw:
+
+.. autodata:: ttnn.hardshrink_bw

@@ -1,0 +1,8 @@
+﻿ttnn.div
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.div:
+
+.. autodata:: ttnn.div

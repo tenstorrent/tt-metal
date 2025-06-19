@@ -1,0 +1,8 @@
+﻿ttnn.hypot\_bw
+==============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.hypot_bw:
+
+.. autodata:: ttnn.hypot_bw

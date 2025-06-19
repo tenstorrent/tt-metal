@@ -1,0 +1,8 @@
+﻿ttnn.experimental.gelu\_bw
+==========================
+
+.. currentmodule:: ttnn.experimental
+
+.. _ttnn.experimental.gelu_bw:
+
+.. autodata:: ttnn.experimental.gelu_bw

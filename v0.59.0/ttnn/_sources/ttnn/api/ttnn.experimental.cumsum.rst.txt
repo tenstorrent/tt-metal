@@ -1,0 +1,8 @@
+﻿ttnn.experimental.cumsum
+========================
+
+.. currentmodule:: ttnn.experimental
+
+.. _ttnn.experimental.cumsum:
+
+.. autodata:: ttnn.experimental.cumsum

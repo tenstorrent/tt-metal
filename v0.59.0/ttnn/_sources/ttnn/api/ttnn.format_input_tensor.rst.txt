@@ -1,0 +1,8 @@
+﻿ttnn.format\_input\_tensor
+==========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.format_input_tensor:
+
+.. autofunction:: ttnn.format_input_tensor
