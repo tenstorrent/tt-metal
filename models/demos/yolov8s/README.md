@@ -44,3 +44,21 @@ Use the following command to run the performant Model with Trace+2CQs:
 ```
 pytest --disable-warnings models/demos/yolov8s/tests/test_e2e_performant.py
 ```
+
+### Demo with Trace+2CQ
+
+- Use the following command to run the demo with Trace+2CQs :
+```
+pytest models/demos/yolov8s/demo/demo.py
+```
+
+#### Note: The post-processing is performed using PyTorch.
+
+## Inputs
+The demo receives inputs from `models/demos/yolov8s/demo/images` dir by default. To test the model on different input data, it is recommended to add a new image file to this directory.
+
+## Outputs
+A runs folder will be created inside the `models/demos/yolov8s/demo/` directory. For reference, the model output will be stored in the torch_model directory, while the TTNN model output will be stored in the tt_model directory.
+
+## Additional Information:
+The tests can be run with  randomly initialized weights and pre-trained real weights.  To run only for the pre-trained weights, specify pretrained_weight_true when running the tests.
