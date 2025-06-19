@@ -155,9 +155,17 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
                 }
             }
+
+            auto edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
+            // change to long axis variantion, and using more buffer slots.
+            if (device_sequence.size() >=
+                tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
+                edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Long;
+            }
             // if ring topology set extra buffer on dateline edms.
             auto src_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
                 .edm_type = src_device_edm_type,
+                .edm_axis = edm_axis,
                 .enable_dateline_sender_extra_buffer_slots = en_dateline_sender_extra_buffer,
                 .enable_dateline_receiver_extra_buffer_slots = en_dateline_receiver_extra_buffer,
                 .enable_dateline_upstream_sender_extra_buffer_slots = en_dateline_upstream_sender_extra_buffer,
@@ -167,6 +175,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             };
             auto dest_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
                 .edm_type = dest_device_edm_type,
+                .edm_axis = edm_axis,
                 .enable_dateline_sender_extra_buffer_slots = en_dateline_sender_extra_buffer,
                 .enable_dateline_receiver_extra_buffer_slots = en_dateline_receiver_extra_buffer,
                 .enable_dateline_upstream_sender_extra_buffer_slots = en_dateline_upstream_sender_extra_buffer,
