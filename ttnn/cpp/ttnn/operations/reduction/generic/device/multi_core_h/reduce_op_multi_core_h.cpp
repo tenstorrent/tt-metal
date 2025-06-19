@@ -84,9 +84,6 @@ operation::ProgramWithCallbacks reduce_nd_shard_multi_core_h(
     const auto input_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
         *device->get_mesh_device().get(), input_buffer_distribution_spec, buffer->core_type());
 
-    int pages_per_core = input_buffer_distribution_spec.num_dev_pages_per_core();
-    log_info(tt::LogOp, "pages per core {}", pages_per_core);
-
     std::map<string, string> reader_defines;
     std::vector<uint32_t> reader_compile_time_args = {
         Ht,
@@ -122,8 +119,6 @@ operation::ProgramWithCallbacks reduce_nd_shard_multi_core_h(
     const auto output_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
         *device->get_mesh_device().get(), output_buffer_distribution_spec, out_buffer->core_type());
 
-    int output_pages_per_core = output_buffer_distribution_spec.num_dev_pages_per_core();
-    log_info(tt::LogOp, "output pages per core {}", output_pages_per_core);
     std::vector<uint32_t> writer_compile_time_args = {
         output_cb_index,
         (uint32_t)output_tile_elements,
@@ -143,10 +138,10 @@ operation::ProgramWithCallbacks reduce_nd_shard_multi_core_h(
 
     std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::H);
     std::vector<uint32_t> compute_kernel_args_group_1 = {
-        Ht,          // Ht
-        num_cols,    // Wt
-        1,           // NC
-        chunk_size,  // Column Chunk Size
+        Ht,                         // Ht
+        num_cols_per_core_group_1,  // Wt
+        1,                          // NC
+        chunk_size,                 // Column Chunk Size
     };
 
     auto reduce_compute_kernel_group_1_id = tt_metal::CreateKernel(
