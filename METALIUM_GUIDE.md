@@ -220,11 +220,15 @@ The Wormhole N300 card illustrates this design with two Wormhole chips connected
 
 This architecture scales efficiently beyond two chips. The QuietBox configuration contains 8 Wormhole or 4 Blackhole processors connected in a mesh topology. Data can be transferred between processors using specialized code called EDM (Ethernet Data Movers) that handles traffic routing over the Ethernet interconnects.
 
-<img width="900" alt="image" src="https://clehaxze.tw//images/gemlog/tenstorrent-wormhole-quietbox-topology.webp">
+<img width="900" alt="image" src="docs/source/common/images/tenstorrent-wormhole-quietbox-topology.webp">
 
-While 8 chips provides substantial computational capacity, larger configurations are required for training the most demanding models. The same interconnect architecture scales to configurations of up to 32 chips connected to a single host system. This approach extends to multi-host deployments, where Wormhole processors maintain their mesh connectivity across distributed systems.
+While 8 chips provides substantial computational capacity, larger configurations are required for training the most demanding models. The same interconnect architecture scales to configurations of up to 32 chips connected on a single host system.
 
-<img width="900" alt="image" src="docs/source/common/images/tenstorrent-wormhole-rack-scale.webp">
+<img width="900" alt="image" src="docs/source/common/images/tenstorrent-galaxy-32-wh.webp">
+
+Multiple 32-chip boxes can be connected together to form a mesh spanning several hosts. These meshes can then be linked, with traffic routed between them using the tt-Fabric firmware. This approach allows scaling to data center configurations while keeping the same programming model, API, and development concerns as a single machine.
+
+<img width="900" alt="image" src="docs/source/common/images/tenstorrent-fabric-scale-out-machine.webp">
 
 ## tt-Metalium
 
