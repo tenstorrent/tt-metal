@@ -128,7 +128,7 @@ Create a kernel that will copy data from DRAM to L1 and back. Since we are only 
 
     The path to the kernel source file can either be
 
-    * Relative to the ``TT_METAL_HOME`` environment variable, or
+    * Relative to the ``TT_METAL_KERNEL_PATH`` environment variable (or ``TT_METAL_HOME`` if the former is not set), or
     * Absolute path to the file, or
     * Relative to the current working directory
 
