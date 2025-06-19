@@ -27,7 +27,7 @@ void bind_rand_operation(py::module& pymodule) {
             Not supported for uniform random generation.
 
         Args:
-            size (list[int]) - a list of integers defining the shape of the output tensor.
+            shape (list[int]) - a list of integers defining the shape of the output tensor.
 
         Keyword args:
             device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
@@ -48,7 +48,7 @@ void bind_rand_operation(py::module& pymodule) {
         ttnn::rand,
         doc,
         ttnn::pybind_arguments_t{
-            py::arg("size"),
+            py::arg("shape"),
             py::kw_only(),
             py::arg("device") = std::nullopt,
             py::arg("dtype") = DataType::BFLOAT16,
