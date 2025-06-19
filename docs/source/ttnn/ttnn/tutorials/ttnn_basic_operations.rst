@@ -105,14 +105,14 @@ ull example and output
 
 Lets put everything together in a complete example that can be run directly. This example will open a Tenstorrent device, create some input tensors and perform operations on them, print the output tensors, and close the device.
 
-.. literalinclude:: ttnn_tutorials/ttnn_basic_operations.py
+.. literalinclude:: ttnn_tutorials_basic_python/ttnn_basic_operations.py
    :caption: Source Code
 
 Running this script will output the operation results as shown below
 
 .. code-block:: console
 
-   $ python3 $TT_METAL_HOME/ttnn/tutorials/ttnn_basic_operations.py
+   $ python3 $TT_METAL_HOME/ttnn/tutorials/basic_python/ttnn_basic_operations.py
    --- TT-NN Tensor Creation with Tiles (32x32) ---
    Tensor from fill value 1:
       tensor([[1., 1., 1.,  ..., 1., 1., 1.],

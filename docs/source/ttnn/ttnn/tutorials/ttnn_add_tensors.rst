@@ -80,14 +80,14 @@ Full example and output
 
 Lets put everything together in a complete example that can be run directly. This example will open a Tenstorrent device, create two tensors, perform the addition, and print the output tensor.
 
-.. literalinclude:: ttnn_tutorials/ttnn_add_tensors.py
+.. literalinclude:: ttnn_tutorials_basic_python/ttnn_add_tensors.py
    :caption: Source Code
 
 Running this script will output the input tensors and the result of their addition, which should be a tensor filled with 3s. As shown below
 
 .. code-block:: console
 
-   $ python3 $TT_METAL_HOME/ttnn/tutorials/ttnn_add_tensors.py
+   $ python3 $TT_METAL_HOME/ttnn/tutorials/basic_python/ttnn_add_tensors.py
    Input tensors:
    tensor([[1., 1., 1.,  ..., 1., 1., 1.],
            [1., 1., 1.,  ..., 1., 1., 1.],
