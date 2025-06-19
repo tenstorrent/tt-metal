@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 import ttnn
-from models.experimental.yolov10.reference.yolov10 import YOLOv10
+from models.experimental.yolov10x.reference.yolov10x import YOLOv10
 from ultralytics import YOLO
 
 YOLOV10_BOXES_PCC = 0.99
