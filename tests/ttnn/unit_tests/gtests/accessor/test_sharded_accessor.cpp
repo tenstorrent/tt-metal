@@ -13,7 +13,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
-#include "ttnn/cpp/ttnn/operations/sharding_utilities.hpp"
+#include "ttnn/operations/sharding_utilities.hpp"
 
 // Defines to include tt_metal/hw/inc/accessor/sharded_accessor.h but won't need these
 #if !(defined(KERNEL_BUILD) || defined(FW_BUILD))

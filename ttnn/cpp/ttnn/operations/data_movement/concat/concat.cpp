@@ -8,17 +8,17 @@
 #include "ttnn/operations/core/core.hpp"
 #include <tt-metalium/math.hpp>
 
-#include "cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
-#include "cpp/ttnn/operations/data_movement/concat/concat.hpp"
-#include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
-#include "cpp/ttnn/operations/data_movement/tilize/tilize.hpp"
-#include "cpp/ttnn/operations/data_movement/untilize/untilize.hpp"
-#include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
-#include "cpp/ttnn/operations/data_movement/common/common.hpp"
-#include "cpp/ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "cpp/ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "cpp/ttnn/operations/data_movement/slice/slice.hpp"
-#include "cpp/ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include "ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/tilize/tilize.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize.hpp"
+#include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
 
 #include <ranges>
 #include <utility>
