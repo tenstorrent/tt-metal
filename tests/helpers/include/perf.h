@@ -21,6 +21,18 @@ enum class PerfRunType
     L1_CONGESTION
 };
 
+template <bool set_a, bool set_b>
+inline void _perf_unpack_loop_set_valid(uint32_t iterations)
+{
+    while (iterations-- > 0)
+    {
+        constexpr uint32_t cond_clear_a = set_a ? ckernel::p_stall::SRCA_CLR : 0;
+        constexpr uint32_t cond_clear_b = set_b ? ckernel::p_stall::SRCB_CLR : 0;
+        TTI_SETDVALID((set_b << 1) | set_a);
+        TTI_STALLWAIT(ckernel::p_stall::STALL_TDMA, cond_clear_a | cond_clear_b);
+    }
+}
+
 template <bool clear_a, bool clear_b>
 inline void _perf_math_loop_clear_valid(uint32_t iterations)
 {
