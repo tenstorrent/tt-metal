@@ -1235,11 +1235,8 @@ void setup_test_with_persistent_fabric(
     size_t switch_interval = 0,
     bool loopback_on_last_device = false,
     bool is_galaxy = false,
-    bool en_dateline_sender_extra_buffer = false,
-    bool en_dateline_receiver_extra_buffer = false,
-    bool en_dateline_upstream_sender_extra_buffer = false,
-    bool en_dateline_upstream_receiver_extra_buffer = false,
-    bool en_dateline_upstream_adjcent_sender_extra_buffer = false) {
+    const tt::tt_fabric::FabricEriscDatamoverBufferConfig& edm_buffer_config =
+        tt::tt_fabric::FabricEriscDatamoverBufferConfig{}) {
     log_info(tt::LogTest, "Enabling persistent fabric");
     fabric_programs = std::vector<Program>(devices.size());
     subdevice_managers = create_subdevices(devices);
@@ -1249,17 +1246,7 @@ void setup_test_with_persistent_fabric(
         });
 
     line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
-        devices,
-        fabric_program_ptrs,
-        num_links.value_or(1),
-        false,
-        topology,
-        is_galaxy,
-        en_dateline_sender_extra_buffer,
-        en_dateline_receiver_extra_buffer,
-        en_dateline_upstream_sender_extra_buffer,
-        en_dateline_upstream_receiver_extra_buffer,
-        en_dateline_upstream_adjcent_sender_extra_buffer);
+        devices, fabric_program_ptrs, num_links.value_or(1), false, topology, is_galaxy, edm_buffer_config);
     line_fabric->set_firmware_context_switch_interval(switch_interval);
     if (loopback_on_last_device) {
         for (auto& edm_builder : line_fabric->edm_builders_backward_direction.at(devices.back()->id())) {
@@ -2580,6 +2567,73 @@ Fabric1DWorkerConfig get_fabric_1d_worker_config(
     return config;
 }
 
+tt::tt_fabric::FabricEriscDatamoverBufferConfig get_edm_buffer_config_wormhole(
+    tt::ClusterType cluster_type, FabricTestMode fabric_mode) {
+    tt::tt_fabric::FabricEriscDatamoverBufferConfig buffer_config{};
+    switch (cluster_type) {
+        case tt::ClusterType::TG:
+        case tt::ClusterType::GALAXY:
+            if (fabric_mode == FabricTestMode::HalfRing) {
+                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, true, true, false};
+            } else if (fabric_mode == FabricTestMode::FullRing) {
+                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{false, true, true, false, true};
+            } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
+                // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
+                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, false, false, false};
+            } else if (fabric_mode == FabricTestMode::RingAsLinear) {
+                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, true, true, false};
+            }
+            break;
+        case tt::ClusterType::T3K:
+            if (fabric_mode == FabricTestMode::HalfRing) {
+                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, false, true, true};
+            } else if (fabric_mode == FabricTestMode::FullRing) {
+                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{false, true, true, false, true};
+            } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
+                // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
+                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, false, false, false};
+            } else if (fabric_mode == FabricTestMode::RingAsLinear) {
+                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, true, true, false};
+            }
+            break;
+        default: break;
+    }
+    return buffer_config;
+}
+
+tt::tt_fabric::FabricEriscDatamoverBufferConfig get_edm_buffer_config_blackhole(
+    tt::ClusterType cluster_type, FabricTestMode fabric_mode) {
+    tt::tt_fabric::FabricEriscDatamoverBufferConfig buffer_config{};
+    switch (cluster_type) {
+        // For now just copy the galaxy config to BH since we don't have any data points.
+        case tt::ClusterType::P150_X4:
+            if (fabric_mode == FabricTestMode::HalfRing) {
+                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, true, true, false};
+            } else if (fabric_mode == FabricTestMode::FullRing) {
+                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{false, true, true, false, true};
+            } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
+                // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
+                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, false, false, false};
+            } else if (fabric_mode == FabricTestMode::RingAsLinear) {
+                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, true, true, false};
+            }
+            break;
+        // the other BH cluster type P150_X2 only has 2 devices, not suitable for ring.
+        default: break;
+    }
+    return buffer_config;
+}
+
+tt::tt_fabric::FabricEriscDatamoverBufferConfig get_edm_buffer_config_helper(FabricTestMode fabric_mode) {
+    const auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+    const auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: return get_edm_buffer_config_wormhole(cluster_type, fabric_mode);
+        case tt::ARCH::BLACKHOLE: return get_edm_buffer_config_blackhole(cluster_type, fabric_mode);
+        default: return tt::tt_fabric::FabricEriscDatamoverBufferConfig{};
+    }
+}
+
 template <typename FABRIC_DEVICE_FIXTURE = Fabric1DFixture>
 void Run1DFabricPacketSendTest(
     std::unique_ptr<Fabric1DFixture>& test_fixture,
@@ -2634,41 +2688,7 @@ void Run1DFabricPacketSendTest(
         case FabricTestMode::RingAsLinear: topology = ttnn::ccl::Topology::Ring; break;
     }
 
-    bool en_dateline_sender_extra_buffer = false;
-    bool en_dateline_receiver_extra_buffer = false;
-    bool en_dateline_upstream_sender_extra_buffer = false;
-    bool en_dateline_upstream_receiver_extra_buffer = false;
-    bool en_dateline_upstream_adjcent_sender_extra_buffer = false;
-    if (fabric_mode == FabricTestMode::HalfRing) {
-        // HalfRing test is more optimal with extra recv buffer on upstream edm.
-        en_dateline_sender_extra_buffer = true;
-        en_dateline_receiver_extra_buffer = true;
-        // TODO: this will be cleaned up once we bundle these config into arch/cluster dependent helper.
-        en_dateline_upstream_sender_extra_buffer = !use_t3k;
-        en_dateline_upstream_receiver_extra_buffer = true;
-        // TODO: this will be cleaned up once we bundle these config into arch/cluster dependent helper.
-        en_dateline_upstream_adjcent_sender_extra_buffer = use_t3k;
-    } else if (fabric_mode == FabricTestMode::FullRing) {
-        // FullRing is more optimal with extra buffer on both send/recv channels.
-        en_dateline_sender_extra_buffer = false;
-        en_dateline_receiver_extra_buffer = true;
-        en_dateline_upstream_sender_extra_buffer = true;
-        en_dateline_upstream_receiver_extra_buffer = false;
-        en_dateline_upstream_adjcent_sender_extra_buffer = true;
-    } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
-        // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
-        en_dateline_sender_extra_buffer = true;
-        en_dateline_receiver_extra_buffer = true;
-        en_dateline_upstream_sender_extra_buffer = false;
-        en_dateline_upstream_receiver_extra_buffer = false;
-        en_dateline_upstream_adjcent_sender_extra_buffer = false;
-    } else if (fabric_mode == FabricTestMode::RingAsLinear) {
-        en_dateline_sender_extra_buffer = true;
-        en_dateline_receiver_extra_buffer = true;
-        en_dateline_upstream_sender_extra_buffer = true;
-        en_dateline_upstream_receiver_extra_buffer = true;
-        en_dateline_upstream_adjcent_sender_extra_buffer = false;
-    }
+    const auto edm_buffer_config = get_edm_buffer_config_helper(fabric_mode);
 
     auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
 
@@ -2711,11 +2731,7 @@ void Run1DFabricPacketSendTest(
             fabric_context_switch_interval,
             false,
             is_6u_galaxy,
-            en_dateline_sender_extra_buffer,
-            en_dateline_receiver_extra_buffer,
-            en_dateline_upstream_sender_extra_buffer,
-            en_dateline_upstream_receiver_extra_buffer,
-            en_dateline_upstream_adjcent_sender_extra_buffer);
+            edm_buffer_config);
     }
 
     // Other boiler plate setup
