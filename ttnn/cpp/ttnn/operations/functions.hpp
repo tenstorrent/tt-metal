@@ -475,7 +475,7 @@ static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layo
         static_assert(false, "random::random(...) error: DataType not supported!");
     }
 
-    return Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec).to_layout(layout);
+    return Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec);
 }
 
 static Tensor random(
