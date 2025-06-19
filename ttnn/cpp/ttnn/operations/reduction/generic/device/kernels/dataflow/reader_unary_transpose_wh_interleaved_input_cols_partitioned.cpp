@@ -1,13 +1,18 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 TenstorrentAI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "accessor/sharded_accessor.h"
 
 void kernel_main() {
+#ifdef USE_ND_SHARDING
+    uint32_t bank_base_address = get_arg_val<uint32_t>(0);
+#else
     uint32_t src_addr = get_arg_val<uint32_t>(0);
+#endif
     uint32_t col_start_tile_id =
         get_arg_val<uint32_t>(1);  // Start id in column major order. This should be the start of a column
     uint32_t curr_col_in_batch = get_arg_val<uint32_t>(2);
@@ -26,15 +31,23 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
     const DataFormat data_format = get_dataformat(cb_id_in0);
 
-#ifdef REDUCE_SCALER
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
     constexpr uint32_t scalar = get_compile_time_arg_val(5);
     generate_reduce_scaler(cb_id_in2, scalar);
-#endif
 
+#ifdef USE_ND_SHARDING
+    constexpr uint32_t tile_elements = get_compile_time_arg_val(6);
+    constexpr uint32_t page_size = get_compile_time_arg_val(7);
+    constexpr uint32_t rank = get_compile_time_arg_val(8);
+    constexpr uint32_t num_banks = get_compile_time_arg_val(9);
+    constexpr uint32_t arg_index = 10;
+    using input_dspec = distribution_spec_t<arg_index, rank, num_banks>;
+
+    auto sharded_accessor = ShardedAccessor<input_dspec, page_size>{.bank_base_address = bank_base_address};
+#else
     const InterleavedAddrGenFast<src_is_dram> s = {
         .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
-
+#endif
     uint32_t w = curr_col_in_batch;
 
     // tiles are read in the N W_skip H W_chunk order
@@ -68,7 +81,12 @@ void kernel_main() {
 
                 cb_reserve_back(cb_id_in0, onetile);
                 uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+#ifdef USE_ND_SHARDING
+                uint64_t curr_noc_addr = sharded_accessor.get_noc_addr(curr_id);
+                noc_async_read(curr_noc_addr, l1_write_addr, tile_bytes);
+#else
                 noc_async_read_tile(curr_id, s, l1_write_addr);
+#endif
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in0, onetile);
 
