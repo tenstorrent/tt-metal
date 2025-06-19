@@ -71,7 +71,7 @@ enum class FabricEriscDatamoverAxis : std::size_t {
     Invalid = 2,
 };
 
-struct FabricEriscDatamoverBufferConfig {
+struct FabricRouterBufferConfig {
     bool enable_dateline_sender_extra_buffer_slots = false;
     bool enable_dateline_receiver_extra_buffer_slots = false;
     bool enable_dateline_upstream_sender_extra_buffer_slots = false;
@@ -83,7 +83,7 @@ struct FabricEriscDatamoverBufferConfig {
 struct FabricEriscDatamoverOptions {
     FabricEriscDatamoverType edm_type = FabricEriscDatamoverType::Default;
     FabricEriscDatamoverAxis edm_axis = FabricEriscDatamoverAxis::Short;
-    FabricEriscDatamoverBufferConfig edm_buffer_config = FabricEriscDatamoverBufferConfig{};
+    FabricRouterBufferConfig edm_buffer_config = FabricRouterBufferConfig{};
 };
 
 struct FabricEriscDatamoverConfig {

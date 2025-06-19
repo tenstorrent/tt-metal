@@ -1235,8 +1235,7 @@ void setup_test_with_persistent_fabric(
     size_t switch_interval = 0,
     bool loopback_on_last_device = false,
     bool is_galaxy = false,
-    const tt::tt_fabric::FabricEriscDatamoverBufferConfig& edm_buffer_config =
-        tt::tt_fabric::FabricEriscDatamoverBufferConfig{}) {
+    const tt::tt_fabric::FabricRouterBufferConfig& edm_buffer_config = tt::tt_fabric::FabricRouterBufferConfig{}) {
     log_info(tt::LogTest, "Enabling persistent fabric");
     fabric_programs = std::vector<Program>(devices.size());
     subdevice_managers = create_subdevices(devices);
@@ -2567,33 +2566,33 @@ Fabric1DWorkerConfig get_fabric_1d_worker_config(
     return config;
 }
 
-tt::tt_fabric::FabricEriscDatamoverBufferConfig get_edm_buffer_config_wormhole(
+tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_wormhole(
     tt::ClusterType cluster_type, FabricTestMode fabric_mode) {
-    tt::tt_fabric::FabricEriscDatamoverBufferConfig buffer_config{};
+    tt::tt_fabric::FabricRouterBufferConfig buffer_config{};
     switch (cluster_type) {
         case tt::ClusterType::TG:
         case tt::ClusterType::GALAXY:
             if (fabric_mode == FabricTestMode::HalfRing) {
-                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, true, true, false};
+                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
             } else if (fabric_mode == FabricTestMode::FullRing) {
-                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{false, true, true, false, true};
+                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{false, true, true, false, true};
             } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
                 // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
-                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, false, false, false};
+                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, false, false};
             } else if (fabric_mode == FabricTestMode::RingAsLinear) {
-                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, true, true, false};
+                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
             }
             break;
         case tt::ClusterType::T3K:
             if (fabric_mode == FabricTestMode::HalfRing) {
-                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, false, true, true};
+                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, true, true};
             } else if (fabric_mode == FabricTestMode::FullRing) {
-                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{false, true, true, false, true};
+                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{false, true, true, false, true};
             } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
                 // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
-                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, false, false, false};
+                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, false, false};
             } else if (fabric_mode == FabricTestMode::RingAsLinear) {
-                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, true, true, false};
+                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
             }
             break;
         default: break;
@@ -2601,21 +2600,21 @@ tt::tt_fabric::FabricEriscDatamoverBufferConfig get_edm_buffer_config_wormhole(
     return buffer_config;
 }
 
-tt::tt_fabric::FabricEriscDatamoverBufferConfig get_edm_buffer_config_blackhole(
+tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_blackhole(
     tt::ClusterType cluster_type, FabricTestMode fabric_mode) {
-    tt::tt_fabric::FabricEriscDatamoverBufferConfig buffer_config{};
+    tt::tt_fabric::FabricRouterBufferConfig buffer_config{};
     switch (cluster_type) {
         // For now just copy the galaxy config to BH since we don't have any data points.
         case tt::ClusterType::P150_X4:
             if (fabric_mode == FabricTestMode::HalfRing) {
-                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, true, true, false};
+                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
             } else if (fabric_mode == FabricTestMode::FullRing) {
-                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{false, true, true, false, true};
+                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{false, true, true, false, true};
             } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
                 // SaturateChipToChipRing cannot use the buffering optimization since it writes back to itself.
-                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, false, false, false};
+                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, false, false, false};
             } else if (fabric_mode == FabricTestMode::RingAsLinear) {
-                buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{true, true, true, true, false};
+                buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
             }
             break;
         // the other BH cluster type P150_X2 only has 2 devices, not suitable for ring.
@@ -2624,13 +2623,13 @@ tt::tt_fabric::FabricEriscDatamoverBufferConfig get_edm_buffer_config_blackhole(
     return buffer_config;
 }
 
-tt::tt_fabric::FabricEriscDatamoverBufferConfig get_edm_buffer_config_helper(FabricTestMode fabric_mode) {
+tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_helper(FabricTestMode fabric_mode) {
     const auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
     const auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: return get_edm_buffer_config_wormhole(cluster_type, fabric_mode);
         case tt::ARCH::BLACKHOLE: return get_edm_buffer_config_blackhole(cluster_type, fabric_mode);
-        default: return tt::tt_fabric::FabricEriscDatamoverBufferConfig{};
+        default: return tt::tt_fabric::FabricRouterBufferConfig{};
     }
 }
 

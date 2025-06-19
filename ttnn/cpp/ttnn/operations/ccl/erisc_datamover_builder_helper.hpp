@@ -30,8 +30,7 @@ public:
         bool build_in_worker_connection_mode = false,
         Topology topology = Topology::Linear,
         bool is_galaxy = false,
-        const tt::tt_fabric::FabricEriscDatamoverBufferConfig& edm_buffer_config =
-            tt::tt_fabric::FabricEriscDatamoverBufferConfig{});
+        const tt::tt_fabric::FabricRouterBufferConfig& edm_buffer_config = tt::tt_fabric::FabricRouterBufferConfig{});
 
     // Invocable per chip if we want to collectively build the fabric by building this separately per chip
     // (and implicitly building the fabric that way)

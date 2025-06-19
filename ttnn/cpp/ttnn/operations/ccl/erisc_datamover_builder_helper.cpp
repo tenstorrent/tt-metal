@@ -50,7 +50,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     bool build_in_worker_connection_mode,
     Topology topology,
     bool is_galaxy,
-    const tt::tt_fabric::FabricEriscDatamoverBufferConfig& edm_buffer_config) :
+    const tt::tt_fabric::FabricRouterBufferConfig& edm_buffer_config) :
     device_sequence(device_sequence), programs(program_sequence) {
     if (topology == Topology::Ring) {
         TT_FATAL(device_sequence.size() > 2, "Ring topology only supports more than 2 devices");

@@ -77,7 +77,7 @@ size_t FabricContext::get_max_payload_size_bytes() const {
 
 std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_edm_config_options(
     tt::tt_fabric::FabricEriscDatamoverType edm_type, tt::tt_fabric::FabricEriscDatamoverAxis edm_axis) {
-    auto edm_buffer_config = tt::tt_fabric::FabricEriscDatamoverBufferConfig{
+    auto edm_buffer_config = tt::tt_fabric::FabricRouterBufferConfig{
         .enable_dateline_sender_extra_buffer_slots = true,
         .enable_dateline_receiver_extra_buffer_slots = true,
         .enable_dateline_upstream_sender_extra_buffer_slots = true,
