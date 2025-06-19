@@ -173,11 +173,12 @@ public:
 
     // Gets the appropriate mesh shape based on device configuration
     MeshShape GetDeterminedMeshShape() const {
-        if (num_devices_ == TG_NUM_DEVICES || num_devices_ == GALAXY_6U_NUM_DEVICES) {
-            return MeshShape{8, 4};
-        } else {
-            return MeshShape{2, 4};
-        }
+        return SystemMesh::instance().get_shape();
+        // if (num_devices_ == TG_NUM_DEVICES || num_devices_ == GALAXY_6U_NUM_DEVICES) {
+        //     return MeshShape{8, 4};
+        // } else {
+        //     return MeshShape{2, 4};
+        // }
     }
 
     // Validates environment and hardware for tests
@@ -3696,13 +3697,13 @@ size_t get_number_of_links_for_ring_deadlock_stability_test(
     size_t num_links = num_links_opt.value_or(0);
     if (num_links == 0) {
         if (cluster_type == ClusterType::GALAXY) {
-            for (size_t i = 0; i < 8; i++) {
+            for (size_t i = 0; i < mesh_device.shape()[0]; i++) {
                 size_t cluster_axis = 1;
                 auto nl =
                     tt::tt_fabric::experimental::get_number_of_available_routing_planes(mesh_device, cluster_axis, i);
                 log_debug(tt::LogTest, "Number of links for Galaxy cluster_axis 0, row {}: {}", i, nl);
             }
-            for (size_t i = 0; i < 4; i++) {
+            for (size_t i = 0; i < mesh_device.shape()[1]; i++) {
                 size_t cluster_axis = 0;
                 auto nl =
                     tt::tt_fabric::experimental::get_number_of_available_routing_planes(mesh_device, cluster_axis, i);

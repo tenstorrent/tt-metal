@@ -122,9 +122,6 @@ public:
     // If the ethernet core is an intermesh link, probe to see if it is trained
     bool is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord eth_core) const;
 
-    // Calculate number of active routing planes for each mesh
-    size_t get_num_active_routing_planes(const IntraMeshConnectivity& intra_mesh_connectivity);
-
 private:
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane
