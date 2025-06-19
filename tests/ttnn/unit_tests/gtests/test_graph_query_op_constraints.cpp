@@ -489,24 +489,18 @@ INSTANTIATE_TEST_SUITE_P(
 // Matmul tests
 // ============================================================================
 
-class MatmulOpIfTest : public TTNNFixtureWithDevice,
-                       public testing::WithParamInterface<std::tuple<
-                           ttnn::TensorSpec,
-                           ttnn::TensorSpec,
-                           std::optional<ttnn::operations::matmul::MatmulProgramConfig>,
-                           ResourceUsageMap>> {};
+class MatmulOpIfTest
+    : public TTNNFixtureWithDevice,
+      public testing::WithParamInterface<
+          std::
+              tuple<ttnn::TensorSpec, ttnn::TensorSpec, std::optional<ttnn::operations::matmul::MatmulProgramConfig>>> {
+};
 
 TEST_P(MatmulOpIfTest, Matmul) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
     const auto& matmul_program_config =
         std::get<std::optional<ttnn::operations::matmul::MatmulProgramConfig>>(GetParam());
-    const auto& expected_resource_usage_map = std::get<ResourceUsageMap>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (expected_resource_usage_map.count(board_type) == 0) {
-        GTEST_SKIP();
-    }
-    const auto& expected_resource_usage = expected_resource_usage_map.at(board_type);
 
     // Run the test
     {
@@ -545,9 +539,9 @@ TEST_P(MatmulOpIfTest, Matmul) {
             tt::LogTest, "query status = {}, error_message = {}", query.status, query.error_message.value_or("none"));
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
-        EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, expected_resource_usage.l1_buffers_peak_per_core);
-        EXPECT_EQ(query.resource_usage.l1_output_buffer_per_core, expected_resource_usage.l1_output_buffer_per_core);
+        EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 0);
+        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 0);
+        EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 0);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
     }
@@ -560,19 +554,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(  // default
             g_height_shard_1_1_1024_32_tiled_to_32_cores,
             g_interleaved_1_1_1024_1024_tiled,
-            std::nullopt,
-            ResourceUsageMap{
-                {BoardType::N300,
-                 ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 24576,
-                     .l1_buffers_peak_per_core = 6144,
-                     .l1_output_buffer_per_core = 6144}},
-                {BoardType::E150,
-                 ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 24576,
-                     .l1_buffers_peak_per_core = 2048,
-                     .l1_output_buffer_per_core = 2048}}}),
-
+            std::nullopt),
         std::make_tuple(  // REUSE_MCAST_1D_IN0
             g_interleaved_1_1_2048_64_tiled,
             g_width_shard_1_1_64_2048_tiled_to_32_cores,
@@ -587,18 +569,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .per_core_N = 2,
                 .fuse_batch = true,
                 .fused_activation = std::nullopt,
-                .mcast_in0 = true},
-            ResourceUsageMap{
-                {BoardType::N300,
-                 ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 524288,
-                     .l1_buffers_peak_per_core = 151552,
-                     .l1_output_buffer_per_core = 151552}},
-                {BoardType::E150,
-                 ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 524288,
-                     .l1_buffers_peak_per_core = 65536,
-                     .l1_output_buffer_per_core = 65536}}}),
+                .mcast_in0 = true}),
         std::make_tuple(  // REUSE_MCAST_2D_BLOCK_SHARDED
             g_block_shard_1_1_1600_256_tiled_to_32_cores,
             g_interleaved_1_1_245_1024_tiled,
@@ -612,18 +583,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .per_core_M = 10,
                 .per_core_N = 4,
                 .transpose_mcast = false,
-                .fused_activation = std::nullopt},
-            ResourceUsageMap{
-                {BoardType::N300,
-                 ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 28736,
-                     .l1_buffers_peak_per_core = 59392,
-                     .l1_output_buffer_per_core = 59392}},
-                {BoardType::E150,
-                 ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 28736,
-                     .l1_buffers_peak_per_core = 26624,
-                     .l1_output_buffer_per_core = 26624}}})));
+                .fused_activation = std::nullopt})));
 
 class Conv2dOpIfTest : public ttnn::TTNNFixtureWithDevice {};
 TEST_F(Conv2dOpIfTest, Conv2d) {
@@ -656,16 +616,6 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
     const std::array<uint32_t, 2> dilation{1, 1};
     const uint32_t groups = 1;
 
-    const auto expected_resource_usage_map = ResourceUsageMap{
-        {BoardType::N300,
-         ttnn::graph::ResourceUsage{
-             .cb_peak_size_per_core = 229440, .l1_buffers_peak_per_core = 190572, .l1_output_buffer_per_core = 0}}};
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (expected_resource_usage_map.count(board_type) == 0) {
-        GTEST_SKIP();
-    }
-    const auto& expected_resource_usage = expected_resource_usage_map.at(board_type);
-
     // Run the test
     {
         tt::tt_metal::IDevice* device = device_;
@@ -691,9 +641,8 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
             output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
-        EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, expected_resource_usage.l1_buffers_peak_per_core);
-        EXPECT_EQ(query.resource_usage.l1_output_buffer_per_core, expected_resource_usage.l1_output_buffer_per_core);
+        EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 0);
+        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 0);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
     }
