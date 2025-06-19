@@ -19,6 +19,7 @@
 #include "ttnn/operations/creation.hpp"
 #include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include <variant>
 
 namespace ttnn::operations::binary {
 
@@ -103,7 +104,7 @@ Tensor _isclose(
     Tensor mul_result = ttnn::multiply(ttnn::abs(value2, output_mem_config), rtol, std::nullopt, output_mem_config);
     is_close_rhs = ttnn::add(mul_result, atol, std::nullopt, output_mem_config);
     mul_result.deallocate();
-    Tensor result = ttnn::where(ttnn::le(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config), 1.0, 0.0);
+    Tensor result = ttnn::where(ttnn::le(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config), 1.f, 0.f);
     return result;
 }
 
@@ -134,7 +135,7 @@ Tensor ExecuteMinimum::invoke(
 Tensor ExecuteMinimum::invoke(
     QueueId queue_id,
     const Tensor& input_a,
-    const float value,
+    const std::variant<int32_t, float> value,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
@@ -142,8 +143,10 @@ Tensor ExecuteMinimum::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::MINIMUM>::
-        invoke(ttnn::DefaultQueueId, input_a, value, memory_config, optional_output_tensor);
+    TT_FATAL(std::holds_alternative<float>(value), "int32 minimum not yet supported");
+    return ttnn::operations::unary::
+        ExecuteUnaryWithVariantFloatIntParameter<ttnn::operations::unary::UnaryOpType::MINIMUM>::invoke(
+            queue_id, input_a, std::get<float>(value), memory_config, optional_output_tensor);
 }
 
 Tensor ExecuteMaximum::invoke(
@@ -173,7 +176,7 @@ Tensor ExecuteMaximum::invoke(
 Tensor ExecuteMaximum::invoke(
     QueueId queue_id,
     const Tensor& input_a,
-    const float value,
+    const std::variant<int32_t, float> value,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
@@ -181,8 +184,13 @@ Tensor ExecuteMaximum::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::MAXIMUM>::
-        invoke(queue_id, input_a, value, memory_config, optional_output_tensor);
+    return std::visit(
+        [&](auto input_b) {
+            return ttnn::operations::unary::
+                ExecuteUnaryWithVariantFloatIntParameter<ttnn::operations::unary::UnaryOpType::MAXIMUM>::invoke(
+                    queue_id, input_a, input_b, memory_config, optional_output_tensor);
+        },
+        value);
 }
 
 Tensor _atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
@@ -219,8 +227,7 @@ Tensor _atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<
                 ttnn::where(
                     altz_bltz,
                     ttnn::subtract(result, M_PI, std::nullopt, output_mem_config),
-                    ttnn::where(
-                        az_bltz, -M_PI_2, ttnn::where(az_bgtz, M_PI_2, 0.0, output_mem_config), output_mem_config),
+                    ttnn::where(az_bltz, -pi_2, ttnn::where(az_bgtz, pi_2, 0.f, output_mem_config), output_mem_config),
                     output_mem_config),
                 output_mem_config),
             output_mem_config);

@@ -75,6 +75,28 @@ size_t FabricContext::get_max_payload_size_bytes() const {
     }
 }
 
+std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_edm_config_options(
+    tt::tt_fabric::FabricEriscDatamoverType edm_type) {
+    constexpr bool enable_dateline_sender_extra_buffer_slots = true;
+    constexpr bool enable_dateline_receiver_extra_buffer_slots = true;
+    constexpr bool enable_dateline_upstream_sender_extra_buffer_slots = true;
+    constexpr bool enable_dateline_upstream_receiver_extra_buffer_slots = true;
+    constexpr bool enable_dateline_upstream_adjacent_sender_extra_buffer_slots = true;
+
+    auto edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
+        .edm_type = edm_type,
+        .enable_dateline_sender_extra_buffer_slots = enable_dateline_sender_extra_buffer_slots,
+        .enable_dateline_receiver_extra_buffer_slots = enable_dateline_receiver_extra_buffer_slots,
+        .enable_dateline_upstream_sender_extra_buffer_slots = enable_dateline_upstream_sender_extra_buffer_slots,
+        .enable_dateline_upstream_receiver_extra_buffer_slots = enable_dateline_upstream_receiver_extra_buffer_slots,
+        .enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
+            enable_dateline_upstream_adjacent_sender_extra_buffer_slots,
+    };
+
+    return std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
+        this->channel_buffer_size_bytes_, this->topology_, edm_options);
+}
+
 FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
     TT_FATAL(
         fabric_config != tt::tt_metal::FabricConfig::DISABLED,
@@ -89,18 +111,14 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
     this->max_payload_size_bytes_ = this->get_max_payload_size_bytes();
     this->channel_buffer_size_bytes_ = this->packet_header_size_bytes_ + this->max_payload_size_bytes_;
 
-    this->router_config_ =
-        std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(this->channel_buffer_size_bytes_, this->topology_);
-    // disable upstream buffering optimization for now for device init.
-    auto dateline_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
-        .edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline,
-        .enable_dateline_sender_extra_buffer_slots = false,
-        .enable_dateline_receiver_extra_buffer_slots = true,
-        .enable_dateline_upstream_sender_extra_buffer_slots = false,
-        .enable_dateline_upstream_receiver_extra_buffer_slots = false,
-    };
-    this->dateline_router_config_ = std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
-        this->channel_buffer_size_bytes_, this->topology_, dateline_edm_options);
+    this->router_config_ = get_edm_config_options(tt::tt_fabric::FabricEriscDatamoverType::Default);
+    this->dateline_router_config_ = get_edm_config_options(tt::tt_fabric::FabricEriscDatamoverType::Dateline);
+    this->dateline_upstream_router_config_ =
+        get_edm_config_options(tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream);
+    this->dateline_upstream_adjcent_router_config_ =
+        get_edm_config_options(tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice);
+    this->dateline_upstream_adjcent_upstream_router_config_ =
+        get_edm_config_options(tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream);
 
     this->num_devices = tt::tt_metal::GetNumAvailableDevices();
     auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
@@ -128,13 +146,33 @@ size_t FabricContext::get_fabric_max_payload_size_bytes() const { return this->m
 
 size_t FabricContext::get_fabric_channel_buffer_size_bytes() const { return this->channel_buffer_size_bytes_; }
 
-tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_config(bool is_dateline) const {
-    if (is_dateline) {
-        TT_FATAL(this->dateline_router_config_ != nullptr, "Error, fabric dateline router config is uninitialized");
-        return *this->dateline_router_config_.get();
-    } else {
-        TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");
-        return *this->router_config_.get();
+tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_config(
+    tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type) const {
+    switch (fabric_edm_type) {
+        case tt::tt_fabric::FabricEriscDatamoverType::Default:
+            TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");
+            return *this->router_config_.get();
+            break;
+        case tt::tt_fabric::FabricEriscDatamoverType::Dateline:
+            TT_FATAL(this->dateline_router_config_ != nullptr, "Error, fabric dateline router config is uninitialized");
+            return *this->dateline_router_config_.get();
+            break;
+        case tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream:
+            TT_FATAL(
+                this->dateline_upstream_router_config_ != nullptr,
+                "Error, fabric dateline upstream router config is uninitialized");
+            return *this->dateline_upstream_router_config_.get();
+        case tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice:
+            TT_FATAL(
+                this->dateline_upstream_adjcent_router_config_ != nullptr,
+                "Error, fabric dateline upstream adjacent device router config is uninitialized");
+            return *this->dateline_upstream_adjcent_router_config_.get();
+        case tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream:
+            TT_FATAL(
+                this->dateline_upstream_adjcent_upstream_router_config_ != nullptr,
+                "Error, fabric dateline upstream adjacent device upstream router config is uninitialized");
+            return *this->dateline_upstream_adjcent_upstream_router_config_.get();
+        default: TT_FATAL(false, "Error, invalid fabric edm type");
     }
 };
 

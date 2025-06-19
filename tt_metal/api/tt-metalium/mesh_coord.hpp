@@ -21,9 +21,10 @@ public:
     using ShapeBase::operator[];
 
     // Shorthands for constructing 1D, 2D and 3D shapes.
-    explicit MeshShape(uint32_t x);
-    MeshShape(uint32_t x, uint32_t y);
-    MeshShape(uint32_t x, uint32_t y, uint32_t z);
+    // The values s0...sn are assumed to be supplied in row-major order (from outer dim to inner dim).
+    explicit MeshShape(uint32_t s);
+    MeshShape(uint32_t s0, uint32_t s1);
+    MeshShape(uint32_t s0, uint32_t s1, uint32_t s2);
 
     explicit MeshShape(const tt::stl::SmallVector<uint32_t>& shape);
     explicit MeshShape(tt::stl::SmallVector<uint32_t>&& shape);
@@ -62,9 +63,10 @@ bool is_line_topology(const MeshShape& shape);
 class MeshCoordinate {
 public:
     // Shorthands for constructing 1D, 2D and 3D coordinates.
-    explicit MeshCoordinate(uint32_t x);
-    MeshCoordinate(uint32_t x, uint32_t y);
-    MeshCoordinate(uint32_t x, uint32_t y, uint32_t z);
+    // The values c0...cn are assumed to be supplied in row-major order (from outer dim to inner dim).
+    explicit MeshCoordinate(uint32_t c);
+    MeshCoordinate(uint32_t c0, uint32_t c1);
+    MeshCoordinate(uint32_t c0, uint32_t c1, uint32_t c2);
 
     // Constructs a generic N-dimensional coordinate.
     explicit MeshCoordinate(tt::stl::Span<const uint32_t> coords);
