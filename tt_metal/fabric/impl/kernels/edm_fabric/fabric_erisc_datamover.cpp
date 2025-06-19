@@ -982,9 +982,9 @@ void run_receiver_channel_step_impl(
     ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table) {
-    auto& ack_counter = receiver_channel_pointers.ack_counter;
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
     if constexpr (enable_first_level_ack) {
+        auto& ack_counter = receiver_channel_pointers.ack_counter;
         bool pkts_received = pkts_received_since_last_check > 0;
         ASSERT(receiver_channel_pointers.completion_counter - ack_counter < RECEIVER_NUM_BUFFERS);
         if (pkts_received) {
@@ -993,15 +993,10 @@ void run_receiver_channel_step_impl(
             receiver_send_received_ack(ack_counter.get_buffer_index(), local_receiver_channel);
             ack_counter.increment();
         }
-    } else {
-        increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
-        // Ack counter does not get used to index a buffer slot, so we skip the buffer index increment
-        // and only increment the counter
-        ack_counter.counter += pkts_received_since_last_check;
     }
 
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
-    bool unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
+    bool unwritten_packets = pkts_received_since_last_check != 0;
     if (unwritten_packets) {
         invalidate_l1_cache();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
@@ -1065,6 +1060,8 @@ void run_receiver_channel_step_impl(
                     packet_header, cached_routing_fields, downstream_edm_interface[receiver_channel], trid);
             }
             wr_sent_counter.increment();
+            // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
+            increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
         }
     }
 
