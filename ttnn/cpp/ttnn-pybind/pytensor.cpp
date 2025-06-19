@@ -936,57 +936,6 @@ void pytensor_module(py::module& m_tensor) {
                     ttnn.Tensor(py_tensor)
             )doc")
         .def(
-            py::init<>([](const py::object& tensor,
-                          const TensorSpec& tensor_spec,
-                          const std::unordered_map<std::string, std::string>& strategy,
-                          std::optional<float> pad_value) {
-                if (py::isinstance<py::list>(tensor)) {
-                    return detail::convert_python_tensors_to_tt_tensors(
-                        tensor,
-                        tensor_spec.data_type(),
-                        tensor_spec.layout(),
-                        tensor_spec.tile(),
-                        tensor_spec.memory_config(),
-                        ttnn::DefaultQueueId,
-                        pad_value.value_or(0.0f),
-                        strategy);
-                }
-                return detail::convert_python_tensor_to_tt_tensor(
-                    tensor,
-                    tensor_spec.data_type(),
-                    tensor_spec.layout(),
-                    tensor_spec.tile(),
-                    tensor_spec.memory_config(),
-                    /*device=*/nullptr,
-                    ttnn::DefaultQueueId,
-                    pad_value.value_or(0.0f));
-            }),
-            py::arg("tensor"),
-            py::arg("tensor_spec"),
-            py::arg("strategy") = std::unordered_map<std::string, std::string>(),
-            py::arg("pad_value") = std::nullopt,
-            py::return_value_policy::move,
-            R"doc(
-                +--------------+--------------------------------+
-                | Argument     | Description                    |
-                +==============+================================+
-                | tensor       | Pytorch or Numpy Tensor        |
-                +--------------+--------------------------------+
-                | tensor_spec  | TT Tensor spec                 |
-                +--------------+--------------------------------+
-                | strategy     | TT Strategy (optional)         |
-                +--------------+--------------------------------+
-                | pad_value    | Padding value (optional)       |
-                +--------------+--------------------------------+
-
-                Example of creating a TT Tensor that uses torch.Tensor's storage as its own storage:
-
-                .. code-block:: python
-
-                    py_tensor = torch.randn((1, 1, 32, 32))
-                    ttnn.Tensor(py_tensor)
-            )doc")
-        .def(
             py::init<>([](const py::object& python_tensor,
                           std::optional<DataType> data_type,
                           std::optional<MeshDevice*> device,
@@ -1029,51 +978,6 @@ void pytensor_module(py::module& m_tensor) {
                 | mem_config   | TT memory_config (optional)    |
                 +--------------+--------------------------------+
                 | tile         | TT Tile Spec (optional)        |
-                +--------------+--------------------------------+
-                | cq_id        | TT Command Queue ID (optional) |
-                +--------------+--------------------------------+
-                | pad_value    | Padding value (optional)       |
-                +--------------+--------------------------------+
-
-                Example of creating a TT Tensor from numpy tensor:
-
-                .. code-block:: python
-
-                    device = ttnn.open_device(device_id=0)
-                    py_tensor = np.zeros((1, 1, 32, 32))
-                    ttnn.Tensor(py_tensor, ttnn.bfloat16, device, ttnn.TILE_LAYOUT)
-            )doc")
-        .def(
-            py::init<>([](const py::object& python_tensor,
-                          const TensorSpec& tensor_spec,
-                          std::optional<MeshDevice*> device,
-                          ttnn::QueueId cq_id,
-                          std::optional<float> pad_value) {
-                return detail::convert_python_tensor_to_tt_tensor(
-                    python_tensor,
-                    tensor_spec.data_type(),
-                    tensor_spec.layout(),
-                    tensor_spec.tile(),
-                    tensor_spec.memory_config(),
-                    device.value_or(nullptr),
-                    cq_id,
-                    pad_value.value_or(0.0f));
-            }),
-            py::arg("tensor"),
-            py::arg("tensor_spec"),
-            py::arg("device") = std::nullopt,
-            py::arg("cq_id") = ttnn::DefaultQueueId,
-            py::arg("pad_value") = std::nullopt,
-            py::return_value_policy::move,
-            R"doc(
-                +--------------+--------------------------------+
-                | Argument     | Description                    |
-                +==============+================================+
-                | tensor       | Pytorch or Numpy Tensor        |
-                +--------------+--------------------------------+
-                | tensor_spec  | TT Tensor spec                 |
-                +--------------+--------------------------------+
-                | device       | TT device ptr (optional)       |
                 +--------------+--------------------------------+
                 | cq_id        | TT Command Queue ID (optional) |
                 +--------------+--------------------------------+
