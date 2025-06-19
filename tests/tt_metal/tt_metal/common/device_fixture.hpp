@@ -33,7 +33,7 @@ protected:
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         std::vector<chip_id_t> ids;
-        for (unsigned int id = 0; id < num_devices_; id++) {
+        for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
             ids.push_back(id);
         }
         create_devices(ids, DEFAULT_L1_SMALL_SIZE);
