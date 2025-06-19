@@ -28,10 +28,10 @@ void kernel_main() {
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
     const DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
-    const InterleavedAddrGenFast<true> s0 = {
+    const InterleavedAddrGenFast<true> a = {
         .bank_base_address = src0_addr, .page_size = in0_tile_bytes, .data_format = in0_data_format};
 
-    const InterleavedAddrGenFast<true> s1 = {
+    const InterleavedAddrGenFast<true> b = {
         .bank_base_address = src1_addr, .page_size = in1_tile_bytes, .data_format = in1_data_format};
 
     // Simple 2D matmul: A[Mt, Kt] @ B[Kt, Nt] = C[Mt, Nt]
@@ -49,7 +49,7 @@ void kernel_main() {
             {
                 cb_reserve_back(cb_id_in0, 1);
                 uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                noc_async_read_tile(tile_A, s0, l1_write_addr_in0);
+                noc_async_read_tile(tile_A, a, l1_write_addr_in0);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in0, 1);
             }
@@ -59,7 +59,7 @@ void kernel_main() {
             {
                 cb_reserve_back(cb_id_in1, 1);
                 uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                noc_async_read_tile(tile_B, s1, l1_write_addr_in1);
+                noc_async_read_tile(tile_B, b, l1_write_addr_in1);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in1, 1);
             }

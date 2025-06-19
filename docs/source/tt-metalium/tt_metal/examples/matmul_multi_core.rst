@@ -102,6 +102,15 @@ Metalium includes utilities to simplify work distribution across cores. The ``tt
 - ``work_per_core1``: Number of output tiles each core in the primary group processes.
 - ``work_per_core2``: Number of output tiles each core in the secondary group processes (0 if the work divides evenly).
 
+For example, if you need to split 81 output tiles across 11 cores, ``split_work_to_cores`` will distribute the work as follows:
+
+* ``num_cores`` = 11 (all 11 cores are used)
+* ``all_cores`` = all 11 cores
+* ``core_group_1`` = first 10 cores (each processes 8 tiles)
+* ``core_group_2`` = last core (processes 1 tile)
+* ``work_per_core1`` = 8 (tiles per core in the primary group)
+* ``work_per_core2`` = 1 (tiles for the secondary group core)
+
 .. code-block:: cpp
 
     auto core_grid = device->compute_with_storage_grid_size();
@@ -204,7 +213,7 @@ To support work distribution, the kernel is updated so that each core processes 
         const uint32_t tile_bytes = get_tile_size(cb_id_out);
         const DataFormat data_format = get_dataformat(cb_id_out);
 
-        const InterleavedAddrGenFast<true> s = {
+        const InterleavedAddrGenFast<true> c = {
             .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
 
         // Each core writes only its assigned tiles
@@ -212,7 +221,7 @@ To support work distribution, the kernel is updated so that each core processes 
             cb_wait_front(cb_id_out, 1);
             uint32_t l1_read_addr = get_read_ptr(cb_id_out);
             // Write to the correct offset based on start_id
-            noc_async_write_tile(i + start_id, s, l1_read_addr);
+            noc_async_write_tile(i + start_id, c, l1_read_addr);
             noc_async_write_barrier();
             cb_pop_front(cb_id_out, 1);
         }
@@ -278,10 +287,10 @@ The reader kernel is responsible for reading the input data from the DRAM buffer
         const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
         const DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
-        const InterleavedAddrGenFast<true> s0 = {
+        const InterleavedAddrGenFast<true> a = {
             .bank_base_address = src0_addr, .page_size = in0_tile_bytes, .data_format = in0_data_format};
 
-        const InterleavedAddrGenFast<true> s1 = {
+        const InterleavedAddrGenFast<true> b = {
             .bank_base_address = src1_addr, .page_size = in1_tile_bytes, .data_format = in1_data_format};
 
         // Loop through the output tiles assigned to this core
@@ -298,7 +307,7 @@ The reader kernel is responsible for reading the input data from the DRAM buffer
                 {
                     cb_reserve_back(cb_id_in0, 1);
                     uint32_t l1_write_addr_in0     = get_write_ptr(cb_id_in0);
-                    noc_async_read_tile(tile_A, s0, l1_write_addr_in0);
+                    noc_async_read_tile(tile_A, a, l1_write_addr_in0);
                     noc_async_read_barrier();
                     cb_push_back(cb_id_in0, 1);
                 }
@@ -307,7 +316,7 @@ The reader kernel is responsible for reading the input data from the DRAM buffer
                 {
                     cb_reserve_back(cb_id_in1, 1);
                     uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                    noc_async_read_tile(tile_B, s1, l1_write_addr_in1);
+                    noc_async_read_tile(tile_B, b, l1_write_addr_in1);
                     noc_async_read_barrier();
                     cb_push_back(cb_id_in1, 1);
                 }
@@ -395,8 +404,8 @@ Unlike OpenCL or CUDA, Metalium does not provide built-in parameters for work di
         }
     }
 
-Program Execution, Downloading and Cleanup
-------------------------------------------
+Program Execution, Receiving Results and Cleanup
+------------------------------------------------
 
 This part is the same as in the single core example. You execute the program, wait for it to finish, and then download the results from the DRAM buffer. The cleanup process is also unchanged.
 

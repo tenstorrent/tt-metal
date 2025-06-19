@@ -19,7 +19,7 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
     const DataFormat data_format = get_dataformat(cb_id_out);
 
-    const InterleavedAddrGenFast<true> s = {
+    const InterleavedAddrGenFast<true> c = {
         .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
 
     // Loop through the tile indices and write each tile to DRAM in order.
@@ -29,7 +29,7 @@ void kernel_main() {
         cb_wait_front(cb_id_out, onetile);
         // Write the output tile to DRAM.
         uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-        noc_async_write_tile(i, s, l1_read_addr);
+        noc_async_write_tile(i, c, l1_read_addr);
         noc_async_write_barrier();  // This will wait until the write is done. As an alternative,
                                     // noc_async_write_flushed() can be faster because it waits
                                     // until the write request is sent. In that case, you have to
