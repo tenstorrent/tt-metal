@@ -71,6 +71,7 @@ protected:
     void TearDown() override {
         // Parent class tears down devices
         DebugToolsFixture::TearDown();
+        ExtraTearDown();
 
         // If test induced a watcher error, re-initialize the context.
         if (DPrintServerHangDetected()) {
@@ -105,6 +106,7 @@ protected:
     // Override this function in child classes for additional setup commands between DPRINT setup
     // and device creation.
     virtual void ExtraSetUp() {}
+    virtual void ExtraTearDown() {}
 };
 
 // For usage by tests that need the dprint server devices disabled.
@@ -114,6 +116,9 @@ protected:
         // For this test, mute each devices using the environment variable
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, false);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint, {});
+    }
+    void ExtraTearDown() override {
+        MetalContext::instance().teardown(); // Teardown dprint server so we can re-init later with all devices enabled again
     }
 };
 
