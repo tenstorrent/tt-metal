@@ -419,7 +419,7 @@ def run_llama3_demo(
     # Tracks the number of iterations where throughput falls below `tsu_threshold`
     tsu_failures = 0
     all_tokens_per_second_per_user = []
-
+    failed_tokens_per_second_per_user = []
     read_events = []
     tt_out_toks_cpu = []
     iteration_time_start = time()
@@ -503,11 +503,12 @@ def run_llama3_demo(
 
                 if not stress_test:
                     # Increment failure count if throughput is too low
-                    if iteration < 200 and (
+                    if decode_iteration in range(1, 200) and (
                         tokens_per_second_per_user < tsu_thresholds["min"]
                         or tokens_per_second_per_user > tsu_thresholds["max"]
                     ):
                         tsu_failures += 1
+                        failed_tokens_per_second_per_user.append((decode_iteration, tokens_per_second_per_user))
 
                 iteration_time_start = time()
 
@@ -562,17 +563,13 @@ def run_llama3_demo(
 
         # print before assertion
         out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
-        tsu_perf_drop_limit = TSU_PERF_DROP_LIMIT_PERCENT * iteration / 100
+        tsu_perf_drop_limit = TSU_PERF_DROP_LIMIT_PERCENT * decode_iteration / 100
         if tsu_failures > tsu_perf_drop_limit:
             logger.info(out_of_targets_msg)
             logger.info(f"Failing iterations sorted by t/s/u")
-            sorted_tokens_per_second_per_user = sorted(all_tokens_per_second_per_user)
-            for i in range(len(sorted_tokens_per_second_per_user)):
-                if (
-                    sorted_tokens_per_second_per_user[i] < tsu_thresholds["min"]
-                    or sorted_tokens_per_second_per_user[i] > tsu_thresholds["max"]
-                ):
-                    logger.info(f"Iteration {i}: {sorted_tokens_per_second_per_user[i]}")
+            sorted_tokens_per_second_per_user = sorted(failed_tokens_per_second_per_user, key=lambda x: x[1])
+            for iteration, tsu in sorted_tokens_per_second_per_user:
+                logger.info(f"Iteration {iteration}: {tsu}")
         # Assert at the end of test to check if the throughput recuperated
         assert tsu_failures <= tsu_perf_drop_limit, out_of_targets_msg
 

@@ -148,8 +148,12 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
-    bool pad_tile = false,
-    bool pad_cores = false);
+    uint32_t stride_w,
+    bool is_conv =
+        false,  // In convs, we have the concept of dividing the act block (act_block_h_override and split reader)
+    uint32_t reader0_datums = 0,
+    uint32_t reader1_datums = 0,
+    bool pad_cores = true);
 
 std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input, uint32_t extend_with_zeroes = 0);
 
