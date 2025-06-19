@@ -17,7 +17,7 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Performs element-wise computation of:  selu = scale *(max(0,x) + min(0,alpha * (exp(X)-1))) by broadcast , where x is each element of a tile
+ * Performs element-wise computation of:  selu = scale *(max(0,x) + min(0,alpha * (exp(x)-1))) by broadcast , where x is each element of a tile
  * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.

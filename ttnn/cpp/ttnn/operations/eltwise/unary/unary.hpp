@@ -102,8 +102,8 @@ struct Selu {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        float scale = 1.0507,   // 1.0507009873554804934193349852946
-        float alpha = 1.67326,  // 1.6732632423543772848170429916717
+        float scale = 1.0507009873554804934193349852946,
+        float alpha = 1.6732632423543772848170429916717,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
