@@ -268,8 +268,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         block_stride  // Block stride
     };
 
-    const bool enable_padding = padding_config_buffer0->size() / num_cores != 4 ||
-                                padding_config_buffer1->size() / num_cores != 4;  // TODO: This is hacky
+    const uint32_t EMPTY_PADDING_CONFIG_BUFFER_SIZE = 4;
+    const bool enable_padding = padding_config_buffer0->size() / num_cores != EMPTY_PADDING_CONFIG_BUFFER_SIZE ||
+                                padding_config_buffer1->size() / num_cores != EMPTY_PADDING_CONFIG_BUFFER_SIZE;
 
     reader_ct_args[0] = enable_padding ? cb_indices.padding_config0 : 0;
     reader_ct_args[1] = cb_indices.gather_config0;
