@@ -141,6 +141,7 @@ class TtResnetBlock2D(nn.Module):
             self.tt_conv3_weights, self.tt_conv3_bias = prepare_linear_params(
                 device, conv_weights_3, conv_bias_3, model_config.conv_w_dtype
             )
+            self.conv3_program_config = model_config.get_matmul_config(matmul_path=f"{module_path}.conv_shortcut")
         else:
             self.tt_conv3_weights = self.tt_conv3_bias = None
 
@@ -302,17 +303,26 @@ class TtResnetBlock2D(nn.Module):
 
         if self.tt_conv3_weights is not None:
             input_tensor_pre_conv = input_tensor
+            print(input_tensor.shape)
             input_tensor = ttnn.linear(
                 input_tensor,
                 self.tt_conv3_weights,
                 bias=self.tt_conv3_bias,
+                program_config=self.conv3_program_config,
+                compute_kernel_config=self.default_compute_config,
+                memory_config=ttnn.L1_MEMORY_CONFIG
+                if C == 320 and (input_shape[1] == 960 or input_shape[1] == 640)
+                else hidden_states.memory_config(),
             )
             ttnn.deallocate(input_tensor_pre_conv)
-
+            if input_tensor.memory_config() != hidden_states.memory_config():
+                input_tensor = ttnn.to_memory_config(input_tensor, memory_config=hidden_states.memory_config())
+        else:
             if input_tensor.is_sharded():
                 input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
 
-        hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        hidden_states = ttnn.add(input_tensor, hidden_states)
+            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        ttnn.add_(hidden_states, input_tensor)
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         return hidden_states, [C, H, W]
