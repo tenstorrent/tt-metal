@@ -577,7 +577,9 @@ DeviceAddr Buffer::aligned_page_size() const { return align(page_size(), this->a
 DeviceAddr Buffer::aligned_size() const { return this->num_dev_pages() * this->aligned_page_size(); }
 
 DeviceAddr Buffer::aligned_size_per_bank() const {
-    // TODO: Revist for ND sharding (it looks okay since num_cores() handles ND sharding)
+    if (buffer_distribution_spec_.has_value()) {
+        return buffer_distribution_spec_->num_dev_pages_per_core() * aligned_page_size();
+    }
     uint32_t num_banks =
         is_sharded(this->buffer_layout_) ? this->num_cores().value() : allocator_->get_num_banks(this->buffer_type());
     return tt::tt_metal::detail::SizeBytesPerBank(
