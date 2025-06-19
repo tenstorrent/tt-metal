@@ -143,17 +143,10 @@ Tensor ExecuteMinimum::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    return std::visit(
-        [&](auto input_b) -> Tensor {
-            if constexpr (std::is_same_v<decltype(input_b), float>) {
-                return ttnn::operations::unary::
-                    ExecuteUnaryWithVariantFloatIntParameter<ttnn::operations::unary::UnaryOpType::MINIMUM>::invoke(
-                        queue_id, input_a, input_b, memory_config, optional_output_tensor);
-            } else {
-                TT_FATAL(false, "int32 minimum not yet supported");
-            }
-        },
-        value);
+    TT_FATAL(std::holds_alternative<float>(value), "int32 minimum not yet supported");
+    return ttnn::operations::unary::
+        ExecuteUnaryWithVariantFloatIntParameter<ttnn::operations::unary::UnaryOpType::MINIMUM>::invoke(
+            queue_id, input_a, std::get<float>(value), memory_config, optional_output_tensor);
 }
 
 Tensor ExecuteMaximum::invoke(
