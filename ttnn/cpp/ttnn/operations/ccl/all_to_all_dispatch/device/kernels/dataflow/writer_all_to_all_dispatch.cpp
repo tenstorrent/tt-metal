@@ -281,12 +281,14 @@ void kernel_main() {
             // find the devices that the expert lives on and dispatch the input tokens to them
             // if there is no tensor parallelism, then the token will only be sent to one device
             for (uint32_t d = 0; d < num_devices; d++) {
-                // if the expert lives on the current device, we dispatch the input token to it
                 if (devices_for_expert[d] == 1) {
                     if (dest_chip_ids[d] == src_chip_id) {
-                        // simply write via local noc
+                        // if the expert lives on the current device, we dispatch the input token to it
                         dispatch_input_local_device(input_token_read_addr, output_token_write_addr, output_page_size);
                     } else if (is_configured_target<mesh_cols, mesh_rows, axis>(src_chip_id, dest_chip_ids[d])) {
+                        // if the expert lives on a remote device, we dispatch the input token to it
+                        // if axis is specified then we only send to the devices that are along the axis
+                        // if axis is not specified then we send to all devices
                         dispatch_input_remote_device(
                             src_chip_id,
                             dest_chip_ids[d],
@@ -307,21 +309,22 @@ void kernel_main() {
         cb_pop_front(input_tensor_cb_id, 1);
     }
 
-    // send semaphore increment to all other devices
+    // Send our selected experts tensor to all other devices and signal that we are done dispatching the input tokens
+    // with a semaphore
     uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
     for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
         uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
         uint64_t metadata_write_addr = get_noc_addr(global_token, metadata_addr_gen);
         uint32_t token_indices_address = base_indices_addr + (local_token * aligned_indices_page_size);
+
+        // dispatch the metadata to all other devices
         for (uint32_t d = 0; d < num_devices; d++) {
             if (dest_chip_ids[d] == src_chip_id) {
+                // dispatch the metadata to the current device and increment the local copy of the semaphore
                 dispatch_metadata_local_device(
                     token_indices_address, metadata_write_addr, metadata_page_size, global_noc_semaphore_address);
-
-                // debug_print_local_metadata(send_preparation_buffer_cb_id, global_token, metadata_addr_gen,
-                // selected_experts_k);
-
             } else if (is_configured_target<mesh_cols, mesh_rows, axis>(src_chip_id, dest_chip_ids[d])) {
+                // dispatch the metadata to the remote device and increment the remote device's copy of the semaphore
                 dispatch_metadata_remote_device(
                     src_chip_id,
                     dest_chip_ids[d],
@@ -337,7 +340,6 @@ void kernel_main() {
             }
         }
     }
-    cb_pop_front(indices_tensor_cb_id, indices_pages);
     cb_pop_front(mapping_tensor_cb_id, mapping_pages);
 
     for (uint32_t i = 0; i < 4; i++) {

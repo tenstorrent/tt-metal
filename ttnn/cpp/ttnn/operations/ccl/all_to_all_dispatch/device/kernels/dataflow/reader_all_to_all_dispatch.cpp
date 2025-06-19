@@ -75,8 +75,7 @@ void kernel_main() {
     const auto indices_addr_gen = get_interleaved_addr_gen<indices_is_dram, indices_page_size>(indices_tensor_address);
     const auto mapping_addr_gen = get_interleaved_addr_gen<mapping_is_dram, mapping_page_size>(mapping_tensor_address);
 
-    // read in expert indices
-
+    // read the table that
     for (uint32_t i = 0; i < mapping_pages; i++) {
         cb_reserve_back(mapping_tensor_cb_id, 1);
         uint32_t l1_write_addr = get_write_ptr(mapping_tensor_cb_id);
@@ -86,6 +85,7 @@ void kernel_main() {
     }
 
     ASSERT(indices_pages == input_pages);
+    // read the input tokens and the selected experts for each token
     for (uint32_t i = 0; i < indices_pages; i++) {
         cb_reserve_back(indices_tensor_cb_id, 1);
         cb_reserve_back(input_tensor_cb_id, 1);
@@ -101,6 +101,7 @@ void kernel_main() {
         cb_push_back(input_tensor_cb_id, 1);
     }
 
+    // wait for all other devices to finish dispatching their input tokens and metadata
     noc_semaphore_wait((uint32_t*)global_semaphore_address, tokens_per_device * dispatch_devices);
     noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
 }

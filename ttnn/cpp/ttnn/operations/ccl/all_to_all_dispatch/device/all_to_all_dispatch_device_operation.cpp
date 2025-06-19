@@ -18,7 +18,65 @@ AllToAllDispatchDeviceOperation::program_factory_t AllToAllDispatchDeviceOperati
 }
 
 void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto input_tensor = tensor_args.input_tensor;
+    auto indices_tensor = tensor_args.expert_indices_tensor;
+
+    TT_FATAL(input_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input tensor must be in row major layout");
+    TT_FATAL(
+        indices_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "Indices tensor must be in row major layout");
+
+    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
+    TT_FATAL(indices_tensor.get_dtype() == tt::tt_metal::DataType::UINT16, "Indices tensor must be uint32");
+    TT_FATAL(!operation_attributes.output_mem_config.is_sharded(), "Output memory config must not be sharded");
+
+    auto output_specs = compute_output_specs(operation_attributes, tensor_args);
+
+    if (tensor_args.optional_output_tensors.has_value()) {
+        auto output_tensors = tensor_args.optional_output_tensors.value();
+        auto sparse_token_tensor = output_tensors[0];
+        auto metadata_tensor = output_tensors[1];
+        TT_FATAL(
+            sparse_token_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "Output tensor must be in row major layout");
+        TT_FATAL(
+            metadata_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "Output metadata tensor must be in row major layout");
+
+        TT_FATAL(
+            output_specs[0] == sparse_token_tensor.get_tensor_spec(),
+            "Optional sparse output token tensor spec {} does not match computed output spec {}",
+            sparse_token_tensor.get_tensor_spec(),
+            output_specs[0]);
+        TT_FATAL(
+            output_specs[1] == metadata_tensor.get_tensor_spec(),
+            "Optional metadata tensor spec {} does not match computed output spec {}",
+            metadata_tensor.get_tensor_spec(),
+            output_specs[1]);
+    }
+
+    auto input_shape = input_tensor.get_tensor_spec().logical_shape();
+    auto indices_shape = indices_tensor.get_tensor_spec().logical_shape();
+
+    for (uint32_t i = 0; i < input_shape.size() - 1; i++) {
+        TT_FATAL(
+            input_shape[i] == indices_shape[i],
+            "Input and indices tensor must have the same shape for all dimensions except the last. Mismatch at "
+            "dimension {} with shape {} and {}",
+            i,
+            input_shape[i],
+            indices_shape[i]);
+    }
+
+    TT_FATAL(operation_attributes.axis.has_value(), "Axis must be specified at the moment");
+    TT_FATAL(
+        operation_attributes.cross_device_semaphore.has_value(),
+        "Cross device semaphore must be specified at the moment");
+
+    TT_FATAL(operation_attributes.num_links == 1, "Number of links must be 1, got {}", operation_attributes.num_links);
+
+    TT_FATAL(operation_attributes.topology == tt::tt_fabric::Topology::Linear, "Topology must be linear at the moment");
+}
 
 void AllToAllDispatchDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
@@ -84,16 +142,6 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
         auto output_tensors = tensor_args.optional_output_tensors.value();
         auto preallocated_output_spec = output_tensors[0].get_tensor_spec();
         auto preallocated_metadata_spec = output_tensors[1].get_tensor_spec();
-        TT_FATAL(
-            preallocated_output_spec == output_tokens_spec,
-            "Preallocated output spec {} does not match output spec {}",
-            preallocated_output_spec,
-            output_tokens_spec);
-        TT_FATAL(
-            preallocated_metadata_spec == metadata_spec,
-            "Preallocated metadata spec {} does not match metadata spec {}",
-            preallocated_metadata_spec,
-            metadata_spec);
         return {preallocated_output_spec, preallocated_metadata_spec};
     }
     return {output_tokens_spec, metadata_spec};

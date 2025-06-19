@@ -114,128 +114,86 @@ uint32_t device_index(const std::vector<tt::tt_metal::IDevice*>& devices, const 
     return std::numeric_limits<uint32_t>::max();
 }
 
+std::vector<tt::tt_metal::IDevice*> get_axis_devices(
+    const MeshDeviceView& mesh_view, uint32_t axis, uint32_t axis_value) {
+    // axis == 1 -> horizontal row (East/West)
+    // axis == 0 -> vertical column (North/South)
+    if (axis == 1) {
+        return mesh_view.get_devices_on_row(axis_value);
+    } else if (axis == 0) {
+        return mesh_view.get_devices_on_column(axis_value);
+    }
+    TT_FATAL(false, "Axis must be 0 (column) or 1 (row)");
+    return {};
+}
+
 std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbors(
     const MeshDeviceView& mesh_view,
     const MeshCoordinate& mesh_coordinate,
     tt::tt_fabric::Topology& topology,
     const std::optional<uint32_t> axis) {
+    using namespace tt::tt_fabric;
+
+    // For readability use symbolic indices instead of raw numbers when accessing the
+    // `directions` array `{East, West, North, South}`.
+    enum Direction : std::size_t { East = 0, West = 1, North = 2, South = 3 };
+
     std::vector<tt::tt_metal::IDevice*> neighbors;
-    std::array<bool, 4> directions;  // east, west, north, south
-    if (topology == tt::tt_fabric::Topology::Ring) {
-        directions = {true, true, true, true};
-    } else {
-        directions = {false, false, false, false};
-    }
-    auto control_plane = tt::tt_fabric::get_control_plane();
+    // directions: {East, West, North, South}
+    std::array<bool, 4> directions = {false, false, false, false};
+
+    const bool is_ring = topology == Topology::Ring;
     auto src_device = mesh_view.get_device(mesh_coordinate);
+
+    // Helper that appends neighbours for a single axis
+    auto process_axis = [&](uint32_t axis_val) {
+        auto axis_devices =
+            get_axis_devices(mesh_view, axis_val, axis_val == 1 ? mesh_coordinate[0] : mesh_coordinate[1]);
+        uint32_t idx = device_index(axis_devices, src_device);
+        uint32_t size = axis_devices.size();
+        if (size <= 1) {
+            return;  // no neighbours on this axis
+        }
+        uint32_t next_neighbor_idx = idx + 1;
+        uint32_t prev_neighbor_idx = idx - 1;
+        uint32_t first_device = 0;
+        uint32_t last_device = size - 1;
+
+        auto add_neighbor = [&](Direction dir, uint32_t dev_idx) {
+            neighbors.push_back(axis_devices[dev_idx]);
+            directions[dir] = true;
+        };
+
+        // Positive direction (East for rows, South for columns)
+        if (next_neighbor_idx < size) {
+            add_neighbor(axis_val == 1 ? Direction::East : Direction::South, next_neighbor_idx);
+        } else if (is_ring) {
+            add_neighbor(axis_val == 1 ? Direction::East : Direction::South, first_device);
+        }
+
+        // Negative direction (West for rows, North for columns)
+        if (idx > 0) {
+            add_neighbor(axis_val == 1 ? Direction::West : Direction::North, prev_neighbor_idx);
+        } else if (is_ring) {
+            add_neighbor(axis_val == 1 ? Direction::West : Direction::North, last_device);
+        }
+    };
+
     if (axis.has_value()) {
-        if (axis.value() == 1) {
-            auto axis_neighbors = mesh_view.get_devices_on_row(mesh_coordinate[0]);
-            auto index = device_index(axis_neighbors, src_device);
-            if (index == 0) {
-                // if Line, no neighbor, so don't push back, but for Ring, we need to push back the last device
-                neighbors.push_back(axis_neighbors[index + 1]);
-                directions[0] = true;  // east
-                // if Line, no neighbor, so don't push back, but for Ring, we need to push back the last device
-                if (topology == tt::tt_fabric::Topology::Ring) {
-                    neighbors.push_back(axis_neighbors[axis_neighbors.size() - 1]);
-                    directions[1] = true;
-                }
-            } else if (index == axis_neighbors.size() - 1) {
-                // if Line, no neighbor, so don't push back, but for Ring, we need to push back the first device
-                neighbors.push_back(axis_neighbors[0]);
-                directions[1] = true;
-                if (topology == tt::tt_fabric::Topology::Ring) {
-                    neighbors.push_back(axis_neighbors[0]);
-                    directions[1] = true;
-                }
-            } else {
-                neighbors.push_back(axis_neighbors[index + 1]);
-                directions[0] = true;
-                neighbors.push_back(axis_neighbors[index - 1]);
-                directions[1] = true;
-            }
-        } else if (axis.value() == 0) {
-            auto axis_neighbors = mesh_view.get_devices_on_column(mesh_coordinate[1]);
-            auto index = device_index(axis_neighbors, src_device);
-            if (index == 0) {                                    // northmost device
-                neighbors.push_back(axis_neighbors[index + 1]);  // south exists
-                directions[3] = true;
-                if (topology == tt::tt_fabric::Topology::Ring) {
-                    neighbors.push_back(axis_neighbors[axis_neighbors.size() - 1]);
-                    directions[2] = true;
-                }
-            } else if (index == axis_neighbors.size() - 1) {
-                neighbors.push_back(axis_neighbors[index - 1]);
-                directions[2] = true;
-                if (topology == tt::tt_fabric::Topology::Ring) {
-                    neighbors.push_back(axis_neighbors[0]);
-                    directions[3] = true;
-                }
-            } else {
-                neighbors.push_back(axis_neighbors[index - 1]);  // north
-                directions[2] = true;
-                neighbors.push_back(axis_neighbors[index + 1]);
-                directions[3] = true;  // south
-            }
-        }
+        process_axis(axis.value());
     } else {
-        {
-            auto axis_neighbors = mesh_view.get_devices_on_row(mesh_coordinate[0]);
-            auto index = device_index(axis_neighbors, src_device);
-            if (index == 0) {
-                // if Line, no neighbor, so don't push back, but for Ring, we need to push back the last device
-                neighbors.push_back(axis_neighbors[index + 1]);
-                directions[0] = true;  // east
-                // if Line, no neighbor, so don't push back, but for Ring, we need to push back the last device
-                if (topology == tt::tt_fabric::Topology::Ring) {
-                    neighbors.push_back(axis_neighbors[axis_neighbors.size() - 1]);
-                    directions[1] = true;
-                }
-            } else if (index == axis_neighbors.size() - 1) {
-                // if Line, no neighbor, so don't push back, but for Ring, we need to push back the first device
-                neighbors.push_back(axis_neighbors[0]);
-                directions[1] = true;
-                if (topology == tt::tt_fabric::Topology::Ring) {
-                    neighbors.push_back(axis_neighbors[0]);
-                    directions[1] = true;
-                }
-            } else {
-                neighbors.push_back(axis_neighbors[index + 1]);
-                directions[0] = true;
-                neighbors.push_back(axis_neighbors[index - 1]);
-                directions[1] = true;
-            }
-        }
-        {
-            auto axis_neighbors = mesh_view.get_devices_on_column(mesh_coordinate[1]);
-            auto index = device_index(axis_neighbors, src_device);
-            if (index == 0) {                                    // northmost device
-                neighbors.push_back(axis_neighbors[index + 1]);  // south exists
-                directions[3] = true;
-                if (topology == tt::tt_fabric::Topology::Ring) {
-                    neighbors.push_back(axis_neighbors[axis_neighbors.size() - 1]);
-                    directions[2] = true;
-                }
-            } else if (index == axis_neighbors.size() - 1) {
-                neighbors.push_back(axis_neighbors[index - 1]);
-                directions[2] = true;
-                if (topology == tt::tt_fabric::Topology::Ring) {
-                    neighbors.push_back(axis_neighbors[0]);
-                    directions[3] = true;
-                }
-            } else {
-                neighbors.push_back(axis_neighbors[index - 1]);
-                directions[2] = true;
-                neighbors.push_back(axis_neighbors[index + 1]);
-                directions[3] = true;
-            }
-        }
+        // When no axis is specified, gather neighbours on both axes
+        process_axis(1);  // horizontal (row)
+        process_axis(0);  // vertical (column)
     }
+
     TT_FATAL(neighbors.size() > 0, "No neighbors found");
     TT_FATAL(!(axis.has_value() && neighbors.size() > 2), "Along a single axis, there can only be 2 neighbors");
-    TT_FATAL(
-        !(topology == tt::tt_fabric::Topology::Ring && neighbors.size() != 4), "Ring topology must have 4 neighbors");
+
+    if (!axis.has_value()) {
+        TT_FATAL(!(is_ring && neighbors.size() != 4), "Ring topology must have 4 neighbors");
+    }
+
     return {neighbors, directions};
 }
 
