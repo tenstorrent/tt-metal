@@ -117,7 +117,6 @@ class TtMoeLayer(LightweightModule):
             topk_values = ttnn.add(topk_values, self.top2_mask_11BB)
             mask_B2 = ttnn.eqz(topk_indices)
             weights_1SB1 = ttnn.sum(ttnn.softmax(topk_values, dim=-1) * mask_B2, dim=3)
-
             topk_values.deallocate(True)
             topk_indices.deallocate(True)
             mask_B2.deallocate(True)
@@ -126,7 +125,7 @@ class TtMoeLayer(LightweightModule):
 
         # MLP and masking
         weights = expert_i_HH(input_i_1SBH, mode=mode)
-        weights = ttnn.unsqueeze(weights_1SB1, dim=3)
+        weights_1SB1 = ttnn.unsqueeze(weights_1SB1, dim=3)
         results_11BH = ttnn.mul(weights, weights_1SB1)
 
         weights.deallocate(True)
