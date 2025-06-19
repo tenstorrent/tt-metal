@@ -15,7 +15,7 @@ from helpers.param_config import (
     generate_params,
     input_output_formats,
 )
-from helpers.perf import PerfRunType, perf_benchmark, write_to_report
+from helpers.perf import ALL_RUN_TYPES, perf_benchmark, write_to_report
 
 # SUPPORTED FORMATS FOR TEST
 supported_formats = [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Float16_b]
@@ -43,12 +43,6 @@ param_ids = generate_param_ids(all_params)
     ids=param_ids,
 )
 def test_perf_eltwise_binary_fpu(testname, formats, dest_acc, mathop, math_fidelity):
-    RUN_TYPES = [
-        PerfRunType.L1_TO_L1,
-        PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.MATH_ISOLATE,
-        PerfRunType.PACK_ISOLATE,
-    ]
 
     # MathFidelity is only used for Elwmul
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
@@ -63,5 +57,5 @@ def test_perf_eltwise_binary_fpu(testname, formats, dest_acc, mathop, math_fidel
         "math_fidelity": math_fidelity,
     }
 
-    results = perf_benchmark(test_config, RUN_TYPES)
-    write_to_report(test_config, RUN_TYPES, results)
+    results = perf_benchmark(test_config, ALL_RUN_TYPES)
+    write_to_report(test_config, ALL_RUN_TYPES, results)

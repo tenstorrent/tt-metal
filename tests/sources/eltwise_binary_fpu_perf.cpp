@@ -78,7 +78,7 @@ void run_kernel()
         {
             return;
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             return _perf_math_loop_clear_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
         }
@@ -127,7 +127,7 @@ void run_kernel()
         {
             return;
         }
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (uint32_t tile = 0; tile < TILE_CNT; tile++)
             {
