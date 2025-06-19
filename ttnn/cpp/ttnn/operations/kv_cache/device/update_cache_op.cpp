@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/operations/kv_cache/device/update_cache_op.hpp"
+#include "ttnn/operations/kv_cache/device/update_cache_op.hpp"
 
 #include <tt-metalium/constants.hpp>
 

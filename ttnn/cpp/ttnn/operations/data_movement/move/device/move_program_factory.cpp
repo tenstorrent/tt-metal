@@ -5,9 +5,9 @@
 #include <math.h>
 
 #include <tt-metalium/work_split.hpp>
-#include "cpp/ttnn/operations/data_movement/move/device/move_device_operation.hpp"
+#include "ttnn/operations/data_movement/move/device/move_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
-#include "cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
+#include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
