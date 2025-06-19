@@ -147,7 +147,7 @@ def num_to_core_range_set(x):
     "dims, slice_size, cores",
     [
         [[2, 256, 256, 64], 128, 16],
-        [[2, 256, 128, 32], 16, 8],
+        [[2, 256, 128, 32], 64, 8],
         [[2, 256, 256, 128], 64, 64],
         [[2, 256, 256, 9], 64, 64],
         [[2, 256, 256, 17], 64, 64],
@@ -162,9 +162,15 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
     if core_grid.x * core_grid.y < cores:
         pytest.skip("Device does not have enough cores")
 
+    if dims[-1] % 32 != 0 and layout == ttnn.TILE_LAYOUT:
+        pytest.skip("Tiled layout requires last dimension to be divisible by 32")
+
     strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
     torch_input = torch.randint(-10, 10, dims)
+    torch_input = torch.tensor(range(dims[2])).reshape(1, 1, dims[2], 1).broadcast_to(dims).to(
+        torch.bfloat16
+    ) + torch.tensor(range(dims[1])).reshape(1, dims[1], 1, 1).broadcast_to(dims).to(torch.bfloat16)
     ttnn_output = ttnn.zeros(dims, device=device, layout=layout, dtype=ttnn.bfloat16)
     ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
     core_range = num_to_core_range_set(cores)
