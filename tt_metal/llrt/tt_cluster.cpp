@@ -30,6 +30,7 @@
 #include "fabric_host_interface.h"
 #include "fabric_types.hpp"
 #include "fmt/base.h"
+#include "fmt/ranges.h"
 #include "get_platform_architecture.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -347,8 +348,30 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         std::unordered_set<chip_id_t> chips_set;
         // generate the cluster desc and pull chip ids from there
         auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-        if (rtoptions_.is_visible_device_specified()) {
-            chips_set.emplace(rtoptions_.get_visible_device());
+        if (rtoptions_.is_visible_devices_specified()) {
+            const auto& visible_devices = rtoptions_.get_visible_devices();
+            std::vector<int> desired_logical_ids;
+
+            for (auto& [logical_id, pci_id] : temp_cluster_desc->get_chips_with_mmio()) {
+                if (std::find(visible_devices.begin(), visible_devices.end(), pci_id) != visible_devices.end()) {
+                    desired_logical_ids.push_back(logical_id);
+                }
+            }
+
+            TT_FATAL(
+                !desired_logical_ids.empty(),
+                "No visible devices found in cluster descriptor. Requested devices: {}",
+                fmt::format("{}", fmt::join(visible_devices, ",")));
+
+            const auto& chips_grouped_by_mmio = temp_cluster_desc->get_chips_grouped_by_closest_mmio();
+            for (int logical_id : desired_logical_ids) {
+                auto it = chips_grouped_by_mmio.find(logical_id);
+                TT_FATAL(
+                    it != chips_grouped_by_mmio.end(), "Logical ID {} not found in chips grouped by MMIO", logical_id);
+                for (const auto& chip_id : it->second) {
+                    chips_set.emplace(chip_id);
+                }
+            }
         }
         // Adding this check is a workaround for current UMD bug that only uses this getter to populate private metadata
         // that is later expected to be populated by unrelated APIs
