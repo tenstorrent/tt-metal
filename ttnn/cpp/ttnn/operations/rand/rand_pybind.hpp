@@ -9,5 +9,5 @@
 namespace py = pybind11;
 
 namespace ttnn::operations::rand {
-void bind_rand_operation(py::module& module);
+void bind_rand_operation(py::module& pymodule);
 }  // namespace ttnn::operations::rand
