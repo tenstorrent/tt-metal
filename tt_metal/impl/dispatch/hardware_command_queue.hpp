@@ -59,7 +59,7 @@ public:
 
     const CoreCoord& virtual_enqueue_program_dispatch_core() const override;
 
-    void record_begin(const uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) override;
+    void record_begin(uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) override;
     void record_end() override;
 
     void reset_worker_state(
@@ -80,7 +80,7 @@ public:
     // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
 
-    void enqueue_trace(const uint32_t trace_id, bool blocking) override;
+    void enqueue_trace(uint32_t trace_id, bool blocking) override;
     void enqueue_program(Program& program, bool blocking) override;
     void enqueue_read_buffer(
         const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,

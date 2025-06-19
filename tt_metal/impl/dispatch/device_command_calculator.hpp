@@ -225,10 +225,10 @@ public:
     // of sub commands that can be written in a single dispatch command.
     template <typename PackedSubCmd>
     void insert_write_packed_payloads(
-        const uint32_t num_sub_cmds,
-        const uint32_t sub_cmd_sizeB,
-        const uint32_t max_prefetch_command_size,
-        const uint32_t packed_write_max_unicast_sub_cmds,
+        uint32_t num_sub_cmds,
+        uint32_t sub_cmd_sizeB,
+        uint32_t max_prefetch_command_size,
+        uint32_t packed_write_max_unicast_sub_cmds,
         std::vector<std::pair<uint32_t, uint32_t>>& packed_cmd_payloads);
 
     // Clear calculator state

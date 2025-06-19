@@ -57,7 +57,7 @@ private:
         IDevice* device,
         std::unordered_set<CoreCoord>& validated_cores,
         const one_core_data_t& one_core_data,
-        const uint32_t start_index,
+        uint32_t start_index,
         uint32_t result_addr);
     bool validate_host(std::unordered_set<CoreCoord>& validated_cores, const one_core_data_t& one_core_data);
 

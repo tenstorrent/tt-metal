@@ -45,7 +45,7 @@ struct AllGatherFusedOpSignaler {
     void init_fused_op(
         const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
         const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
-        const FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
+        FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
     void init_all_gather(
         tt::tt_metal::Program& program,

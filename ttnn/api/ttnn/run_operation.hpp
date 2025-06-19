@@ -69,7 +69,7 @@ Tensors run_with_autoformat(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors = {},
     const OptionalTensors& optional_output_tensors = {},
-    const float pad_value = 0,
+    float pad_value = 0,
     ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename ConcreteOperation>

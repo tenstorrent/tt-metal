@@ -11,7 +11,7 @@ namespace ttnn::operations::moreh::moreh_cumsum {
 struct MorehCumsum {
     static Tensor invoke(
         const Tensor& input,
-        const int64_t dim,
+        int64_t dim,
         const std::optional<Tensor>& output,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
@@ -20,7 +20,7 @@ struct MorehCumsum {
 struct MorehCumsumBackward {
     static Tensor invoke(
         const Tensor& output_grad,
-        const int64_t dim,
+        int64_t dim,
         const std::optional<Tensor>& input_grad,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);

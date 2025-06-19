@@ -91,10 +91,10 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
@@ -107,15 +107,15 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
-    const CoreCoord core_grid_offset = CoreCoord(0, 0));
+    CoreCoord core_grid_offset = CoreCoord(0, 0));
 
 namespace operations {
 namespace experimental {
@@ -125,11 +125,11 @@ Tensor reduce_scatter_minimal_async(
     const Tensor& input_tensor,
     Tensor& persistent_intermediate_buffer,
     Tensor& persistent_output_buffer,
-    const uint32_t dim,
+    uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    const uint32_t num_links = 1,
+    uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
 }  // namespace ccl

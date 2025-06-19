@@ -38,27 +38,34 @@ class AllGatherConfig {
     static AllGatherBidirectionalMode choose_bidirectional_mode(Tensor const& input_tensor, bool fuse_op);
 
    public:
-    AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links, ccl::Topology topology, std::size_t num_buffers_per_worker, bool fuse_op=false, const std::optional<size_t> user_defined_num_workers=std::nullopt);
+       AllGatherConfig(
+           const Tensor& input_tensor,
+           const Tensor& output_tensor,
+           uint32_t dim,
+           uint32_t ring_size,
+           uint32_t num_links,
+           ccl::Topology topology,
+           std::size_t num_buffers_per_worker,
+           bool fuse_op = false,
+           std::optional<size_t> user_defined_num_workers = std::nullopt);
 
-    uint32_t get_erisc_handshake_address() const { return this->erisc_handshake_address; }
+       uint32_t get_erisc_handshake_address() const { return this->erisc_handshake_address; }
 
-    uint32_t get_num_eth_buffers_per_edm() const { return this->num_eth_buffers; }
-    uint32_t get_num_workers_per_link() const { return this->num_workers_per_link; }
-    uint32_t get_num_workers() const { return this->num_workers_per_link * this->num_links; }
+       uint32_t get_num_eth_buffers_per_edm() const { return this->num_eth_buffers; }
+       uint32_t get_num_workers_per_link() const { return this->num_workers_per_link; }
+       uint32_t get_num_workers() const { return this->num_workers_per_link * this->num_links; }
 
-    uint32_t get_eth_buffer_size() const { return this->eth_buffer_size; }
+       uint32_t get_eth_buffer_size() const { return this->eth_buffer_size; }
 
-    uint32_t get_eth_sems_l1_base_byte_address() const { return this->eth_sems_l1_base_byte_address; }
+       uint32_t get_eth_sems_l1_base_byte_address() const { return this->eth_sems_l1_base_byte_address; }
 
-    uint32_t get_eth_buffers_l1_base_byte_address() const { return this->eth_buffers_l1_base_byte_address; }
+       uint32_t get_eth_buffers_l1_base_byte_address() const { return this->eth_buffers_l1_base_byte_address; }
 
-    uint32_t get_semaphore_size() const { return this->semaphore_size; }
-    std::size_t get_num_buffers_per_channel() const { return this->num_edm_buffers_per_channel; }
+       uint32_t get_semaphore_size() const { return this->semaphore_size; }
+       std::size_t get_num_buffers_per_channel() const { return this->num_edm_buffers_per_channel; }
 
-    uint32_t get_num_edm_channels_in_clockwise_direction() const {
-        return this->enable_bidirectional ?
-            this->num_workers_per_link / 2 :
-            this->num_workers_per_link;
+       uint32_t get_num_edm_channels_in_clockwise_direction() const {
+           return this->enable_bidirectional ? this->num_workers_per_link / 2 : this->num_workers_per_link;
     }
     uint32_t get_ring_size() const { return this->ring_size; }
     bool is_payload_and_channel_sync_merged() const { return enable_merged_payload_and_channel_sync;}
@@ -147,14 +154,13 @@ namespace ccl{
 namespace all_gather_detail{
 AllGather create_all_gather_struct(
     const Tensor& input_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
+    uint32_t dim,
+    uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<size_t> user_defined_num_workersm,
-    const std::optional<size_t> user_defined_num_buffers_per_channel,
+    std::optional<size_t> user_defined_num_workersm,
+    std::optional<size_t> user_defined_num_buffers_per_channel,
     const std::vector<IDevice*>& devices,
-    const ccl::Topology topology
-);
+    ccl::Topology topology);
 } // namespace all_gather_detail
 } // namespace ccl
 
@@ -162,89 +168,87 @@ AllGather create_all_gather_struct(
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_full_shard_grid(
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    const std::optional<size_t> user_defined_num_workers,
-    const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::optional<chip_id_t> receiver_device_id,
-    const std::optional<chip_id_t> sender_device_id,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
+    std::optional<size_t> user_defined_num_workers,
+    std::optional<size_t> user_defined_num_buffers_per_channel,
+    std::optional<chip_id_t> receiver_device_id,
+    std::optional<chip_id_t> sender_device_id,
     ccl::Topology topology);
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     chip_id_t target_device_id,
-    const std::optional<chip_id_t> receiver_device_id,
-    const std::optional<chip_id_t> sender_device_id,
+    std::optional<chip_id_t> receiver_device_id,
+    std::optional<chip_id_t> sender_device_id,
     ccl::Topology topology,
-    const std::optional<size_t> user_defined_num_workers,
-    const std::optional<size_t> user_defined_num_buffers_per_channel);
+    std::optional<size_t> user_defined_num_workers,
+    std::optional<size_t> user_defined_num_buffers_per_channel);
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     chip_id_t target_device_id,
-    const std::optional<chip_id_t> receiver_device_id,
-    const std::optional<chip_id_t> sender_device_id,
+    std::optional<chip_id_t> receiver_device_id,
+    std::optional<chip_id_t> sender_device_id,
     ccl::Topology topology,
-    const std::optional<size_t> user_defined_num_workers,
-    const std::optional<size_t> user_defined_num_buffers_per_channel,
+    std::optional<size_t> user_defined_num_workers,
+    std::optional<size_t> user_defined_num_buffers_per_channel,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
-    const CoreCoord core_grid_offset = CoreCoord(0, 0));
-
-
+    CoreCoord core_grid_offset = CoreCoord(0, 0));
 
 namespace operations {
 namespace ccl {
 
 Tensor all_gather(
     const Tensor& input_tensor,
-    const int32_t dim,
-    const uint32_t num_links = 1,
+    int32_t dim,
+    uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<size_t> user_defined_num_workers = std::nullopt,
-    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
+    std::optional<size_t> user_defined_num_workers = std::nullopt,
+    std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
 
 std::vector<Tensor> all_gather(
     const std::vector<Tensor>& input_tensors,
-    const int32_t dim,
-    const uint32_t num_links = 1,
+    int32_t dim,
+    uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<size_t> user_defined_num_workers = std::nullopt,
-    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
+    std::optional<size_t> user_defined_num_workers = std::nullopt,
+    std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
 
 Tensor all_gather(
     const Tensor& input_tensor,
-    const int32_t dim,
-    const uint32_t cluster_axis,
+    int32_t dim,
+    uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const uint32_t num_links = 1,
+    uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<size_t> user_defined_num_workers = std::nullopt,
-    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear);
+    std::optional<size_t> user_defined_num_workers = std::nullopt,
+    std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear);
 
 std::vector<Tensor> all_gather(
     const std::vector<Tensor>& input_tensors,
-    const int32_t dim,
-    const uint32_t cluster_axis,
+    int32_t dim,
+    uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const uint32_t num_links = 1,
+    uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<size_t> user_defined_num_workers = std::nullopt,
-    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear);
+    std::optional<size_t> user_defined_num_workers = std::nullopt,
+    std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear);
 
 } // namespace ccl
 } // namespace operations

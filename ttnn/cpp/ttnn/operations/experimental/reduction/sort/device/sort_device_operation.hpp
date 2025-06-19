@@ -33,9 +33,9 @@ struct SortDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
-        const int8_t dim,
-        const bool descending,
-        const bool stable,
+        int8_t dim,
+        bool descending,
+        bool stable,
         const MemoryConfig& output_memory_config,
         const std::vector<std::optional<Tensor>>& output_tensors);
 };

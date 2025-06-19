@@ -26,7 +26,7 @@ struct ConcatDeviceOperation {
 // Notes: Non-empty tensors provided must have the same shape, except in the cat dimension.
 Tensor concat_impl(
     const std::vector<Tensor>& input_tensors,
-    const std::int64_t dim = 0,
+    std::int64_t dim = 0,
     unsigned int groups = 1,
     const tt::tt_metal::MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 

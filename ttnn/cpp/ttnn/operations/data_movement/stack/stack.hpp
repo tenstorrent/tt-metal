@@ -10,7 +10,7 @@ namespace ttnn {
 namespace operations::data_movement {
 
 struct StackOperation {
-    static ttnn::Tensor invoke(const std::vector<ttnn::Tensor>& input_tensors, const int dim);
+    static ttnn::Tensor invoke(const std::vector<ttnn::Tensor>& input_tensors, int dim);
 };
 
 }  // namespace operations::data_movement

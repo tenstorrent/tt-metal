@@ -21,9 +21,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_group_attn_matmul(
     Tensor& output,
     std::optional<const uint32_t> num_tokens,
     std::optional<const bool> transpose_hw,
-    const uint32_t out_subblock_w,
+    uint32_t out_subblock_w,
     CoreCoord compute_with_storage_grid_size,
-    const bool row_major,
+    bool row_major,
     ttnn::DeviceComputeKernelConfig compute_kernel_config);
 
 struct GroupAttnMatmulDeviceOperation {

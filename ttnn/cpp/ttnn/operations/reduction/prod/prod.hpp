@@ -16,8 +16,8 @@ namespace operations::reduction {
 struct ProdOperation {
     static Tensor invoke(
         const Tensor& input,
-        const std::optional<int64_t> dim = std::nullopt,
-        const bool keepdim = false,
+        std::optional<int64_t> dim = std::nullopt,
+        bool keepdim = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
     static Tensor invoke(
