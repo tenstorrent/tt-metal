@@ -136,9 +136,126 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def_readonly("transpose_of_faces", &Tile::transpose_of_faces);
 
     auto pyTensorSpec = static_cast<py::class_<TensorSpec>>(m_tensor.attr("TensorSpec"));
-    pyTensorSpec.def("shape", &TensorSpec::logical_shape, "Logical shape of a tensor")
+    pyTensorSpec
+        .def(
+            py::init<>([](const ttnn::Shape& shape,
+                          DataType dtype,
+                          Layout layout,
+                          BufferType buffer_type,
+                          const std::optional<Tile>& tile) {
+                return TensorSpec(
+                    shape,
+                    TensorLayout(
+                        dtype, PageConfig(layout, tile), MemoryConfig(TensorMemoryLayout::INTERLEAVED, buffer_type)));
+            }),
+            py::arg("shape"),
+            py::arg("dtype"),
+            py::arg("layout"),
+            py::arg("buffer_type") = BufferType::DRAM,
+            py::arg("tile") = std::nullopt,
+            R"doc(
+                Create TensorSpec class.
+                This constructor is used to create TensorSpec for tensors that are not sharded.
+            )doc")
+        .def(
+            py::init<>([](const ttnn::Shape& shape,
+                          DataType dtype,
+                          Layout layout,
+                          TensorMemoryLayout memory_layout,
+                          const std::optional<ShardSpec>& shard_spec,
+                          BufferType buffer_type,
+                          const std::optional<Tile>& tile) {
+                return TensorSpec(
+                    shape,
+                    TensorLayout(
+                        dtype, PageConfig(layout, tile), MemoryConfig(memory_layout, buffer_type, shard_spec)));
+            }),
+            py::arg("shape"),
+            py::arg("dtype"),
+            py::arg("layout"),
+            py::arg("memory_layout"),
+            py::arg("shard_spec") = std::nullopt,
+            py::arg("buffer_type") = BufferType::DRAM,
+            py::arg("tile") = std::nullopt,
+            R"doc(
+                Create TensorSpec class.
+                This constructor is used to create TensorSpec for tensors that are sharded.
+            )doc")
+        .def(
+            py::init<>([](const ttnn::Shape& shape,
+                          DataType dtype,
+                          Layout layout,
+                          const NdShardSpec& nd_shard_spec,
+                          BufferType buffer_type,
+                          const std::optional<Tile>& tile) {
+                return TensorSpec(
+                    shape, TensorLayout(dtype, PageConfig(layout, tile), MemoryConfig(buffer_type, nd_shard_spec)));
+            }),
+            py::arg("shape"),
+            py::arg("dtype"),
+            py::arg("layout"),
+            py::arg("nd_shard_spec"),
+            py::arg("buffer_type") = BufferType::DRAM,
+            py::arg("tile") = std::nullopt,
+            R"doc(
+                Create TensorSpec class.
+                This constructor is used to create TensorSpec for ND sharded tensors.
+                Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
+            )doc")
+        .def(
+            "sharded_by_dims",
+            [](const TensorSpec& self,
+               const std::vector<int32_t>& dims,
+               CoreRangeSet grid,
+               ShardOrientation orientation) {
+                return self.sharded_by_dims(tt::stl::Span<const int32_t>(dims), std::move(grid), orientation);
+            },
+            py::arg("dims"),
+            py::arg("grid"),
+            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            R"doc(
+                Shard tensor by dimensions.
+                This guarantees that the data along the specified dimensions will get stored within the same core.
+                Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
+            )doc")
+        .def(
+            "sharded_across_dims",
+            [](const TensorSpec& self,
+               const std::vector<int32_t>& dims,
+               CoreRangeSet grid,
+               ShardOrientation orientation) {
+                return self.sharded_across_dims(tt::stl::Span<const int32_t>(dims), std::move(grid), orientation);
+            },
+            py::arg("dims"),
+            py::arg("grid"),
+            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            R"doc(
+                Shard tensor across dimensions.
+                This guarantees that the data along the specified dimensions will get stored across multiple cores.
+                Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
+            )doc")
+        .def(
+            "block_sharded",
+            &TensorSpec::block_sharded,
+            py::arg("grid"),
+            R"doc(
+                Shard tensor across 2D grid of cores using block sharding.
+            )doc")
+        .def(
+            "block_sharded",
+            [](const TensorSpec& self, CoreRangeSet grid) {
+                TT_FATAL(grid.ranges().size() == 1, "Block sharding requires a single CoreRange");
+                return self.block_sharded(grid.ranges()[0]);
+            },
+            py::arg("grid"),
+            R"doc(
+                Shard tensor across 2D grid of cores using block sharding.
+            )doc")
+        .def("shape", &TensorSpec::logical_shape, "Logical shape of a tensor")
         .def("layout", &TensorSpec::layout, "Layout of a tensor")
-        .def("dtype", &TensorSpec::data_type, "Dtype of a tensor");
+        .def("dtype", &TensorSpec::data_type, "Dtype of a tensor")
+        .def("tile", &TensorSpec::tile, "Tile of a tensor")
+        .def("memory_config", &TensorSpec::memory_config, "Memory config of a tensor");
 
     auto pyMemoryConfig = static_cast<py::class_<MemoryConfig>>(m_tensor.attr("MemoryConfig"));
     pyMemoryConfig

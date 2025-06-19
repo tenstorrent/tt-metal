@@ -295,6 +295,29 @@ def from_torch(
         return ttnn.Tensor(tensor, dtype, device, layout, memory_config, tile, cq_id, pad_value)
 
 
+@ttnn.register_python_operation(name="ttnn.from_torch_with_spec", golden_function=_golden_function)
+def from_torch_with_spec(
+    tensor: "torch.Tensor",
+    tensor_spec: ttnn.TensorSpec,
+    *,
+    pad_value: Optional[float] = None,
+    device: Optional[ttnn.MeshDevice] = None,
+    mesh_mapper: Optional[ttnn.TensorToMesh] = None,
+    cq_id: Optional[int] = ttnn.DefaultQueueId,
+) -> ttnn.Tensor:
+    return from_torch(
+        tensor,
+        dtype=tensor_spec.dtype(),
+        tile=tensor_spec.tile(),
+        pad_value=pad_value,
+        layout=tensor_spec.layout(),
+        device=device,
+        memory_config=tensor_spec.memory_config(),
+        mesh_mapper=mesh_mapper,
+        cq_id=cq_id,
+    )
+
+
 def _golden_function(tensor, *, torch_rank=None, **kwargs):
     if torch_rank is None:
         return tensor

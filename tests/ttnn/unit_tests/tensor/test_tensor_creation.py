@@ -285,3 +285,58 @@ def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layo
     passing = torch.allclose(py_tensor, py_tensor_after_round_trip_3, **allclose_kwargs)
     passing = torch.allclose(py_tensor, py_tensor_after_round_trip_4, **allclose_kwargs)
     assert passing
+
+
+core_ranges = ttnn.num_cores_to_corerangeset(56, grid_size, True)
+
+
+@pytest.mark.parametrize(
+    "tensor_spec",
+    [
+        # Basic tests for using TensorSpec to create a Tensor
+        ttnn.TensorSpec((1, 2, 3, 4), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+        ttnn.TensorSpec((2, 3, 10, 20), ttnn.float32, ttnn.TILE_LAYOUT),
+        ttnn.TensorSpec((2, 3, 10, 20), ttnn.float32, ttnn.TILE_LAYOUT, tile=ttnn.Tile([16, 16])),
+        ttnn.TensorSpec((2, 3, 10, 20), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1),
+        # Manually specifying sharding
+        ttnn.TensorSpec(
+            (2, 3, 10, 20),
+            ttnn.float32,
+            ttnn.TILE_LAYOUT,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.ShardSpec(core_ranges, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+            buffer_type=ttnn.BufferType.L1,
+        ),
+        ttnn.TensorSpec(
+            (2, 3, 40, 50),
+            ttnn.float32,
+            ttnn.TILE_LAYOUT,
+            ttnn.NdShardSpec([1, 1, 32, 32], core_ranges, ttnn.ShardOrientation.ROW_MAJOR),
+            buffer_type=ttnn.BufferType.L1,
+        ),
+        # Sharding using TensorSpec methods
+        # Batch sharding
+        ttnn.TensorSpec((2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1).sharded_by_dims(
+            [0], core_ranges
+        ),
+        # Sharding preserving last two dimensions
+        ttnn.TensorSpec((2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1).sharded_by_dims(
+            [-1, -2], core_ranges
+        ),
+        # Sharding across last dimension
+        ttnn.TensorSpec(
+            (2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+        ).sharded_across_dims([-1], core_ranges),
+        # Block sharding with automatically deduced shard shape
+        ttnn.TensorSpec((2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1).block_sharded(
+            core_ranges
+        ),
+    ],
+)
+def test_tensor_creation_with_tensor_spec(tensor_spec, device):
+    dtype = tt_dtype_to_torch_dtype[tensor_spec.dtype()]
+    shape = list(tensor_spec.shape())
+    py_tensor = torch.rand(shape, dtype=dtype)
+    tt_tensor = ttnn.from_torch_with_spec(py_tensor, tensor_spec, device=device)
+    py_tensor_after_round_trip = ttnn.to_torch(tt_tensor)
+    assert torch.allclose(py_tensor, py_tensor_after_round_trip)
