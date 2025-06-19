@@ -84,7 +84,7 @@ void read_translation_table(
 TEST(NOC, TensixSingleDeviceHarvestingPrints) {
     auto arch = tt::get_arch_from_string(get_umd_arch_name());
     tt::tt_metal::IDevice* device;
-    const unsigned int device_id = 0;
+    const unsigned int device_id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
     device = tt::tt_metal::CreateDevice(device_id);
     CoreCoord unharvested_logical_grid_size;
     switch (arch) {
@@ -122,7 +122,7 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
 TEST(NOC, TensixVerifyNocNodeIDs) {
     auto arch = tt::get_arch_from_string(get_umd_arch_name());
     tt::tt_metal::IDevice* device;
-    const unsigned int device_id = 0;
+    const unsigned int device_id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
     device = tt::tt_metal::CreateDevice(device_id);
 
     uint32_t MY_NOC_ENCODING_REG = tt::tt_metal::MetalContext::instance().hal().get_noc_encoding_reg();
@@ -154,7 +154,7 @@ TEST(NOC, TensixVerifyNocIdentityTranslationTable) {
         GTEST_SKIP();
     }
     tt::tt_metal::IDevice* device;
-    const unsigned int device_id = 0;
+    const unsigned int device_id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
     device = tt::tt_metal::CreateDevice(device_id);
     // Ping all the registers for NOC
     auto logical_grid_size = device->logical_grid_size();

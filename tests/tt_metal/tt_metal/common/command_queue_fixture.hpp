@@ -48,7 +48,7 @@ protected:
     }
 
     void create_device(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
-        const chip_id_t device_id = 0;
+        const chip_id_t device_id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         this->device_ =
@@ -104,10 +104,10 @@ protected:
     void create_devices(const std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        const chip_id_t mmio_device_id = 0;
+        const chip_id_t mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         std::vector<chip_id_t> chip_ids;
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB) {
-            for (unsigned int id = 0; id < tt::tt_metal::GetNumAvailableDevices(); id++) {
+            for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
                 chip_ids.push_back(id);
             }
         } else {
@@ -165,7 +165,7 @@ protected:
         }
 
         std::vector<chip_id_t> chip_ids;
-        for (unsigned int id = 0; id < num_devices_; id++) {
+        for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
             chip_ids.push_back(id);
         }
 
