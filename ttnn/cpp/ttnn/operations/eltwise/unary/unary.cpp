@@ -12,6 +12,7 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/eltwise/unary/tanh_accurate/tanh_accurate.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn::operations::unary {
 
@@ -307,11 +308,18 @@ Tensor Identity::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::IDENTITY;
-    if (input_tensor.dtype() == DataType::UINT32) {
-        op_type = UnaryOpType::IDENTITY_UINT32;
-    }
 
-    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    if (input_tensor.dtype() != DataType::UINT8) {
+        return detail::unary_impl(
+            queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    } else {
+        auto input = ttnn::typecast(input_tensor, DataType::UINT32);
+        return ttnn::typecast(
+            detail::unary_impl(queue_id, input, {UnaryWithParam{op_type}}, memory_config),
+            DataType::UINT8,
+            memory_config,
+            optional_output_tensor);
+    }
 }
 
 Tensor Abs::invoke(
