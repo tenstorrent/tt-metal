@@ -69,7 +69,7 @@ struct ExecuteUnaryWithVariantFloatIntParameter {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const T parameter,
+        T parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
