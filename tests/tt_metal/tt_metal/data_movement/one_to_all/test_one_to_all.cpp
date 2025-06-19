@@ -117,9 +117,6 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     uint32_t sub_l1_base_address =
         test_config.loopback ? mst_l1_base_address : mst_l1_base_address + (bytes_per_transaction);
 
-    // Semaphores
-    const uint32_t sem_id = CreateSemaphore(program, sub_logical_core_set, 0);
-
     // Initialize Kernels
 
     // Sender Kernel
@@ -131,8 +128,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
                                             (uint32_t)test_config.pages_per_transaction,
                                             (uint32_t)test_config.bytes_per_page,
                                             (uint32_t)test_config.test_id,
-                                            (uint32_t)num_subordinates,
-                                            (uint32_t)sem_id};
+                                            (uint32_t)num_subordinates};
     std::string sender_kernel_path = "tests/tt_metal/tt_metal/data_movement/one_to_all/kernels/";
 
     if (test_config.is_multicast) {  // Multicast Sender Kernel
@@ -157,16 +153,6 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
             .processor = DataMovementProcessor::RISCV_0,
             .noc = test_config.noc_id,
             .compile_args = sender_compile_args});
-
-    // Receiver Kernel (currently deprecated)
-    /*vector<uint32_t> receiver_compile_args = {
-        (uint32_t)l1_base_address,
-        (uint32_t)l1_base_address,
-        (uint32_t)test_config.num_of_transactions,
-        (uint32_t)test_config.pages_per_transaction,
-        (uint32_t)test_config.bytes_per_page,
-        (uint32_t)test_config.test_id,
-        (uint32_t)sem_id};*/
 
     // Runtime Arguments
 

@@ -15,7 +15,6 @@ void kernel_main() {
     constexpr uint32_t bytes_per_page = get_compile_time_arg_val(4);
     constexpr uint32_t test_id = get_compile_time_arg_val(5);
     constexpr uint32_t num_subordinates = get_compile_time_arg_val(6);
-    constexpr uint32_t sem_id = get_compile_time_arg_val(7);
 
     // Derivative values
     constexpr uint32_t bytes_per_transaction = pages_per_transaction * bytes_per_page;
@@ -40,17 +39,7 @@ void kernel_main() {
         noc_async_write_barrier();
     }
 
-    /* SEMAPHORES (currently unused)
-    for (uint32_t subordinate = 0; subordinate < num_subordinates; subordinate++) {
-        uint32_t dest_x = get_arg_val<uint32_t>(subordinate_coords_offset + 2 * subordinate);
-        uint32_t dest_y = get_arg_val<uint32_t>(subordinate_coords_offset + 2 * subordinate + 1);
-        uint64_t sem_addr = get_noc_addr(dest_x, dest_y, semaphore);
-        noc_semaphore_inc(sem_addr, 1);
-    }*/
-
-    noc_async_atomic_barrier();
-
     DeviceTimestampedData("Number of transactions", num_of_transactions);
-    DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction * num_subordinates);
+    DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction);
     DeviceTimestampedData("Test id", test_id);
 }

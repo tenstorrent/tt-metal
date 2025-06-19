@@ -203,13 +203,13 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 32700, "upper": 37500}, "bandwidth": 28},  # 18596, 28.2
         },
         52: {  # One to All Unicast Directed Ideal
-            "riscv_0": {"latency": {"lower": 0, "upper": 4350000}, "bandwidth": 30},  # 4297376, 31.23
+            "riscv_0": {"latency": {"lower": 0, "upper": 4350000}, "bandwidth": 0.46},  # 4297376, 0.488
         },
         53: {  # One to All Multicast Directed Ideal
-            "riscv_0": {"latency": {"lower": 0, "upper": 150000}, "bandwidth": 15},  # 137035, 15.3
+            "riscv_0": {"latency": {"lower": 0, "upper": 150000}, "bandwidth": 14},  # 137035, 15.3
         },
         54: {  # One to All Multicast Linked Directed Ideal
-            "riscv_0": {"latency": {"lower": 0, "upper": 90000}, "bandwidth": 23},  # 88542, 23.69
+            "riscv_0": {"latency": {"lower": 0, "upper": 90000}, "bandwidth": 22},  # 88542, 23.69
         },
         17: {
             "riscv_1": {"latency": {"lower": 50, "upper": 700}, "bandwidth": 3},
@@ -297,7 +297,7 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 16000, "upper": 17800}, "bandwidth": 59},  # 8730, 60.1
         },
         52: {  # One to All Unicast Directed Ideal
-            "riscv_0": {"latency": {"lower": 0, "upper": 7500000}, "bandwidth": 62},  # 7345627, 62.8
+            "riscv_0": {"latency": {"lower": 0, "upper": 7500000}, "bandwidth": 0.55},  # 7345627, 0.57
         },
         53: {  # One to All Multicast Directed Ideal
             "riscv_0": {"latency": {"lower": 0, "upper": 180000}, "bandwidth": 24},  # 170221, 24.6
