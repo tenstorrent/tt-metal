@@ -6,7 +6,7 @@ import torch
 import inspect
 from typing import List, Optional, Union
 
-SDXL_L1_SMALL_SIZE = 65536
+SDXL_L1_SMALL_SIZE = 57344
 
 
 # Copied from sdxl pipeline
