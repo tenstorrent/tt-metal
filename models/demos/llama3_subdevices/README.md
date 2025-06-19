@@ -53,6 +53,23 @@ pytest models/demos/llama3_subdevices/demo/demo.py::test_llama_demo --batch_size
 pytest models/demos/llama3_subdevices/demo/demo.py::test_llama_demo --batch_size=32 --layers=80 --max_generated_tokens=500000 --stress_test=True
 ```
 
+## Command-Line Parameters
+- --weights (str): Model weights to use (instruct, random, etc.)
+- --layers (int): Number of transformer layers (e.g., 1, 10, 80)
+- --input_prompts (str): Path to JSON file with input prompts
+- --instruct (bool): Use instruct-tuned weights
+- --repeat_batches (int): Number of consecutive batches to run
+- --max_seq_len (int): Maximum context length (up to 128k)
+- --batch_size (int): Number of users per batch (1, 2, 4, 8, 16, 32)
+- --max_generated_tokens (int): Max tokens to generate per user
+- --paged_attention (bool): Enable paged attention
+- --page_params (dict): Paged attention parameters (page_block_size, page_max_num_blocks)
+- --sampling_params (dict): Sampling parameters (temperature, top_p, top_k, seed)
+- --stress_test (bool): Enable stress test mode
+- --start_pos (int): Start position for decoding
+- --optimizations (str): Optimization level (performance, accuracy)
+- --FAKE_DEVICE (str): Emulate device for testing (N150, N300, T3K, TG)
+
 ## Input Prompts
 
 Input prompts should be provided as a JSON file, with each entry containing a prompt and optionally a context and max_length.
