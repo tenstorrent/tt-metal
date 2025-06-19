@@ -119,6 +119,7 @@ void kernel_main() {
                     if (num_targets_backward_direction) {
                         write_and_advance_local_read_address_for_fabric_write_backward(
                             noc0_dest_noc_addr, pkt_hdr, fabric_connection, l1_read_addr, output_page_size);
+                    }
                 } else {
                     if (num_targets_forward_direction) {
                         write_and_advance_local_read_address_for_fabric_write_forward(
