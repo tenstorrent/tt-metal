@@ -4,7 +4,7 @@
 
 #include <algorithm>
 #include "dataflow_api.h"
-#include "cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
+#include "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/common.hpp"
 
 void kernel_main() {
     uint32_t i = 0;

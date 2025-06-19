@@ -16,7 +16,7 @@
 
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
-#include "cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
 
 // Includes that need to be moved to CCL datastructures header
 #include <vector>

@@ -9,9 +9,9 @@
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 /* All Gather Matmul fusion includes */
-#include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
-#include "cpp/ttnn/operations/matmul/device/matmul_op.hpp"
-#include "cpp/ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 
 namespace ttnn {
 namespace ccl {

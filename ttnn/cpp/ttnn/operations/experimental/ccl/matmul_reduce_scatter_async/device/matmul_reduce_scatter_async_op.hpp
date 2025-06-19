@@ -22,8 +22,8 @@
 #include <algorithm>
 
 /* Fusion includes */
-#include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
-#include "cpp/ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn {

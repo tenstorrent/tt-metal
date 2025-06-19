@@ -11,13 +11,13 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "cpp/ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/creation.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include <variant>
 

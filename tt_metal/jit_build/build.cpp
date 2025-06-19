@@ -257,6 +257,7 @@ void JitBuildEnv::init(
         "..",
         root_,
         root_ + "ttnn",
+        root_ + "ttnn/cpp",
         root_ + "tt_metal",
         root_ + "tt_metal/include",
         root_ + "tt_metal/hw/inc",
@@ -271,8 +272,7 @@ void JitBuildEnv::init(
         root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/common/inc",
         root_ + "tt_metal/api/",
         root_ + "tt_metal/api/tt-metalium/",
-        root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib"
-    };
+        root_ + "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib"};
 
     std::ostringstream oss;
     for (size_t i = 0; i < includeDirs.size(); ++i) {

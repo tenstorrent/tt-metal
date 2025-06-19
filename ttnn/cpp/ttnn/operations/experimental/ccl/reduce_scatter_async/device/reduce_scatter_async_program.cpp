@@ -15,21 +15,21 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 
-#include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
+#include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
 
 // For reduction op
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
-#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
-#include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt_stl/overloaded.hpp>
 

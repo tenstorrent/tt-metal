@@ -4,8 +4,8 @@
 
 #include "stack.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
-#include "cpp/ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
 
 namespace ttnn::operations::data_movement {
 

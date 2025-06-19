@@ -6,7 +6,7 @@
 #include <optional>
 #include <variant>
 
-#include "cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/math.hpp"

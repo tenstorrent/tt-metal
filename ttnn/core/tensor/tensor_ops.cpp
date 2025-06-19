@@ -24,8 +24,8 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/core.hpp"
 
-#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace tt::tt_metal::tensor_ops {
 
