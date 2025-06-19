@@ -465,7 +465,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackUntilizeShortInit) {
 Following tests are for pack untilize
 ***************************************/
 TEST_F(DeviceFixture, TensixComputePackUntilize) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
+    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}, {10, 10}, {2, 40}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
