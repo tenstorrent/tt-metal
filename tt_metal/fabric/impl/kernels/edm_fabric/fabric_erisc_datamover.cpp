@@ -983,6 +983,8 @@ void run_receiver_channel_step_impl(
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table) {
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
+    auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
+    bool unwritten_packets;
     if constexpr (enable_first_level_ack) {
         auto& ack_counter = receiver_channel_pointers.ack_counter;
         bool pkts_received = pkts_received_since_last_check > 0;
@@ -993,10 +995,11 @@ void run_receiver_channel_step_impl(
             receiver_send_received_ack(ack_counter.get_buffer_index(), local_receiver_channel);
             ack_counter.increment();
         }
+        unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
+    } else {
+        unwritten_packets = pkts_received_since_last_check != 0;
     }
 
-    auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
-    bool unwritten_packets = pkts_received_since_last_check != 0;
     if (unwritten_packets) {
         invalidate_l1_cache();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
