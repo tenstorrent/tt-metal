@@ -746,7 +746,17 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
         return flattened_config;
     };
 
-    auto flattened_pad_config = flatten_pad_config(pad_config);
+    std::vector<std::vector<uint32_pair_t>> pad_config0(num_cores_nhw);
+    std::vector<std::vector<uint32_pair_t>> pad_config1(num_cores_nhw);
+    for (int core_idx = 0; core_idx < pad_config.size(); core_idx++) {
+        const auto& config = pad_config[core_idx];
+        auto middle = config.begin() + config.size() / 2;
+        pad_config0[core_idx] = std::vector<uint32_pair_t>(config.begin(), middle);
+        pad_config1[core_idx] = std::vector<uint32_pair_t>(middle, config.end());
+    }
+
+    auto flattened_pad_config0 = flatten_pad_config(pad_config0);
+    auto flattened_pad_config1 = flatten_pad_config(pad_config1);
 
     auto align_config = [](auto& config, size_t align_granularity = 1, uint16_t align_value = 0) {
         size_t max_len = 0;
@@ -767,10 +777,15 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
         }
     };
 
-    align_config(flattened_pad_config, 2);
+    align_config(flattened_pad_config0, 2);
+    align_config(flattened_pad_config1, 2);
 
     return HaloGatherKernelConfig{
-        flattened_pad_config, serialized_gather_configs0, serialized_gather_configs1, number_of_blocks_per_core};
+        flattened_pad_config0,
+        flattened_pad_config1,
+        serialized_gather_configs0,
+        serialized_gather_configs1,
+        number_of_blocks_per_core};
 }
 
 std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplace_halo_kernel_config_tensors(
