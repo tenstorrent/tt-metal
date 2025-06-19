@@ -299,17 +299,18 @@ void kernel_main() {
     auto* metadata_packet_header =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
 
-    cb_wait_front(indices_tensor_cb_id, indices_pages);
+    uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
+
     cb_wait_front(mapping_tensor_cb_id, mapping_pages);
 
     DPRINT << "dispatching tokens" << ENDL();
     for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
         uint32_t b = (local_token + (tokens_per_device * dispatch_index));
+        cb_wait_front(indices_tensor_cb_id, 1);
         cb_wait_front(input_tensor_cb_id, 1);
         // uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id) + local_token * aligned_input_page_size;
         uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
-        uint16_t* token_indices =
-            (uint16_t*)(get_read_ptr(indices_tensor_cb_id) + (local_token * aligned_indices_page_size));
+        uint16_t* token_indices = (uint16_t*)(get_read_ptr(indices_tensor_cb_id));
         uint64_t output_token_write_addr = get_noc_addr(b, output_addr_gen);
         for (uint32_t k = 0; k < selected_experts_k; k++) {
             uint16_t expert_chosen = token_indices[k];
@@ -337,6 +338,7 @@ void kernel_main() {
                 }
             }
         }
+        cb_pop_front(indices_tensor_cb_id, 1);
         cb_pop_front(input_tensor_cb_id, 1);
     }
     DPRINT << "dispatching tokens completed" << ENDL();
@@ -347,7 +349,7 @@ void kernel_main() {
     for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
         uint32_t b = (local_token + (tokens_per_device * dispatch_index));
         uint64_t metadata_write_addr = get_noc_addr(b, metadata_addr_gen);
-        uint32_t token_indices_address = get_read_ptr(indices_tensor_cb_id) + (local_token * aligned_indices_page_size);
+        uint32_t token_indices_address = base_indices_addr + (local_token * aligned_indices_page_size);
         for (uint32_t d = 0; d < num_devices; d++) {
             if (dest_chip_ids[d] == src_chip_id) {
                 dispatch_metadata_local_device(
