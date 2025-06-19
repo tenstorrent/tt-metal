@@ -34,7 +34,7 @@ using DeviceComputeKernelConfig = std::variant<GrayskullComputeKernelConfig, Wor
 DeviceComputeKernelConfig init_device_compute_kernel_config(
     tt::ARCH arch,
     const std::optional<const DeviceComputeKernelConfig>& device_kernel_config,
-    const MathFidelity default_fidelity = MathFidelity::LoFi,
+    MathFidelity default_fidelity = MathFidelity::LoFi,
     bool default_approx_mode = true,
     bool default_fp32_acc = false,
     bool default_l1_acc = false,
@@ -45,7 +45,7 @@ MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& c
 tt::ARCH get_arch_from_compute_config(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 
 std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
-    tt::ARCH arch, const DeviceComputeKernelConfig compute_kernel_config);
+    tt::ARCH arch, DeviceComputeKernelConfig compute_kernel_config);
 
 uint32_t get_dest_reg_count(
     const DeviceComputeKernelConfig& compute_kernel_config,

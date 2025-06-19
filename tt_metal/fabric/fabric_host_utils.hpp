@@ -37,7 +37,7 @@ std::vector<uint32_t> get_forwarding_link_indices(chip_id_t src_chip_id, chip_id
 void get_optimal_noc_for_edm(
     FabricEriscDatamoverBuilder& edm_builder1,
     FabricEriscDatamoverBuilder& edm_builder2,
-    const uint32_t num_links,
-    const Topology topology);
+    uint32_t num_links,
+    Topology topology);
 
 }  // namespace tt::tt_fabric

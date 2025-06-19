@@ -18,7 +18,7 @@ struct MoeOperation {
         const Tensor& input_tensor,
         const Tensor& expert_mask_tensor,
         const Tensor& topk_mask_tensor,
-        const uint16_t k,
+        uint16_t k,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 
@@ -26,7 +26,7 @@ struct MoeOperation {
         const Tensor& input_tensor,
         const Tensor& expert_mask_tensor,
         const Tensor& topk_mask_tensor,
-        const uint16_t k,
+        uint16_t k,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 };

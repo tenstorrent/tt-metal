@@ -144,7 +144,7 @@ void copy_sharded_buffer_from_core_to_completion_queue(
     Buffer& buffer,
     ShardedBufferReadDispatchParams& dispatch_params,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    const CoreCoord core,
+    CoreCoord core,
     CoreType dispatch_core_type);
 
 void copy_interleaved_buffer_to_completion_queue(

@@ -12,15 +12,15 @@ namespace operations {
 namespace kv_cache {
 
 struct ExecuteFillCache {
-    static ttnn::Tensor invoke(const ttnn::Tensor& cache, const ttnn::Tensor& input, const uint32_t batch_index);
+    static ttnn::Tensor invoke(const ttnn::Tensor& cache, const ttnn::Tensor& input, uint32_t batch_index);
 };
 
 struct ExecuteUpdateCache {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& cache,
         const ttnn::Tensor& input,
-        const uint32_t update_index,
-        const uint32_t batch_offset,
+        uint32_t update_index,
+        uint32_t batch_offset,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
@@ -28,14 +28,13 @@ struct UpdateCacheOperation {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& cache,
         const ttnn::Tensor& input,
-        const uint32_t update_idx,
-        const uint32_t batch_offset,
+        uint32_t update_idx,
+        uint32_t batch_offset,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
 struct FillCacheOperation {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& cache_tensor, const ttnn::Tensor& input_tensor, const uint32_t batch_idx);
+    static ttnn::Tensor invoke(const ttnn::Tensor& cache_tensor, const ttnn::Tensor& input_tensor, uint32_t batch_idx);
 };
 
 }  // namespace kv_cache

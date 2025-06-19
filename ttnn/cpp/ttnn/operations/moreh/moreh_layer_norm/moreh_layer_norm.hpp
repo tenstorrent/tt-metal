@@ -11,8 +11,8 @@ namespace ttnn::operations::moreh::moreh_layer_norm {
 struct MorehLayerNorm {
     static std::vector<std::optional<Tensor>> invoke(
         const Tensor& input,
-        const uint32_t normalized_dims,
-        const float eps,
+        uint32_t normalized_dims,
+        float eps,
         const std::optional<const Tensor>& gamma,
         const std::optional<const Tensor>& beta,
         const std::optional<const Tensor>& output,

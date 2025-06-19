@@ -16,8 +16,8 @@ struct ExecutePrefixScan {
         const Tensor& bx,
         const Tensor& h_prev,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<DataType> dtype = std::nullopt,
-        const std::optional<MathFidelity> math_fidelity = std::nullopt);
+        std::optional<DataType> dtype = std::nullopt,
+        std::optional<MathFidelity> math_fidelity = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::ssm

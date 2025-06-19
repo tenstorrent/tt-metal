@@ -73,7 +73,7 @@ struct MorehNllLossStep2DeviceOperation {
         const std::optional<Tensor>& weight_tensor,
         const std::optional<Tensor>& divisor_tensor,
         const std::optional<Tensor>& output_tensor,
-        const int32_t ignore_index,
+        int32_t ignore_index,
         const std::optional<ttnn::MemoryConfig>& memory_config,
         const DeviceComputeKernelConfig& compute_kernel_config);
 };

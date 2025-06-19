@@ -24,10 +24,9 @@ public:
     virtual std::string_view get_linker_opt_level() const = 0;
 
     // Called to process the user defines
-    virtual void process_defines(
-        const std::function<void(const std::string& define, const std::string& value)>) const = 0;
+    virtual void process_defines(std::function<void(const std::string& define, const std::string& value)>) const = 0;
     // Called to process the user compile time args
-    virtual void process_compile_time_args(const std::function<void(const std::vector<uint32_t>& values)>) const = 0;
+    virtual void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const = 0;
 
     virtual ~JitBuildSettings() = default;
 };

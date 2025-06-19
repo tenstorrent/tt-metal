@@ -14,26 +14,26 @@ struct SplitOperation {
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::SmallVector<int64_t>& split_sizes,
-        const int64_t dim,
+        int64_t dim,
         const std::optional<MemoryConfig>& memory_config_arg);
 
     static std::vector<ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::SmallVector<int64_t>& split_sizes,
-        const int64_t dim,
+        int64_t dim,
         const std::optional<MemoryConfig>& memory_config);
 
     static std::vector<ttnn::Tensor> invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
-        const int64_t split_size,
-        const int64_t dim,
+        int64_t split_size,
+        int64_t dim,
         const std::optional<MemoryConfig>& memory_config_arg);
 
     static std::vector<ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor,
-        const int64_t split_size,
-        const int64_t dim,
+        int64_t split_size,
+        int64_t dim,
         const std::optional<MemoryConfig>& memory_config);
 };
 

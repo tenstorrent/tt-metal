@@ -138,10 +138,10 @@ private:
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_control_buffers;
 
     // Read all control buffers
-    void readControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state);
+    void readControlBuffers(IDevice* device, const CoreCoord& worker_core, ProfilerDumpState state);
 
     // reset control buffers
-    void resetControlBuffers(IDevice* device, const CoreCoord& worker_core, const ProfilerDumpState state);
+    void resetControlBuffers(IDevice* device, const CoreCoord& worker_core, ProfilerDumpState state);
 
     // Dumping profile result to file
     void logPacketData(
@@ -163,16 +163,16 @@ private:
         chip_id_t device_id,
         int core_x,
         int core_y,
-        const std::string_view risc_name,
+        std::string_view risc_name,
         uint32_t timer_id,
         uint64_t timestamp,
         uint64_t data,
         uint32_t run_host_id,
-        const std::string_view opname,
-        const std::string_view zone_name,
+        std::string_view opname,
+        std::string_view zone_name,
         kernel_profiler::PacketTypes packet_type,
         uint64_t source_line,
-        const std::string_view source_file,
+        std::string_view source_file,
         const nlohmann::json& metaData);
 
     // dump noc trace related profile data to json file
@@ -181,24 +181,24 @@ private:
         chip_id_t device_id,
         int core_x,
         int core_y,
-        const std::string_view risc_name,
+        std::string_view risc_name,
         uint32_t timer_id,
         uint64_t timestamp,
         uint64_t data,
         uint32_t run_host_id,
-        const std::string_view opname,
-        const std::string_view zone_name,
+        std::string_view opname,
+        std::string_view zone_name,
         kernel_profiler::PacketTypes packet_type,
         uint64_t source_line,
-        const std::string_view source_file);
+        std::string_view source_file);
 
     // Helper function for reading risc profile results
     void readRiscProfilerResults(
         IDevice* device,
         const CoreCoord& worker_core,
-        const ProfilerDumpState state,
+        ProfilerDumpState state,
         const std::vector<uint32_t>& data_buffer,
-        const ProfilerDataBufferSource data_source,
+        ProfilerDataBufferSource data_source,
         const std::optional<ProfilerOptionalMetadata>& metadata,
         std::ofstream& log_file_ofs,
         nlohmann::ordered_json& noc_trace_json_log);
@@ -210,7 +210,7 @@ private:
     void updateTracyContext(std::pair<uint32_t, CoreCoord> device_core);
 
 public:
-    DeviceProfiler(const IDevice* device, const bool new_logs);
+    DeviceProfiler(const IDevice* device, bool new_logs);
 
     DeviceProfiler() = delete;
 
@@ -254,8 +254,8 @@ public:
     void dumpResults(
         IDevice* device,
         const std::vector<CoreCoord>& worker_cores,
-        const ProfilerDumpState state = ProfilerDumpState::NORMAL,
-        const ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
+        ProfilerDumpState state = ProfilerDumpState::NORMAL,
+        ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
     // Push device results to tracy
@@ -280,8 +280,8 @@ public:
 void write_control_buffer_to_core(
     IDevice* device,
     const CoreCoord& core,
-    const HalProgrammableCoreType core_type,
-    const ProfilerDumpState state,
+    HalProgrammableCoreType core_type,
+    ProfilerDumpState state,
     const std::vector<uint32_t>& control_buffer);
 
 bool onlyProfileDispatchCores(ProfilerDumpState state);
