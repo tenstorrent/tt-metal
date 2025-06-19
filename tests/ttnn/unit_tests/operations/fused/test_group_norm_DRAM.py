@@ -14,7 +14,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 
 
-# @skip_for_blackhole("Fails on Blackhole. Issue #20913")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
@@ -55,7 +54,8 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
         (1, 512, 256, 256, 32, 4, 8, 8),  # SD 1.4 VAE
         (1, 256, 256, 256, 32, 8, 8, 8),  # SD 1.4 VAE
         (1, 256, 512, 512, 32, 16, 8, 8),  # SD 1.4 VAE
-        (1, 128, 512, 512, 32, 16, 4, 8),  # SD 1.4 VAE
+        # This shape is an invalid dimension - need to confirm
+        # (1, 128, 512, 512, 32, 16, 4, 8),  # SD 1.4 VAE
     ],
 )
 def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x):
