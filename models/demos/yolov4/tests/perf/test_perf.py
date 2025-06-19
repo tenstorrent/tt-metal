@@ -21,7 +21,7 @@ from models.utility_functions import disable_persistent_kernel_cache, profiler
     "input_shape, expected_compile_time, expected_inference_time",
     [
         ((1, 320, 320, 3), 70, 0.5),
-        ((1, 640, 640, 3), 70, 0.6),
+        ((1, 640, 640, 3), 55, 0.6),
     ],
 )
 def test_yolov4(
