@@ -98,7 +98,7 @@ Metalium includes utilities to simplify work distribution across cores. The ``tt
 - ``work_per_core1``: Number of output tiles each core in the primary group processes.
 - ``work_per_core2``: Number of output tiles each core in the secondary group processes (0 if the work divides evenly).
 
-For example, if you need to split 81 output tiles across 11 cores, ``split_work_to_cores`` will distribute the work as follows:
+For example, if you need to split 81 output tiles across 11 cores, ``split_work_to_cores`` may distribute the work as follows:
 
 * ``num_cores`` = 11 (all 11 cores are used)
 * ``all_cores`` = all 11 cores
