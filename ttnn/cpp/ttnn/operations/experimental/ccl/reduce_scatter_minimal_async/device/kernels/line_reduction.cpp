@@ -20,7 +20,12 @@ void MAIN {
     constexpr uint32_t num_links = get_compile_time_arg_val(7);
     constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(8);
 
-    constexpr uint32_t num_packets = div_up(div_up(batch_slice_num_pages, tile_granularity), num_links);
+    uint32_t arg_idx = 0;
+    uint32_t link = get_arg_val<uint32_t>(arg_idx++);
+
+    uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
+    uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
+    uint32_t num_packets = div_up(tiles_to_read - tiles_read, tile_granularity);
 
     for (uint32_t b = 0; b < num_batches; b++) {
         for (uint32_t i = 0; i < num_total_reduction_steps; i++) {  // Don't reduce on the first slice
