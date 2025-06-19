@@ -33,11 +33,7 @@ def test_tensor_dtype_and_value_range(device, dtype):
         min_value = torch.min(torch_tensor).item()
         max_value = torch.max(torch_tensor).item()
         assert max_value - min_value > 0.99
-    if dtype == ttnn.int32:
-        torch_tensor = ttnn.to_torch(tensor)
-        assert torch.min(torch_tensor).item() == -1
-        assert torch.max(torch_tensor).item() == 1
-    elif dtype == ttnn.uint32 or dtype == ttnn.uint16 or dtype == ttnn.uint8:
+    else:
         torch_tensor = ttnn.to_torch(tensor)
         assert torch.min(torch_tensor).item() == 0
         assert torch.max(torch_tensor).item() == 1
@@ -80,6 +76,7 @@ def test_rand_with_memory_config(device, mem_config):
     tensor = ttnn.rand(DEFAULT_SHAPE, device=device, memory_config=mem_config)
     assert tensor.memory_config() == mem_config
     assert tuple(tensor.shape) == tuple(DEFAULT_SHAPE)
+    # How to verify that it is uses l1/dram?
 
 
 def test_rand_invalid_args():

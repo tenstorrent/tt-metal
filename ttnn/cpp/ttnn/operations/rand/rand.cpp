@@ -74,7 +74,7 @@ static tt::tt_metal::Tensor genRandomTensor(
         case DataType::UINT32: return genRandomTensor(0u, 1u, spec);
         case DataType::FLOAT32: return genRandomTensor(0.0f, 1.0f, spec);
         case DataType::BFLOAT16: return genRandomTensor(::bfloat16(0.0f), ::bfloat16(1.0f), spec);
-        case DataType::INT32: return genRandomTensor(int32_t(-1), int32_t(1), spec);
+        case DataType::INT32: return genRandomTensor(int32_t(0), int32_t(1), spec);
         default: TT_THROW("Unsupported DataType!");
     };
 }
