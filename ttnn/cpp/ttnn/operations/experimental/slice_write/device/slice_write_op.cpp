@@ -19,6 +19,7 @@ void SliceWriteDeviceOperation::validate_with_output_tensors(
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0).value();
     const auto output_padded_shape = output_tensor.padded_shape();
+    const auto output_shape = output_tensor.logical_shape();
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR, "Error");
@@ -31,7 +32,7 @@ void SliceWriteDeviceOperation::validate_with_output_tensors(
         output_padded_shape.rank(),
         this->slice_start.rank(),
         this->slice_end.rank());
-    for (uint32_t i = 0; i < output_padded_shape.rank(); i++) {
+    for (uint32_t i = 0; i < output_shape.rank(); i++) {
         TT_FATAL(
             this->slice_start[i] < output_padded_shape[i],
             "Start is outside the bounds of the output tensor for index {}. Got {}. Size {}",

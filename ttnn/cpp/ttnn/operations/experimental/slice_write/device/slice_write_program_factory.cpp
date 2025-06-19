@@ -514,7 +514,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     for (uint32_t i = 0; i < actual_input_shape.rank(); i++) {
         actual_input_shape[i] = output_tensor_end[i] - output_tensor_start[i];
     }
-    auto output_shape = output_tensor.logical_shape();
+    auto output_shape = output_tensor.padded_shape();
     log_debug(tt::LogOp, "Slice Write Output Shape: {}", output_shape);
 
     TT_FATAL(
@@ -803,7 +803,7 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
     }
 
     TT_FATAL(
-        num_tiles_per_channel * TILE_WIDTH * num_cores_channels == output_shape[-1],
+        num_tiles_per_channel * TILE_WIDTH * num_cores_channels == output_padded_shape[-1],
         "Number of tiles per channel {} * tile width {} * num_cores_channels {} should be equal to output shape "
         "last dimension {}",
         num_tiles_per_channel,
