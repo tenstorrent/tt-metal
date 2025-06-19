@@ -669,13 +669,13 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
         lines = []
         labels = []
         if riscv_1_durations:
-            (line1,) = ax.plot(riscv_1_durations, label="RISCV 1 Duration (cycles)", marker="o")
+            (line1,) = ax.plot(riscv_1_durations, label="Receiver Duration (cycles)", marker="o")
             lines.append(line1)
-            labels.append("RISCV 1 Duration (cycles)")
+            labels.append("Receiver Duration (cycles)")
         if riscv_0_durations:
-            (line0,) = ax.plot(riscv_0_durations, label="RISCV 0 Duration (cycles)", marker="o")
+            (line0,) = ax.plot(riscv_0_durations, label="Sender Duration (cycles)", marker="o")
             lines.append(line0)
-            labels.append("RISCV 0 Duration (cycles)")
+            labels.append("Sender Duration (cycles)")
         ax.set_xlabel("Index")
         ax.set_ylabel("Duration (cycles)")
         ax.set_title("Kernel Durations")
