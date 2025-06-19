@@ -9,7 +9,7 @@
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
-#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/global_semaphore.hpp"
 
 namespace ttnn {

@@ -7,7 +7,7 @@
 
 #include "debug/dprint.h"
 
-#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 #include "cumsum_common.hpp"
 
 void kernel_main() {
