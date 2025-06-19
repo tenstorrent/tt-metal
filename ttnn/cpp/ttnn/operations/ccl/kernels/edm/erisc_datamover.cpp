@@ -145,9 +145,9 @@ void kernel_main() {
 
     bool is_done_as_rx_handshaker = is_handshake_sender;
     if constexpr (is_handshake_sender) {
-        erisc::datamover::handshake::sender_side_start(handshake_addr);
+        erisc::datamover::handshake::deprecated::sender_side_start(handshake_addr);
     } else {
-        erisc::datamover::handshake::receiver_side_start(handshake_addr);
+        erisc::datamover::handshake::deprecated::receiver_side_start(handshake_addr);
     }
 
     // Receiver args
@@ -184,7 +184,7 @@ void kernel_main() {
     }
 
     if (!is_handshake_sender) {
-        if (!is_done_as_rx_handshaker && erisc::datamover::handshake::receiver_side_can_finish()) {
+        if (!is_done_as_rx_handshaker && erisc::datamover::handshake::deprecated::receiver_side_can_finish()) {
             is_done_as_rx_handshaker = true;
             erisc::datamover::handshake::receiver_side_finish(handshake_addr);
         }
@@ -224,10 +224,10 @@ void kernel_main() {
     }
 
     if constexpr (is_handshake_sender) {
-        erisc::datamover::handshake::sender_side_finish(handshake_addr);
+        erisc::datamover::handshake::deprecated::sender_side_finish(handshake_addr);
     } else {
         if (!is_done_as_rx_handshaker) {
-            erisc::datamover::handshake::receiver_side_finish(handshake_addr);
+            erisc::datamover::handshake::deprecated::receiver_side_finish(handshake_addr);
             is_done_as_rx_handshaker = true;
         }
     }

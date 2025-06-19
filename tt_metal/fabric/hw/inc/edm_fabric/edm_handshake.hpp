@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include "ethernet/dataflow_api.h"
+#include <fabric_host_interface.h>
 
 namespace erisc {
 namespace datamover {
@@ -15,11 +16,6 @@ namespace datamover {
  * of the link is ready to start sending/receiving messages. We perform a handshake to ensure that's
  * case. Before handshaking, we make sure to clear any of the channel sync datastructures local
  * to our core.
- *
- * The handshaking process is split into two parts for the sender/master and two parts for the
- * the subordinate. The handshake is broken into 2 parts so that the master can initiate the handshake
- * as early as possible so the message can be "in flight" over the ethernet link while other EDM
- * initialization is taking place.
  *
  * Important note about handshaking: the sender/master canNOT complete the handshake until all receiver
  * channels are initialized. Otherwise we have a race between channel initialization on the receiver side
@@ -32,9 +28,82 @@ namespace datamover {
  * and sends payload available information to that channel. The receive must acknowledge that message and upon
  * doing so, considers the handshake complete.
  */
+
 namespace handshake {
 
+/* EDM Handshaking Mechanism:
+ * 1. Both sides set their local_value register to 0.
+ * 2. Both sides write a magic value to their scratch register.
+ * 3. Handshake master repeatedly copies the magic value from the scratch register to the local_value of the remote
+ * subordinate, until it sees the magic value in its local_value register.
+ * 4. Handshake subordiante polls its local_value register until it sees the magic value written by the master. It
+ * then copies the magic value from its scratch register to the master's local_value register, completing the handshake.
+ */
+
 static constexpr uint32_t A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH = 1000000000;
+static constexpr uint32_t MAGIC_HANDSHAKE_VALUE = 0xAA;
+
+// Data-Structure used for EDM to EDM Handshaking.
+struct handshake_info_t {
+    uint32_t local_value;  // Updated by remote
+    uint32_t padding[3];   // Ensures 16B alignment for scratch register
+    uint32_t scratch[4];   // TODO: This can be removed if we use a stream register for handshaking.
+};
+
+FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info() {
+    volatile tt_l1_ptr handshake_info_t* handshake_info =
+        reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_addr);
+    handshake_info->local_value = 0;
+    handshake_info->scratch[0] = MAGIC_HANDSHAKE_VALUE;
+    return handshake_info;
+}
+
+FORCE_INLINE void sender_side_handshake(size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
+    volatile tt_l1_ptr handshake_info_t* handshake_info = init_handshake_info();
+    uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
+    uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
+    uint32_t count = 0;
+    while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE) {
+        if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
+            count = 0;
+            run_routing();
+        } else {
+            count++;
+            internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
+        }
+        invalidate_l1_cache();
+    }
+}
+
+FORCE_INLINE void receiver_side_handshake(size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
+    volatile tt_l1_ptr handshake_info_t* handshake_info = init_handshake_info();
+    uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
+    uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
+    uint32_t count = 0;
+    while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE) {
+        if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
+            count = 0;
+            run_routing();
+        } else {
+            count++;
+        }
+        invalidate_l1_cache();
+    }
+    internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
+}
+
+namespace deprecated {
+
+/* The split handshaking mechanism exposed through the following APIs is deprecated.
+ * This was developed for non-persistent kernels targeting EDM cores, which are not
+ * supported with TT-Fabric.
+ * TODO: Remove these APIs once legacy CCL Ops are removed.
+ *
+ * The handshaking process is split into two parts for the sender/master and two parts for the
+ * the subordinate. The handshake is broken into 2 parts so that the master can initiate the handshake
+ * as early as possible so the message can be "in flight" over the ethernet link while other EDM
+ * initialization is taking place.
+ */
 
 /*
  * Initialize base datastructures and values which are common to master and subordinate EDM cores.
@@ -106,6 +175,9 @@ FORCE_INLINE void receiver_side_finish(
     }
     eth_receiver_channel_done(0);
 }
+
+}  // namespace deprecated
+
 }  // namespace handshake
 
 }  // namespace datamover
