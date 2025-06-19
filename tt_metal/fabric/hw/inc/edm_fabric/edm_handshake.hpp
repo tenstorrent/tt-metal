@@ -36,7 +36,7 @@ namespace handshake {
  * 2. Both sides write a magic value to their scratch register.
  * 3. Handshake master repeatedly copies the magic value from the scratch register to the local_value of the remote
  * subordinate, until it sees the magic value in its local_value register.
- * 4. Handshake subordiante polls its local_value register until it sees the magic value written by the master. It
+ * 4. Handshake subordinate polls its local_value register until it sees the magic value written by the master. It
  * then copies the magic value from its scratch register to the master's local_value register, completing the handshake.
  */
 
@@ -50,16 +50,17 @@ struct handshake_info_t {
     uint32_t scratch[4];   // TODO: This can be removed if we use a stream register for handshaking.
 };
 
-FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info() {
+FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(std::uint32_t handshake_register_address) {
     volatile tt_l1_ptr handshake_info_t* handshake_info =
-        reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_addr);
+        reinterpret_cast<volatile tt_l1_ptr handshake_info_t*>(handshake_register_address);
     handshake_info->local_value = 0;
     handshake_info->scratch[0] = MAGIC_HANDSHAKE_VALUE;
     return handshake_info;
 }
 
-FORCE_INLINE void sender_side_handshake(size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
-    volatile tt_l1_ptr handshake_info_t* handshake_info = init_handshake_info();
+FORCE_INLINE void sender_side_handshake(
+    std::uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
+    volatile tt_l1_ptr handshake_info_t* handshake_info = init_handshake_info(handshake_register_address);
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t count = 0;
@@ -75,8 +76,9 @@ FORCE_INLINE void sender_side_handshake(size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LON
     }
 }
 
-FORCE_INLINE void receiver_side_handshake(size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
-    volatile tt_l1_ptr handshake_info_t* handshake_info = init_handshake_info();
+FORCE_INLINE void receiver_side_handshake(
+    std::uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
+    volatile tt_l1_ptr handshake_info_t* handshake_info = init_handshake_info(handshake_register_address);
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t count = 0;

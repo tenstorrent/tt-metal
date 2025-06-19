@@ -808,7 +808,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     // TODO: allow specification per eth txq
     const size_t default_num_eth_txq_data_packet_accept_ahead = 32;
-
+    // By default have the ERISC cores context switch to base routing FW every 4K cycles during the peer handshake.
+    // This allows host to write Fabric kernels to remote chips over ethernet, when ERISC cores already running fabric
+    // are waiting for the handshake to complete.
+    const size_t default_handshake_context_switch_timeout = 4096;
     size_t num_sender_channels = config.num_used_sender_channels;
     size_t num_receiver_channels = config.num_used_receiver_channels;
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -915,6 +918,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         eth_txq_spin_wait_receiver_send_completion_ack,
         default_num_eth_txq_data_packet_accept_ahead,
 
+        default_handshake_context_switch_timeout,
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
 

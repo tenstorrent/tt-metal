@@ -1905,9 +1905,11 @@ void kernel_main() {
 
     if constexpr (enable_ethernet_handshake) {
         if constexpr (is_handshake_sender) {
-            erisc::datamover::handshake::sender_side_handshake(DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+            erisc::datamover::handshake::sender_side_handshake(
+                handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         } else {
-            erisc::datamover::handshake::receiver_side_handshake(DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+            erisc::datamover::handshake::receiver_side_handshake(
+                handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         }
 
         *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;

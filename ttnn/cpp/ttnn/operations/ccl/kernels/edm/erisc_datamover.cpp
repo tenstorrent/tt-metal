@@ -186,7 +186,7 @@ void kernel_main() {
     if (!is_handshake_sender) {
         if (!is_done_as_rx_handshaker && erisc::datamover::handshake::deprecated::receiver_side_can_finish()) {
             is_done_as_rx_handshaker = true;
-            erisc::datamover::handshake::receiver_side_finish(handshake_addr);
+            erisc::datamover::handshake::deprecated::receiver_side_finish(handshake_addr);
         }
     }
 
