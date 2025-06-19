@@ -16,7 +16,7 @@ void kernel_main() {
     const uint32_t num_sticks_per_core = get_arg_val<uint32_t>(6);
     const uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(7);
     const uint32_t num_read_per_barrier = get_arg_val<uint32_t>(8);
-
+#define DEBUG
 #ifdef DEBUG
     DPRINT << "dst_addr: " << dst_addr << ENDL();
     DPRINT << "output_stick_size: " << output_stick_size << ENDL();
