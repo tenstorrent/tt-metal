@@ -32,7 +32,7 @@ static tt::tt_metal::Tensor genRandomTensor(const ttnn::Shape& shape, const tt::
     const size_t total = output_buffer.size();
     if (total < 2048 * 2048) {
         std::ranges::for_each(output_buffer, init_rand_elem);
-        return tt::tt_metal::Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec).to_layout(layout);
+        return tt::tt_metal::Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec);
     } else {
         tf::Executor executor;
         tf::Taskflow taskflow;
@@ -41,7 +41,7 @@ static tt::tt_metal::Tensor genRandomTensor(const ttnn::Shape& shape, const tt::
         executor.run(taskflow).wait();
     }
 
-    return tt::tt_metal::Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec).to_layout(layout);
+    return tt::tt_metal::Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec);
 }
 
 void BM_where_experimental_bf16_ttt(benchmark::State& state) {
