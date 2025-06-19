@@ -545,7 +545,6 @@ Vision
    :template: function.rst
 
    ttnn.upsample
-   ttnn.downsample
 
 KV Cache
 ========
