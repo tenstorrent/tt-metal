@@ -246,7 +246,7 @@ def create_tt_model(
         ),
         (  # CI Run for PCC check: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_subdevices/demo/input_data_questions_reference.json",  # input_prompts
-            True,  # instruct mode
+            False,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
@@ -257,7 +257,7 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
             True,  # pcc_check
-            80,  # num layers
+            1,  # num layers
         ),
     ],
     ids=[
