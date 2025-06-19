@@ -43,26 +43,25 @@ namespace tt::tt_fabric {
 
 namespace intermesh_constants {
 
-// Constants for multi-mesh configuration
-constexpr uint32_t MULTI_MESH_CONFIG_ADDR = 0x104C;
-constexpr uint32_t MULTI_MESH_LINK_STATUS_ADDR = 0x1104;
+// Constants used to derive the intermesh ethernet links config
 constexpr uint32_t MULTI_MESH_ENABLED_VALUE = 0x2;
 constexpr uint32_t LINK_CONNECTED_MASK = 0x1;
 constexpr uint32_t MULTI_MESH_MODE_MASK = 0xFF;
 constexpr uint32_t INTERMESH_ETH_LINK_BITS_SHIFT = 8;
 constexpr uint32_t INTERMESH_ETH_LINK_BITS_MASK = 0xFFFF;
-constexpr uint32_t MAX_ETH_LINKS = 16;
 
 }  // namespace intermesh_constants
 
 namespace {
 
 // Helper to extract intermesh ports from config value
-std::vector<chan_id_t> extract_intermesh_eth_links(uint32_t config_value) {
+std::vector<chan_id_t> extract_intermesh_eth_links(uint32_t config_value, chip_id_t chip_id) {
     std::vector<chan_id_t> intermesh_eth_links;
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& soc_desc = cluster.get_soc_desc(chip_id);
     uint32_t intermesh_eth_links_bits = (config_value >> intermesh_constants::INTERMESH_ETH_LINK_BITS_SHIFT) &
                                         intermesh_constants::INTERMESH_ETH_LINK_BITS_MASK;
-    for (chan_id_t link = 0; link < intermesh_constants::MAX_ETH_LINKS; ++link) {
+    for (chan_id_t link = 0; link < static_cast<chan_id_t>(soc_desc.get_num_eth_channels()); ++link) {
         if (intermesh_eth_links_bits & (1 << link)) {
             intermesh_eth_links.push_back(link);
         }
@@ -1201,9 +1200,11 @@ void ControlPlane::initialize_intermesh_eth_links() {
             chip_id, cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, first_eth_core, CoreType::ETH));
 
         std::vector<uint32_t> config_data(1, 0);
-        cluster.read_core(config_data, sizeof(uint32_t), virtual_eth_core, intermesh_constants::MULTI_MESH_CONFIG_ADDR);
+        auto multi_mesh_config_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
+            tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::INTERMESH_ETH_LINK_CONFIG);
+        cluster.read_core(config_data, sizeof(uint32_t), virtual_eth_core, multi_mesh_config_addr);
         std::vector<std::pair<CoreCoord, chan_id_t>> intermesh_eth_links;
-        for (auto link : extract_intermesh_eth_links(config_data[0])) {
+        for (auto link : extract_intermesh_eth_links(config_data[0], chip_id)) {
             // Find the CoreCoord for this channel
             for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
                 if (channel == link) {
@@ -1218,6 +1219,10 @@ void ControlPlane::initialize_intermesh_eth_links() {
 }
 
 bool ControlPlane::is_intermesh_enabled() const {
+    // Check if the architecture and system support intermesh routing
+    if (not tt_metal::MetalContext::instance().hal().intermesh_eth_links_enabled()) {
+        return false;
+    }
     std::vector<uint32_t> config_data(1, 0);
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto first_chip_id = *(cluster.all_pci_chip_ids().begin());
@@ -1225,7 +1230,9 @@ bool ControlPlane::is_intermesh_enabled() const {
     tt_cxy_pair virtual_eth_core(
         first_chip_id,
         cluster.get_virtual_coordinate_from_logical_coordinates(first_chip_id, first_eth_core, CoreType::ETH));
-    cluster.read_core(config_data, sizeof(uint32_t), virtual_eth_core, intermesh_constants::MULTI_MESH_CONFIG_ADDR);
+    auto multi_mesh_config_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::INTERMESH_ETH_LINK_CONFIG);
+    cluster.read_core(config_data, sizeof(uint32_t), virtual_eth_core, multi_mesh_config_addr);
     bool intermesh_enabled =
         (config_data[0] & intermesh_constants::MULTI_MESH_MODE_MASK) == intermesh_constants::MULTI_MESH_ENABLED_VALUE;
     return intermesh_enabled;
@@ -1255,8 +1262,9 @@ bool ControlPlane::is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord et
     tt_cxy_pair virtual_eth_core(
         chip_id, cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
     std::vector<uint32_t> status_data(1, 0);
-    cluster.read_core(
-        status_data, sizeof(uint32_t), virtual_eth_core, intermesh_constants::MULTI_MESH_LINK_STATUS_ADDR);
+    auto multi_mesh_link_status_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::INTERMESH_ETH_LINK_STATUS);
+    cluster.read_core(status_data, sizeof(uint32_t), virtual_eth_core, multi_mesh_link_status_addr);
 
     // Check if the link is trained
     return (status_data[0] & intermesh_constants::LINK_CONNECTED_MASK) == intermesh_constants::LINK_CONNECTED_MASK;

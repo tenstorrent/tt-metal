@@ -4,7 +4,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 namespace shard_builder {
 

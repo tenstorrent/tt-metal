@@ -9,7 +9,7 @@
 
 #include <tt-metalium/buffer_types.hpp>
 #include "gtest/gtest.h"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 
 static constexpr std::array<noc_grid_index_t, 8> worker_to_routing_x_wormhole = {1, 2, 3, 4, 6, 7, 8, 9};
 

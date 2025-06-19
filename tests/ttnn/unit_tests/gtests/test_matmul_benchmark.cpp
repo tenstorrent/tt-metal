@@ -31,9 +31,9 @@
 #include <tt-metalium/tile.hpp>
 #include "impl/context/metal_context.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/cpp/ttnn/operations/functions.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/trace.hpp"

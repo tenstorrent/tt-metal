@@ -13,7 +13,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn {
 

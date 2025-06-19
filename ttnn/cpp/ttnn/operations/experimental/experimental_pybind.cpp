@@ -35,9 +35,9 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_pybind.hpp"
-#include "cpp/ttnn/operations/experimental/copy/typecast/typecast_pybind.hpp"
-#include "cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.hpp"
-#include "cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
+#include "ttnn/operations/experimental/copy/typecast/typecast_pybind.hpp"
+#include "ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.hpp"
+#include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/ccl_experimental_pybind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_pybind.hpp"
@@ -46,6 +46,7 @@
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_pybind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
 #include "ttnn/operations/experimental/scatter/scatter_pybind.hpp"
+#include "ttnn/operations/experimental/scatter/tosa/tosa_scatter_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/sort/sort_pybind.hpp"
 #include "ttnn/operations/experimental/gather/gather_pybind.hpp"
 #include "ttnn/operations/experimental/gather/tosa/gather_tosa_pybind.hpp"
@@ -106,6 +107,7 @@ void py_module(py::module& module) {
     gelu_backward::detail::bind_experimental_gelu_backward_operation(module);
 
     scatter::detail::bind_scatter_operation(module);
+    tosa_scatter::detail::bind_tosa_scatter_operation(module);
 
     reduction::sort::detail::bind_reduction_sort_operation(module);
 

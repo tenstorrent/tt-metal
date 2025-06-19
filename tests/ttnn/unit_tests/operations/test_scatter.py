@@ -88,7 +88,7 @@ def test_scatter_normal(input_shape, dim, index_and_source_shape, input_dtype, i
 
     for _ in range(2):
         torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src)
-        ttnn_result = ttnn.experimental.scatter_(ttnn_input, dim, ttnn_index, ttnn_src)
+        ttnn_result = ttnn.experimental.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
 
         torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
         assert torch_result_from_ttnn.shape == torch_result.shape
