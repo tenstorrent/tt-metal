@@ -3742,10 +3742,30 @@ def test_conv_yolov10x(
 @pytest.mark.parametrize(
     "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation",
     (
-        (1, 1920, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0, 0, 0), (1, 1)),
+        (1, 64, 64, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0, 0, 0), (1, 1)),
     ),
 )
-
+@pytest.mark.parametrize(
+    "input_layout",
+    [
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize(
+    "output_layout",
+    [
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_layout",
+    [
+        None,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ]
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv2d_act_dealloc(
     device,
@@ -3762,6 +3782,9 @@ def test_conv2d_act_dealloc(
     stride,
     padding,
     dilation,
+    input_layout,
+    output_layout,
+    shard_layout
 ):
     input_shape = (batch, input_channels, input_height, input_width)
     weight_shape = (output_channels, input_channels // groups, kernel[0], kernel[1])
@@ -3774,19 +3797,30 @@ def test_conv2d_act_dealloc(
         torch_weight_tensor,
         ttnn.bfloat16 if weights_dtype == ttnn.bfloat16 else ttnn.float32,
     )
+
+    input_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+    if shard_layout is not None:
+        num_cores = 2
+        input_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(input_height*input_width*batch // num_cores, input_channels),
+                core_grid=ttnn.num_cores_to_corerangeset(target_num_cores=num_cores, grid_size=device.compute_with_storage_grid_size(), row_wise=True),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+        )
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         output_dtype,
-        layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else ttnn.ROW_MAJOR_LAYOUT,
-        device=device # set the tensor to be on device because is_allocated() returns true for host tensors
+        layout=input_layout,
+        device=device, # set the tensor to be on device because is_allocated() returns true for host tensors
+        memory_config=input_mem_cfg,
     )
 
     conv_config = ttnn.Conv2dConfig(
         dtype=output_dtype,
         weights_dtype=weights_dtype,
-        shard_layout=None,
         deallocate_activation=True,
-        in_place=False,
+        output_layout=output_layout,
     )
     _ = ttnn.conv2d(
         input_tensor=tt_input_tensor,
