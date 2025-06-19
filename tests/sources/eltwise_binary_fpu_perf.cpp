@@ -37,14 +37,20 @@ void run_kernel()
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+            return;
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             return _perf_unpack_loop_set_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
         }
-
-        for (uint32_t tile = 0; tile < TILE_CNT; tile++)
+        else
         {
-            _llk_unpack_AB_<>(L1_ADDRESS(src_a + (tile % 8) * 0x1000), L1_ADDRESS(src_b + (tile % 8) * 0x1000), false);
+            for (uint32_t tile = 0; tile < TILE_CNT; tile++)
+            {
+                _llk_unpack_AB_<>(L1_ADDRESS(src_a + (tile % 8) * 0x1000), L1_ADDRESS(src_b + (tile % 8) * 0x1000), false);
+            }
         }
         tensix_sync(); // -> perf
     }
@@ -68,7 +74,11 @@ void run_kernel()
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+            return;
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             return _perf_math_loop_clear_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
         }
@@ -117,14 +127,22 @@ void run_kernel()
         {
             return;
         }
-
-        for (uint32_t tile = 0; tile < TILE_CNT; tile++)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            _llk_packer_wait_for_math_done_();
-            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, L1_ADDRESS(dst + (tile % 8) * 0x1000));
-            _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+            for (uint32_t tile = 0; tile < TILE_CNT; tile++)
+            {
+                _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, L1_ADDRESS(dst + (tile % 8) * 0x1000));
+            }
         }
-
+        else
+        {
+            for (uint32_t tile = 0; tile < TILE_CNT; tile++)
+            {
+                _llk_packer_wait_for_math_done_();
+                _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, L1_ADDRESS(dst + (tile % 8) * 0x1000));
+                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+            }
+        }
         tensix_sync(); // -> perf
     }
 }
