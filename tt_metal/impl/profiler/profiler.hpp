@@ -308,6 +308,8 @@ void writeToCoreControlBuffer(
 
 bool onlyProfileDispatchCores(ProfilerDumpState state);
 
+void waitForDeviceCommandsToFinish(IDevice* device);
+
 }  // namespace tt_metal
 
 }  // namespace tt

@@ -106,11 +106,7 @@ void setControlBuffer(IDevice* device, std::vector<uint32_t>& control_buffer) {
 
         writeToCoreControlBuffer(device, curr_core, ProfilerDumpState::NORMAL, control_buffer);
         if (useFastDispatchForControlBuffers(ProfilerDumpState::NORMAL)) {
-            if (auto mesh_device = device->get_mesh_device()) {
-                mesh_device->mesh_command_queue().finish();
-            } else {
-                Finish(device->command_queue());
-            }
+            waitForDeviceCommandsToFinish(device);
         }
     }
 #endif
@@ -715,11 +711,7 @@ void DumpDeviceProfileResults(
     if (getDeviceProfilerState()) {
         if (state != ProfilerDumpState::ONLY_DISPATCH_CORES) {
             if (tt::DevicePool::instance().is_dispatch_firmware_active()) {
-                if (auto mesh_device = device->get_mesh_device()) {
-                    mesh_device->mesh_command_queue().finish();
-                } else {
-                    Finish(device->command_queue());
-                }
+                waitForDeviceCommandsToFinish(device);
             }
         } else if (onlyProfileDispatchCores(state)) {
             TT_ASSERT(areAllCoresDispatchCores(device, virtual_cores));
