@@ -17,7 +17,7 @@ ttnn::distributed::MeshDevice* device = nullptr;
 
 void BM_host_alloc_on_tensor_readback(benchmark::State& state) {
     const size_t global_tensor_size = state.range(0);
-    tt::tt_metal::Tensor device_tensor = tt::tt_metal::allocate_tensor_on_mesh(
+    tt::tt_metal::Tensor device_tensor = tt::tt_metal::allocate_tensor_on_device(
         tt::tt_metal::TensorSpec(
             ttnn::Shape({global_tensor_size / sizeof(float) / device->num_devices()}),
             tt::tt_metal::TensorLayout(

@@ -8,6 +8,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include "tt-metalium/assert.hpp"
 #include "tt-metalium/distributed_host_buffer.hpp"
 #include "tt-metalium/memory_pin.hpp"
 #include "tt-metalium/mesh_buffer.hpp"
@@ -522,6 +523,23 @@ std::string to_string<bfloat4_b>(
 //                                      .to_host()
 // ======================================================================================
 
+HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
+    ZoneScopedN("AllocateBuffer");
+    const size_t size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+    switch (tensor_spec.data_type()) {
+        case DataType::BFLOAT16: return HostBuffer(std::vector<bfloat16>(size_bytes / sizeof(bfloat16)));
+        case DataType::FLOAT32: return HostBuffer(std::vector<float>(size_bytes / sizeof(float)));
+        case DataType::INT32: return HostBuffer(std::vector<int32_t>(size_bytes / sizeof(int32_t)));
+        case DataType::UINT8: return HostBuffer(std::vector<uint8_t>(size_bytes / sizeof(uint8_t)));
+        case DataType::UINT16: return HostBuffer(std::vector<uint16_t>(size_bytes / sizeof(uint16_t)));
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT8_B:
+        case DataType::UINT32: return HostBuffer(std::vector<uint32_t>(size_bytes / sizeof(uint32_t)));
+        case DataType::INVALID: TT_THROW("Invalid data type");
+    }
+    TT_THROW("Unreachable");
+}
+
 template <typename T>
 Tensor to_host_helper(const Tensor& tensor, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId) {
     TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
@@ -582,11 +600,7 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     }
 
     distributed_host_buffer = distributed_host_buffer.transform(
-        [&](const HostBuffer&) {
-            ZoneScopedN("AllocateBuffer");
-            std::vector<T> data_vec(tensor.get_tensor_spec().compute_packed_buffer_size_bytes() / sizeof(T));
-            return HostBuffer(std::move(data_vec));
-        },
+        [&](const HostBuffer&) { return allocate_host_buffer(tensor.tensor_spec()); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
     mesh_cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
@@ -859,18 +873,39 @@ void copy_to_host_tensor(const Tensor& device_tensor, Tensor& host_tensor, ttnn:
     ttnn::MeshDevice* device = mesh_buffer->device();
     distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue(*cq_id);
 
-    auto distributed_host_buffer = std::get<MultiDeviceHostStorage>(host_tensor.storage()).distributed_buffer();
+    const auto& distributed_host_buffer = std::get<MultiDeviceHostStorage>(host_tensor.storage()).distributed_buffer();
 
-    TT_FATAL(
-        distributed_host_buffer.shard_coords().size() == device_storage.coords.size(),
-        "Host tensor has different number of shards allocated: {} != {}",
-        distributed_host_buffer.shard_coords().size(),
-        device_storage.coords.size());
+    // Host tensor must have pre-allocated buffers for all device shards.
+    // However, it may have some extra shards. Drop them by "unwrapping" the distributed host buffer, and re-wrapping
+    // only for those shards that are actually present on device.
+    std::vector<std::pair<distributed::MeshCoordinate, std::optional<HostBuffer>>> shards;
+    shards.reserve(device_storage.coords.size());
+    for (const auto& device_coord : device_storage.coords) {
+        shards.push_back({device_coord, distributed_host_buffer.get_shard(device_coord)});
+    }
 
-    mesh_cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, /*blocking=*/true);
+    DistributedHostBuffer dst_distributed_host_buffer = DistributedHostBuffer::create(device->shape());
+    const size_t expected_size_bytes = device_tensor.tensor_spec().compute_packed_buffer_size_bytes();
+    for (const auto& [device_coord, host_buffer] : shards) {
+        dst_distributed_host_buffer.emplace_shard(device_coord, [&]() {
+            // Note the lambda is executed only for host-local shards.
+            // If `host_buffer` is nullopt, the data was not correctly allocated on the host.
+            TT_FATAL(host_buffer.has_value(), "Host shard for device shard {} is not populated.", device_coord);
+
+            TT_FATAL(
+                host_buffer->view_bytes().size() == expected_size_bytes,
+                "Host shard for device shard {} has invalid size: {} != {}",
+                device_coord,
+                host_buffer->view_bytes().size(),
+                expected_size_bytes);
+            return *host_buffer;
+        });
+    }
+
+    mesh_cq.enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, /*blocking=*/true);
 
     host_tensor = Tensor(
-        MultiDeviceHostStorage(std::move(distributed_host_buffer)),
+        MultiDeviceHostStorage(std::move(dst_distributed_host_buffer)),
         device_tensor.tensor_spec(),
         device_tensor.distributed_tensor_config());
 }

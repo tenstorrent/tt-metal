@@ -36,15 +36,6 @@ ttnn::Tensor to_device(
     const std::optional<MemoryConfig>& memory_config,
     ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
-ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
-    DataType data_type,
-    Layout layout,
-    MeshDevice* mesh_device,
-    const std::optional<MemoryConfig>& memory_config);
-
-ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, MeshDevice* device);
-
 ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 void deallocate(Tensor& tensor, bool force = true);
