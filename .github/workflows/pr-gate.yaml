@@ -80,6 +80,7 @@ jobs:
   metalium-smoke-tests:
     needs: [ asan-build, find-changed-files ]
     if: ${{
+        github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
         needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
         needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
@@ -101,6 +102,7 @@ jobs:
   ttnn-smoke-tests:
     needs: [ asan-build, find-changed-files ]
     if: ${{
+        github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
         needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
         needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
@@ -139,6 +141,7 @@ jobs:
   metalium-examples:
     needs: [ build, find-changed-files ]
     if: ${{
+        github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
         needs.find-changed-files.outputs.tt-metalium-changed == 'true'
       }}
