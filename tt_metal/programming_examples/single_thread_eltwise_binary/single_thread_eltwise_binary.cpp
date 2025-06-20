@@ -45,7 +45,7 @@ int main() {
         constexpr CoreCoord core = {0, 0};
 
         constexpr uint32_t single_tile_size = 2 * 1024;
-        constexpr uint32_t num_tiles = 1;
+        constexpr uint32_t num_tiles = 64;
         constexpr uint32_t dram_buffer_size =
             single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 

@@ -67,7 +67,7 @@ void MAIN {
 
         DUNPACK(DPRINT << "RBD" << ENDL());
 
-        tile_regs_acquire_st();
+        // tile_regs_acquire_st();
 
         DUNPACK(DPRINT << "RACQD" << ENDL());
 
@@ -79,11 +79,11 @@ void MAIN {
 
         DUNPACK(DPRINT << "ADDD" << ENDL());
 
-        tile_regs_commit_st();
+        // tile_regs_commit_st();
 
         DUNPACK(DPRINT << "RCOMMD" << ENDL());
-       
-        tile_regs_wait_st();
+
+        // tile_regs_wait_st();
 
         DUNPACK(DPRINT << "RWD" << ENDL());
 
@@ -97,7 +97,7 @@ void MAIN {
 
         DUNPACK(DPRINT << "PACKD" << ENDL());
 
-        tile_regs_release_st();
+        // tile_regs_release_st();
 
         DUNPACK(DPRINT << "RRELD" << ENDL());
 
