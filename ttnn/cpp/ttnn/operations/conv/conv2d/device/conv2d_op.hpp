@@ -157,6 +157,10 @@ struct Conv2dSliceConfig {
 
     // Number of slices that the output tensor should be divided into.
     uint32_t num_slices = 0;
+
+    // Layout of the output DRAM tensor.
+    // If not set, the output tensor will be in the same layout as the input.
+    std::optional<tt::tt_metal::Layout> output_layout = std::nullopt;
 };
 
 // TODO: Accept parallelization

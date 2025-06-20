@@ -193,7 +193,10 @@ Result conv2d_DRAM(
     std::optional<ttnn::Tensor> bias_tensor_on_device;
     TT_FATAL(!memory_config_.has_value(), "Setting Memory config for Conv2D with DRAM Slicing is not supported.");
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
-    TT_FATAL(conv_config.dtype != tt::tt_metal::DataType::BFLOAT8_B, "Conv DRAM currently doesn't support BFLOAT8_B");
+    Layout output_layout = dram_slice_config.output_layout.value_or(input_tensor_on_device.layout());
+    if (conv_config.dtype == tt::tt_metal::DataType::BFLOAT8_B) {
+        output_layout = tt::tt_metal::Layout::TILE;
+    }
 
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -204,22 +207,32 @@ Result conv2d_DRAM(
             ttnn::Shape({batch_size, output_height, output_width, out_channels}),
             tt_metal::TensorLayout(
                 conv_config.dtype,
-                tt_metal::PageConfig(tt_metal::Layout::ROW_MAJOR),
+                tt_metal::PageConfig(output_layout),
                 MemoryConfig{
                     TensorMemoryLayout::INTERLEAVED,
                     BufferType::DRAM,
                 })),
         device);
 
+    uint32_t slice_rounding_value = 1;
+    if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::WIDTH &&
+        output_layout == tt_metal::Layout::TILE) {
+        // For width sharded conv2d with TILE layout, we need to round the slice size to a multiple of TILE_HEIGHT.
+        slice_rounding_value = tt::constants::TILE_HEIGHT;
+    }
+
     bool first_run = true;
-    const uint32_t min_output_slice_size = output_sliced_dim / dram_slice_config.num_slices;
-    const uint32_t output_slice_rem = output_sliced_dim % dram_slice_config.num_slices;
+    const uint32_t min_output_slice_size =
+        tt::div_up(output_sliced_dim, slice_rounding_value) / dram_slice_config.num_slices;
+    const uint32_t output_slice_rem =
+        tt::div_up(output_sliced_dim, slice_rounding_value) % dram_slice_config.num_slices;
 
     uint32_t slice_index = 0;
     uint32_t output_slice_dim_start = 0;
 
     while ((output_slice_dim_start < output_sliced_dim) && (slice_index < dram_slice_config.num_slices)) {
-        const uint32_t output_slice_size = min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0);
+        const uint32_t output_slice_size =
+            slice_rounding_value * (min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0));
         const uint32_t output_slice_dim_end = std::min(output_sliced_dim, output_slice_dim_start + output_slice_size);
         const uint32_t this_output_slice_dim = output_slice_dim_end - output_slice_dim_start;
 
@@ -272,6 +285,22 @@ Result conv2d_DRAM(
                 continue;
             }
         }
+        log_info(
+            LogOp,
+            "Conv2d DRAM Slicing: Slice {}: Output Slice Start: ({}, {}), End: ({}, {})",
+            slice_index,
+            output_slice_height_start,
+            output_slice_width_start,
+            output_slice_height_end,
+            output_slice_width_end);
+        log_info(
+            LogOp,
+            "Conv2d DRAM Slicing: Slice {}: Input Slice Start: ({}, {}), End: ({}, {})",
+            slice_index,
+            input_slice_height_start,
+            input_slice_width_start,
+            input_slice_height_end,
+            input_slice_width_end);
 
         const uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
         const uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
@@ -372,7 +401,7 @@ Result conv2d_DRAM(
             sliced_output_tensor = ttnn::to_memory_config(
                 sliced_output_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
         }
-        if (sliced_output_tensor.layout() != Layout::ROW_MAJOR) {
+        if (sliced_output_tensor.layout() != Layout::ROW_MAJOR && output_layout == Layout::ROW_MAJOR) {
             sliced_output_tensor = ttnn::untilize(sliced_output_tensor);
         }
         if (sliced_output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
