@@ -256,7 +256,7 @@ void MetalContext::set_custom_control_plane_mesh_graph(
 
     global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
         mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
-    this->set_fabric_config(fabric_config_);
+    this->set_fabric_config(fabric_config_, tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 void MetalContext::set_default_control_plane_mesh_graph() {
@@ -264,7 +264,7 @@ void MetalContext::set_default_control_plane_mesh_graph() {
         !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
         "Modifying control plane requires no devices to be active");
     global_control_plane_.reset();
-    this->set_fabric_config(fabric_config_);
+    this->set_fabric_config(fabric_config_, tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 void MetalContext::teardown_fabric_config() {
@@ -273,9 +273,12 @@ void MetalContext::teardown_fabric_config() {
 }
 
 void MetalContext::set_fabric_config(
-    const tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes) {
+    const tt_metal::FabricConfig fabric_config,
+    tt_metal::FabricReliabilityMode reliability_mode,
+    std::optional<uint8_t> num_routing_planes) {
     if (this->fabric_config_ == tt_metal::FabricConfig::DISABLED || fabric_config == tt_metal::FabricConfig::DISABLED) {
         this->fabric_config_ = fabric_config;
+        this->fabric_reliability_mode_ = reliability_mode;
     } else {
         TT_FATAL(
             this->fabric_config_ == fabric_config,
@@ -327,9 +330,9 @@ void MetalContext::initialize_fabric_config() {
         this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& control_plane = this->get_control_plane();
     if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
-        control_plane.initialize_fabric_context(this->fabric_config_);
+        control_plane.initialize_fabric_context(this->fabric_config_, this->fabric_reliability_mode_);
     }
-    control_plane.configure_routing_tables_for_fabric_ethernet_channels();
+    control_plane.configure_routing_tables_for_fabric_ethernet_channels(this->fabric_reliability_mode_);
 }
 
 tt_metal::FabricConfig MetalContext::get_fabric_config() const {
@@ -365,7 +368,8 @@ void MetalContext::initialize_control_plane() {
     const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
                                                        "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
 
-    global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(mesh_graph_desc_path.string());
+    global_control_plane_ = std::make_unique<tt::tt_fabric::GlobalControlPlane>(
+        mesh_graph_desc_path.string());
 }
 
 }  // namespace tt::tt_metal
