@@ -4,12 +4,15 @@
 
 ## Evaluation Table
 
-| Model        | Resolution | Batch Size | Samples | TTNN vs Ground Truth(Correct_predictions/Total_predictions) | Torch vs Ground Truth (Correct_predictions/Total_predictions) |
+| Model        | Resolution | Batch Size | Samples | TTNN Accuracy | Torch Accuracy |
 |--------------|------------|------------|---------|-------------------------------|-------------------------------|
 | ViT          | (224, 224) | 8          | 512     | 81.25%               | 82.23%                 |
 | ResNet50     | (224, 224) | 16         | 512     | 78.52%                 | 75.59%                |
 | MobileNetV2  | (224, 224) | 8          | 512     | 68.36%                 | 65.62%                 |
 
+Where,
+- **TTNN Accuracy** refers to the ratio of correct predictions made by TTNN model to the total number of predictions, calculated by comparing TTNN outputs against the ground truth data.
+- **Torch Accuracy** refers to the ratio of correct predictions made by torch model to the total number of predictions, calculated by comparing Torch outputs against the ground truth data.
 
 ## To run the test of ttnn vs ground truth, please follow the following commands:
 
