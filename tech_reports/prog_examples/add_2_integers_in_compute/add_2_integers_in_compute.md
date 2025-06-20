@@ -68,7 +68,7 @@ CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * 
 CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 ```
 
-L1 circular buffers will be used communicate data to and from the compute engine. We create circular buffers for the source vectors and destination vector. The source data will be sent from the DRAM buffers to the circular buffer of each specified core, then the results for a given core will be stored at another circular buffer index before being sent to DRAM.
+L1 circular buffers will be used to communicate data to and from the compute engine. We create circular buffers for the source vectors and destination vector. The source data will be sent from the DRAM buffers to the circular buffer of each specified core, then the results for a given core will be stored at another circular buffer index before being sent to DRAM.
 
 ## Kernel setup
 
