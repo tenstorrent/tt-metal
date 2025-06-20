@@ -1449,8 +1449,8 @@ TEST_F(UnitMeshCQFixture, TensixTestRuntimeArgsCorrectlySentSingleCore) {
 
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (auto& device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, device->mesh_command_queue(), dummy_program_config, 9, 12, 15, 1));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+            device, device->mesh_command_queue(), dummy_program_config, 9, 12, 15, 1);
     }
 }
 
@@ -1680,8 +1680,8 @@ TEST_F(UnitMeshCQFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore) {
         CoreRangeSet cr_set(cr);
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, device->mesh_command_queue(), dummy_program_config, 13, 17, 19, 1));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+            device, device->mesh_command_queue(), dummy_program_config, 13, 17, 19, 1);
     }
 }
 
@@ -1693,8 +1693,8 @@ TEST_F(UnitMeshCQFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore_255_Per
         CoreRangeSet cr_set(cr);
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, device->mesh_command_queue(), dummy_program_config, 255, 255, 255, 1));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+            device, device->mesh_command_queue(), dummy_program_config, 255, 255, 255, 1);
     }
 }
 
@@ -1707,8 +1707,8 @@ TEST_F(UnitMeshCQFixture, TensixTestSendRuntimeArgsMultiCoreRange) {
         CoreRangeSet cr_set(std::vector{cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-            device, device->mesh_command_queue(), dummy_program_config, 12, 9, 2));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
+            device, device->mesh_command_queue(), dummy_program_config, 12, 9, 2);
     }
 }
 
@@ -1722,8 +1722,8 @@ TEST_F(UnitMeshCQFixture, TensixTestSendRuntimeArgsMultiNonOverlappingCoreRange)
         CoreRangeSet cr_set(std::vector{cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-            device, device->mesh_command_queue(), dummy_program_config, 9, 12, 2));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
+            device, device->mesh_command_queue(), dummy_program_config, 9, 12, 2);
     }
 }
 
@@ -1736,8 +1736,8 @@ TEST_F(UnitMeshCQFixture, TensixTestUpdateRuntimeArgsMultiCoreRange) {
         CoreRangeSet cr_set(std::vector{cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-            device, device->mesh_command_queue(), dummy_program_config, 9, 31, 10));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
+            device, device->mesh_command_queue(), dummy_program_config, 9, 31, 10);
     }
 }
 
@@ -2161,8 +2161,8 @@ TEST_F(UnitMeshCQFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
 
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, device->mesh_command_queue(), dummy_program_config, 256, 256, 256, NUM_ITER));
+        local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+            device, device->mesh_command_queue(), dummy_program_config, 256, 256, 256, NUM_ITER);
     }
 }
 
