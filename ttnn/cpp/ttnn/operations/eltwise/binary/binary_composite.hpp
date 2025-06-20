@@ -78,17 +78,6 @@ struct ExecuteBinaryCompositeOps {
 };
 
 template <BinaryCompositeOpType binary_comp_op_type>
-struct ExecuteBinaryCompositeOpsFloat {
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        float alpha,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, alpha, memory_config);
-    }
-};
-
-template <BinaryCompositeOpType binary_comp_op_type>
 struct ExecuteBinaryCompositeOpsIsClose {
     static Tensor invoke(
         const Tensor& input_tensor_a,
@@ -285,6 +274,36 @@ struct ExecuteGCD {
         QueueId queue_id,
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
+        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
+        std::optional<bool> use_legacy = std::nullopt);
+};
+
+struct ExecuteAddalpha {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        float alpha,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
+        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
+        std::optional<bool> use_legacy = std::nullopt);
+};
+
+struct ExecuteSubalpha {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        float alpha,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -518,18 +537,14 @@ constexpr auto xlogy = ttnn::register_operation<
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::XLOGY>>();
 constexpr auto minimum = ttnn::register_operation<"ttnn::minimum", operations::binary::ExecuteMinimum>();
 constexpr auto maximum = ttnn::register_operation<"ttnn::maximum", operations::binary::ExecuteMaximum>();
+constexpr auto addalpha = ttnn::register_operation<"ttnn::addalpha", operations::binary::ExecuteAddalpha>();
+constexpr auto subalpha = ttnn::register_operation<"ttnn::subalpha", operations::binary::ExecuteSubalpha>();
 constexpr auto atan2 = ttnn::register_operation<
     "ttnn::atan2",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::ATAN2>>();
 constexpr auto nextafter = ttnn::register_operation<
     "ttnn::nextafter",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::NEXTAFTER>>();
-constexpr auto addalpha = ttnn::register_operation<
-    "ttnn::addalpha",
-    operations::binary::ExecuteBinaryCompositeOpsFloat<operations::binary::BinaryCompositeOpType::ADDALPHA>>();
-constexpr auto subalpha = ttnn::register_operation<
-    "ttnn::subalpha",
-    operations::binary::ExecuteBinaryCompositeOpsFloat<operations::binary::BinaryCompositeOpType::SUBALPHA>>();
 constexpr auto isclose = ttnn::register_operation<
     "ttnn::isclose",
     operations::binary::ExecuteBinaryCompositeOpsIsClose<operations::binary::BinaryCompositeOpType::ISCLOSE>>();

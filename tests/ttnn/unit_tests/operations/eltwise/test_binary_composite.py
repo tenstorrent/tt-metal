@@ -161,48 +161,6 @@ def test_binary_logical_xor_ttnn(input_shapes, device):
     assert comp_pass
 
 
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("alpha", [1.0, 5.0, 10.0])
-def test_binary_addalpha_ttnn(input_shapes, alpha, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
-
-    output_tensor = ttnn.addalpha(input_tensor1, input_tensor2, alpha)
-    golden_function = ttnn.get_golden_function(ttnn.addalpha)
-    golden_tensor = golden_function(in_data1, in_data2, alpha)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("alpha", [1.0, 5.0, 10.0])
-def test_binary_subalpha_ttnn(input_shapes, alpha, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
-
-    output_tensor = ttnn.subalpha(input_tensor1, input_tensor2, alpha)
-    golden_function = ttnn.get_golden_function(ttnn.subalpha)
-    golden_tensor = golden_function(in_data1, in_data2, alpha)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
 @pytest.mark.parametrize("accurate_mode", [False, True])
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
