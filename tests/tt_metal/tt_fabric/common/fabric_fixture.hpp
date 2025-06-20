@@ -157,6 +157,17 @@ void RunTestMCastConnAPI(
     RoutingDirection bwd_dir = RoutingDirection::E,
     uint32_t bwd_hops = 1);
 
+void RunTestChipAndNocMCast(
+    BaseFabricFixture* fixture,
+    RoutingDirection dir,
+    bool is_chip_multicast,
+    bool is_noc_multicast,
+    uint32_t start_distance,
+    uint32_t range,
+    uint32_t mcast_rect_size_x,
+    uint32_t mcast_rect_size_y,
+    bool enable_fabric_tracing = false);
+
 void RunTestLineMcast(
     BaseFabricFixture* fixture, RoutingDirection unicast_dir, const std::vector<McastRoutingInfo>& mcast_routing_info);
 
