@@ -14,7 +14,6 @@ from models.utility_functions import run_for_wormhole_b0
 
 
 @run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 40960, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
@@ -49,7 +48,7 @@ def test_e2e_performant(
 
     inference_times = []
     for _ in range(10):
-        input_shape = (1, 3, *resolution)
+        input_shape = (1, *resolution, 3)
         torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
 
         t0 = time.time()
