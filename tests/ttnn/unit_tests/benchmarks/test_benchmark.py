@@ -2,6 +2,40 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+# This test runs different shapes for matmul_2d, with possibly the best configurations for performance.
+#
+# The inputs include:
+#   - m, k, n: Dimensions of the input tensors.
+#   - in0_sharded, out_sharded: Flags indicating whether the in0 (activation) and output tensors are sharded or not.
+#   - in0_block_w_div: A parameter to divide an in0 block into multiple chunks, helping to reduce L1 cache usage.
+#   - num_out_blocks_h: A parameter to divide an output block into multiple chunks on height dim, helping to reduce L1 cache usage.
+#   - num_out_blocks_w: A parameter to divide an output block into multiple chunks on width dim, helping to reduce L1 cache usage.
+#
+# Test is measuring and calculating following performance metrics:
+#   - Inference time: The average time taken for inference in nanoseconds.
+#   - TFLOPs: The number of tera floating-point operations per second.
+#   - Host based utilization: The ratio of ideal cycles to inference cycles, calculated for both user selected and full available grid size.
+#   - Device based utilization: The ratio of ideal cycles to TRISC1 kernel duration, calculated for both user selected and full available grid size.
+#
+# Important notes regarding performance metrics calculation:
+#   - Inference time is measured by host based on repeated(num_measurement_iterations times) execution of matmul operation.
+#   - Measured inference time includes all host and device overheads. If profiler build is enabled it can have impact on
+#     runtime performance of device and host operations.
+#   - TFLOPs is calculated based on the formula: 2 * m * k * n / 1e12 / inference_time_avg
+#       - factor 2 comes from fact that we are doing multiplication and addition in matmul operation.
+#   - Host based utilization is calculated using formula: ideal_cycle / inference_cycle
+#       - ideal_cycle is number of cycles requred to matmul input tensors: m * k * n / (tile_h * tile_w * tile_h) * (cycle_per_tile / num_cores)
+#           - cycle_per_tile is idealistic number of cycles required for Tensix engine to matmul 2 tiles and it is based on math fidelity:
+#             for LoFi it is 16, for HiFi2 it is 32, for HiFi3 it is 48 and for HiFi4 it is 64.
+#           - num_cores is number of cores in grid that is used to execute matmul operation, 8x8 grid will have 64 cores.
+#       - inference_cycle is calculated as: inference_time_avg * device_freq[Hz]
+#           - device_freq is fixed value common for specific architecture, for Wormhole B0 it is 1000MHz, for Blackhole it is 1350MHz
+#             This value can change and needs to be updated in code until there is python support to read device frequency from device.
+#   - Host based utilization uses fixed device frequency value, in reality device frequency can vary due to frequency throttling. Calculated value
+#     is worst case scenario for host based utilization since frequency throttling will reduce device frequency and thus increase utilization.
+#   - Device based utilization is calculated using formula: ideal_cycle / trisc1_kernel_duration
+#       - trisc1_kernel_duration is read from profiler log and it is average duration of TRISC1 kernel in number of cycles.
+
 import time
 
 from loguru import logger
@@ -9,11 +43,15 @@ import csv
 import pytest
 import torch
 import ttnn
-from models.utility_functions import run_for_wormhole_b0, is_grayskull, profiler
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import is_grayskull, profiler, is_wormhole_b0, is_blackhole
 from pathlib import Path
 import os
 import numpy as np
+from tt_metal.tools.profiler.process_device_log import import_log_run_stats
+import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
+from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG, rm
+
+profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 
 
 SUBBLOCK_HW_CHOICES = [
@@ -59,20 +97,17 @@ def get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, out_sharded=False, fp
     return (1, 1)
 
 
-# This test runs different shapes for matmul_2d, with possibly the best configurations for performance.
-#
-# The inputs include:
-#   - m, k, n: Dimensions of the input tensors.
-#   - in0_sharded, out_sharded: Flags indicating whether the in0 (activation) and output tensors are sharded or not.
-#   - in0_block_w_div: A parameter to divide an in0 block into multiple chunks, helping to reduce L1 cache usage.
-#   - num_out_blocks_h: A parameter to divide an output block into multiple chunks on height dim, helping to reduce L1 cache usage.
-#   - num_out_blocks_w: A parameter to divide an output block into multiple chunks on width dim, helping to reduce L1 cache usage.
-
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG, rm
-
-profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
+# Get default value of device frequency[MHz] based on architecture.
+# Hardcoded values are used until there is python support to read freq
+# value from device. Please note that this needs to be update if device
+# runs at different frequency.
+def get_device_frequency():
+    if is_wormhole_b0():
+        return 1000
+    elif is_blackhole():
+        return 1350
+    else:
+        return None
 
 
 def get_profiler_data():
@@ -353,10 +388,11 @@ def test_matmul_2d_host_perf(
                         output_tile=output_tile,
                     )
 
-                # Clear profiler log after warmup iterations
+                # Clear profiler log and dump profiler data after warmup iterations
                 ttnn.DumpDeviceProfiler(device)
                 rm(profiler_log_path)
-                trisc1_kernel_duration = []
+                # Synchronize device to ensure all warmup iterations are completed and device is in clean state
+                ttnn.synchronize_device(device)
 
                 if use_trace:
                     tid = ttnn.begin_trace_capture(device, cq_id=0)
@@ -394,8 +430,8 @@ def test_matmul_2d_host_perf(
                 # Read profiler log data, device frequency and TRISC1 kernel duration
                 ttnn.DumpDeviceProfiler(device)
                 profiler_data = get_profiler_data()
-                trisc1_kernel_duration.append(profiler_data["trisc1_kernel_duration"])
-                device_freq = profiler_data["device_freq"]
+                trisc1_kernel_duration = profiler_data["trisc1_kernel_duration"]
+                device_freq = get_device_frequency()
 
                 inference_time_avg = profiler.get("run") / num_measurement_iterations
                 tflops = 2 * m * k * n / 1e12 / inference_time_avg
@@ -582,10 +618,11 @@ def test_matmul_2d_host_perf_out_of_box(
                 for iter in range(0, num_warmup_iterations):
                     output_t = in0_t @ in1_t
 
-                # Clear profiler log from warmup data before measurement iterations starts
+                # Clear profiler log and dump profiler data after warmup iterations
                 ttnn.DumpDeviceProfiler(device)
                 rm(profiler_log_path)
-                trisc1_kernel_duration = []
+                # Synchronize device to ensure all warmup iterations are completed and device is in clean state
+                ttnn.synchronize_device(device)
 
                 if use_trace:
                     tid = ttnn.begin_trace_capture(device, cq_id=0)
@@ -607,8 +644,8 @@ def test_matmul_2d_host_perf_out_of_box(
                 # Read profiler log data, device frequency and TRISC1 kernel duration
                 ttnn.DumpDeviceProfiler(device)
                 profiler_data = get_profiler_data()
-                trisc1_kernel_duration.append(profiler_data["trisc1_kernel_duration"])
-                device_freq = profiler_data["device_freq"]
+                trisc1_kernel_duration = profiler_data["trisc1_kernel_duration"]
+                device_freq = get_device_frequency()
 
                 inference_time_avg = profiler.get("run") / num_measurement_iterations
                 tflops = 2 * m * k * n / 1e12 / inference_time_avg
