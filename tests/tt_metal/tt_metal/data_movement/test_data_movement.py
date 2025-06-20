@@ -42,6 +42,8 @@ test_id_to_name = {
     18: "Reshard Hardcoded Medium",
     19: "Reshard Hardcoded Many Cores",
     20: "Reshard Hardcoded 2 Cores to Many Cores",
+    200: "Deinterleave Single Core",
+    201: "Deinterleave Multi Core",
     21: "Conv Act with halo 3x3",
     22: "Conv Act with halo 3x3 Small",
     23: "Conv Halo Gather",
@@ -135,6 +137,13 @@ test_id_to_comment = {
     23: "The performance of this test is similar to how other tests perform based on the number of \n\
         transactions and the transaction size, but with extra degradation due to needing to read \n\
         parameters from L1.",
+    200: "With a single core the graphs shows performance increases as the theshold increases. \n\
+         This is because frequent flushes dont hide the round trip latency.",
+    201: "With multiple cores the graph shows that a small theshold always provides bad performance. \n\
+          This is because frequent flushes dont hide the round trip latency. At larger thesholds, \n\
+          the performance starts to fluctuate due to head-of-line blocking and unfairness in the NOC. \n\
+          Performance fluctuates because the flush disturbes the steady state and will randomly create \n\
+          traffic that sometimes has head of line blocking, and sometimes not.",
 }
 
 # Correspondng test bounds for each arch, test id, riscv core
@@ -217,6 +226,12 @@ test_bounds = {
         },
         19: {
             "riscv_1": {"latency": {"lower": 500, "upper": 3000}, "bandwidth": 10},
+        },
+        200: {
+            "riscv_1": {"latency": {"lower": 15000, "upper": 30000}, "bandwidth": 1.7},
+        },
+        201: {
+            "riscv_1": {"latency": {"lower": 10000, "upper": 60000}, "bandwidth": 2},
         },
         20: {
             "riscv_1": {"latency": {"lower": 100, "upper": 1000}, "bandwidth": 3},
@@ -319,6 +334,12 @@ test_bounds = {
         },
         19: {
             "riscv_1": {"latency": {"lower": 500, "upper": 3000}, "bandwidth": 25},
+        },
+        200: {
+            "riscv_1": {"latency": {"lower": 15000, "upper": 30000}, "bandwidth": 1.7},
+        },
+        201: {
+            "riscv_1": {"latency": {"lower": 10000, "upper": 60000}, "bandwidth": 2},
         },
         20: {
             "riscv_1": {"latency": {"lower": 100, "upper": 1000}, "bandwidth": 7},

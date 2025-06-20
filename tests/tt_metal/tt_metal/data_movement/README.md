@@ -15,6 +15,7 @@ This test suite addresses the functionality and performance (i.e. bandwidth) of 
 | Loopback             | 16         | Does a loopback operation where one cores writes to itself.                          |
 | Reshard Hardcoded    | 17-20      | Uses existing reshard tests to analyse their bandwidth and latency.                  |
 | Conv Hardcoded       | 21-23      | Uses existing conv tests to analyse their bandwidth and latency.                     |
+| Deinterleave         | 200-201    | Tests deinterleaving                                                                 |
 
 ## Running Tests
 ### C++ Gtests
