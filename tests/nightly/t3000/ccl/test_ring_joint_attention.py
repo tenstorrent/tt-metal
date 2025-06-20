@@ -354,7 +354,7 @@ def test_ring_joint_sdpa(
     up_factor,
     all_gather_topology,
 ):
-    if nh & up_factor != 0:
+    if nh % up_factor != 0:
         pytest.skip("nh must be divisible by up_factor")
     if rp_factor == 8 and rp_axis == 1:
         mesh_device.reshape(ttnn.MeshShape(1, 8))
