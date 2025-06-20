@@ -777,6 +777,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         // update senders
         auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
         auto& worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_writer_kernel_id);
+        auto out_ready_semaphore_forward = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore.at(0);
+        auto out_ready_semaphore_backward = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore.at(1);
         // update receivers
         auto& worker_forward_receiver_reader_runtime_args_by_core =
             GetRuntimeArgs(program, worker_forward_receiver_reader_kernel_id);
@@ -791,10 +793,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
             worker_reader_sender_runtime_args[0] = input.buffer()->address();
             worker_reader_sender_runtime_args[1] = intermed.buffer()->address();
+            worker_reader_sender_runtime_args[6] = out_ready_semaphore_forward.address();
+            worker_reader_sender_runtime_args[7] = out_ready_semaphore_backward.address();
+
             // sender writer
             auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
             worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
             worker_writer_sender_runtime_args[1] = output.buffer()->address();
+            worker_writer_sender_runtime_args[9] = out_ready_semaphore_forward.address();
+            worker_writer_sender_runtime_args[10] = out_ready_semaphore_backward.address();
         }
 
         for (int link = 0; link < num_links; link++) {

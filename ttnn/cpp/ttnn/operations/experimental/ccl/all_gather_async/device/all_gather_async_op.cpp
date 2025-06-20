@@ -359,8 +359,7 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
         input_shape,
         input_memory_layout,
         input_dtype,
-        input_memory_config,
-        semaphore_address);
+        input_memory_config);
 }
 
 namespace operations {

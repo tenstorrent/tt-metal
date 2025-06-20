@@ -45,7 +45,7 @@ def run_ag_with_trace(
         dim=dim,
         cluster_axis=cluster_axis,
         persistent_intermediate_buffer=persistent_intermediate_buffer,
-        multi_device_global_semaphore=ccl_semaphore_handles[0],
+        multi_device_global_semaphore=ccl_semaphore_handles[NUM_BUFFERS - 1],
         persistent_output_buffer=persistent_output_tensor,
         num_links=num_links,
         memory_config=output_mem_config,
@@ -66,7 +66,7 @@ def run_ag_with_trace(
                 dim=dim,
                 cluster_axis=cluster_axis,
                 persistent_intermediate_buffer=persistent_intermediate_buffer,
-                multi_device_global_semaphore=ccl_semaphore_handles[0],
+                multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS],
                 persistent_output_buffer=persistent_output_tensor,
                 num_links=num_links,
                 memory_config=output_mem_config,
@@ -441,8 +441,6 @@ def run_reduce_scatter_on_TG(
         from_remote_semaphore_handles.append(ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0))
         from_remote_semaphore_handles.append(ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0))
 
-    to_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-
     ##
     ## Compute golden
     ##
@@ -630,7 +628,7 @@ def run_reduce_scatter_on_TG(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 5554176}], indirect=True
 )
 @pytest.mark.parametrize(
-    "trace_mode, warmup_iters, num_iters", [(False, 0, 1), (True, 15, 100)], ids=["no_trace", "trace"]
+    "trace_mode, warmup_iters, num_iters", [(False, 0, 1), (True, 15, 100)], ids=["no-trace", "yes-trace"]
 )
 def test_all_gather_TG(
     mesh_device,
