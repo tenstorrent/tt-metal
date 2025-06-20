@@ -27,19 +27,19 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
     using namespace tt::tt_metal;
     using namespace tt::constants;
 
-    TT_ASSERT(
+    TT_FATAL(
         args.condition_tensor.get_dtype() == args.true_value_tensor.get_dtype(),
         "Mismatched data types: 'condition_tensor' and 'true_values_tensor' must have the same dtype.");
 
-    TT_ASSERT(
+    TT_FATAL(
         args.condition_tensor.get_dtype() == args.false_value_tensor.get_dtype(),
         "Mismatched data types: 'condition_tensor' and 'false_values_tensor' must have the same dtype.");
 
-    TT_ASSERT(
+    TT_FATAL(
         args.condition_tensor.get_dtype() == output.get_dtype(),
         "Mismatched data types: 'condition_tensor' and 'output' tensor must have the same dtype.");
 
-    TT_ASSERT(
+    TT_FATAL(
         args.condition_tensor.get_dtype() == DataType::BFLOAT16 ||
             args.condition_tensor.get_dtype() == DataType::FLOAT32 ||
             args.condition_tensor.get_dtype() == DataType::BFLOAT8_B,
@@ -91,7 +91,7 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
         tt_metal::ReaderDataMovementConfig(ttnn::kernel_utils::to_vector(reader_compile_time_args), reader_defines));
 
     tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     CompileTimeWriterKernelArgs writer_compile_time_args = {
         .cb_dst = output_cb_index, .is_dst_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM};
     std::map<string, string> writer_defines;
