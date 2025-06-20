@@ -10,7 +10,7 @@
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/reconfig_data_format.h"
@@ -245,13 +245,13 @@ void top_k() {
 
             reconfig_data_format_srca(input_cb_index);
             transpose_init(input_cb_index);
-            transpose_wh_tile(input_cb_index, 0, 0);
-            transpose_wh_tile(input_cb_index, 1, 1);
+            transpose_tile(input_cb_index, 0, 0);
+            transpose_tile(input_cb_index, 1, 1);
 
             reconfig_data_format_srca(index_cb_index);
             transpose_init(index_cb_index);
-            transpose_wh_tile(index_cb_index, 0, 2);
-            transpose_wh_tile(index_cb_index, 1, 3);
+            transpose_tile(index_cb_index, 0, 2);
+            transpose_tile(index_cb_index, 1, 3);
 
             // llk_topk_sort -> inplace
             ckernel::topk_local_sort(0, (int)ascending, logk - 1);
@@ -334,7 +334,7 @@ void top_k() {
         for (uint32_t i = 0; i < Kt; ++i) {
             acquire_dst();
             cb_reserve_back(values_cb_index, 1);
-            transpose_wh_tile(input_transposed_cb_index, i, 0);
+            transpose_tile(input_transposed_cb_index, i, 0);
             pack_tile(0, values_cb_index);
             cb_push_back(values_cb_index, 1);
             release_dst();
@@ -350,7 +350,7 @@ void top_k() {
         for (uint32_t i = 0; i < Kt; ++i) {
             acquire_dst();
             cb_reserve_back(output_ind_cb_index, 1);
-            transpose_wh_tile(index_transposed_cb_index, i, 0);
+            transpose_tile(index_transposed_cb_index, i, 0);
             pack_tile(0, output_ind_cb_index);
             cb_push_back(output_ind_cb_index, 1);
             release_dst();

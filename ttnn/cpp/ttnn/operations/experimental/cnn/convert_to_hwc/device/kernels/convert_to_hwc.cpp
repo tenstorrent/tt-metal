@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 #include "compute_kernel_api/tilize.h"
 
 template <uint32_t BatchSize = 1>
@@ -17,7 +17,7 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
 
     transpose_init(cb_in);
     for (uint32_t i = 0; i < BatchSize; i++) {
-        transpose_wh_tile(cb_in, i, i);
+        transpose_tile(cb_in, i, i);
     }
 
     cb_reserve_back(cb_out, BatchSize);

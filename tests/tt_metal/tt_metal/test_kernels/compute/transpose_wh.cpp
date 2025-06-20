@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 
 namespace NAMESPACE {
@@ -22,7 +22,7 @@ void MAIN {
         cb_reserve_back(tt::CBIndex::c_16, 1);
 
         tile_regs_acquire();
-        transpose_wh_tile(tt::CBIndex::c_0, 0, 0);
+        transpose_tile(tt::CBIndex::c_0, 0, 0);
         tile_regs_commit();
 
         tile_regs_wait();

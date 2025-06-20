@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -25,7 +25,7 @@ void MAIN {
         cb_reserve_back(cb_out1, 1);
 
         acquire_dst();
-        transpose_wh_tile(cb_im0, 0, 0);
+        transpose_tile(cb_im0, 0, 0);
         pack_tile(0, cb_out1);
         release_dst();
 

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_kernel_api.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
@@ -119,13 +119,13 @@ void MAIN {
                             // Transpose and copy data to registers
                             reconfig_data_format_srca(input_tensor_cb_index);
                             transpose_init(input_tensor_cb_index);
-                            transpose_wh_tile(input_tensor_cb_index, 0, input_dest_start);
-                            transpose_wh_tile(input_tensor_cb_index, 1, input_dest_end);
+                            transpose_tile(input_tensor_cb_index, 0, input_dest_start);
+                            transpose_tile(input_tensor_cb_index, 1, input_dest_end);
 
                             reconfig_data_format_srca(index_tensor_cb_index);
                             transpose_init(index_tensor_cb_index);
-                            transpose_wh_tile(index_tensor_cb_index, 0, index_dest_start);
-                            transpose_wh_tile(index_tensor_cb_index, 1, index_dest_end);
+                            transpose_tile(index_tensor_cb_index, 0, index_dest_start);
+                            transpose_tile(index_tensor_cb_index, 1, index_dest_end);
 
                             // llk_topk_sort -> inplace
                             ckernel::topk_local_sort(0, (int)dir, 5);
@@ -156,8 +156,8 @@ void MAIN {
                             cb_wait_front(input_tensor_transposed_cb_index, 2 * one_tile);
                             reconfig_data_format_srca(input_tensor_transposed_cb_index);
                             transpose_init(input_tensor_transposed_cb_index);
-                            transpose_wh_tile(input_tensor_transposed_cb_index, 0, input_dest_start);
-                            transpose_wh_tile(input_tensor_transposed_cb_index, 1, input_dest_end);
+                            transpose_tile(input_tensor_transposed_cb_index, 0, input_dest_start);
+                            transpose_tile(input_tensor_transposed_cb_index, 1, input_dest_end);
 
                             cb_reserve_back(input_tensor_output_cb_index, one_tile);
                             pack_reconfig_data_format(input_tensor_output_cb_index);
@@ -175,8 +175,8 @@ void MAIN {
                             cb_wait_front(index_tensor_transposed_cb_index, 2 * one_tile);
                             reconfig_data_format_srca(index_tensor_transposed_cb_index);
                             transpose_init(index_tensor_transposed_cb_index);
-                            transpose_wh_tile(index_tensor_transposed_cb_index, 0, input_dest_start);
-                            transpose_wh_tile(index_tensor_transposed_cb_index, 1, input_dest_end);
+                            transpose_tile(index_tensor_transposed_cb_index, 0, input_dest_start);
+                            transpose_tile(index_tensor_transposed_cb_index, 1, input_dest_end);
 
                             cb_reserve_back(index_tensor_output_cb_index, one_tile);
                             pack_reconfig_data_format(index_tensor_output_cb_index);

@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/pack_untilize.h"
@@ -19,7 +19,7 @@ ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint
         cb_reserve_back(cb_untilize, Ht);
         for (uint32_t h = 0; h < Ht; ++h) {
             tile_regs_acquire();
-            transpose_wh_tile(cb_tilize, tile_idx, 0);
+            transpose_tile(cb_tilize, tile_idx, 0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, cb_untilize);
@@ -56,7 +56,7 @@ ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, uint32_t c
     for (uint32_t w = 0; w < Wt; ++w) {
         tile_regs_acquire();
         for (uint32_t h = 0; h < Ht; ++h) {
-            transpose_wh_tile(cb_tilize, tile_idx, h);
+            transpose_tile(cb_tilize, tile_idx, h);
             tile_idx += Wt;
         }
 
@@ -89,7 +89,7 @@ ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, uint32_t cb_out) {
     for (uint32_t w = 0; w < Wt; ++w) {
         tile_regs_acquire();
         for (uint32_t h = 0; h < Ht; ++h) {
-            transpose_wh_tile(cb_tilize, tile_idx, h);
+            transpose_tile(cb_tilize, tile_idx, h);
             tile_idx += Wt;
         }
         tile_regs_commit();
