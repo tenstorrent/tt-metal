@@ -92,7 +92,7 @@ inline uint8_t get_relative_logical_y() {
  *
  * | Argument       | Description                                                             | Type     | Valid Range | Required |
  * |----------------|-------------------------------------------------------------------------|----------|-------------|----------|
- * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 255    | True     |
+ * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 6144    | True     |
  */
 // clang-format on
 static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l1_base[arg_idx]; }
@@ -106,7 +106,7 @@ static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l
  *
  * | Argument       | Description                                                             | Type     | Valid Range | Required |
  * |----------------|-------------------------------------------------------------------------|----------|-------------|----------|
- * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 255    | True     |
+ * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 6144    | True     |
  */
 // clang-format on
 static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) { return (uint32_t)&crta_l1_base[arg_idx]; }
@@ -120,7 +120,7 @@ static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) { return (uint32_t
  *
  * | Argument              | Description                                    | Type                  | Valid Range | Required |
  * |-----------------------|------------------------------------------------|-----------------------|-------------|----------|
- * | arg_idx               | Unique Runtime argument index                  | uint32_t              | 0 to 255    | True     |
+ * | arg_idx               | Unique Runtime argument index                  | uint32_t              | 0 to 6144    | True     |
  * | T (template argument) | Data type of the returned argument             | Any 4-byte sized type | N/A         | True     |
  */
 // clang-format on
@@ -140,7 +140,7 @@ FORCE_INLINE T get_arg_val(int arg_idx) {
  *
  * | Argument              | Description                                    | Type                  | Valid Range | Required |
  * |-----------------------|------------------------------------------------|-----------------------|-------------|----------|
- * | arg_idx               | Common Runtime argument index                  | uint32_t              | 0 to 255    | True     |
+ * | arg_idx               | Common Runtime argument index                  | uint32_t              | 0 to 6144    | True     |
  * | T (template argument) | Data type of the returned argument             | Any 4-byte sized type | N/A         | True     |
  */
 // clang-format on
