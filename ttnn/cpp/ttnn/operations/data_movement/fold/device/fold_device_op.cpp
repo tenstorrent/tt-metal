@@ -21,7 +21,9 @@ void validate_fold(
     bool is_sharded,
     bool is_dram_interleaved,
     uint32_t stride_h,
-    uint32_t stride_w) {
+    uint32_t stride_w,
+    uint32_t pad_h,
+    uint32_t pad_w) {
     const Tensor& input_tensor = input_tensors.at(0);
 
     const auto input_shape = input_tensor.padded_shape();
@@ -40,8 +42,11 @@ void validate_fold(
             (input_shape[-1] * input_tensor.element_size()) % 16 == 0,
             "Fold: Expect input tensor's pages to be multiples of 16 bytes.");
     } else if (is_dram_interleaved) {
-        TT_FATAL(input_shape[1] % stride_h == 0, "Fold: Input height must be divisible by stride_h.");
-        TT_FATAL(input_shape[2] % stride_w == 0, "Fold: Input width must be divisible by stride_w.");
+        TT_FATAL((input_shape[1] + pad_h) % stride_h == 0, "Fold: Input height + pad_h must be divisible by stride_h.");
+        TT_FATAL((input_shape[2] + pad_w) % stride_w == 0, "Fold: Input width + pad_w must be divisible by stride_w.");
+        if (input_tensor.get_layout() == Layout::TILE) {
+            TT_FATAL(pad_h == 0 && pad_w == 0, "Fold: For tile layout, pad_h and pad_w must be 0.");
+        }
     } else {
         TT_FATAL(input_shape[1] % stride_h == 0, "Fold: Input height must be divisible by stride_h.");
         TT_FATAL(input_shape[2] % stride_w == 0, "Fold: Input width must be divisible by stride_w.");
@@ -53,12 +58,24 @@ void validate_fold(
 
 void Fold::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     return validate_fold(
-        {tensors.input_tensor}, op_attr.is_sharded, op_attr.is_dram_interleaved, op_attr.stride_h, op_attr.stride_w);
+        {tensors.input_tensor},
+        op_attr.is_sharded,
+        op_attr.is_dram_interleaved,
+        op_attr.stride_h,
+        op_attr.stride_w,
+        op_attr.pad_h,
+        op_attr.pad_w);
 }
 
 void Fold::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     return validate_fold(
-        {tensors.input_tensor}, op_attr.is_sharded, op_attr.is_dram_interleaved, op_attr.stride_h, op_attr.stride_w);
+        {tensors.input_tensor},
+        op_attr.is_sharded,
+        op_attr.is_dram_interleaved,
+        op_attr.stride_h,
+        op_attr.stride_w,
+        op_attr.pad_h,
+        op_attr.pad_w);
 }
 
 Fold::spec_return_value_t Fold::compute_output_specs(
@@ -83,7 +100,8 @@ Fold::spec_return_value_t Fold::compute_output_specs(
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config))};
     } else if (op_attr.is_dram_interleaved) {
-        ttnn::Shape output_logical_shape({input_shape[0], input_shape[1], input_shape[2], input_shape[3]});
+        ttnn::Shape output_logical_shape(
+            {input_shape[0], (input_shape[1] + op_attr.pad_h), (input_shape[2] + op_attr.pad_w), input_shape[3]});
         return {TensorSpec(
             output_logical_shape,
             tt::tt_metal::TensorLayout(
@@ -117,6 +135,9 @@ std::tuple<Fold::operation_attributes_t, Fold::tensor_args_t> Fold::invoke(
     Fold::operation_attributes_t op_attr = {
         .stride_h = stride_h,
         .stride_w = stride_w,
+        .pad_h = pad_h,
+        .pad_w = pad_w,
+        .pad_c = pad_c,
         .is_sharded = is_sharded,
         .is_dram_interleaved = is_dram_interleaved};
     return {op_attr, Fold::tensor_args_t{.input_tensor = input_tensor}};
