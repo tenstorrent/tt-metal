@@ -7,7 +7,8 @@
 #include <type_traits>
 
 template <typename E>
-struct Flags {
+class Flags {
+public:
     static_assert(std::is_enum_v<E>, "Flags<E> requires E to be an enum.");
 
     using Underlying = std::underlying_type_t<E>;
@@ -18,12 +19,11 @@ struct Flags {
     constexpr explicit Flags(Underlying bits) noexcept : bits_(bits) {}
 
     // Bitwise OR a single enum
-    constexpr Flags operator|(E rhs) const noexcept { return Flags(bits_ | static_cast<Underlying>(rhs)); }
+    constexpr Flags operator|(E other) const noexcept { return Flags(bits_ | static_cast<Underlying>(other)); }
     // Bitwise OR another Flags
-    constexpr Flags operator|(Flags rhs) const noexcept { return Flags(bits_ | rhs.bits_); }
+    constexpr Flags operator|(Flags other) const noexcept { return Flags(bits_ | other.bits_); }
 
-    // ... similarly, operator&, operator^, operator~ if you like ...
-    constexpr Flags operator&(E rhs) const noexcept { return Flags(bits_ & static_cast<Underlying>(rhs)); }
+    constexpr Flags operator&(E other) const noexcept { return Flags(bits_ & static_cast<Underlying>(other)); }
     constexpr bool test(E single) const noexcept {
         return (bits_ & static_cast<Underlying>(single)) == static_cast<Underlying>(single);
     }
@@ -31,5 +31,5 @@ struct Flags {
     constexpr Underlying raw() const noexcept { return bits_; }
 
 private:
-    Underlying bits_;
+    Underlying bits_ = 0;
 };

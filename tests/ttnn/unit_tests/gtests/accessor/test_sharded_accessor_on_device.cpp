@@ -16,8 +16,6 @@
 #include "ttnn/operations/sharding_utilities.hpp"
 
 namespace sharded_accessor_device_tests {
-using tt::tt_metal::sharded_accessor_utils::ArgConfig;
-using tt::tt_metal::sharded_accessor_utils::ArgsConfig;
 
 struct InputOutputBufferParams {
     tt::tt_metal::Shape physical_tensor_shape;

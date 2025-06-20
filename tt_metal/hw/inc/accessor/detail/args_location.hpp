@@ -7,28 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 
-#include <hostdevcommon/flags.hpp>
+#include <hostdevcommon/sharded_accessor/arg_config.hpp>
 #include "const.hpp"
-
-namespace {
-/**
- * @brief Encodes which arguments are compile-time and which are common runtime.
- */
-// TODO: This exact enum is defined on host. Maybe somehow reuse it?
-enum class ArgConfig : uint8_t {
-    CTA = 0,
-    RankCRTA = 1 << 0,
-    NumBanksCRTA = 1 << 1,
-    TensorShapeCRTA = 1 << 2,
-    ShardShapeCRTA = 1 << 3,
-    BankCoordsCRTA = 1 << 4,
-    CRTA = RankCRTA | NumBanksCRTA | TensorShapeCRTA | ShardShapeCRTA | BankCoordsCRTA
-};
-
-using ArgsConfig = Flags<ArgConfig>;
-constexpr ArgsConfig operator|(ArgConfig a, ArgConfig b) noexcept { return ArgsConfig(a) | b; }
-constexpr ArgsConfig operator|(ArgConfig a, ArgsConfig b) noexcept { return ArgsConfig(a) | b; }
-}  // namespace
 
 namespace nd_sharding {
 namespace detail {

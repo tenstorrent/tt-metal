@@ -73,9 +73,6 @@ void benchmark_all_args_combinations_single_core(
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_,
     const std::string& res_path,
     const std::string& kernel_path) {
-    using tt::tt_metal::sharded_accessor_utils::ArgConfig;
-    using tt::tt_metal::sharded_accessor_utils::ArgsConfig;
-
     // Create input and output replicated mesh buffers across generic mesh device; tests will only use first device
     const auto input_mesh_buffer = create_replicated_input_mesh_buffer_from_inputs(params, mesh_device_.get());
 
@@ -110,7 +107,6 @@ void benchmark_all_args_combinations_single_core(
         const auto aligned_page_size = input_shard_view->aligned_page_size();
 
         // Set up sharded accessor compile-time args for reader kernel
-        using tt::tt_metal::sharded_accessor_utils::ArgConfig;
         const auto& input_buffer_distribution_spec =
             std::get<BufferDistributionSpec>(input_mesh_buffer->device_local_config().shard_parameters.value());
         const auto sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
