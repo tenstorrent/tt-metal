@@ -123,7 +123,6 @@ void OptimizedConvNew::validate(
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     TT_FATAL(input_tensor_a.memory_config().is_sharded(), "Activation tensor should be sharded.");
-    TT_FATAL(!input_tensor_b.memory_config().is_sharded(), "Weights tensor should not be sharded.");
     if (this->untilize_out) {
         TT_FATAL((this->dtype == DataType::BFLOAT16) || (this->dtype == DataType::FLOAT32), "Error");
     }
