@@ -13,7 +13,7 @@ struct Flags {
     using Underlying = std::underlying_type_t<E>;
 
     constexpr Flags() noexcept : bits_(0) {}
-    constexpr Flags(E single) noexcept : bits_(static_cast<Underlying>(single)) {}
+    constexpr Flags(E value) noexcept : bits_{static_cast<Underlying>(value)} {}
     constexpr Flags(E a, E b) noexcept : bits_(static_cast<Underlying>(a) | static_cast<Underlying>(b)) {}
     constexpr explicit Flags(Underlying bits) noexcept : bits_(bits) {}
 
