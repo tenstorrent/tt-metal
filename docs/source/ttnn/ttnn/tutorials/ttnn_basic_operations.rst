@@ -45,20 +45,20 @@ Lets create a helper function for convering from PyTorch tensors to TT-NN tiled 
 Host Tensor Creation
 --------------------
 
-Create several tensors for our tests and fill with different values. We will use these tensors to demonstrate various operations.
+Create a tensor for our tests and fill with different values. We will use this and other tensors to demonstrate various operations.
 
 .. code-block:: python
 
    print("\n--- TT-NN Tensor Creation with Tiles (32x32) ---")
-   host_t4 = torch.rand((32, 32), dtype=torch.float32)
-   host_np_array = np.array([[5, 6], [7, 8]]).repeat(16, axis=0).repeat(16, axis=1)
-   host_t5 = torch.from_numpy(host_np_array.astype(np.float32))
+   host_rand = torch.rand((32, 32), dtype=torch.float32)
 
-Convert Host Tensors to TT-NN Tiled Tensors
--------------------------------------------
+Convert Host Tensors to TT-NN Tiled Tensors or Create Natively on Device
+------------------------------------------------------------------------
 
-Tensix cores operate most efficiently on tiled data, allowing them to perform a large amount of compute in parallel.
-Create natively using TT-NN where possible.
+Tensix cores operate most efficiently on tiled data, allowing them to perform a large amount of compute in parallel. Where necesasry, lets convert
+host tensors to TT-NN tiled tensors using the helper function we created earlier, and transfer them to the TT device.  Alternatively, we can create tensors
+natively using TT-NN's tensor creation functions, and initialize them directly on the TT device.  TT-NN calls that create tensors natively on the device are a
+more efficient way to create tensors, as they avoid the overhead of transferring data from the host to the device.
 
 .. code-block:: python
 
@@ -69,6 +69,7 @@ Create natively using TT-NN where possible.
       layout=ttnn.TILE_LAYOUT,
       device=device,
    )
+
    tt_t2 = ttnn.zeros(
       shape=(32, 32),
       dtype=ttnn.bfloat16,
@@ -81,8 +82,10 @@ Create natively using TT-NN where possible.
       layout=ttnn.TILE_LAYOUT,
       device=device,
    )
-   tt_t4 = to_tt_tile(host_t4)
-   tt_t5 = to_tt_tile(host_t5)
+   tt_t4 = to_tt_tile(host_rand)
+
+   t5 = np.array([[5, 6], [7, 8]], dtype=np.float32).repeat(16, axis=0).repeat(16, axis=1)
+   tt_t5 = ttnn.Tensor(t5, device=device, layout=ttnn.TILE_LAYOUT)
 
 Tile-Based Arithmetic Operations
 --------------------------------
