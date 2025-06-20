@@ -141,34 +141,60 @@ void kernel_main() {
                 size_t l1_read_addr = get_read_ptr(cb_output_id);
 
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-                    uint32_t payload_size_bytes =
-                        std::min(contig_pages_advanced, num_pages_to_read - j) * intermediate_page_size;
+                    uint32_t num_pages_to_write = std::min(contig_pages_advanced, num_pages_to_read - j);
+                    uint32_t payload_size_bytes = num_pages_to_write * intermediate_page_size;
 
-                    uint64_t remote_noc0_dest_noc_addr = get_noc_addr(
-                        input_tile_id_start + row_offset + pages_read_in_row,
-                        intermediate_addrgen,
-                        0 /*offset*/,
-                        0 /*noc_id*/);
-                    pkt_hdr->to_noc_unicast_write(
-                        tt::tt_fabric::NocUnicastCommandHeader{remote_noc0_dest_noc_addr}, payload_size_bytes);
-                    dir_fabric_connection->wait_for_empty_write_slot();
-                    dir_fabric_connection->send_payload_without_header_non_blocking_from_address(
-                        l1_read_addr, payload_size_bytes);
-                    dir_fabric_connection->send_payload_flush_non_blocking_from_address(
-                        (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
-
-                    // Note: Must flush write for correctness
-                    noc_async_writes_flushed();
-                    l1_read_addr += payload_size_bytes;
-                    tiles_read++;
+                    uint32_t first_tile_id = input_tile_id_start + row_offset + pages_read_in_row;
+                    uint64_t remote_noc0_dest_noc_addr =
+                        get_noc_addr(first_tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
                     pages_read_in_row++;
                     if (pages_read_in_row >= slice_Wt) {
                         row_offset += stride_Wt;
                         pages_read_in_row = 0;
                     }
-                }
 
+                    if (num_pages_to_write == 2) {
+                        uint32_t second_tile_id = input_tile_id_start + row_offset + pages_read_in_row;
+                        uint64_t second_remote_noc0_dest_noc_addr =
+                            get_noc_addr(second_tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+
+                        pages_read_in_row++;
+                        if (pages_read_in_row >= slice_Wt) {
+                            row_offset += stride_Wt;
+                            pages_read_in_row = 0;
+                        }
+
+                        // todo: call fabric-scatter-write
+                        pkt_hdr->to_noc_unicast_scatter_write(
+                            tt::tt_fabric::NocUnicastScatterCommandHeader{
+                                remote_noc0_dest_noc_addr,
+                                second_remote_noc0_dest_noc_addr,
+                                intermediate_page_size /*single packet size*/},
+                            payload_size_bytes /*total payload size*/);
+                        dir_fabric_connection->wait_for_empty_write_slot();
+                        dir_fabric_connection->send_payload_without_header_non_blocking_from_address(
+                            l1_read_addr, payload_size_bytes);
+                        dir_fabric_connection->send_payload_flush_non_blocking_from_address(
+                            (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+
+                    } else {
+                        ASSERT(num_pages_to_write == 1);
+                        // todo: call fabric-write
+                        pkt_hdr->to_noc_unicast_write(
+                            tt::tt_fabric::NocUnicastCommandHeader{remote_noc0_dest_noc_addr}, payload_size_bytes);
+                        dir_fabric_connection->wait_for_empty_write_slot();
+                        dir_fabric_connection->send_payload_without_header_non_blocking_from_address(
+                            l1_read_addr, payload_size_bytes);
+                        dir_fabric_connection->send_payload_flush_non_blocking_from_address(
+                            (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+                    }
+
+                    // Note: Must flush write for correctness
+                    noc_async_writes_flushed();
+                    l1_read_addr += payload_size_bytes;
+                    tiles_read += num_pages_to_write;
+                }
                 cb_pop_front(cb_output_id, tile_granularity);
             }
 
