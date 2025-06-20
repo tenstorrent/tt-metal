@@ -3740,11 +3740,12 @@ def test_conv_yolov10x(
 )
 
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, padding, dilation",
     (
-        (1, 64, 64, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0, 0, 0), (1, 1)),
+        (1, 64, 64, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (0, 0, 0, 0), (1, 1)),
     ),
 )
+@pytest.mark.parametrize("stride", [(1, 1), (2, 2)])
 @pytest.mark.parametrize(
     "input_layout",
     [
@@ -3764,6 +3765,7 @@ def test_conv_yolov10x(
     [
         None,
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ]
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -3786,6 +3788,8 @@ def test_conv2d_act_dealloc(
     output_layout,
     shard_layout
 ):
+    if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED and input_layout == ttnn.ROW_MAJOR_LAYOUT and stride == (1,1):
+        pytest.skip("Block sharded conv2d does not support input with row major layout")
     input_shape = (batch, input_channels, input_height, input_width)
     weight_shape = (output_channels, input_channels // groups, kernel[0], kernel[1])
     torch_input_tensor = randomize_torch_tensor(torch_tensor_map, input_shape)
@@ -3799,12 +3803,21 @@ def test_conv2d_act_dealloc(
     )
 
     input_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
-    if shard_layout is not None:
+    if shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
         num_cores = 2
         input_mem_cfg = ttnn.create_sharded_memory_config(
                 shape=(input_height*input_width*batch // num_cores, input_channels),
                 core_grid=ttnn.num_cores_to_corerangeset(target_num_cores=num_cores, grid_size=device.compute_with_storage_grid_size(), row_wise=True),
                 strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+        )
+    elif shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        num_cores = 4
+        input_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(input_height*input_width*batch // 2, input_channels // 2),
+                core_grid=ttnn.CoreGrid(x=2,y=2),
+                strategy=ttnn.ShardStrategy.BLOCK,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
         )
