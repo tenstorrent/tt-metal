@@ -10,6 +10,9 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+
+#include "dprint_pages.h"
+
 #include "../common.hpp"
 
 using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
@@ -27,15 +30,22 @@ inline void print_uint16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_
     }
 }
 
-template <uint32_t src_chip_id, uint32_t mesh_cols, uint32_t mesh_rows, int axis>
+// Batch is shared among all devices, or replicated along each row or each column.
+enum class ReplicateGroup : int {
+    NONE = -1,
+    ROWS = 1,
+    COLS = 0,
+};
+
+template <uint32_t src_chip_id, uint32_t mesh_cols, uint32_t mesh_rows, ReplicateGroup Axis>
 bool is_configured_target(uint32_t dest_chip_id) {
     // axis is the direction along which we are allowed to send packets
     // axis = 1; means we are allowed to send packets in the row direction
     // axis = 0; means we are allowed to send packets in the column direction
     // axis = -1; means we are allowed to send packets in all directions
-    if constexpr (axis == 0) {  // check if they're on the same column
+    if constexpr (Axis == ReplicateGroup::COLS) {  // check if they're on the same column
         return src_chip_id % mesh_cols == dest_chip_id % mesh_cols;
-    } else if constexpr (axis == 1) {  // check if they're on the same row
+    } else if constexpr (Axis == ReplicateGroup::ROWS) {  // check if they're on the same row
         return src_chip_id / mesh_cols == dest_chip_id / mesh_cols;
     } else {
         return true;  // if axis is not configured, we assume the target is configured, which is the default case, which
@@ -43,26 +53,44 @@ bool is_configured_target(uint32_t dest_chip_id) {
     }
 }
 
-template <uint32_t SourceChipId, uint32_t BatchSize, uint32_t MeshCols, uint32_t MeshRows, int Axis>
+template <uint32_t SourceChipId, uint32_t BatchSize, uint32_t MeshCols, uint32_t MeshRows, ReplicateGroup Axis>
 inline uint32_t get_device_idx_from_batch_idx(const uint32_t b) {
-    constexpr Replicate_Dim = (Axis == 0) ? MeshRows : MeshCols;
-    constexpr uint32_t Batch_Per_Device = BatchSize / Replicate_Dim;
+    constexpr uint32_t Replicate_Group = (Axis == ReplicateGroup::NONE)   ? MeshCols * MeshRows
+                                         : (Axis == ReplicateGroup::COLS) ? MeshRows
+                                                                          : MeshCols;
 
-    const device_in_group = b / Batch_Per_Device;
-    if constexpr (Axis == -1) {
+    constexpr uint32_t Batch_Per_Device = BatchSize / Replicate_Group;
+    const uint32_t device_in_group = b / Batch_Per_Device;
+
+    if constexpr (Axis == ReplicateGroup::NONE) {
         return device_in_group;
-    } else if (Axis == 0) {
-        return SourceChipId * MeshCols + device_in_group;
+    } else if (Axis == ReplicateGroup::ROWS) {
+        auto device_idx = (SourceChipId / MeshCols) * MeshCols + device_in_group;
+        // DPRINT<<"Src ID "<<SourceChipId<<" b: "<< b<<" Batch_Per_Device: "<<Batch_Per_Device<<" device_in_group:
+        // "<<device_in_group<< " device idx: "<<device_idx<<"\n";
+        return device_idx;
     } else {
-        return device_in_group * MeshCols + SourceChipId;
+        auto device_idx = device_in_group * MeshCols + SourceChipId % MeshRows;
+        // DPRINT<<"Src ID "<<SourceChipId<<" b: "<< b<<" Batch_Per_Device: "<<Batch_Per_Device<<" device_in_group:
+        // "<<device_in_group<< " device idx: "<<device_idx<<"\n";
+        return device_idx;
     }
 }
 
-// output per device is [K, B/D* replicate_dim, 1, H]
-template <uint32_t BatchSize, uint32_t NumDevices, uint32_t ReplicateDim>
+// output per device is [K, B/replicate_group, 1, H]
+template <uint32_t BatchSize, uint32_t MeshCols, uint32_t MeshRows, ReplicateGroup Axis>
 inline uint32_t get_output_page_idx(const uint32_t b, const uint32_t k) {
-    constexpr uint32_t Batch_Per_Device = BatchSize / NumDevices * ReplicateDim;
-    return k * Batch_Per_Device + b % Batch_Per_Device;  // :(
+    uint32_t batch_devices;
+    if constexpr (Axis == ReplicateGroup::NONE) {
+        batch_devices = MeshCols * MeshRows;
+    } else if constexpr (Axis == ReplicateGroup::ROWS) {
+        batch_devices = MeshCols;
+    } else {
+        batch_devices = MeshRows;
+    }
+
+    const uint32_t batch_per_device = BatchSize / batch_devices;
+    return k * batch_per_device + b % batch_per_device;
 }
 
 // commonize me!
@@ -179,11 +207,12 @@ void kernel_main() {
     constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(13);
 
 #ifdef REPLICATE_AXIS
-    constexpr int replicate_axis = REPLICATE_AXIS;
-    constexpr uint32_t replicate_dim = replicate_axis == 0 ? mesh_rows : mesh_cols;
+    constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_AXIS);
+    constexpr uint8_t replicate_group_devices =
+        num_devices / (replicate_axis == ReplicateGroup::COLS ? mesh_cols : mesh_rows);
 #else
-    constexpr int replicate_axis = -1;
-    constexpr uint32_t replicate_dim = 1;
+    constexpr ReplicateGroup replicate_axis = ReplicateGroup::NONE;
+    constexpr uint8_t replicate_group_devices = num_devices;
 #endif
 
     constexpr uint8_t Num_Directions = 4;
@@ -200,8 +229,6 @@ void kernel_main() {
 
     InterleavedAddrGen<output_is_dram> output_addrgen{
         .bank_base_address = output_base_addr, .page_size = data_size_bytes};
-
-    DPRINT << "WRITER 0.5" << "\n";
 
     volatile PACKET_HEADER_TYPE * packet_headers[2];
     for(uint8_t i =0;i<2;++i){
@@ -225,11 +252,16 @@ void kernel_main() {
 
             if (found) {
                 cb_wait_front(data_cb_id,1);
-                const uint32_t src_data_l1_ptr = get_write_ptr(data_cb_id);
+                const uint32_t src_data_l1_ptr = get_read_ptr(data_cb_id);
 
                 // figure out output page index, noc address.
-                const uint32_t output_page_idx = get_output_page_idx<batch_size, num_devices, replicate_dim>(b, k);
+                const uint32_t output_page_idx =
+                    get_output_page_idx<batch_size, mesh_cols, mesh_rows, replicate_axis>(b, k);
                 const uint64_t output_noc_addr = get_noc_addr(output_page_idx, output_addrgen);
+
+                DPRINT << " b: " << b << " k: " << k << " output_page_idx: " << output_page_idx
+                       << " src chip: " << src_chip_id << "\n";
+                tt::data_movement::common::print_bf16_pages(src_data_l1_ptr, data_size_bytes / 2, 1);
 
                 // figure out which device to send data to and routing
                 const auto dest_device_idx =
@@ -243,8 +275,8 @@ void kernel_main() {
                     const auto route = get_direction<src_chip_id, mesh_cols, mesh_rows>(dest_chip_id);
 
                     if (!directions[route]) {
-                        DPRINT << "BAD DIRECTION: src " << src_chip_id << " dest: " << dest_chip_id << "b: " << b
-                               << "\n";
+                        DPRINT << "BAD DIRECTION: src " << src_chip_id << " dest: " << (uint32_t)dest_chip_id
+                               << " dest index: " << dest_device_idx << " b: " << b << "\n";
                         continue;
                     }
 
@@ -252,9 +284,9 @@ void kernel_main() {
                     dispatch_input_remote_device<src_chip_id, mesh_cols, mesh_rows, fabric_max_packet_size_bytes>(
                         dest_chip_id,
                         dest_mesh_id,
+                        data_size_bytes,
                         src_data_l1_ptr,
                         output_noc_addr,
-                        data_size_bytes,
                         fabric_connections,
                         packet_headers[0]);
 
@@ -302,7 +334,7 @@ void kernel_main() {
     close_direction_connections(directions, fabric_connections);
 
     auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
-    noc_semaphore_wait(semaphore_ptr, num_devices / (num_devices / replicate_dim));
+    noc_semaphore_wait(semaphore_ptr, replicate_group_devices);
 
     DPRINT << "WRITER DONE: " << "\n";
 }

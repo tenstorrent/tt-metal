@@ -43,7 +43,7 @@ AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperati
     const uint32_t selected_experts_k = metadata_shape[-1];
 
     const auto& axis = operation_attributes.axis;
-    const uint32_t batch_replicate_dim = axis.has_value() ? mesh_device->shape()[axis.value()] : 1;
+    const uint32_t batch_replicate_dim = axis.has_value() ? mesh_device->shape()[!axis.value()] : 1;
     const uint32_t total_batch_size = batch_size * batch_replicate_dim;
 
     TT_ASSERT(total_batch_size % num_devices == 0);

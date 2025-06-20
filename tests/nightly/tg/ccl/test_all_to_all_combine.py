@@ -38,10 +38,9 @@ def get_input_sparse_contribs(sparse_tokens, expert_indices, expert_mapping):
     assert experts % devices == 0
     experts_per_device = experts // devices
 
-    input_contribs_tensor = sparse_tokens.reshape([devices, 1, batch, hidden_size]).repeat(
-        [1, experts_per_device, 1, 1]
-    )
+    input_contribs_tensor = sparse_tokens.permute([0, 2, 1, 3]).repeat([1, experts_per_device, 1, 1])
 
+    token_expert_count = 0
     for d in range(devices):
         experts_on_device = _get_experts_on_device(experts, expert_mapping, d)
         for b in range(batch):
@@ -51,10 +50,13 @@ def get_input_sparse_contribs(sparse_tokens, expert_indices, expert_mapping):
                 if expert_idx not in experts_on_device:
                     continue
 
-                local_expert_idx = expert_idx % experts_per_device
+                local_expert_idx = experts_on_device.index(expert_idx)
 
                 # multiply by expert index to mock application of expert
-                input_contribs_tensor[d, local_expert_idx, b, :] *= expert_idx
+                input_contribs_tensor[d, local_expert_idx, b, :] = sparse_tokens[d, b, 0, :] * expert_idx
+                token_expert_count += 1
+
+    assert token_expert_count == batch * selected_experts_k
 
     return input_contribs_tensor
 
@@ -66,17 +68,32 @@ def get_output_combined_contribs(sparse_contribs, expert_indices, expert_mapping
     experts = expert_mapping.shape[-2]
     selected_experts_k = expert_indices.shape[-1]
     hidden = sparse_contribs.shape[-1]
-    replication_dim = mesh_shape[replication_axis]
+
+    if replication_axis == 1:
+        replication_dim = mesh_shape[1]
+        replication_group = mesh_shape[0]
+    elif replication_axis == 0:
+        replication_dim = mesh_shape[0]
+        replication_group = mesh_shape[1]
+    else:
+        assert replication_axis == -1
+        replication_dim = 1
+        replication_group = devices
+
     devices = mesh_shape[0] * mesh_shape[1]
+
+    batch_per_device = batch // replication_group
 
     assert experts % devices == 0
     experts_per_device = experts // devices
 
-    output_combined_contribs_tensor = torch.zeros(selected_experts_k, batch * replication_dim, 1, hidden)
+    output_combined_contribs_tensor = torch.ones(selected_experts_k, batch * replication_dim, 1, hidden) * 7
+    real_data_map = torch.zeros(output_combined_contribs_tensor.shape[:-2])
 
+    token_expert_count = 0
     for m0 in range(mesh_shape[0]):
         for m1 in range(mesh_shape[1]):
-            d = m0 * mesh_shape[0] + m1
+            d = m0 * mesh_shape[1] + m1
             experts_on_device = _get_experts_on_device(experts, expert_mapping, d)
             for b in range(batch):
                 for k in range(selected_experts_k):
@@ -84,12 +101,20 @@ def get_output_combined_contribs(sparse_contribs, expert_indices, expert_mapping
 
                     if expert_idx not in experts_on_device:
                         continue
-                    local_expert_idx = expert_idx % experts_per_device
+                    local_expert_idx = experts_on_device.index(expert_idx)
 
-                    output_combined_contribs_tensor[k, m0 * batch + b, 0, :] = sparse_contribs[
+                    dense_batch_idx = m0 * batch + b
+
+                    output_combined_contribs_tensor[k, dense_batch_idx, 0, :] = sparse_contribs[
                         d, local_expert_idx, b, :
                     ]
-    return output_combined_contribs_tensor
+
+                    real_data_map[k, dense_batch_idx] = 1
+
+                    token_expert_count += 1
+    assert token_expert_count == batch * selected_experts_k
+
+    return output_combined_contribs_tensor, real_data_map
 
 
 def gen_tensors(
@@ -110,14 +135,21 @@ def gen_tensors(
     sparse_dispatched_tokens = get_sparse_tokens(input_tokens, expert_indices, expert_mapping, seq, mesh_shape)
     input_sparse_contribs_tensor = get_input_sparse_contribs(sparse_dispatched_tokens, expert_indices, expert_mapping)
 
-    output_tensor = get_output_combined_contribs(
+    output_tensor, data_map = get_output_combined_contribs(
         input_sparse_contribs_tensor, expert_indices, expert_mapping, mesh_shape, replication_axis
     )
 
     metadata_tensor = get_metadata_tensor(expert_indices, expert_mapping, mesh_shape)
 
     # create expert indices
-    return sparse_dispatched_tokens, input_sparse_contribs_tensor, expert_mapping, metadata_tensor, output_tensor
+    return (
+        sparse_dispatched_tokens,
+        input_sparse_contribs_tensor,
+        expert_mapping,
+        metadata_tensor,
+        output_tensor,
+        data_map,
+    )
 
 
 def run_all_to_all_combine_test(
@@ -159,11 +191,17 @@ def run_all_to_all_combine_test(
     output_tensor_goldens_list = []
 
     for iter in range(num_iters):
-        _, input_contrib, expert_mapping, metadata_tensor, output_contrib_tensor = gen_tensors(
+        _, input_contrib, expert_mapping, metadata_tensor, output_contrib_tensor, data_map = gen_tensors(
             batch, experts, select_experts_k, hidden_size, mesh_shape, axis, devices, scheme=scheme
         )
 
-        output_tensor_goldens_list.append(output_contrib_tensor)
+        print(f"{expert_mapping=}")
+        print(f"{metadata_tensor=}")
+
+        for d in range(devices):
+            print(f"{input_contrib[d,:,:,:]}")
+
+        output_tensor_goldens_list.append((output_contrib_tensor, data_map))
 
         tt_input_contribs = ttnn.from_torch(
             input_contrib,
@@ -171,7 +209,7 @@ def run_all_to_all_combine_test(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=dtype,
             memory_config=input_memory_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 0), mesh_shape=mesh_shape),
         )
 
         tt_expert_mapping = ttnn.from_torch(
@@ -202,12 +240,6 @@ def run_all_to_all_combine_test(
             ccl_sub_device_crs,
         ]
     )
-
-    # worker_sub_device_id = ttnn.SubDeviceId(0)
-    #     sub_device_stall_group = [worker_sub_device_id]
-    #     sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    #     mesh_device.load_sub_device_manager(sub_device_manager)
-    #     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
     ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
@@ -240,18 +272,21 @@ def run_all_to_all_combine_test(
 
     tt_out_tensor_list = run_op(num_iters, store_all_results=True)
 
-    #     mesh_device.reset_sub_device_stall_group()
+    for tt_out, (ref, data_map) in zip(tt_out_tensor_list, output_tensor_goldens_list):
+        tt_out_agg = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+        check_results(tt_out_agg, ref, data_map)
 
-    # passed = True
-    #     metadata_passed = True
-    #     first_failed_tensor_index = None
-    #     first_failed_metadata_index = None
-    #     failed_indices = []
-    #     failed_metadata_indices = []
-    #     expected_pcc = 0.9999 if dtype == ttnn.bfloat8_b else 0.999990
 
-    for tt_out, ref in zip(tt_out_tensor_list, output_tensor_goldens_list):
-        assert_with_pcc(ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)), ref)
+#         for k in range(select_experts_k):
+#             print(f"{tt_out_agg[k,:,:,:]=}")
+#             print(f"{ref[k,:,:,:]=}")
+
+
+def check_results(test_tensor, ref_tensor, data_map):
+    for k in range(ref_tensor.shape[0]):
+        for b in range(ref_tensor.shape[1]):
+            if data_map[k, b].item() == 1:
+                assert_with_pcc(test_tensor[k, b, 0, :], ref_tensor[k, b, 0, :])
 
 
 @pytest.mark.parametrize(
@@ -263,6 +298,8 @@ def run_all_to_all_combine_test(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
 def test_all_to_all_combine_no_trace(mesh_device, mesh_shape):
+    torch.set_printoptions(threshold=10000)
+
     devices = mesh_shape[0] * mesh_shape[1]
     batch = 1 * devices
     experts = 2 * devices
@@ -310,10 +347,8 @@ def test_simple_tensor_gen(mesh_device, mesh_shape):
         expert_mapping,
         metadata_tensor,
         output_tensor,
+        _,
     ) = gen_tensors(batch, experts, select_experts_k, hidden_size, mesh_shape, axis, devices, scheme="sequential")
-
-    print(f"{expert_mapping=}")
-    print(f"{metadata_tensor=}")
 
     assert sparse_dispatched_tokens.shape == (devices, batch, 1, hidden_size)
     assert input_sparse_contribs_tensor.shape == (devices, experts // devices, batch, hidden_size)

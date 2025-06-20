@@ -25,6 +25,12 @@ inline void print_uint16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_
 
 namespace detail{
 
+// (1, experts // devices, batch, hidden_size)
+template <uint32_t Batch>
+inline uint32_t get_input_data_page_idx(const uint32_t e, const uint32_t b) {
+    return e * Batch + b;
+}
+
 template <uint32_t DeviceIdx, uint32_t NumMappingPages, uint32_t MappingPageSizeBytes, bool MappingIsDram>
 void get_device_expert_indices(
     const InterleavedAddrGen<MappingIsDram>& mapping_addrgen,
@@ -67,10 +73,6 @@ void kernel_main() {
     constexpr bool mapping_is_dram = get_compile_time_arg_val(13);
     constexpr bool metadata_is_dram = get_compile_time_arg_val(14);
 
-    // if (src_chip_id!=0)return;
-
-    constexpr bool aligned_16 = (data_size_bytes % ALIGN_REQ_16 == 0);
-
     const auto mapping_tensor_addr = get_arg_val<uint32_t>(0);
     const auto metadata_tensor_addr = get_arg_val<uint32_t>(1);
     const auto input_tensor_addr = get_arg_val<uint32_t>(2);
@@ -96,11 +98,12 @@ void kernel_main() {
         mapping_addrgen, mapping_buffer_addr, mapping_page_size_bytes, local_experts_ptr);
     cb_push_back(local_experts_cb_id,1);
 
-    //     DPRINT<< " local experts for DEVICE: "<<src_chip_id;
-    //     for(uint32_t i =0; i< num_local_experts;++i)DPRINT<<" "<< local_experts_ptr[i]<<" ";
-    //     DPRINT<<"\n";
+    DPRINT << " local experts for DEVICE: " << src_chip_id;
+    for (uint32_t i = 0; i < num_local_experts; ++i) {
+        DPRINT << " " << local_experts_ptr[i] << " ";
+    }
+    DPRINT << "\n";
 
-    uint32_t input_data_page_idx = 0;
     for(uint32_t b=0;b<batch_size;++b){
         cb_reserve_back(metadata_cb_id,1);
         const uint32_t metadata_l1_addr = get_read_ptr(metadata_cb_id);
@@ -121,6 +124,8 @@ void kernel_main() {
                 // taking inspiration from send-receive. This would also require a dedicated receiver kernel.
                 // DPRINT<<"READER FOUND b: "<<b<<" e: "<< e<< " expert: " <<expert_idx<< "\n";
 
+                const uint32_t input_data_page_idx = detail::get_input_data_page_idx<batch_size>(e, b);
+
                 cb_reserve_back(data_cb_id,1);
                 const uint32_t data_l1_addr=get_write_ptr(data_cb_id);
                 const uint64_t data_noc_addr = get_noc_addr(input_data_page_idx, data_addrgen);
@@ -128,12 +133,15 @@ void kernel_main() {
                 noc_async_read_barrier();
                 // DPRINT<<"READER 4 "<< e<< "\n";
 
+                // DPRINT <<"Found some weird shit: b: "<<b<<" e: "<<e<<" expert_id: "<<expert_idx<<" page idx:
+                // "<<input_data_page_idx<<"\n"; tt::data_movement::common::print_bf16_pages(data_l1_addr,
+                // data_size_bytes/2,1);
+
                 cb_push_back(data_cb_id, 1);
             }
-            ++input_data_page_idx;
         }
         // DPRINT<<"READER 5 "<< b<< "\n";
         cb_push_back(metadata_cb_id,1);
     }
-    DPRINT << "READER DONE \n";
+    // DPRINT << "READER DONE \n";
 }

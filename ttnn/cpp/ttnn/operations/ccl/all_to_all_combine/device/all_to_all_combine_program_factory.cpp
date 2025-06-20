@@ -173,6 +173,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto client_interface_cb =
         tt::tt_metal::CreateCircularBuffer(program, sender_core, client_interface_cb_config);
 
+    const uint32_t flat_mesh_idx = mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
+
     const std::vector<uint32_t> reader_compile_time_args = {
         mapping_tensor_cb_id,
         local_experts_cb_id,
@@ -181,7 +183,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         experts_per_device,
         batch_size,
         experts,  // same as num_mapping_pages
-        src_physical_device_id,
+        flat_mesh_idx,
         input_page_size_bytes,
         selected_experts_k,
         mapping_page_size_bytes,
@@ -264,13 +266,13 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         writer_config);
 
     std::vector<uint32_t> reader_runtime_args = {
-        mapping_tensor.buffer()->address(),
-        metadata_tensor.buffer()->address(),
-        input_tensor.buffer()->address(),
+        mapping_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
+        metadata_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
+        input_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
     };
 
     std::vector<uint32_t> writer_runtime_args = {
-        output_tensor.buffer()->address(),
+        output_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
         operation_attributes.cross_device_semaphore.address(),
     };
     for (auto& neighbor : neighbors) {

@@ -38,7 +38,7 @@ def get_pcc_threshold(dtype):
 
 def gen_tokens(batch, hidden_size, seq_len, mesh_shape, devices, scheme="random", dtype=torch.bfloat16):
     tokens = []
-    factor = 0
+    factor = 1
     for _ in range(batch):
         for _ in range(seq_len):
             if scheme == "random":
