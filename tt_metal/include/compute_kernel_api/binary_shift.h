@@ -37,7 +37,7 @@ ALWI void binary_left_shift_tile(uint32_t idst0, uint32_t idst1) {
     MATH((llk_math_eltwise_binary_sfpu_left_shift<APPROX>(idst0, idst1)));
 }
 
-template <bool sign_magnitude_format = true>
+template <bool sign_magnitude_format = false>
 ALWI void binary_left_shift_uint32_tile(uint32_t idst0, uint32_t idst1) {
     MATH((llk_math_eltwise_binary_sfpu_left_shift<APPROX, InstrModLoadStore::INT32, sign_magnitude_format>(
         idst0, idst1)));
@@ -69,7 +69,7 @@ ALWI void binary_right_shift_tile(uint32_t idst0, uint32_t idst1) {
     MATH((llk_math_eltwise_binary_sfpu_right_shift<APPROX>(idst0, idst1)));
 }
 
-template <bool sign_magnitude_format = true>
+template <bool sign_magnitude_format = false>
 ALWI void binary_right_shift_uint32_tile(uint32_t idst0, uint32_t idst1) {
     MATH((llk_math_eltwise_binary_sfpu_right_shift<APPROX, InstrModLoadStore::INT32, sign_magnitude_format>(
         idst0, idst1)));
