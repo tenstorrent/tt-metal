@@ -82,7 +82,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    // it is bad for compute, pad act_block_h_ntiles
     uint32_t out_subblock_h_ntiles_padded = out_subblock_h_ntiles;
     if (enable_subblock_padding) {
         uint32_t max_num_subblock = fp32_dest_acc_en ? 4 : 8;
@@ -688,7 +687,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     if (filter_h >= 1 and filter_w >= 1) {
         if (!is_conv_1d_depthwise_conv and weight_width_sliced) {
             // Block sharded conv
-            TT_FATAL(weight_width_sliced == true, "read_window_in_inner_loop should be true for this conv");
+            TT_FATAL(weight_width_sliced == true, "weight_width_sliced should be true for this conv");
             reader_kernel =
                 "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
                 "reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp";
