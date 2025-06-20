@@ -23,7 +23,7 @@ from models.tt_transformers.tt.common import (
     sample_host,
 )
 from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
-from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
+from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -857,13 +857,12 @@ def test_demo_text(
     supported_models = ["Llama3.2-1B", "Llama3.2-3B", "Llama3.1-8B", "Llama3.2-11B", "Llama3.1-70B", "Mistral-7B"]
     supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "T3K", "TG"]
 
-    tt_device_name = model_args[0].device_name
+    tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
     model_name = model_args[0].base_model_name
+    model_device_key = f"{tt_device_name}_{model_name}"
 
     if model_name in supported_models:
         assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
-
-        model_device_key = f"{tt_device_name}_{model_name}"
 
         # Set the target prefill t/s for every combination of device and model (optional - for tracking benchmark data)
         dict_target_prefill_tok_s = {}  # TODO: add prefill targets for model-device combinations
@@ -983,10 +982,10 @@ def test_demo_text(
         }
         ci_target_decode_tok_s_u = {
             # N150 targets - higher is better
-            "N150_Llama3.2-1B": 51,
-            "N150_Llama3.2-3B": 31,
-            "N150_Llama3.1-8B": 20,
-            "N150_Mistral-7B": 23,
+            "N150_Llama3.2-1B": 64,
+            "N150_Llama3.2-3B": 41,
+            "N150_Llama3.1-8B": 23,
+            "N150_Mistral-7B": 26,
             # N300 targets
             "N300_Qwen2.5-7B": 20,
             # T3K targets
