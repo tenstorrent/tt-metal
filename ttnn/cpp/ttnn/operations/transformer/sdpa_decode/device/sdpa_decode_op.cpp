@@ -213,10 +213,10 @@ void ScaledDotProductAttentionDecode::validate(
 std::vector<TensorSpec> ScaledDotProductAttentionDecode::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     auto& input = input_tensors.at(0);
-    ttnn::Layout output_layout = Layout::TILE;
+    Layout output_layout = Layout::TILE;
     ttnn::Shape output_shape = input.logical_shape();
     if (input.layout() == Layout::ROW_MAJOR) {
-        output_shape[2] = round_up_to_tile(output_shape[2], TILE_HEIGHT);
+        output_shape[2] = round_up_to_tile(output_shape[2], tt::constants::TILE_HEIGHT);
         output_layout = Layout::ROW_MAJOR;
     }
     return {TensorSpec(output_shape, TensorLayout(input.dtype(), PageConfig(output_layout), output_mem_config))};
