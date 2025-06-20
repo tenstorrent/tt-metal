@@ -3,14 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from typing_extensions import override
 
 import ttnn
-from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.rope import RotarySetup as TTTransformerRotarySetup
-from ttnn import ReplicateTensorToMesh
 
 
-class RotarySetup(LightweightModule):
+class RotarySetup(TTTransformerRotarySetup):
     def __init__(
         self,
         device,
@@ -22,10 +21,8 @@ class RotarySetup(LightweightModule):
         orig_context_len: int,  # only used if scaling enabled
         datatype=ttnn.bfloat16,
     ):
-        super().__init__()
-
-        # favor composition over inheritance: __ is convention for private variables
-        self.__tt_transformer_rotary_setup = TTTransformerRotarySetup(
+        # Call parent constructor - this will initialize all the necessary attributes
+        super().__init__(
             device=device,
             batch_size=batch_size,
             head_dim=head_dim,
@@ -36,49 +33,48 @@ class RotarySetup(LightweightModule):
             datatype=datatype,
         )
 
-        self.batch_size = batch_size
-        self.head_dim = head_dim
-        self.device = device
-        self.datatype = datatype
-        self.is_mesh_device = self.__tt_transformer_rotary_setup.is_mesh_device
-        self.num_devices = self.__tt_transformer_rotary_setup.num_devices
-        self.batch_size_per_device_group = self.__tt_transformer_rotary_setup.batch_size_per_device_group
-        self.core_grid = self.__tt_transformer_rotary_setup.core_grid
-
-    @property
-    def transformation_mat(self):
-        return self.__tt_transformer_rotary_setup.transformation_mat
-
-    @property
-    def transformation_mat_prefill(self):
-        return self.__tt_transformer_rotary_setup.transformation_mat_prefill
-
-    @property
-    def cos_matrix(self):
-        return self.__tt_transformer_rotary_setup.cos_matrix
-
-    @property
-    def sin_matrix(self):
-        return self.__tt_transformer_rotary_setup.sin_matrix
-
+    @override
     def set_cos_sin(self, cos_matrix, sin_matrix):
         # [INFO] we avoid re-allocating the cos_matrix and sin_matrix tensors to allow for correct processing of captured trace
-        assert cos_matrix.shape == self.cos_matrix.shape, "cos_matrix must be the same size as the existing cos_matrix"
-        assert sin_matrix.shape == self.sin_matrix.shape, "sin_matrix must be the same size as the existing sin_matrix"
-        for mat, mat_tt in zip((cos_matrix, sin_matrix), (self.cos_matrix, self.sin_matrix)):
-            mat = ttnn.from_torch(
-                mat,
-                device=None,
-                dtype=self.datatype,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-            )
-            mat = ttnn.unsqueeze_to_4D(mat)
-            ttnn.copy_host_to_device_tensor(mat, mat_tt)
+        if hasattr(self, "cos_matrix"):
+            assert (
+                cos_matrix.shape == self.cos_matrix.shape
+            ), "cos_matrix must be the same size as the existing cos_matrix"
+            assert (
+                sin_matrix.shape == self.sin_matrix.shape
+            ), "sin_matrix must be the same size as the existing sin_matrix"
 
-    def get_both_trans_mats(self):
-        return self.__tt_transformer_rotary_setup.get_both_trans_mats()
+            for mat, mat_tt in zip((cos_matrix, sin_matrix), (self.cos_matrix, self.sin_matrix)):
+                mat = ttnn.from_torch(
+                    mat,
+                    device=None,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=self.datatype,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                )
+                mat = ttnn.unsqueeze_to_4D(mat)
+                ttnn.copy_host_to_device_tensor(mat, mat_tt)
+        else:
+            # [INFO] tt-transformers RotarySetup uses a single cos_matrix and sin_matrix for all batches
+            assert (
+                cos_matrix.shape[0] == 1 and sin_matrix.shape[0] == 1
+            ), "Init values of cos_matrix and sin_matrix must have batch size 1"
+            for mat, attr_name in zip((cos_matrix, sin_matrix), ("cos_matrix", "sin_matrix")):
+                setattr(
+                    self,
+                    attr_name,
+                    ttnn.from_torch(
+                        mat.expand(
+                            self.batch_size, -1, -1, -1
+                        ),  # [INFO] Qwen2.5 VL produces cos and sin matrices with shape [batch_size, 1, seq_len, head_dim]
+                        device=self.device,
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=self.datatype,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                    ),
+                )
 
+    @override
     def get_rot_idxs(self, position_idxs, on_host=False):
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
         assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
@@ -89,7 +85,7 @@ class RotarySetup(LightweightModule):
                 position_idxs,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
             )
         else:  # On device
             rot_idxs = ttnn.as_tensor(
@@ -98,11 +94,12 @@ class RotarySetup(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
             )
 
         return rot_idxs  # [batch] tensor
 
+    @override
     def get_rot_mats(self, position_idxs, return_rot_idxs=False):
         device = self.device
 
