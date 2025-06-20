@@ -310,6 +310,9 @@ public:
     void configure_ethernet_cores_for_fabric_routers(
         tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
 
+    void initialize_fabric_config(
+        tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode);
+
     // Returns whether we are running on Galaxy.
     bool is_galaxy_cluster() const;
 
@@ -365,7 +368,6 @@ private:
     // Disable ethernet cores that retrain
     // This should be removed when we handle retraining or dropped links in control plane properly
     void disable_ethernet_cores_with_retrain();
-
 
     // Set tunnels from mmio
     void set_tunnels_from_mmio_device();

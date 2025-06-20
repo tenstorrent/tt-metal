@@ -245,7 +245,7 @@ void write_socket_configs(
     }
 }
 
-uint32_t get_physical_mesh_id(MeshDevice* mesh_device, const MeshCoordinate& coord) {
+uint32_t get_physical_mesh_id(const MeshDevice* mesh_device, const MeshCoordinate& coord) {
     auto physical_device_id = mesh_device->get_device(coord)->id();
     auto global_coord = SystemMesh::instance().get_global_device_coordinate(physical_device_id);
     return SystemMesh::instance().get_physical_mesh_id(global_coord);
