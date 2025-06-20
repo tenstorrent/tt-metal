@@ -298,7 +298,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         CoreCoord(phys_core), SyncInfo(host_timestamp, device_timestamp, frequencyFit));
 }
 
-void setShift(int device_id, int64_t shift, double scale, SyncInfo& root_sync_info) {
+void setShift(int device_id, int64_t shift, double scale, const SyncInfo& root_sync_info) {
     if (std::isnan(scale)) {
         return;
     }
@@ -578,7 +578,6 @@ void ProfilerSync(ProfilerSyncState state) {
         do_sync_on_close = true;
         auto ethernet_connections = tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections();
         std::unordered_set<chip_id_t> visited_devices = {};
-        // rename to max, max number of devices that sync can support; repalce with function
         constexpr int TOTAL_DEVICE_COUNT = 36;
         for (int sender_device_id = 0; sender_device_id < TOTAL_DEVICE_COUNT; sender_device_id++) {
             if (tt::DevicePool::instance().is_device_active(sender_device_id)) {
@@ -684,7 +683,7 @@ void InitDeviceProfiler(IDevice* device) {
 #endif
 }
 
-bool AreAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
+bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
     const chip_id_t device_id = device->id();
     const uint8_t device_num_hw_cqs = device->num_hw_cqs();
     const auto& dispatch_core_config = get_dispatch_core_config();
@@ -723,7 +722,7 @@ void DumpDeviceProfileResults(
                 }
             }
         } else if (onlyProfileDispatchCores(state)) {
-            TT_ASSERT(AreAllCoresDispatchCores(device, virtual_cores));
+            TT_ASSERT(areAllCoresDispatchCores(device, virtual_cores));
 
             constexpr uint8_t maxLoopCount = 10;
             constexpr uint32_t loopDuration_us = 10000;

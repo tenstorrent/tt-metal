@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dev_msgs.h"
-#include <common/TracyTTDeviceData.hpp>
 #include <device.hpp>
 #include <distributed.hpp>
 #include "device_pool.hpp"
@@ -735,7 +734,7 @@ void DeviceProfiler::logPacketDataToCSV(
     }
 
     log_file_ofs << fmt::format(
-        "{},{},{},{},{},{},{},{},{},{},{},{},\n",
+        "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
         device_id,
         core_x,
         core_y,
@@ -745,7 +744,7 @@ void DeviceProfiler::logPacketDataToCSV(
         data,
         run_host_id,
         zone_name,
-        // magic_enum::enum_name(packet_type),
+        magic_enum::enum_name(packet_type),
         source_line,
         source_file,
         metaDataStr);
