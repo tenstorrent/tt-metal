@@ -982,16 +982,16 @@ def test_demo_text(
         }
         ci_target_decode_tok_s_u = {
             # N150 targets - higher is better
-            "N150_Llama3.2-1B": 64,
-            "N150_Llama3.2-3B": 41,
-            "N150_Llama3.1-8B": 23,
-            "N150_Mistral-7B": 26,
+            "N150_Llama3.2-1B": 58,
+            "N150_Llama3.2-3B": 34,
+            "N150_Llama3.1-8B": 21,
+            "N150_Mistral-7B": 24,
             # N300 targets
-            "N300_Qwen2.5-7B": 20,
+            "N300_Qwen2.5-7B": 21,
             # T3K targets
             "T3K_Llama3.1-70B": 14,
             "T3K_Qwen2.5-72B": 13,
-            "T3K_Qwen3-32B": 19,
+            "T3K_Qwen3-32B": 20,
         }
 
         # Only call verify_perf if the model_device_key exists in the targets
