@@ -111,7 +111,7 @@ src/firmware/riscv/targets/erisc/src/eth_routing.cpp
 src/firmware/riscv/targets/erisc/src/eth_routing_v2.cpp
 .ipynb_checkpoints/
 ttnn/tutorials/DiT/
-!ttnn/tutorias/*.py
+!ttnn/tutorials/basic_python/*.py
 
 .envrc
 
