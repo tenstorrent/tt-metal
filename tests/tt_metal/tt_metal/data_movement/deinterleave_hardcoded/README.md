@@ -19,7 +19,6 @@ The deinterleave patterns are the exact ones as gotten from the base tests, as s
 | dest_core_compile_args    | std::vector<std::vector<uint32_t>> | Compile-time arguments for the destination core. |
 | dest_core_runtime_args    | std::vector<std::vector<uint32_t>> | Runtime arguments for the destination core. |
 | noc                       | N/A                                | Specify which NOC to use for the test |
-| kernel_name               | std::string                        | Name of the kernel to be executed. |
 
 ## Test Cases
 Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size.

@@ -25,7 +25,6 @@ struct DeinterleaveConfig {
     std::vector<std::vector<uint32_t>> dest_core_compile_args;
     std::vector<std::vector<uint32_t>> dest_core_runtime_args;
     NOC noc_id = NOC::NOC_0;
-    std::string kernel_name = "";
 };
 
 /// @brief Does L1 Sender Core --> L1 Receiver Core
@@ -40,7 +39,7 @@ bool run_dm(IDevice* device, const DeinterleaveConfig& test_config) {
         // Kernels
         auto receiver_kernel = CreateKernel(
             program,
-            test_config.kernel_name,
+            "tests/tt_metal/tt_metal/data_movement/deinterleave_hardcoded/kernels/deinterleave_kernel_rm.cpp",
             test_config.dest_core_set[k],
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_1,
@@ -124,10 +123,7 @@ TEST_F(DeviceFixture, TensixDataMovementDeinterleaveSingleCore) {
             .dest_core_set = send_dest_core_set,
             .dest_core_compile_args = send_dest_core_compile_args,
             .dest_core_runtime_args = send_dest_core_runtime_args,
-            .noc_id = noc_id,
-            .kernel_name =
-                "tests/tt_metal/tt_metal/data_movement/deinterleave_hardcoded/kernels/deinterleave_kernel_rm.cpp",
-        };
+            .noc_id = noc_id};
 
         // Run
         for (unsigned int id = 0; id < num_devices_; id++) {
@@ -221,10 +217,7 @@ TEST_F(DeviceFixture, TensixDataMovementDeinterleaveMultiCore) {
             .dest_core_set = send_dest_core_set,
             .dest_core_compile_args = send_dest_core_compile_args,
             .dest_core_runtime_args = send_dest_core_runtime_args,
-            .noc_id = noc_id,
-            .kernel_name =
-                "tests/tt_metal/tt_metal/data_movement/deinterleave_hardcoded/kernels/deinterleave_kernel_rm.cpp",
-        };
+            .noc_id = noc_id};
 
         // Run
         for (unsigned int id = 0; id < num_devices_; id++) {

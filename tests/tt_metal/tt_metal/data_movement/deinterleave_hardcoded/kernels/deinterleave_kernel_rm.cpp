@@ -7,37 +7,6 @@
 #include "dataflow_api.h"
 #include "risc_common.h"
 
-template <typename T>
-void helper_print_cb(const uint32_t cb_id, const uint32_t height, const uint32_t width, const uint32_t stick_size) {
-    DPRINT << "dst " << "height=" << height << ";width=" << width << ";stick_size=" << stick_size << ENDL();
-    T* cb_ptr = reinterpret_cast<T*>(get_read_ptr(cb_id));
-    for (uint32_t h = 0; h < height; h++) {
-        for (uint32_t w = 0; w < width; w++) {
-            DPRINT << " <";
-            for (uint32_t c = 0; c < stick_size; c++) {
-                T val = *(cb_ptr + h * width * stick_size + w * stick_size + c);
-                DPRINT << HEX() << val << DEC() << ",";
-            }
-            DPRINT << "> ";
-        }
-        DPRINT << ENDL();
-    }
-}
-
-template <typename T>
-void helper_clear_cb(
-    const uint32_t cb_id, const uint32_t height, const uint32_t width, const uint32_t stick_size, const T value) {
-    T* dst = reinterpret_cast<T*>(get_write_ptr(cb_id));
-    for (uint32_t h = 0; h < height; h++) {
-        for (uint32_t w = 0; w < width; w++) {
-            for (uint32_t c = 0; c < stick_size; c++) {
-                *dst = value;
-                dst++;
-            }
-        }
-    }
-}
-
 // Target 8KB of data before a single barrier for 8x8 grid of readers
 template <uint32_t payload_size, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
