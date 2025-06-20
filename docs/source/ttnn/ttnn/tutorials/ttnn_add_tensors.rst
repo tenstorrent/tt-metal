@@ -28,8 +28,8 @@ Create necessary device on which we will run our program.
    device = ttnn.open_device(device_id=0)
 
 
-Host Tensor Creation
---------------------
+Tensor Creation
+---------------
 
 Create two TT-NN tensors, and initialize them with values 1 and 2 respectively.  The preferred shape of the tensors is (32, 32) which will match the hardware's tile size.
 

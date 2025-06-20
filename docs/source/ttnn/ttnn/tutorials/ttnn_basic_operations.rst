@@ -51,8 +51,8 @@ Lets create a few helper functions for convering from PyTorch tensors to TT-NN t
       else:
          raise ValueError("Unsupported type for fill_value")
 
-Tensor Creation
----------------
+Host Tensor Creation
+--------------------
 
 Create several tensors for our tests and fill with different values. We will use these tensors to demonstrate various operations.
 
