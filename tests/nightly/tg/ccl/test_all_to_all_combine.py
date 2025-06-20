@@ -59,20 +59,20 @@ def get_input_sparse_contribs(sparse_tokens, expert_indices, expert_mapping):
     return input_contribs_tensor
 
 
-def get_output_combined_contribs(sparse_contribs, expert_indices, expert_mapping, mesh_shape):
+def get_output_combined_contribs(sparse_contribs, expert_indices, expert_mapping, mesh_shape, replication_axis):
     # output recalled contribs is [K, batch * mesh_shape[0], 1, hidden]
 
     batch = expert_indices.shape[0]
     experts = expert_mapping.shape[-2]
     selected_experts_k = expert_indices.shape[-1]
     hidden = sparse_contribs.shape[-1]
-    mesh_dim = mesh_shape[0]
+    replication_dim = mesh_shape[replication_axis]
     devices = mesh_shape[0] * mesh_shape[1]
 
     assert experts % devices == 0
     experts_per_device = experts // devices
 
-    output_combined_contribs_tensor = torch.zeros(selected_experts_k, batch * mesh_dim, 1, hidden)
+    output_combined_contribs_tensor = torch.zeros(selected_experts_k, batch * replication_dim, 1, hidden)
 
     for m0 in range(mesh_shape[0]):
         for m1 in range(mesh_shape[1]):
@@ -92,22 +92,26 @@ def get_output_combined_contribs(sparse_contribs, expert_indices, expert_mapping
     return output_combined_contribs_tensor
 
 
-def gen_tensors(batch, experts, selected_experts_k, hidden_size, mesh_shape, devices, scheme="random"):
+def gen_tensors(
+    batch, experts, selected_experts_k, hidden_size, mesh_shape, replication_axis, devices, scheme="random"
+):
     torch.manual_seed(42)
     # create input tokens
     assert batch % devices == 0
     assert experts % devices == 0
     assert selected_experts_k < experts
 
-    input_tokens = gen_tokens(batch, hidden_size, mesh_shape, devices, scheme)
-    expert_mapping = gen_expert_mapping(experts, devices, scheme)
-    expert_indices = get_expert_indices(batch, experts, selected_experts_k, scheme)
+    seq = 1
 
-    sparse_dispatched_tokens = get_sparse_tokens(input_tokens, expert_indices, expert_mapping, mesh_shape)
+    input_tokens = gen_tokens(batch, hidden_size, seq, mesh_shape, devices, scheme)
+    expert_mapping = gen_expert_mapping(experts, devices, scheme)
+    expert_indices = get_expert_indices(batch, experts, selected_experts_k, seq, mesh_shape, scheme)
+
+    sparse_dispatched_tokens = get_sparse_tokens(input_tokens, expert_indices, expert_mapping, seq, mesh_shape)
     input_sparse_contribs_tensor = get_input_sparse_contribs(sparse_dispatched_tokens, expert_indices, expert_mapping)
 
     output_tensor = get_output_combined_contribs(
-        input_sparse_contribs_tensor, expert_indices, expert_mapping, mesh_shape
+        input_sparse_contribs_tensor, expert_indices, expert_mapping, mesh_shape, replication_axis
     )
 
     metadata_tensor = get_metadata_tensor(expert_indices, expert_mapping, mesh_shape)
@@ -119,12 +123,13 @@ def gen_tensors(batch, experts, selected_experts_k, hidden_size, mesh_shape, dev
 def run_all_to_all_combine_test(
     mesh_device,
     mesh_shape,
+    axis,
     batch,
     experts,
     select_experts_k,
     hidden_size,
     num_iters,
-    num_links=1,  # currently not passed through
+    num_links,
     scheme="random",
     use_regular_grid=False,
     input_grid=None,
@@ -155,7 +160,7 @@ def run_all_to_all_combine_test(
 
     for iter in range(num_iters):
         _, input_contrib, expert_mapping, metadata_tensor, output_contrib_tensor = gen_tensors(
-            batch, experts, select_experts_k, hidden_size, mesh_shape, devices, scheme=scheme
+            batch, experts, select_experts_k, hidden_size, mesh_shape, axis, devices, scheme=scheme
         )
 
         output_tensor_goldens_list.append(output_contrib_tensor)
@@ -211,7 +216,6 @@ def run_all_to_all_combine_test(
 
     def run_op(n_iters, store_all_results=True):
         tt_output_list = []
-        tt_metadata_list = []
 
         for i in range(n_iters):
             tt_out_tensor = ttnn.all_to_all_combine(
@@ -222,18 +226,17 @@ def run_all_to_all_combine_test(
                 topology=topology,
                 memory_config=output_memory_config,
                 global_semaphore=ccl_semaphore_handles[i],
-                axis=0
+                axis=axis
                 # subdevice_id=worker_sub_device_id,
             )
 
             ttnn.synchronize_device(mesh_device)
             if store_all_results:
                 tt_output_list.append(tt_out_tensor)
-                tt_metadata_list.append(tt_metadata)
         if store_all_results:
-            return tt_output_list, tt_metadata_list
+            return tt_output_list
         else:
-            return [tt_out_tensor], [tt_metadata]
+            return [tt_out_tensor]
 
     tt_out_tensor_list = run_op(num_iters, store_all_results=True)
 
@@ -248,7 +251,7 @@ def run_all_to_all_combine_test(
     #     expected_pcc = 0.9999 if dtype == ttnn.bfloat8_b else 0.999990
 
     for tt_out, ref in zip(tt_out_tensor_list, output_tensor_goldens_list):
-        assert_with_pcc(ttnn.to_torch(tt_out), ref)
+        assert_with_pcc(ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)), ref)
 
 
 @pytest.mark.parametrize(
@@ -270,10 +273,12 @@ def test_all_to_all_combine_no_trace(mesh_device, mesh_shape):
     output_memory_config = ttnn.DRAM_MEMORY_CONFIG
     num_links = 1
     topology = ttnn.Topology.Linear
+    axis = 1
 
     run_all_to_all_combine_test(
         mesh_device,
         mesh_shape,
+        axis,
         batch,
         experts,
         select_experts_k,
@@ -297,14 +302,15 @@ def test_simple_tensor_gen(mesh_device, mesh_shape):
     experts = 2 * devices
     select_experts_k = 2
     hidden_size = 32
-    mesh_dim = mesh_shape[0]
+    axis = 1
+    mesh_dim = mesh_shape[axis]
     (
         sparse_dispatched_tokens,
         input_sparse_contribs_tensor,
         expert_mapping,
         metadata_tensor,
         output_tensor,
-    ) = gen_tensors(batch, experts, select_experts_k, hidden_size, mesh_shape, devices, scheme="sequential")
+    ) = gen_tensors(batch, experts, select_experts_k, hidden_size, mesh_shape, axis, devices, scheme="sequential")
 
     print(f"{expert_mapping=}")
     print(f"{metadata_tensor=}")

@@ -82,7 +82,6 @@ std::vector<tt::tt_metal::IDevice*> get_axis_devices(
 std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbors(
     const MeshDeviceView& mesh_view,
     const MeshCoordinate& mesh_coordinate,
-<<<<<<< HEAD
     tt::tt_fabric::Topology& topology,
     const std::optional<uint32_t> axis) {
     using namespace tt::tt_fabric;
@@ -92,19 +91,10 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
     enum Direction : std::size_t { East = 0, West = 1, North = 2, South = 3 };
 
     std::vector<tt::tt_metal::IDevice*> neighbors;
-<<<<<<< HEAD
     // directions: {East, West, North, South}
     std::array<bool, 4> directions = {false, false, false, false};
 
     const bool is_ring = topology == Topology::Ring;
-=======
-    std::array<bool, 4> directions;  // east, west, north, south
-    if (topology == tt::tt_fabric::Topology::Ring) {
-        directions = {true, true, true, true};
-    } else {
-        directions = {false, false, false, false};
-    }
->>>>>>> ea6393060b (reader working, writer mostly working)
     auto src_device = mesh_view.get_device(mesh_coordinate);
 
     // Helper that appends neighbours for a single axis
@@ -422,6 +412,8 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         auto fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
         dest_mesh_id.push_back(*fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)fabric_node_id.chip_id);
+        std::cout << " COORD: " << coord[0] << "," << coord[1] << " fab ID: " << (uint32_t)fabric_node_id.chip_id
+                  << std::endl;
     }
     log_debug(tt::LogOp, "dest_chip_id: {}", detail::stringify_vector(dest_chip_id));
     log_debug(tt::LogOp, "dest_mesh_id: {}", detail::stringify_vector(dest_mesh_id));
@@ -499,6 +491,12 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
             .noc = tt::tt_metal::NOC::NOC_1,
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
+
+    std::cout << "DIRECTIONS: " << std::endl;
+    for (auto d : directions) {
+        std::cout << d << " ";
+    }
+    std::cout << std::endl;
 
     std::map<std::string, std::string> writer_defines = {
         {"DEST_CHIP_ID", detail::stringify_vector(dest_chip_id)},

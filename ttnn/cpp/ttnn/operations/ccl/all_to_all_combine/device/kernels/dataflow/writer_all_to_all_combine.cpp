@@ -10,7 +10,6 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "../common.hpp"
 
 using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
@@ -28,11 +27,35 @@ inline void print_uint16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_
     }
 }
 
-template <uint32_t BatchSize, uint32_t NumDevices, uint32_t ReplicateDim>
-inline uint32_t get_device_idx_from_batch_idx(const uint32_t b) {
-    constexpr uint32_t Batch_Per_Device = BatchSize / NumDevices * ReplicateDim;
+template <uint32_t src_chip_id, uint32_t mesh_cols, uint32_t mesh_rows, int axis>
+bool is_configured_target(uint32_t dest_chip_id) {
+    // axis is the direction along which we are allowed to send packets
+    // axis = 1; means we are allowed to send packets in the row direction
+    // axis = 0; means we are allowed to send packets in the column direction
+    // axis = -1; means we are allowed to send packets in all directions
+    if constexpr (axis == 0) {  // check if they're on the same column
+        return src_chip_id % mesh_cols == dest_chip_id % mesh_cols;
+    } else if constexpr (axis == 1) {  // check if they're on the same row
+        return src_chip_id / mesh_cols == dest_chip_id / mesh_cols;
+    } else {
+        return true;  // if axis is not configured, we assume the target is configured, which is the default case, which
+                      // is all directions
+    }
+}
 
-    return b / Batch_Per_Device;
+template <uint32_t SourceChipId, uint32_t BatchSize, uint32_t MeshCols, uint32_t MeshRows, int Axis>
+inline uint32_t get_device_idx_from_batch_idx(const uint32_t b) {
+    constexpr Replicate_Dim = (Axis == 0) ? MeshRows : MeshCols;
+    constexpr uint32_t Batch_Per_Device = BatchSize / Replicate_Dim;
+
+    const device_in_group = b / Batch_Per_Device;
+    if constexpr (Axis == -1) {
+        return device_in_group;
+    } else if (Axis == 0) {
+        return SourceChipId * MeshCols + device_in_group;
+    } else {
+        return device_in_group * MeshCols + SourceChipId;
+    }
 }
 
 // output per device is [K, B/D* replicate_dim, 1, H]
@@ -53,7 +76,6 @@ inline void open_direction_connections(
             connections[i] =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
             connections[i].open();
-            DPRINT << "COnnection opened: " << i << "\n";
         }
     }
 }
@@ -154,10 +176,15 @@ void kernel_main() {
     constexpr uint32_t output_is_dram = get_compile_time_arg_val(10);
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(11);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(12);  // ew_dim
-    constexpr uint32_t replicate_dim = get_compile_time_arg_val(13);
-    constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(14);
+    constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(13);
 
-    // if(src_chip_id != 1 )return;
+#ifdef REPLICATE_AXIS
+    constexpr int replicate_axis = REPLICATE_AXIS;
+    constexpr uint32_t replicate_dim = replicate_axis == 0 ? mesh_rows : mesh_cols;
+#else
+    constexpr int replicate_axis = -1;
+    constexpr uint32_t replicate_dim = 1;
+#endif
 
     constexpr uint8_t Num_Directions = 4;
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
@@ -166,8 +193,6 @@ void kernel_main() {
 
     const auto output_base_addr = get_arg_val<uint32_t>(0);
     const auto global_semaphore_addr = get_arg_val<uint32_t>(1);
-
-    DPRINT << "WRITER 0" << "\n";
 
     const uint32_t rt_arg_count = 2;
     std::array<WorkerToFabricEdmSender, Num_Directions> fabric_connections;
@@ -186,52 +211,43 @@ void kernel_main() {
         cb_push_back(packet_header_cb_id,1);
     }
 
-    DPRINT << "WRITER 1" << "\n";
-
     cb_wait_front(local_experts_cb_id,1);
     auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(local_experts_cb_id));
 
-    // print_uint16_pages(get_read_ptr(local_experts_cb_id),num_local_experts,1);
-
-    for(uint32_t b=0;b<batch_size;++b){
-        // DPRINT<< " WAIT FOR METADATA: "<<b<<"\n";
+    for (uint32_t b = 0; b < batch_size; ++b) {
         cb_wait_front(metadata_cb_id, 1);
         const uint32_t metadata_l1_addr = get_write_ptr(metadata_cb_id);
         auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(metadata_l1_addr);
-        // DPRINT<<"METADATA: "<<b<<"\n";
-        //         print_uint16_pages(metadata_l1_addr,selected_experts_k,1);
 
         for (uint32_t e = 0; e < num_local_experts; ++e) {
             const auto & expert_idx = local_experts_ptr[e];
             const auto [found, k] = detail::find_if<uint16_t, selected_experts_k, true>(metadata_ptr, expert_idx);
-            // DPRINT<<"WRITER 2 b: "<< b <<" e:" <<e <<" expert: "<<expert_idx<<"\n";
 
-            if(found){
-                // DPRINT<<"WRITER FOUND b: "<< b <<" e:" <<e <<"\n";
-
+            if (found) {
                 cb_wait_front(data_cb_id,1);
                 const uint32_t src_data_l1_ptr = get_write_ptr(data_cb_id);
-                // DPRINT<<"WRITER GOT FOUND b: "<< b <<" e: " <<e <<" expert: "<<expert_idx<<"\n";
 
                 // figure out output page index, noc address.
                 const uint32_t output_page_idx = get_output_page_idx<batch_size, num_devices, replicate_dim>(b, k);
-                // DPRINT<<"dest page idx: "<<output_page_idx<<"\n";
-
                 const uint64_t output_noc_addr = get_noc_addr(output_page_idx, output_addrgen);
-                // DPRINT<<"dest noc addr: "<<output_noc_addr<<"\n";
 
                 // figure out which device to send data to and routing
-                const auto dest_device_idx = get_device_idx_from_batch_idx<batch_size, num_devices, replicate_dim>(b);
-                // DPRINT<<"device idx: "<<dest_device_idx<<"\n";
-
+                const auto dest_device_idx =
+                    get_device_idx_from_batch_idx<src_chip_id, batch_size, mesh_cols, mesh_rows, replicate_axis>(b);
                 const auto& dest_chip_id = dest_chip_ids[dest_device_idx];
-
-                // DPRINT<<"WRITER 3.5 b: "<< b <<" e:" <<e <<"\n";
 
                 if(dest_chip_id==src_chip_id){
                     noc_async_write(src_data_l1_ptr,output_noc_addr,data_size_bytes);
                     noc_async_write_barrier();
-                } else if (false) {
+                } else {
+                    const auto route = get_direction<src_chip_id, mesh_cols, mesh_rows>(dest_chip_id);
+
+                    if (!directions[route]) {
+                        DPRINT << "BAD DIRECTION: src " << src_chip_id << " dest: " << dest_chip_id << "b: " << b
+                               << "\n";
+                        continue;
+                    }
+
                     const auto& dest_mesh_id = dest_mesh_ids[dest_device_idx];
                     dispatch_input_remote_device<src_chip_id, mesh_cols, mesh_rows, fabric_max_packet_size_bytes>(
                         dest_chip_id,
@@ -259,10 +275,10 @@ void kernel_main() {
     for(uint32_t device_idx=0;device_idx < num_devices;++device_idx){
         const auto & dest_chip_id = dest_chip_ids[device_idx];
 
-        if (dest_chip_ids[device_idx] == src_chip_id) {
-            // noc_semaphore_inc(get_noc_addr(global_semaphore_addr), 1);
-            // noc_async_atomic_barrier();
-        } else {
+        if (dest_chip_id == src_chip_id) {
+            noc_semaphore_inc(get_noc_addr(global_semaphore_addr), 1);
+            noc_async_atomic_barrier();
+        } else if (is_configured_target<src_chip_id, mesh_cols, mesh_rows, replicate_axis>(dest_chip_id)) {
             const auto & dest_mesh_id = dest_mesh_ids[device_idx];
             const auto route = get_direction<src_chip_id, mesh_cols, mesh_rows>(dest_chip_id);
 
@@ -277,24 +293,16 @@ void kernel_main() {
                 dest_mesh_id,
                 mesh_cols);
 
-            if (!directions[route]) {
-                DPRINT << "BAD ROUTE" << "\n";
-            }
-
             fabric_connections[route].wait_for_empty_write_slot();
-
             fabric_connections[route].send_payload_flush_blocking_from_address(
                 reinterpret_cast<uint32_t>(packet_headers[1]), sizeof(PACKET_HEADER_TYPE));
         }
-        // DPRINT<<"WRITER 6: "<<dest_chip_id<<"\n";
     }
 
     close_direction_connections(directions, fabric_connections);
 
-    DPRINT << "WRITER 7: " << "\n";
-
     auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
-    noc_semaphore_wait(semaphore_ptr, num_devices);
+    noc_semaphore_wait(semaphore_ptr, num_devices / (num_devices / replicate_dim));
 
-    DPRINT << "WRITER 8: " << "\n";
+    DPRINT << "WRITER DONE: " << "\n";
 }

@@ -222,7 +222,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         output_is_dram,
         mesh_view.num_rows(),
         mesh_view.num_cols(),
-        batch_replicate_dim,
         max_packet_size_bytes,
     };
 
@@ -236,7 +235,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     }
     const auto [neighbors, directions] = detail::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
 
-    std::cout << "DIRECTIONS: " << std::endl;
+    std::cout << "DIRECTIONS pyid: " << src_physical_device_id << " fabid: " << src_chip_id
+              << " COORD: " << mesh_coordinate[0] << "," << mesh_coordinate[1] << std::endl;
     for (auto d : directions) {
         std::cout << d << " ";
     }
@@ -246,6 +246,10 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         {"DEST_CHIP_ID", detail::stringify_vector(dest_chip_id)},
         {"DEST_MESH_ID", detail::stringify_vector(dest_mesh_id)},
         {"DIRECTIONS", detail::stringify_array(directions)}};
+
+    if (axis.has_value()) {
+        writer_defines["REPLICATE_AXIS"] = std::to_string(axis.value());
+    }
 
     const tt::tt_metal::DataMovementConfig writer_config{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,

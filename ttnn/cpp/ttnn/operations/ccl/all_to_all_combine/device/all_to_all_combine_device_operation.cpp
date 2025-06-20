@@ -46,9 +46,10 @@ AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperati
     const uint32_t batch_replicate_dim = axis.has_value() ? mesh_device->shape()[axis.value()] : 1;
     const uint32_t total_batch_size = batch_size * batch_replicate_dim;
 
-    TT_ASSERT(batch_size%num_devices==0);
+    TT_ASSERT(total_batch_size % num_devices == 0);
+    const uint32_t total_batch_per_device_size = total_batch_size / num_devices;
 
-    auto output_shape = ttnn::Shape({selected_experts_k, total_batch_size, 1, hidden_size});
+    auto output_shape = ttnn::Shape({selected_experts_k, total_batch_per_device_size, 1, hidden_size});
 
     auto mem_config = operation_attributes.output_mem_config;
     return TensorSpec(
