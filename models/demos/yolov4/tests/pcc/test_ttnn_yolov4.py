@@ -42,16 +42,8 @@ def run_yolov4(device, reset_seeds, model_location_generator, use_pretrained_wei
     img = load_image(imgfile, resolution)
     torch_input = image_to_tensor(img)
 
-    n, c, h, w = torch_input.shape
-    if c == 3:
-        c = 8
-    input_mem_config = ttnn.create_sharded_memory_config(
-        [n, c, h, w],
-        ttnn.CoreGrid(x=8, y=8),
-        ttnn.ShardStrategy.HEIGHT,
-    )
-    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-    ttnn_input = ttnn_input.to(device, input_mem_config)
+    input_tensor = torch.permute(torch_input, (0, 2, 3, 1))
+    ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16)
 
     torch_output_tensor = torch_model(torch_input)
 
