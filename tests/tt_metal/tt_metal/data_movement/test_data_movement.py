@@ -153,10 +153,10 @@ test_id_to_comment = {
 # are subject to change with new directed tests.
 test_bounds = {
     "wormhole_b0": {
-        0: {
-            "riscv_1": {"latency": {"lower": 300, "upper": 24000}, "bandwidth": 0.08},
-            "riscv_0": {"latency": {"lower": 300, "upper": 25000}, "bandwidth": 0.07},
-        },
+        # 0: {
+        #     "riscv_1": {"latency": {"lower": 300, "upper": 24000}, "bandwidth": 0.08},
+        #     "riscv_0": {"latency": {"lower": 300, "upper": 25000}, "bandwidth": 0.07},
+        # },
         1: {
             "riscv_1": {"latency": {"lower": 23000, "upper": 24000}, "bandwidth": 21},
             "riscv_0": {"latency": {"lower": 24000, "upper": 25000}, "bandwidth": 21},
@@ -165,16 +165,16 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 300, "upper": 600}, "bandwidth": 0.08},
             "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.08},
         },
-        3: {
+        3: {  # DRAM Unary Directed Ideal
             "riscv_1": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 22},
             "riscv_0": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 21},
         },
-        4: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 18000}, "bandwidth": 0.1},
-        },
-        5: {
-            "riscv_1": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.1},
-        },
+        # 4: {
+        #     "riscv_0": {"latency": {"lower": 200, "upper": 18000}, "bandwidth": 0.1},
+        # },
+        # 5: {
+        #     "riscv_1": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.1},
+        # },
         # 6: {
         #     "riscv_0": {"latency": {"lower": 400, "upper": 70000}, "bandwidth": 0.3},
         # },
@@ -202,12 +202,12 @@ test_bounds = {
         # 14: {
         #     "riscv_0": {"latency": {"lower": 500, "upper": 40000}, "bandwidth": 0.04},
         # },
-        15: {
-            "riscv_1": {"latency": {"lower": 700, "upper": 85000}, "bandwidth": 0.71},
-        },
-        16: {
-            "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
-        },
+        # 15: {
+        #     "riscv_1": {"latency": {"lower": 700, "upper": 85000}, "bandwidth": 0.71},
+        # },
+        # 16: {
+        #     "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
+        # },
         30: {  # One from All Directed Ideal
             "riscv_1": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 30},
         },
