@@ -19,19 +19,19 @@ Where,
 **Vit:** <br>
 **_For 224x224,_**<br>
  ```sh
- pytest models/experimental/classification_models_evaluation/classification_eval.py::test_vit_classification[wormhole_b0-tt_model-8-device_params0]
+ pytest models/experimental/classification_eval/classification_eval.py::test_vit_image_classification_eval[wormhole_b0-tt_model-8-device_params0]
  ```
 
 **Resnet50:** <br>
 **_For 224x224,_**<br>
  ```sh
- pytest models/experimental/classification_models_evaluation/classification_eval.py::test_resnet50_classification[16-act_dtype0-weight_dtype0-device_params0-tt_model]
+ pytest models/experimental/classification_eval/classification_eval.py::test_resnet50_image_classification_eval[16-act_dtype0-weight_dtype0-device_params0-tt_model]
  ```
 
 **MobileNetV2:** <br>
 **_For 224x224,_**<br>
  ```sh
- pytest models/experimental/classification_models_evaluation/classification_eval.py::test_mobilenetv2_classification[8-224-tt_model-device_params0]
+ pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval[8-224-tt_model-device_params0]
  ```
 
 ## To run the test of torch vs ground truth, please follow the following commands:
@@ -39,17 +39,17 @@ Where,
 **Vit:** <br>
 **_For 224x224,_**<br>
  ```sh
- pytest models/experimental/classification_models_evaluation/classification_eval.py::test_vit_classification[wormhole_b0-torch_model-8-device_params0]
+ pytest models/experimental/classification_eval/classification_eval.py::test_vit_image_classification_eval[wormhole_b0-torch_model-8-device_params0]
  ```
 
 **Resnet50:** <br>
 **_For 224x224,_**<br>
  ```sh
- pytest models/experimental/classification_models_evaluation/classification_eval.py::test_resnet50_classification[16-act_dtype0-weight_dtype0-device_params0-torch_model]
+ pytest models/experimental/classification_eval/classification_eval.py::test_resnet50_image_classification_eval[16-act_dtype0-weight_dtype0-device_params0-torch_model]
  ```
 
 **MobileNetV2:** <br>
 **_For 224x224,_**<br>
  ```sh
- pytest models/experimental/classification_models_evaluation/classification_eval.py::test_mobilenetv2_classification[8-224-torch_model-device_params0]
+ pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval[8-224-torch_model-device_params0]
  ```
