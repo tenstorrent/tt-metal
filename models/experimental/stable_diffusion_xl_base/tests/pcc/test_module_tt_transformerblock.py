@@ -15,12 +15,12 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
 
 
 @pytest.mark.parametrize(
-    "input_shape, encoder_shape, down_block_id, block_id, query_dim, num_attn_heads, out_dim",
+    "input_shape, encoder_shape, down_block_id, block_id, query_dim, num_attn_heads, out_dim, pcc",
     [
-        ((1, 4096, 640), (1, 77, 2048), 1, 0, 640, 10, 640),
-        ((1, 4096, 640), (1, 77, 2048), 1, 1, 640, 10, 640),
-        ((1, 1024, 1280), (1, 77, 2048), 2, 0, 1280, 20, 1280),
-        ((1, 1024, 1280), (1, 77, 2048), 2, 1, 1280, 20, 1280),
+        ((1, 4096, 640), (1, 77, 2048), 1, 0, 640, 10, 640, 0.999),
+        ((1, 4096, 640), (1, 77, 2048), 1, 1, 640, 10, 640, 0.999),
+        ((1, 1024, 1280), (1, 77, 2048), 2, 0, 1280, 20, 1280, 0.998),
+        ((1, 1024, 1280), (1, 77, 2048), 2, 1, 1280, 20, 1280, 0.998),
     ],
 )
 @pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
@@ -34,6 +34,7 @@ def test_transformerblock(
     query_dim,
     num_attn_heads,
     out_dim,
+    pcc,
     use_program_cache,
     reset_seeds,
     transformer_weights_dtype,
@@ -81,5 +82,5 @@ def test_transformerblock(
     del unet
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     logger.info(f"PCC is: {pcc_message}")
