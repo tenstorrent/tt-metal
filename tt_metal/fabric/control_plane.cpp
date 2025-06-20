@@ -201,6 +201,14 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     build_golden_link_counts(
         this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity(), golden_link_counts);
 
+    auto apply_count = [this](FabricNodeId fabric_node_id, RoutingDirection direction, size_t count) {
+        if (this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id) &&
+            this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).contains(direction) &&
+            this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).at(direction).size() > 0) {
+            this->router_port_directions_to_num_routing_planes_map_[fabric_node_id][direction] = count;
+        }
+    };
+
     // For each mesh in the system
     for (auto mesh_id : user_meshes) {
         const auto& mesh_shape = this->get_physical_mesh_shape(MeshId{mesh_id});
@@ -247,12 +255,10 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
                 auto chip_coord_x = chip_coord[0];
                 auto chip_coord_y = chip_coord[1];
 
-                this->router_port_directions_to_num_routing_planes_map_[fabric_node_id] = {
-                    {RoutingDirection::E, row_min_planes.at(chip_coord_y)},
-                    {RoutingDirection::W, row_min_planes.at(chip_coord_y)},
-                    {RoutingDirection::N, col_min_planes.at(chip_coord_x)},
-                    {RoutingDirection::S, col_min_planes.at(chip_coord_x)},
-                };
+                apply_count(fabric_node_id, RoutingDirection::E, row_min_planes.at(chip_coord_y));
+                apply_count(fabric_node_id, RoutingDirection::W, row_min_planes.at(chip_coord_y));
+                apply_count(fabric_node_id, RoutingDirection::N, col_min_planes.at(chip_coord_x));
+                apply_count(fabric_node_id, RoutingDirection::S, col_min_planes.at(chip_coord_x));
             }
         }
     }
@@ -1314,9 +1320,9 @@ std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_routing_planes_in_dir
         this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).contains(routing_direction)) {
         num_routing_planes =
             this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).at(routing_direction);
+        TT_FATAL(eth_chans.size() >= num_routing_planes, "Not enough active fabric eth channels in direction");
+        eth_chans.resize(num_routing_planes);
     }
-    TT_FATAL(eth_chans.size() >= num_routing_planes, "Not enough active fabric eth channels in direction");
-    eth_chans.resize(num_routing_planes);
     return eth_chans;
 }
 
