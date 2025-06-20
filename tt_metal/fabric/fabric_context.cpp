@@ -77,22 +77,18 @@ size_t FabricContext::get_max_payload_size_bytes() const {
 
 std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_edm_config_options(
     tt::tt_fabric::FabricEriscDatamoverType edm_type, tt::tt_fabric::FabricEriscDatamoverAxis edm_axis) {
-    constexpr bool enable_dateline_sender_extra_buffer_slots = true;
-    constexpr bool enable_dateline_receiver_extra_buffer_slots = true;
-    constexpr bool enable_dateline_upstream_sender_extra_buffer_slots = true;
-    constexpr bool enable_dateline_upstream_receiver_extra_buffer_slots = true;
-    bool enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
-        edm_axis != tt::tt_fabric::FabricEriscDatamoverAxis::Short;
-
+    auto edm_buffer_config = tt::tt_fabric::FabricRouterBufferConfig{
+        .enable_dateline_sender_extra_buffer_slots = true,
+        .enable_dateline_receiver_extra_buffer_slots = true,
+        .enable_dateline_upstream_sender_extra_buffer_slots = true,
+        .enable_dateline_upstream_receiver_extra_buffer_slots = true,
+        .enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
+            edm_axis != tt::tt_fabric::FabricEriscDatamoverAxis::Short,
+    };
     auto edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
         .edm_type = edm_type,
         .edm_axis = edm_axis,
-        .enable_dateline_sender_extra_buffer_slots = enable_dateline_sender_extra_buffer_slots,
-        .enable_dateline_receiver_extra_buffer_slots = enable_dateline_receiver_extra_buffer_slots,
-        .enable_dateline_upstream_sender_extra_buffer_slots = enable_dateline_upstream_sender_extra_buffer_slots,
-        .enable_dateline_upstream_receiver_extra_buffer_slots = enable_dateline_upstream_receiver_extra_buffer_slots,
-        .enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
-            enable_dateline_upstream_adjacent_sender_extra_buffer_slots,
+        .edm_buffer_config = edm_buffer_config,
     };
 
     return std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
