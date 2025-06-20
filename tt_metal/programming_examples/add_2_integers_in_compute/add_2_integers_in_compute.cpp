@@ -4,6 +4,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/uint8.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
 using namespace tt;
@@ -21,14 +22,20 @@ int main() {
     constexpr CoreCoord core = {0, 0};
 
     constexpr uint32_t single_tile_size = 2 * 1024;
+    constexpr uint32_t single_tile_size_u8 = 1024;
     tt_metal::InterleavedBufferConfig dram_config{
         .device = device,
         .size = single_tile_size,
         .page_size = single_tile_size,
         .buffer_type = tt_metal::BufferType::DRAM};
+    tt_metal::InterleavedBufferConfig dram_config_u8{
+        .device = device,
+        .size = single_tile_size_u8,
+        .page_size = single_tile_size_u8,
+        .buffer_type = tt_metal::BufferType::DRAM};
 
     std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
-    std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config);
+    std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config_u8);
     std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
 
     // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
@@ -46,8 +53,8 @@ int main() {
 
     constexpr uint32_t src1_cb_index = CBIndex::c_1;
     CircularBufferConfig cb_src1_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src1_cb_index, single_tile_size);
+        CircularBufferConfig(num_input_tiles * single_tile_size_u8, {{src1_cb_index, tt::DataFormat::UInt8}})
+            .set_page_size(src1_cb_index, single_tile_size_u8);
     CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
     constexpr uint32_t output_cb_index = CBIndex::c_16;
@@ -80,7 +87,7 @@ int main() {
         core,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,
+            .fp32_dest_acc_en = true,
             .math_approx_mode = false,
             .compile_args = compute_kernel_args,
         });
@@ -89,7 +96,7 @@ int main() {
     std::vector<uint32_t> src0_vec;
     std::vector<uint32_t> src1_vec;
     src0_vec = create_constant_vector_of_bfloat16(single_tile_size, 14.0f);
-    src1_vec = create_constant_vector_of_bfloat16(single_tile_size, 8.0f);
+    src1_vec = create_constant_vector_of_uint8(single_tile_size_u8, 1);
 
     EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
     EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
@@ -113,6 +120,6 @@ int main() {
     printf("Result = %d\n", result_vec[0]);  // 22 = 1102070192
     printf(
         "Expected = %d\n",
-        pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(bfloat16(22.0f), bfloat16(22.0f))));
+        pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(bfloat16(15.0f), bfloat16(15.0f))));
     CloseDevice(device);
 }
