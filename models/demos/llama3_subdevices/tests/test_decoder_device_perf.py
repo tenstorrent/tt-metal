@@ -8,6 +8,9 @@ import math
 import ttnn
 import json
 import pandas as pd
+import csv
+import os
+from datetime import datetime
 from collections import defaultdict
 from models.demos.llama3_subdevices.tt.llama_common import (
     PagedAttentionConfig,
@@ -371,11 +374,6 @@ def load_perf_targets(galaxy_type):
         raise ValueError(f"Expected top-level JSON object to be a dictionary in '{perf_target_json_filename}'.")
 
     return perf_targets
-
-
-import csv
-import os
-from datetime import datetime
 
 
 def append_perf_data_to_csv(
