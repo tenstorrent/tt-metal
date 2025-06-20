@@ -79,6 +79,7 @@ template struct ExecuteUnary<UnaryOpType::ACOS>;
 template struct ExecuteUnary<UnaryOpType::ASIN>;
 template struct ExecuteUnary<UnaryOpType::ATAN>;
 template struct ExecuteUnary<UnaryOpType::COS>;
+template struct ExecuteUnary<UnaryOpType::ACOSH>;
 template struct ExecuteUnary<UnaryOpType::ERFINV>;
 template struct ExecuteUnary<UnaryOpType::EXP2>;
 template struct ExecuteUnary<UnaryOpType::EXPM1>;
