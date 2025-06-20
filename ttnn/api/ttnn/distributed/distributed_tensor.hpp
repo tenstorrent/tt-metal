@@ -166,10 +166,13 @@ Tensor distribute_tensor(
     ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 // Creates a distributed tensor from a span of logical data specified in `buffer`.
+// `global_shape` must match the size of `buffer`; shapes of shards will be derived automatically based on the `mapper`,
+// and the `shard_layout` will be applied subsequently.
 template <typename T>
 Tensor create_distributed_tensor(
     tt::stl::Span<const T> buffer,
-    const TensorSpec& spec,
+    const ttnn::Shape& global_shape,
+    const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt,
     ttnn::QueueId cq_id = ttnn::DefaultQueueId,

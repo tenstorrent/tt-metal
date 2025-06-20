@@ -75,7 +75,8 @@ void log_external_operation(const operation::ExternalOperation& operation, const
 template <typename T>
 Tensor create_typed_tt_tensor_from_py_data(
     std::size_t py_data_ptr,
-    const TensorSpec& tensor_spec,
+    const Shape& py_data_shape,
+    const TensorLayout& tensor_layout,
     MeshDevice* device,
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback,
@@ -83,24 +84,31 @@ Tensor create_typed_tt_tensor_from_py_data(
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
     TT_FATAL(
-        !tensor_spec.memory_config().is_sharded() || tensor_spec.memory_config().shard_spec().has_value() ||
-            tensor_spec.memory_config().nd_shard_spec().has_value(),
+        !tensor_layout.get_memory_config().is_sharded() || tensor_layout.get_memory_config().shard_spec().has_value() ||
+            tensor_layout.get_memory_config().nd_shard_spec().has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
-    tt::stl::Span<T> pydata_span(reinterpret_cast<T*>(py_data_ptr), tensor_spec.logical_shape().volume());
+    tt::stl::Span<T> pydata_span(reinterpret_cast<T*>(py_data_ptr), py_data_shape.volume());
 
+    // Shard pydata across mesh and apply `tensor_layout` at each shard.
+    // Shapes of multi device shards will be derived automatically.
     if (mesh_mapper != nullptr) {
         return ttnn::distributed::create_distributed_tensor(
             tt::stl::make_const_span(pydata_span),
-            tensor_spec,
+            py_data_shape,
+            tensor_layout,
             *mesh_mapper,
             device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
             cq_id,
             static_cast<T>(pad_value));
-    } else if (const bool pydata_borrowable = tensor_spec.layout() == Layout::ROW_MAJOR &&
-                                              tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
-                                              tensor_spec.data_type() == convert_to_data_type<T>();
-               pydata_borrowable) {
+    }
+
+    // Otherwise, create a single tt tensor from the pydata.
+    const TensorSpec tensor_spec(py_data_shape, tensor_layout);
+    if (const bool pydata_borrowable = tensor_spec.layout() == Layout::ROW_MAJOR &&
+                                       tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
+                                       tensor_spec.data_type() == convert_to_data_type<T>();
+        pydata_borrowable) {
         auto output = Tensor::from_borrowed_data(
             pydata_span,
             tensor_spec.logical_shape(),
@@ -119,7 +127,8 @@ Tensor create_typed_tt_tensor_from_py_data(
 
 Tensor create_tt_tensor_from_py_data(
     std::size_t py_data_ptr,
-    const TensorSpec& tensor_spec,
+    const Shape& py_data_shape,
+    const TensorLayout& tensor_layout,
     MeshDevice* device,
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback,
@@ -129,7 +138,8 @@ Tensor create_tt_tensor_from_py_data(
     auto create_concrete = [&]<typename T>() {
         return create_typed_tt_tensor_from_py_data<T>(
             py_data_ptr,
-            tensor_spec,
+            py_data_shape,
+            tensor_layout,
             device,
             on_creation_callback,
             on_destruction_callback,
@@ -137,7 +147,7 @@ Tensor create_tt_tensor_from_py_data(
             pad_value,
             mesh_mapper);
     };
-    switch (tensor_spec.data_type()) {
+    switch (tensor_layout.get_data_type()) {
         case DataType::UINT8: return create_concrete.operator()<uint8_t>();
         case DataType::UINT16: return create_concrete.operator()<uint16_t>();
         case DataType::INT32: return create_concrete.operator()<int32_t>();
@@ -149,11 +159,11 @@ Tensor create_tt_tensor_from_py_data(
             return create_concrete.operator()<float>();
         }
         case DataType::INVALID: {
-            TT_THROW("Unsupported DataType: {}", tensor_spec.data_type());
+            TT_THROW("Unsupported DataType: {}", tensor_layout.get_data_type());
         }
     }
 
-    TT_THROW("Unsupported DataType: {}", tensor_spec.data_type());
+    TT_THROW("Unsupported DataType: {}", tensor_layout.get_data_type());
 }
 
 // Preprocess the python tensor, optionally performing dtype conversion.
@@ -347,16 +357,13 @@ Tensor convert_python_tensor_to_tt_tensor(
         }
     }();
 
-    auto tensor_spec = TensorSpec(
-        shape, TensorLayout(preprocessed_py_tensor.data_type, PageConfig(layout, optional_tile), memory_config));
-    auto on_creation_callback = [t = preprocessed_py_tensor.contiguous_py_tensor] { t.inc_ref(); };
-    auto on_destruction_callback = [t = preprocessed_py_tensor.contiguous_py_tensor] { t.dec_ref(); };
     auto output = create_tt_tensor_from_py_data(
         preprocessed_py_tensor.py_data_ptr,
-        tensor_spec,
+        shape,
+        TensorLayout(preprocessed_py_tensor.data_type, PageConfig(layout, optional_tile), memory_config),
         device,
-        on_creation_callback,
-        on_destruction_callback,
+        /*on_creation_callback=*/[t = preprocessed_py_tensor.contiguous_py_tensor] { t.inc_ref(); },
+        /*on_destruction_callback=*/[t = preprocessed_py_tensor.contiguous_py_tensor] { t.dec_ref(); },
         cq_id,
         pad_value,
         mesh_mapper);
