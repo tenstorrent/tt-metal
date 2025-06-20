@@ -5,6 +5,7 @@
 import math
 import ttnn
 import torch
+import math
 import pytest
 from loguru import logger
 from tests.ttnn.unit_tests.operations.ccl.test_new_reduce_scatter import run_reduce_scatter_impl
@@ -18,16 +19,35 @@ def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
     return ccl_semaphore_handles
 
 
-def padded_shape(output_shape, tile):
+def padded_shape(output_shape, tile, num_devices, num_links, ag_input_dtype):
+    num_banks = 12
+
+    # calculate num tiles sent in one iteration on one link
     output_tiles_shape = (math.ceil(output_shape[2] / tile[0]), math.ceil(output_shape[3] / tile[1]))
     output_tile_num = output_tiles_shape[0] * output_tiles_shape[1]
-    padded_output_tile_num = math.ceil(output_tile_num / 48) * 48
+    tile_num_per_link = math.ceil(output_tile_num / (num_devices * num_links))
+
+    max_num_tiles_per_package = 2
+    if ag_input_dtype == ttnn.bfloat8_b:
+        max_num_tiles_per_package = 4
+
+    # for bfloat8_b, tile_num_per_link=6, we would need to send 2 packages, but they can be of size 3 instead of 4
+    num_packages_per_link = math.ceil(tile_num_per_link / max_num_tiles_per_package)
+    actual_num_tiles_per_package = math.ceil(tile_num_per_link / num_packages_per_link)
+
+    # calculate total num packages that will be in intermediate tensor
+    total_num_packages = num_packages_per_link * num_devices * num_links
+
+    # calculate num tiles needed for total packages to fit
+    padded_output_tile_num = math.floor(total_num_packages / num_banks) * num_banks * actual_num_tiles_per_package
+    if total_num_packages % num_banks > 0:
+        padded_output_tile_num += (actual_num_tiles_per_package - 1) * num_banks + total_num_packages % num_banks
 
     padded_shape = [
         output_shape[0],
         output_shape[1],
-        output_shape[2],
-        math.ceil(padded_output_tile_num / output_tiles_shape[0]) * tile[1],
+        tile[0],
+        padded_output_tile_num * tile[1],
     ]
     return padded_shape
 
@@ -83,7 +103,7 @@ def run_all_gather_impl(
     logger.info("Creating persistent buffers")
     persistent_intermediate_buffers = [
         ttnn.from_torch(
-            torch.zeros(padded_shape(ag_output_shape, tile)),
+            torch.zeros(padded_shape(ag_output_shape, tile, num_devices, num_links, ag_input_dtype)),
             device=t3k_mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ag_input_dtype,
