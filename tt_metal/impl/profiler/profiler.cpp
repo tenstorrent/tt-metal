@@ -55,6 +55,14 @@ bool onlyProfileDispatchCores(const ProfilerDumpState state) {
            state == ProfilerDumpState::ONLY_DISPATCH_CORES;
 }
 
+void waitForDeviceCommandsToFinish(IDevice* device) {
+    if (auto mesh_device = device->get_mesh_device()) {
+        mesh_device->mesh_command_queue().finish();
+    } else {
+        Finish(device->command_queue());
+    }
+}
+
 bool isGalaxyMMIODevice(const IDevice* device) {
     return tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && device->is_mmio_capable();
 }
@@ -130,12 +138,6 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
             profile_buffer_idx += profile_buffer_bank_size_bytes / sizeof(uint32_t);
         }
     }
-
-    // if (auto mesh_device = device->get_mesh_device()) {
-    //     mesh_device->mesh_command_queue().finish();
-    // } else {
-    //     Finish(device->command_queue());
-    // }
 }
 
 void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device) {
@@ -224,14 +226,6 @@ std::unordered_map<CoreCoord, std::vector<uint32_t>> DeviceProfiler::readL1DataB
         core_l1_data_buffers[virtual_core] = readL1DataBufferForCore(device, virtual_core, state);
     }
 
-    // if (useFastDispatchForDataBuffers(state)) {
-    //     if (auto mesh_device = device->get_mesh_device()) {
-    //         mesh_device->mesh_command_queue().finish();
-    //     } else {
-    //         Finish(device->command_queue());
-    //     }
-    // }
-
     return core_l1_data_buffers;
 }
 
@@ -279,14 +273,6 @@ void DeviceProfiler::readControlBuffers(
     for (const CoreCoord& virtual_core : virtual_cores) {
         readControlBufferForCore(device, virtual_core, state);
     }
-
-    // if (useFastDispatchForControlBuffers(state)) {
-    //     if (auto mesh_device = device->get_mesh_device()) {
-    //         mesh_device->mesh_command_queue().finish();
-    //     } else {
-    //         Finish(device->command_queue());
-    //     }
-    // }
 }
 
 void DeviceProfiler::resetControlBufferForCore(
@@ -309,14 +295,6 @@ void DeviceProfiler::resetControlBuffers(
     for (const CoreCoord& virtual_core : virtual_cores) {
         resetControlBufferForCore(device, virtual_core, state);
     }
-
-    // if (useFastDispatchForControlBuffers(state)) {
-    //     if (auto mesh_device = device->get_mesh_device()) {
-    //         mesh_device->mesh_command_queue().finish();
-    //     } else {
-    //         Finish(device->command_queue());
-    //     }
-    // }
 }
 
 void DeviceProfiler::readProfilerBuffer(IDevice* device, const ProfilerDumpState state) {
@@ -1295,11 +1273,7 @@ void DeviceProfiler::dumpResults(
         resetControlBuffers(device, virtual_cores, state);
 
         if (useFastDispatchForControlBuffers(device, state) || useFastDispatchForDataBuffers(device, state)) {
-            if (auto mesh_device = device->get_mesh_device()) {
-                mesh_device->mesh_command_queue().finish();
-            } else {
-                Finish(device->command_queue());
-            }
+            waitForDeviceCommandsToFinish(device);
         }
 
         for (const auto& virtual_core : virtual_cores) {
@@ -1323,11 +1297,7 @@ void DeviceProfiler::dumpResults(
             readL1DataBuffers(device, virtual_cores, state);
 
         if (useFastDispatchForControlBuffers(device, state) || useFastDispatchForDataBuffers(device, state)) {
-            if (auto mesh_device = device->get_mesh_device()) {
-                mesh_device->mesh_command_queue().finish();
-            } else {
-                Finish(device->command_queue());
-            }
+            waitForDeviceCommandsToFinish(device);
         }
 
         for (const auto& virtual_core : virtual_cores) {
