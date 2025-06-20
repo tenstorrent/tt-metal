@@ -26,42 +26,6 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::operations::unary {
 
-// acosh(x) = log(x + sqrt(x^2 - 1))
-Tensor _acosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_FATAL(input_a.storage_type() == StorageType::DEVICE, "Unary operation requires input to be on Device.");
-
-    Tensor t_one = ttnn::full_like(input_a, 1.0f);
-    Tensor t_result(input_a);
-    {
-        Tensor ln_res(input_a);
-        {
-            Tensor x_abs = ttnn::abs(input_a, output_mem_config);
-            Tensor x_sq_m1(input_a);
-            {
-                Tensor x_sq = ttnn::square(x_abs, output_mem_config);
-                x_sq_m1 = ttnn::subtract(x_sq, 1.0f, std::nullopt, output_mem_config);
-            }
-            ln_res = ttnn::log(
-                ttnn::add(x_abs, ttnn::sqrt(x_sq_m1, output_mem_config), std::nullopt, output_mem_config),
-                output_mem_config);
-        }
-        // To handle inputs <= 1
-        // input < 1, output is nan
-        // input > 1, output is acosh(input)
-        Tensor nan_res = ttnn::multiply(
-            ttnn::le(input_a, t_one, std::nullopt, output_mem_config),
-            tt::tt_metal::hal::get_nan(),
-            std::nullopt,
-            output_mem_config);
-        t_result = ttnn::multiply(
-            ttnn::gt(input_a, t_one, std::nullopt, output_mem_config), ln_res, std::nullopt, output_mem_config);
-        t_result = ttnn::add(nan_res, t_result, std::nullopt, output_mem_config);
-    }
-    // input == 1, output is 0
-    Tensor result = ttnn::where(ttnn::eq(input_a, t_one, std::nullopt, output_mem_config), 0.0f, t_result);
-    return result;
-}
-
 // asinh(x) = log(x + sqrt(x^2 + 1))
 Tensor _asinh(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL(input_a.storage_type() == StorageType::DEVICE, "Unary operation requires input to be on Device.");
