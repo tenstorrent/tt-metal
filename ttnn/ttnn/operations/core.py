@@ -242,7 +242,7 @@ def from_torch(
     layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
     device: Optional[ttnn.MeshDevice] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
-    mesh_mapper: Optional[ttnn.CppTensorToMesh] = None,
+    mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
     cq_id: Optional[int] = ttnn.DefaultQueueId,
 ) -> ttnn.Tensor:
     """
@@ -287,7 +287,15 @@ def from_torch(
 
     if mesh_mapper:
         # TODO: #22258 - supply device to pytensor constructor directly.
-        tensor = ttnn.Tensor(tensor, dtype, mesh_mapper, tile, layout, memory_config, pad_value)
+        tensor = ttnn.Tensor(
+            tensor,
+            dtype,
+            mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
+            tile,
+            layout,
+            memory_config,
+            pad_value,
+        )
         if device is not None:
             tensor = ttnn.to_device(tensor, device, memory_config=memory_config, cq_id=cq_id)
         return tensor
@@ -566,7 +574,7 @@ def as_tensor(
     memory_config: Optional[ttnn.MemoryConfig] = None,
     cache_file_name: Optional[Union[str, pathlib.Path]] = None,
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
-    mesh_mapper: Optional[ttnn.CppTensorToMesh] = None,
+    mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
     use_device_tilizer: bool = False,
 ) -> ttnn.Tensor:
     """
@@ -618,7 +626,7 @@ def as_tensor(
         layout: Optional[ttnn.Layout],
         device: Optional[ttnn.MeshDevice],
         memory_config: Optional[ttnn.MemoryConfig],
-        mesh_mapper: Optional[ttnn.CppTensorToMesh],
+        mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper],
     ):
         if preprocess:
             tensor = preprocess(tensor)
@@ -651,7 +659,7 @@ def as_tensor(
             dtype: Optional[ttnn.DataType],
             layout: Optional[ttnn.Layout],
             cache_file_name: str,
-            mesh_mapper: Optional[ttnn.CppTensorToMesh],
+            mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper],
         ):
             tensor = torch_to_ttnn(tensor, dtype, layout, device, memory_config, mesh_mapper)
             logger.debug(
@@ -661,7 +669,12 @@ def as_tensor(
             ttnn._ttnn.tensor.dump_tensor(cache_file_name, tensor)
             return tensor
 
-        storage_type = f"_multi_device" if mesh_mapper else ""
+        if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper):
+            storage_type = f"_multi_device" if mesh_mapper else ""
+        elif mesh_mapper:
+            storage_type = f"_multi_device_{device.get_num_devices()}"
+        else:
+            storage_type = ""
 
         cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
 

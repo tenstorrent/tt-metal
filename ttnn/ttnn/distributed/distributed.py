@@ -199,9 +199,19 @@ def create_mesh_device(*args, **kwargs):
 TensorToMesh = ttnn.CppTensorToMesh
 
 
+# Workaround needed to differentiate mappers created by `ReplicateTensorToMesh`, which use a different file name used for caching.
+class ReplicateTensorToMeshWrapper:
+    def __init__(self, mapper: ttnn.CppTensorToMesh):
+        self._mapper = mapper
+
+    def unwrap(self):
+        return self._mapper
+
+
 # Deprecated. Prefer to use `ttnn.replicate_tensor_to_mesh_mapper` directly.
 def ReplicateTensorToMesh(mesh_device: MeshDevice):
-    return ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
+    mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
+    return ReplicateTensorToMeshWrapper(mapper)
 
 
 # Deprecated. Prefer to use `ttnn.shard_tensor_to_mesh_mapper` directly.
