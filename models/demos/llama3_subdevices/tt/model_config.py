@@ -21,7 +21,7 @@ from models.tt_transformers.tt.common import (
     nearest_multiple,
 )
 from typing import Tuple
-from models.utility_functions import nearest_32
+from models.utility_functions import nearest_32, wormhole_dict_device_names
 from pathlib import Path
 from enum import Enum, auto
 from tqdm import tqdm
@@ -454,7 +454,7 @@ class TtModelArgs:
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
-        self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
+        self.device_name = wormhole_dict_device_names[self.num_devices]
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
