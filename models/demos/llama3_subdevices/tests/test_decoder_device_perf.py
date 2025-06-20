@@ -373,6 +373,118 @@ def load_perf_targets(galaxy_type):
     return perf_targets
 
 
+import csv
+import os
+from datetime import datetime
+
+
+def append_perf_data_to_csv(
+    avg_kernel_duration_mid_layers_compilation,
+    min_kernel_duration_mid_layers_compilation,
+    max_kernel_duration_mid_layers_compilation,
+    avg_kernel_duration_mid_layers_trace,
+    min_kernel_duration_mid_layers_trace,
+    max_kernel_duration_mid_layers_trace,
+    avg_dispatch_duration_mid_layers_trace,
+    avg_first_to_last_start_mid_layers_trace,
+    avg_kernel_duration_model_tail_compilation,
+    avg_kernel_duration_model_tail_trace,
+    avg_dispatch_duration_model_tail_trace,
+    csv_filename="out.csv",
+):
+    """
+    Appends selected performance data to CSV and prints them in print_dict style.
+    Each row in the CSV corresponds to (op_code_with_id, metric_type, value).
+    """
+    file_exists = os.path.exists(csv_filename)
+    run_number = 1
+
+    if file_exists:
+        try:
+            with open(csv_filename, "r") as f:
+                reader = csv.DictReader(f)
+                run_numbers = [int(row["run_number"]) for row in reader if row["run_number"].isdigit()]
+                if run_numbers:
+                    run_number = max(run_numbers) + 1
+        except:
+            run_number = 1
+
+    fieldnames = ["run_number", "timestamp", "op_code_with_id", "metric_type", "value"]
+
+    timestamp = datetime.now().isoformat()
+
+    def print_dict(d, name):
+        print(f"{name} = {{")
+        for k in sorted(d.keys()):
+            print(f"    '{k}': {d[k]},")
+        print("}\n")
+
+    def write_metrics(writer, metric_dict, metric_type):
+        for op_id, value in metric_dict.items():
+            writer.writerow(
+                {
+                    "run_number": run_number,
+                    "timestamp": timestamp,
+                    "op_code_with_id": op_id,
+                    "metric_type": metric_type,
+                    "value": value,
+                }
+            )
+
+    with open(csv_filename, "a", newline="") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+
+        metric_groups = [
+            # Mid-layer compilation
+            (
+                "avg_kernel_duration_mid_layers_compilation",
+                avg_kernel_duration_mid_layers_compilation,
+                "mid_compile_avg",
+            ),
+            (
+                "min_kernel_duration_mid_layers_compilation",
+                min_kernel_duration_mid_layers_compilation,
+                "mid_compile_min",
+            ),
+            (
+                "max_kernel_duration_mid_layers_compilation",
+                max_kernel_duration_mid_layers_compilation,
+                "mid_compile_max",
+            ),
+            # Mid-layer trace
+            ("avg_kernel_duration_mid_layers_trace", avg_kernel_duration_mid_layers_trace, "mid_trace_avg"),
+            ("min_kernel_duration_mid_layers_trace", min_kernel_duration_mid_layers_trace, "mid_trace_min"),
+            ("max_kernel_duration_mid_layers_trace", max_kernel_duration_mid_layers_trace, "mid_trace_max"),
+            # Mid-layer dispatch and latency
+            ("avg_dispatch_duration_mid_layers_trace", avg_dispatch_duration_mid_layers_trace, "mid_dispatch_avg"),
+            (
+                "avg_first_to_last_start_mid_layers_trace",
+                avg_first_to_last_start_mid_layers_trace,
+                "mid_first_to_last_start_avg",
+            ),
+            # Model tail
+            (
+                "avg_kernel_duration_model_tail_compilation",
+                avg_kernel_duration_model_tail_compilation,
+                "model_tail_compile_avg",
+            ),
+            ("avg_kernel_duration_model_tail_trace", avg_kernel_duration_model_tail_trace, "model_tail_trace_avg"),
+            (
+                "avg_dispatch_duration_model_tail_trace",
+                avg_dispatch_duration_model_tail_trace,
+                "model_tail_dispatch_avg",
+            ),
+        ]
+
+        for name, d, metric_type in metric_groups:
+            print_dict(d, name)
+            write_metrics(writer, d, metric_type)
+
+    print(f"\nPerformance data appended to {csv_filename} (Run #{run_number})")
+
+
 @pytest.mark.models_device_performance_bare_metal
 # To update:
 # Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
@@ -498,6 +610,21 @@ def test_llama_TG_perf_device(
     print_dict(avg_kernel_duration_model_tail_compilation, "avg_kernel_duration_model_tail_compilation")
     print_dict(avg_kernel_duration_model_tail_trace, "avg_kernel_duration_model_tail_trace")
     print_dict(avg_dispatch_duration_model_tail_trace, "avg_dispatch_duration_model_tail_trace")
+
+    append_perf_data_to_csv(
+        avg_kernel_duration_mid_layers_compilation,
+        min_kernel_duration_mid_layers_compilation,
+        max_kernel_duration_mid_layers_compilation,
+        avg_kernel_duration_mid_layers_trace,
+        min_kernel_duration_mid_layers_trace,
+        max_kernel_duration_mid_layers_trace,
+        avg_dispatch_duration_mid_layers_trace,
+        avg_first_to_last_start_mid_layers_trace,
+        avg_kernel_duration_model_tail_compilation,
+        avg_kernel_duration_model_tail_trace,
+        avg_dispatch_duration_model_tail_trace,
+        "out.csv",
+    )
 
     assert len(avg_kernel_duration_mid_layers_compilation) == len(
         perf_targets["decoder"]
@@ -759,6 +886,78 @@ def test_llama_TG_perf_device(
     assert all_passing
 
 
+def append_non_overlapped_dispatch_data_to_csv(
+    avg_dispatch_duration_model_tail,
+    min_dispatch_duration_model_tail,
+    max_dispatch_duration_model_tail,
+    avg_dispatch_duration_mid_layers,
+    min_dispatch_duration_mid_layers,
+    max_dispatch_duration_mid_layers,
+    csv_filename="out-non-dispatched.csv",
+):
+    """
+    Appends dispatch timing (avg/min/max) for model tail and mid decoder layers
+    from the non-overlapped dispatch run to a CSV file. Also prints each dict.
+
+    Args:
+        *_model_tail, *_mid_layers: Dicts of op_code_with_id -> dispatch duration
+        csv_filename: Output CSV file name
+    """
+    file_exists = os.path.exists(csv_filename)
+    run_number = 1
+
+    if file_exists:
+        try:
+            with open(csv_filename, "r") as f:
+                reader = csv.DictReader(f)
+                run_numbers = [int(row["run_number"]) for row in reader if row["run_number"].isdigit()]
+                if run_numbers:
+                    run_number = max(run_numbers) + 1
+        except:
+            run_number = 1
+
+    timestamp = datetime.now().isoformat()
+    fieldnames = ["run_number", "timestamp", "op_code_with_id", "metric_type", "value"]
+
+    def print_dict(d, name):
+        print(f"{name} = {{")
+        for k in sorted(d.keys()):
+            print(f"    '{k}': {d[k]},")
+        print("}\n")
+
+    def write_metrics(writer, metric_dict, metric_type):
+        for op_id, value in metric_dict.items():
+            writer.writerow(
+                {
+                    "run_number": run_number,
+                    "timestamp": timestamp,
+                    "op_code_with_id": op_id,
+                    "metric_type": metric_type,
+                    "value": value,
+                }
+            )
+
+    with open(csv_filename, "a", newline="") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+
+        metric_groups = [
+            ("avg_dispatch_duration_mid_layers", avg_dispatch_duration_mid_layers, "mid_dispatch_avg"),
+            ("min_dispatch_duration_mid_layers", min_dispatch_duration_mid_layers, "mid_dispatch_min"),
+            ("max_dispatch_duration_mid_layers", max_dispatch_duration_mid_layers, "mid_dispatch_max"),
+            ("avg_dispatch_duration_model_tail", avg_dispatch_duration_model_tail, "model_tail_dispatch_avg"),
+            ("min_dispatch_duration_model_tail", min_dispatch_duration_model_tail, "model_tail_dispatch_min"),
+            ("max_dispatch_duration_model_tail", max_dispatch_duration_model_tail, "model_tail_dispatch_max"),
+        ]
+
+        for name, d, metric_type in metric_groups:
+            print_dict(d, name)
+            write_metrics(writer, d, metric_type)
+
+    print(f"\nDispatch data appended to {csv_filename} (Run #{run_number})")
+
+
 @pytest.mark.models_device_performance_bare_metal
 # To update:
 # Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch
@@ -837,6 +1036,16 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
 
     print_dict(avg_dispatch_duration_mid_layers, "avg_dispatch_duration_mid_layers")
     print_dict(avg_dispatch_duration_model_tail, "avg_dispatch_duration_model_tail")
+
+    append_non_overlapped_dispatch_data_to_csv(
+        avg_dispatch_duration_model_tail=avg_dispatch_duration_model_tail,
+        min_dispatch_duration_model_tail=min_dispatch_duration_model_tail,
+        max_dispatch_duration_model_tail=max_dispatch_duration_model_tail,
+        avg_dispatch_duration_mid_layers=avg_dispatch_duration_mid_layers,
+        min_dispatch_duration_mid_layers=min_dispatch_duration_mid_layers,
+        max_dispatch_duration_mid_layers=max_dispatch_duration_mid_layers,
+        csv_filename="out-non-dispatched.csv",
+    )
 
     assert len(avg_dispatch_duration_mid_layers) == len(
         perf_targets["decoder"]
