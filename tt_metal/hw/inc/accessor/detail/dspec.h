@@ -59,11 +59,7 @@ struct DistributionSpec {
 
     // This constructor is only used for completely static DistributionSpec
     template <typename T = void, typename = std::enable_if_t<is_static, T>>
-    constexpr DistributionSpec() {
-        static_assert(
-            shard_grid_ct[0] * shard_grid_strides_ct[0] >= num_banks_ct,
-            "Number of shards must be greater than or equal to number of banks!");
-    };
+    constexpr DistributionSpec() {}
 
     template <typename TensorShape = Shape, typename ShardShape = Shape, typename BankCoords = BankCoords>
     constexpr DistributionSpec(
@@ -96,7 +92,6 @@ struct DistributionSpec {
         }
         if constexpr (!shapes_static) {
             compute_shard_grid_and_strides_rt(tensor_shape(), shard_shape());
-            ASSERT(shard_grid_rt[0] * shard_grid_strides_rt[0] >= num_banks());
         }
     }
 
