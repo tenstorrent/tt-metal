@@ -71,7 +71,7 @@ class TT_CCL:
                 # line prefill and both decode
                 else:
                     self.gather_semaphore_handles[i].append(
-                        [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)]
+                        ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
                     )
 
                 if mode == "prefill":
@@ -924,8 +924,8 @@ class TT_CCL:
         seqlen = input_tensor_mesh.shape[-2]
         persistent_buffers = self.persistent_buffers[seqlen].get(buffer_key, None)
 
-        if seqlen == 128:
-            num_links = 1
+        if buffer_key == 128 and key == "QKV":
+            num_links = 2
         else:
             num_links = 4
         print(f"+ RING RS: {buffer_key} - {input_tensor_mesh.shape} {num_links} links ")
@@ -958,7 +958,7 @@ class TT_CCL:
             persistent_buffer = None
             if self.use_ring_ag_prefill and buffer_key is not None:
                 if buffer_key in USE_LINE_AG:
-                    seqlen = input_tensor_mesh.shape[-2]
+                    seqlen = input_tensor_mesh.shape[1] * input_tensor_mesh.shape[-2]
                     persistent_buffer = self.all_gather_buffers[seqlen][buffer_key]["output"]
                 else:
                     return self.ring_all_gather(
@@ -992,7 +992,9 @@ class TT_CCL:
             cluster_axis=cluster_axis,
             mesh_device=self.mesh_device,
             topology=topology,
-            multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][0],
+            multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]]
+            if self.mode == "decode"
+            else self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][0],
             persistent_output_tensor=persistent_buffer,
             num_links=num_links,
             memory_config=memory_config,
@@ -1016,11 +1018,8 @@ class TT_CCL:
         persistent_buffers = self.all_gather_buffers[seqlen].get(buffer_key, None)
 
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
-        if seqlen == 128:
-            num_links = 1
-        else:
-            num_links = 4
-        print(f"+ !! RING AG: {buffer_key} - {input_tensor_mesh.shape} {num_links} links ")
+        num_links = 4
+        # print(f"+ !! RING AG: {buffer_key} - {input_tensor_mesh.shape} {num_links} links ")
         ttnn_tensor_out = ttnn.experimental.all_gather_async(
             input_tensor=input_tensor_mesh,
             persistent_intermediate_buffer=persistent_buffers["intermediate"],
