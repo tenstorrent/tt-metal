@@ -69,6 +69,16 @@ pytest models/demos/llama3_subdevices/demo/demo_decode.py::test_llama_demo --bat
 pytest models/demos/llama3_subdevices/demo/demo_decode.py::test_llama_demo --batch_size=32 --layers=80 --max_generated_tokens=500000 --stress_test=True
 ```
 
+To run the text demo:
+
+```
+pytest models/demos/llama3_subdevices/demo/text_demo.py::test_demo_text \
+    --batch_size=32 \
+    --repeat_batches=1 \
+    --input_prompts=models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json \
+    --max_generated_tokens=200
+```
+
 ## Command-Line Parameters
 - **--weights (str)**: Model weights to use (instruct, random, etc.)
 - **--layers (int)**: Number of transformer layers (e.g., 1, 10, 80)
