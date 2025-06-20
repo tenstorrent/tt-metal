@@ -12,7 +12,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
-#include "ttnn/operations/sharding_utilities.hpp"
+#include "ttnn/cpp/ttnn/operations/sharding_utilities.hpp"
 
 namespace accessor_benchmarks {
 
@@ -99,7 +99,10 @@ void benchmark_all_args_combinations_single_core(
         auto args_bitmask = args_loc_cnf.raw();
 
         std::string crta_config_str = fmt::format("\"SHARDED_ACCESSOR_{:05b}\"", args_bitmask);
-        tt::log_info("Creating single-core benchmarking program with the following args config: {}", crta_config_str);
+        log_info(
+            tt::LogTest,
+            "Creating single-core benchmarking program with the following args config: {}",
+            crta_config_str);
         auto program = CreateProgram();
 
         constexpr CoreCoord grid = {0, 0};
@@ -134,9 +137,9 @@ void benchmark_all_args_combinations_single_core(
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_work_load, false);
 
         // Wait for program to finish
-        tt::log_info("Program launched!");
+        log_info(tt::LogTest, "Program launched!");
         Finish(mesh_device_->mesh_command_queue());
-        tt::log_info("Program finished!");
+        log_info(tt::LogTest, "Program finished!");
     }
     tt::tt_metal::detail::DumpDeviceProfileResults(local_device);
 }

@@ -13,7 +13,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
-#include "ttnn/operations/sharding_utilities.hpp"
+#include "ttnn/cpp/ttnn/operations/sharding_utilities.hpp"
 
 namespace sharded_accessor_device_tests {
 
@@ -244,9 +244,9 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_work_load, false);
 
         // Wait for program to finish
-        tt::log_info("Program launched!");
+        log_info(tt::LogTest, "Program launched!");
         Finish(mesh_device_->mesh_command_queue());
-        tt::log_info("Program finished!");
+        log_info(tt::LogTest, "Program finished!");
     }
 
     // Initialize dst vector
@@ -254,7 +254,7 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
 
     // Validate output buffer matches src vector
     {
-        tt::log_info("Validating output buffer matches src vector");
+        log_info(tt::LogTest, "Validating output buffer matches src vector");
         std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
             .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
             .host_data = const_cast<void*>(reinterpret_cast<const void*>(dst.data())),
@@ -269,7 +269,7 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
 
     // Validate input buffer matches src vector (ie. unmodified after kernel read/writes)
     {
-        tt::log_info("Validating input buffer matches src vector (as a sanity check)");
+        log_info(tt::LogTest, "Validating input buffer matches src vector (as a sanity check)");
         std::vector<tt::tt_metal::distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfer{{
             .shard_coord = tt::tt_metal::distributed::MeshCoordinate{0, 0},
             .host_data = const_cast<void*>(reinterpret_cast<const void*>(dst.data())),
