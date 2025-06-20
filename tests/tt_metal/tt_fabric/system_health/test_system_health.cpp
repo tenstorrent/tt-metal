@@ -93,12 +93,16 @@ TEST(Cluster, ReportIntermeshLinks) {
     auto all_intermesh_links = control_plane.get_all_intermesh_eth_links();
 
     // Summary
+    size_t total_chips = 0;
     size_t total_links = 0;
     for (const auto& [chip_id, links] : all_intermesh_links) {
-        total_links += links.size();
+        if (links.size() > 0) {
+            total_chips++;
+            total_links += links.size();
+        }
     }
 
-    log_info(tt::LogTest, "Total chips with intermesh links: {}", all_intermesh_links.size());
+    log_info(tt::LogTest, "Total chips with intermesh links: {}", total_chips);
     log_info(tt::LogTest, "Total intermesh links: {}", total_links);
     log_info(tt::LogTest, "");
 
@@ -158,8 +162,6 @@ TEST(Cluster, ReportSystemHealth) {
                 if (eth_connections.at(chip_id).find(chan) != eth_connections.at(chip_id).end()) {
                     const auto& [connected_chip_id, connected_eth_core] =
                         cluster.get_connected_ethernet_core(std::make_tuple(chip_id, eth_core));
-                    std::cout << "Connected chip: " << connected_chip_id
-                              << " connected eth core: " << connected_eth_core.str() << std::endl;
                     eth_ss << " link UP " << connection_type << ", retrain: " << read_vec[0] << ", connected to chip "
                            << connected_chip_id;
                     if (cluster_type == tt::ClusterType::GALAXY) {
@@ -169,8 +171,6 @@ TEST(Cluster, ReportSystemHealth) {
                 } else {
                     const auto& [connected_chip_unique_id, connected_eth_core] =
                         cluster.get_connected_ethernet_core_to_remote_mmio_device(std::make_tuple(chip_id, eth_core));
-                    std::cout << "Connected unique chip: " << connected_chip_unique_id
-                              << " connected eth core: " << connected_eth_core.str() << std::endl;
                     eth_ss << " link UP " << connection_type << ", retrain: " << read_vec[0] << ", connected to chip "
                            << connected_chip_unique_id;
                     if (cluster_type == tt::ClusterType::GALAXY) {
