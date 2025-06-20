@@ -7,6 +7,7 @@
 #include <mesh_buffer.hpp>
 #include <mesh_coord.hpp>
 #include <tt_stl/overloaded.hpp>
+#include <allocator.hpp>
 #include <vector>
 
 #include "assert.hpp"
@@ -57,6 +58,36 @@ void validate_mesh_buffer_config(const MeshBufferConfig& config, const MeshDevic
         mesh_device.num_devices());
 }
 
+bool validate_submesh_allocation(const MeshDevice& mesh_device) {
+    if (mesh_device.is_parent_mesh())
+    {
+        if (mesh_device.get_submeshes().empty())
+        {
+            return true;
+        }
+        else
+        {
+            for (const auto& submesh : mesh_device.get_submeshes()) {
+                if (!submesh->is_initialized() || submesh->num_hw_cqs() <= 0) {
+                    continue;
+                }
+                if (!submesh->allocator()->get_allocated_buffers().empty())
+                    return false;
+            }
+            return true;
+        }
+
+    }
+    else
+    {
+        const auto& parent_mesh = mesh_device.get_parent_mesh();
+        if (!parent_mesh->is_initialized()) {
+            return true;
+        }
+        return parent_mesh->allocator()->get_allocated_buffers().empty();
+    }
+}
+
 }  // namespace
 
 uint32_t ShardedBufferConfig::compute_datum_size_bytes() const {
@@ -93,6 +124,12 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     if (!address.has_value()) {
         // Rely on the MeshDevice allocator to provide the address for the entire mesh buffer.
         // The address provided to the backing buffer is used as the address for the MeshBuffer object.
+
+        TT_ASSERT(
+            validate_submesh_allocation(*mesh_device),
+            "Cannot create MeshBuffer on mesh {} due to allocations on submeshes or parent mesh",
+            mesh_device->id());
+
         std::shared_ptr<Buffer> backing_buffer = Buffer::create(
             mesh_device,
             device_local_size,

@@ -172,11 +172,12 @@ uint8_t MeshDevice::num_hw_cqs() const {
 }
 
 bool MeshDevice::is_initialized() const {
-    if (!scoped_devices_) {
-        return false;
-    }
-    return validate_and_get_reference_value(
-        this->get_devices(), [](const auto* device) { return device->is_initialized(); });
+    bool subdevice_initialized = sub_device_manager_tracker_ != nullptr;
+    bool cq_initialized = mesh_command_queues_.size() > 0;
+    TT_ASSERT(
+        (subdevice_initialized == cq_initialized),
+        "MeshDevice is in an inconsistent state, subdevice manager or command queue is not initialized. ");
+    return subdevice_initialized && cq_initialized;
 }
 
 uint32_t MeshDevice::l1_size_per_core() const {
@@ -247,6 +248,9 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices), std::make_unique<MeshDeviceView>(devices), std::shared_ptr<MeshDevice>());
 
+    // Initialize the parent mesh device before creating submeshes
+    mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
+
     auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
     TT_FATAL(
         device_ids.size() == submeshes.size(),
@@ -294,7 +298,11 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
         "Submesh shape {} and mesh device shape {} must have the same number of dimensions.",
         submesh_shape,
         view_->shape());
-
+    //prevents creating submeshes on a submesh
+    TT_FATAL(
+        parent_mesh_ == nullptr,
+        "Cannot create submeshes for MeshDevice {}, which is already a submesh",
+        this->id());
     const MeshCoordinate offset_coord = [&offset, &submesh_shape]() {
         if (offset.has_value()) {
             TT_FATAL(
@@ -519,6 +527,10 @@ int MeshDevice::id() const { return mesh_id_; }
 chip_id_t MeshDevice::build_id() const { return reference_device()->id(); }
 
 bool MeshDevice::is_parent_mesh() const { return parent_mesh_ == nullptr; }
+
+std::shared_ptr<MeshDevice> MeshDevice::get_parent_mesh() const {
+    return parent_mesh_;
+}
 
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const {
     std::vector<std::shared_ptr<MeshDevice>> result;
