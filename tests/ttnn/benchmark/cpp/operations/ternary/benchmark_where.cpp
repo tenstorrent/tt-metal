@@ -17,8 +17,6 @@ namespace {
 // much faster than ttnn::random::random which uses uniform_real_distribution for floats
 template <typename ElemType>
 static tt::tt_metal::Tensor genRandomTensor(const ttnn::Shape& shape, const tt::tt_metal::Layout layout) {
-    const unsigned num_threads = std::thread::hardware_concurrency();
-
     constexpr ttnn::DataType data_type = tt::tt_metal::convert_to_data_type<ElemType>();
     ttnn::TensorSpec spec(shape, ttnn::TensorLayout(data_type, ttnn::PageConfig(layout), tt::tt_metal::MemoryConfig{}));
     auto output_buffer = std::vector<ElemType>(spec.padded_shape().volume());
@@ -30,7 +28,7 @@ static tt::tt_metal::Tensor genRandomTensor(const ttnn::Shape& shape, const tt::
     };
 
     const size_t total = output_buffer.size();
-    if (total < 2048 * 2048) {
+    if (total < 256 * 256) {
         std::ranges::for_each(output_buffer, init_rand_elem);
         return tt::tt_metal::Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec);
     } else {
