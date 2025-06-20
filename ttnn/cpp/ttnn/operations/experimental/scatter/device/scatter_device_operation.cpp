@@ -97,4 +97,30 @@ ScatterDeviceOperation::invocation_result_t ScatterDeviceOperation::invoke(
         tensor_args_t{input_tensor, index_tensor, source_tensor}};
 }
 
+operation::Hash ScatterDeviceOperation::compute_program_hash(
+    const operation_attributes_t& op_args, const tensor_args_t& tensor_args) {
+    return operation::hash_operation<ScatterDeviceOperation>(
+        op_args.dim,
+        op_args.opt_reduction,
+        op_args.output_memory_config,
+        tensor_args.input_tensor.logical_shape(),
+        tensor_args.index_tensor.logical_shape(),
+        tensor_args.src_tensor.logical_shape(),
+        tensor_args.input_tensor.dtype(),
+        tensor_args.index_tensor.dtype(),
+        tensor_args.src_tensor.dtype(),
+        tensor_args.input_tensor.memory_config(),
+        tensor_args.index_tensor.memory_config(),
+        tensor_args.src_tensor.memory_config(),
+        tensor_args.input_tensor.layout(),
+        tensor_args.index_tensor.layout(),
+        tensor_args.src_tensor.layout(),
+        tensor_args.input_tensor.device_storage(),
+        tensor_args.index_tensor.device_storage(),
+        tensor_args.src_tensor.device_storage(),
+        tensor_args.input_tensor.device(),
+        tensor_args.index_tensor.device(),
+        tensor_args.src_tensor.device());
+}
+
 }  // namespace ttnn::operations::experimental::scatter
