@@ -21,8 +21,8 @@
 #include <algorithm>
 
 /* Fusion includes */
-#include "cpp/ttnn/operations/matmul/device/matmul_op.hpp"
-#include "cpp/ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_device_operation.hpp"
 
@@ -83,20 +83,20 @@ struct Matmul_RS {
         const ttnn::Tensor& weight_tensor,
         const ttnn::Tensor& rs_tensor,
         ttnn::Tensor& intermediate_packet_buffer,
-        const int32_t dim,
+        int32_t dim,
         const GlobalSemaphore& semaphore,
-        const uint32_t cluster_axis,
-        const uint32_t ring_devices,
-        const uint32_t num_links,
+        uint32_t cluster_axis,
+        uint32_t ring_devices,
+        uint32_t num_links,
         const tt::tt_metal::SubDeviceId& subdevice_id,
         const std::optional<ttnn::MemoryConfig>& memory_config_rs = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config_mm = std::nullopt,
-        const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
-        const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,
-        const bool transpose_a = false,
-        const bool transpose_b = false,
-        const std::optional<const DataType> dtype = std::nullopt,
+        std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,
+        bool transpose_a = false,
+        bool transpose_b = false,
+        std::optional<const DataType> dtype = std::nullopt,
         const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
         const std::optional<const std::string>& activation = std::nullopt,
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,

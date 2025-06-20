@@ -76,6 +76,7 @@ def run_conv(
     stride_w,
     padding,
     config_override,
+    math_approx_mode=True,
     dilation_h=1,
     dilation_w=1,
     transpose_shards=False,
@@ -213,6 +214,7 @@ def run_conv(
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
+        math_approx_mode=math_approx_mode,
         math_fidelity=math_fidelity,
         fp32_dest_acc_en=fp32_accum,
         packer_l1_acc=packer_l1_acc,
@@ -3656,3 +3658,83 @@ def test_conv2d_with_fold(
         enable_kernel_stride_folding=True,
         preprocess_weights_on_device=preprocess_weights_on_device,
     )
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, use_1d_systolic_array, config_override, use_shallow_conv_variant, shard_layout, activation",
+    (
+        (1, 320, 320, 20, 20, 3, 3, 1, 1, 1, 1, 320, True, None, False, BS, ""),
+        (1, 320, 320, 40, 40, 3, 3, 1, 1, 1, 1, 320, True, None, False, HS, "silu"),
+        (1, 320, 320, 80, 80, 3, 3, 2, 2, 1, 1, 320, True, None, False, HS, "silu"),
+        (1, 640, 640, 20, 20, 3, 3, 1, 1, 1, 1, 640, True, None, False, BS, "silu"),
+        (1, 640, 640, 40, 40, 3, 3, 1, 1, 1, 1, 640, True, None, False, BS, "silu"),
+        (1, 640, 640, 40, 40, 3, 3, 2, 2, 1, 1, 640, True, None, False, BS, ""),
+        (1, 640, 640, 80, 80, 3, 3, 2, 2, 1, 1, 640, True, None, False, None, ""),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG])
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+def test_conv_yolov10x(
+    device,
+    torch_tensor_map,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+    config_override,
+    use_shallow_conv_variant,
+    groups,
+    output_layout,
+    memory_config,
+    shard_layout,
+    activation,
+):
+    run_conv(
+    device=device,
+    torch_tensor_map=torch_tensor_map,
+    math_fidelity=math_fidelity,
+    output_dtype=ttnn.bfloat8_b,
+    weights_dtype=weights_dtype,
+    batch_size=batch_size,
+    output_channels=output_channels,
+    input_channels=input_channels,
+    input_height=input_height,
+    input_width=input_width,
+    filter_height=filter_height,
+    filter_width=filter_width,
+    stride_h=stride_h,
+    stride_w=stride_w,
+    padding=(pad_h, pad_w),
+    config_override=config_override,
+    groups=groups,
+    output_layout=output_layout,
+    memory_config=memory_config,
+    fp32_accum=False,
+    packer_l1_acc=False,
+    input_layout=ttnn.TILE_LAYOUT,
+    deallocate_activation=False,
+    shard_layout = shard_layout,
+    activation = activation,
+    math_approx_mode = False,
+)

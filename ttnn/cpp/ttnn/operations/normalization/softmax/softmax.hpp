@@ -16,22 +16,22 @@ struct ExecuteSoftmax {
     // softmax
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const int dim_arg,
+        int dim_arg,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const bool numeric_stable = false);
+        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        bool numeric_stable = false);
 };
 
 struct ExecuteScaleMaskSoftmax {
     // scale_mask_softmax
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const std::optional<float> scale = std::nullopt,
+        std::optional<float> scale = std::nullopt,
         const std::optional<const Tensor>& mask = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const bool is_causal_mask = false,
-        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const bool numeric_stable = false);
+        bool is_causal_mask = false,
+        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        bool numeric_stable = false);
 };
 
 struct ExecuteSoftmaxInPlace {
@@ -39,31 +39,31 @@ struct ExecuteSoftmaxInPlace {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const SoftmaxProgramConfig& program_config = SoftmaxDefaultProgramConfig{},
-        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const bool numeric_stable = false);
+        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        bool numeric_stable = false);
 };
 
 struct ExecuteScaleMaskSoftmaxInPlace {
     // scale_mask_softmax_in_place
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const std::optional<float> scale = std::nullopt,
+        std::optional<float> scale = std::nullopt,
         const std::optional<const Tensor>& mask = std::nullopt,
         const SoftmaxProgramConfig& program_config = SoftmaxDefaultProgramConfig{},
-        const bool is_causal_mask = false,
-        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const bool numeric_stable = false);
+        bool is_causal_mask = false,
+        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        bool numeric_stable = false);
 };
 
 struct ExecuteScaleCausalMaskHWSoftmaxInPlace {
     // scale_causal_mask_hw_dims_softmax_in_place
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const std::optional<float> scale = std::nullopt,
+        std::optional<float> scale = std::nullopt,
         const std::optional<const Tensor>& mask = std::nullopt,
         const SoftmaxProgramConfig& program_config = SoftmaxDefaultProgramConfig{},
-        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const bool numeric_stable = false);
+        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        bool numeric_stable = false);
 };
 
 }  // namespace operations::normalization

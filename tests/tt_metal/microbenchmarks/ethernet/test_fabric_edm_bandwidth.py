@@ -23,7 +23,7 @@ from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SI
 
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 
-machine_type_suffix = None
+machine_type_suffix = "6u" if is_6u() else None
 
 # Global daemon management variables
 daemon_process = None
@@ -156,16 +156,6 @@ def get_direct_mode():
 def set_direct_mode(enabled):
     global _direct_mode_enabled
     _direct_mode_enabled = enabled
-
-
-def update_machine_type_suffix(machine_type: str):
-    global machine_type_suffix
-    machine_type_suffix = machine_type
-
-
-def reset_machine_type_suffix():
-    global machine_type_suffix
-    machine_type_suffix = None
 
 
 # Python enum mirroring test_fabric_edm_common.hpp
@@ -310,11 +300,16 @@ def profile_results(
         },
     }
     devices_data = import_log_run_stats(setup)
-    devices = list(devices_data["devices"].keys())
+    devices_with_analysis = []
+    for device, data in devices_data["devices"].items():
+        cores = data.get("cores", {}).get("DEVICE", {})
+        # check that 'analysis' exists and that it contains our zone_name
+        if "analysis" in cores and zone_name in cores["analysis"]:
+            devices_with_analysis.append(device)
 
     # MAIN-TEST-BODY
     main_loop_cycles = []
-    for device in devices:
+    for device in devices_with_analysis:
         main_loop_cycle = devices_data["devices"][device]["cores"]["DEVICE"]["analysis"][zone_name]["stats"]["Max"]
         main_loop_cycles.append(main_loop_cycle)
 
@@ -600,7 +595,6 @@ def run_fabric_edm(
     disable_persistent_kernel_cache()
     if rc != 0:
         # Handle exit codes differently for daemon vs direct execution
-        reset_machine_type_suffix()
         if rc == 1:
             pytest.skip("Skipping test because it only works with T3000")
             return
@@ -625,9 +619,6 @@ def run_fabric_edm(
         unidirectional=unidirectional,
         senders_are_unidirectional=senders_are_unidirectional,
     )
-
-    # Reset for the next test case
-    reset_machine_type_suffix()
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -1123,7 +1114,6 @@ def test_fabric_6u_4chip_cols_mcast_bw(
     if not is_6u():
         pytest.skip("Skip test for T3K since the mesh shape is not supported")
     is_ring = fabric_test_mode == FabricTestMode.FullRing or fabric_test_mode == FabricTestMode.HalfRing
-    update_machine_type_suffix("6u")
     run_fabric_edm(
         is_unicast=is_unicast,
         num_messages=num_messages,
@@ -1169,7 +1159,6 @@ def test_fabric_6u_4chip_rows_mcast_bw(
     if not is_6u():
         pytest.skip("Skip test for T3K since the mesh shape is not supported")
     is_ring = fabric_test_mode == FabricTestMode.FullRing or fabric_test_mode == FabricTestMode.HalfRing
-    update_machine_type_suffix("6u")
     run_fabric_edm(
         is_unicast=is_unicast,
         num_messages=num_messages,
@@ -1216,7 +1205,6 @@ def test_fabric_6u_all_rows_and_cols_mcast_bw(
     if not is_6u():
         pytest.skip("Skip test for T3K since the mesh shape is not supported")
     is_ring = fabric_test_mode == FabricTestMode.FullRing
-    update_machine_type_suffix("6u")
     run_fabric_edm(
         is_unicast=is_unicast,
         num_messages=num_messages,

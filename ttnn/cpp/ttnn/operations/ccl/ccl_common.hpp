@@ -16,7 +16,7 @@
 #include <tt-metalium/program.hpp>
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/erisc_datamover_builder.hpp>
-#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 namespace ttnn {
 namespace ccl {
@@ -64,9 +64,9 @@ class EriscDatamoverBuilder;
 
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
-    const uint32_t num_devices,
+    uint32_t num_devices,
     const ttnn::SmallVector<uint32_t>& unpad_elements,
-    const int dim);
+    int dim);
 
 class LineTopology {
    public:
@@ -562,22 +562,21 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
     }
 };
 
-
 tt::tt_metal::KernelHandle generate_edm_kernel(
-   tt::tt_metal::Program& program,
-    tt::tt_metal::IDevice const* device,
-    tt::tt_fabric::FabricEriscDatamoverBuilder const& edm_builder,
-    CoreCoord const& eth_core,
-    tt::tt_metal::DataMovementProcessor const risc_id,
+    tt::tt_metal::Program& program,
+    const tt::tt_metal::IDevice* device,
+    const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
+    const CoreCoord& eth_core,
+    tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id);
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
-   tt::tt_metal::Program& program,
-    IDevice const* device,
-    EriscDatamoverBuilder const& edm_builder,
-    CoreCoord const& eth_core,
-    tt::tt_metal::DataMovementProcessor const risc_id,
-    tt::tt_metal:: NOC noc_id);
+    tt::tt_metal::Program& program,
+    const IDevice* device,
+    const EriscDatamoverBuilder& edm_builder,
+    const CoreCoord& eth_core,
+    tt::tt_metal::DataMovementProcessor risc_id,
+    tt::tt_metal::NOC noc_id);
 
 void generate_edm_kernels_for_ring_or_linear_topology(
    tt::tt_metal::Program& program,
