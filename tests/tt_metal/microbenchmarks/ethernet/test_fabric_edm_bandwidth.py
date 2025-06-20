@@ -300,11 +300,16 @@ def profile_results(
         },
     }
     devices_data = import_log_run_stats(setup)
-    devices = list(devices_data["devices"].keys())
+    devices_with_analysis = []
+    for device, data in devices_data["devices"].items():
+        cores = data.get("cores", {}).get("DEVICE", {})
+        # check that 'analysis' exists and that it contains our zone_name
+        if "analysis" in cores and zone_name in cores["analysis"]:
+            devices_with_analysis.append(device)
 
     # MAIN-TEST-BODY
     main_loop_cycles = []
-    for device in devices:
+    for device in devices_with_analysis:
         main_loop_cycle = devices_data["devices"][device]["cores"]["DEVICE"]["analysis"][zone_name]["stats"]["Max"]
         main_loop_cycles.append(main_loop_cycle)
 
