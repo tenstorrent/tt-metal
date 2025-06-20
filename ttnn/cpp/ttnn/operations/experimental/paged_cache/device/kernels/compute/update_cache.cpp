@@ -7,6 +7,7 @@
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tilize.h"
+#include "compute_kernel_api/untilize.h"
 
 namespace NAMESPACE {
 
@@ -63,7 +64,11 @@ void MAIN {
 
         cb_push_back(untilized_cache_cb, Wt);
 
-        pack_untilize_uninit(untilized_cache_cb);
+        if constexpr (use_pack_untilize) {
+            pack_untilize_uninit(untilized_cache_cb);
+        } else {
+            untilize_uninit(untilized_cache_cb);
+        }
 
         reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
         pack_reconfig_data_format(untilized_cache_cb, out_cb);

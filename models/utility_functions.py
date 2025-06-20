@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import struct
 import time
 from typing import Union
@@ -15,6 +16,18 @@ from ttnn.device import Arch
 from typing_extensions import deprecated
 
 import ttnn
+
+
+def get_mesh_device():
+    """Fixture to provide mesh device configuration."""
+    mesh_device = os.environ.get("MESH_DEVICE", "N150")
+    mesh_config = {
+        "N150": (1, 1),
+        "N300": (1, 2),
+        "T3K": (1, 8),
+        "TG": (8, 4),
+    }.get(mesh_device, (1, ttnn.get_num_devices()))
+    return mesh_config
 
 
 ### Math operations ###
