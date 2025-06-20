@@ -437,6 +437,9 @@ void PrintTensixRegisterData(ostringstream* stream, int setwidth, uint32_t datum
             *stream << setw(setwidth) << (datum & 0xffff) << " ";
             *stream << setw(setwidth) << (datum >> 16) << " ";
             break;
+        case static_cast<std::uint8_t>(tt::DataFormat::Int32):
+            *stream << setw(setwidth) << static_cast<int32_t>(datum) << " ";
+            break;
         default: *stream << "Unknown data format " << data_format << " "; break;
     }
 }
