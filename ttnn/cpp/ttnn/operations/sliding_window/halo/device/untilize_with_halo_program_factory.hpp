@@ -11,9 +11,9 @@ namespace ttnn::operations::data_movement::detail {
 tt::tt_metal::operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    const uint32_t pad_val,
-    const uint32_t ncores_nhw,
-    const uint32_t max_out_nsticks_per_core,
+    uint32_t pad_val,
+    uint32_t ncores_nhw,
+    uint32_t max_out_nsticks_per_core,
     const Tensor& padding_config0,
     const Tensor& padding_config1,
     const Tensor& gather_config0,
