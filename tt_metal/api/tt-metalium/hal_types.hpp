@@ -45,6 +45,7 @@ enum class HalL1MemAddrType : uint8_t {
     ETH_FW_MAILBOX,
     INTERMESH_ETH_LINK_CONFIG,
     INTERMESH_ETH_LINK_STATUS,
+    TENSIX_ROUTING_TABLE,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 
