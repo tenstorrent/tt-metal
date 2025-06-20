@@ -758,32 +758,53 @@ def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", 
         logger.info(f"dm_stats plot for test id {test_id} saved at {output_file}")
 
 
-def export_dm_stats_to_csv(dm_stats, output_file="dm_stats.csv"):
-    with open(output_file, mode="w", newline="") as csvfile:
-        writer = csv.writer(csvfile)
+def export_dm_stats_to_csv(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement"):
+    os.makedirs(output_dir, exist_ok=True)
+    # Group by test id
+    test_ids = set()
+    for riscv in dm_stats.keys():
+        for attributes in dm_stats[riscv]["attributes"].values():
+            test_ids.add(attributes["Test id"])
+    test_ids = sorted(test_ids)
 
-        # Write the header
-        writer.writerow(["Kernel", "Run Host ID", "Test ID", "Latency (cycles)", "Bandwidth (bytes/cycle)"])
-
-        # Iterate over the dm_stats object
-        for kernel, kernel_data in dm_stats.items():
-            for run_host_id, attributes in kernel_data["attributes"].items():
-                test_id = attributes.get("Test id", "N/A")
-                duration_cycles = next(
-                    (
-                        entry["duration_cycles"]
-                        for entry in kernel_data["analysis"]["series"]
-                        if entry["duration_type"][0]["run_host_id"] == run_host_id
-                    ),
-                    None,
-                )
-                if duration_cycles:
+    for test_id in test_ids:
+        test_name = test_id_to_name.get(test_id, f"Test ID {test_id}")
+        csv_file = os.path.join(output_dir, f"{test_name}.csv")
+        with open(csv_file, mode="w", newline="") as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(
+                [
+                    "Kernel",
+                    "Run Host ID",
+                    "Log2 of Transaction Size (bytes)",
+                    "Number of Transactions",
+                    "Latency (cycles)",
+                    "Bandwidth (bytes/cycle)",
+                ]
+            )
+            for kernel in ["riscv_1", "riscv_0"]:
+                kernel_series = dm_stats[kernel]["analysis"]["series"]
+                for entry in kernel_series:
+                    run_host_id = entry["duration_type"][0]["run_host_id"]
+                    attributes = dm_stats[kernel]["attributes"].get(run_host_id, {})
+                    if attributes.get("Test id") != test_id:
+                        continue
                     transaction_size = attributes.get("Transaction size in bytes", 0)
                     num_transactions = attributes.get("Number of transactions", 0)
+                    duration_cycles = entry["duration_cycles"]
                     bandwidth = (num_transactions * transaction_size) / duration_cycles if duration_cycles else 0
-                    writer.writerow([kernel, run_host_id, test_id, duration_cycles, bandwidth])
-
-    logger.info(f"dm_stats exported to {output_file}")
+                    log2_transaction_size = int(np.log2(transaction_size)) if transaction_size > 0 else 0
+                    writer.writerow(
+                        [
+                            "Receiver" if kernel == "riscv_1" else "Sender",
+                            run_host_id,
+                            log2_transaction_size,
+                            num_transactions,
+                            duration_cycles,
+                            bandwidth,
+                        ]
+                    )
+        logger.info(f"CSV report for test id {test_id} saved at {csv_file}")
 
 
 def test_data_movement(
