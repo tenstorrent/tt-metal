@@ -555,7 +555,7 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
 
     Tensor output;
     if (distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device)) {
-        output = allocate_tensor_on_mesh(tensor_spec, mesh_device);
+        output = allocate_tensor_on_device(tensor_spec, mesh_device);
     } else {
         auto device_buffer = tensor_impl::allocate_buffer_on_device(device, tensor_spec);
         output = Tensor(DeviceStorage{device_buffer}, tensor_spec, ReplicateTensor{});
@@ -717,16 +717,27 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
     }
 }
 
-Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {
-    // Allocate a mesh buffer synchronously.
-    auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
+Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
+    auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(device, tensor_spec);
     std::vector<distributed::MeshCoordinate> coords;
-    coords.reserve(mesh_device->shape().mesh_size());
-    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+    coords.reserve(device->shape().mesh_size());
+    for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
         coords.push_back(coord);
     }
     DeviceStorage device_storage(std::move(mesh_buffer), std::move(coords));
     return Tensor(std::move(device_storage), tensor_spec, ReplicateTensor{});
+}
+
+Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
+    auto distributed_host_buffer = DistributedHostBuffer::create(device->shape());
+    for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
+        distributed_host_buffer.emplace_shard(coord, []() { return HostBuffer(); });
+    }
+
+    distributed_host_buffer = distributed_host_buffer.transform(
+        [&](const HostBuffer&) { return tensor_impl::allocate_host_buffer(tensor_spec); },
+        DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+    return Tensor(MultiDeviceHostStorage(std::move(distributed_host_buffer)), tensor_spec, ReplicateTensor{});
 }
 
 void write_tensor(const Tensor& src, Tensor& dst, QueueId cq_id) {
@@ -739,7 +750,7 @@ void write_tensor(const Tensor& src, Tensor& dst, QueueId cq_id) {
         dst.storage_type());
 
     if (is_device_tensor(src)) {
-        tensor_impl::copy_to_device_tensor_wrapper(src, dst, cq_id);
+        tensor_impl::copy_to_host_tensor_wrapper(src, dst, cq_id);
         return;
     }
 

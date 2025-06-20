@@ -266,7 +266,7 @@ struct Empty {
         const Layout& layout,
         MeshDevice* device,
         const MemoryConfig& memory_config) {
-        return allocate_tensor_on_mesh(
+        return allocate_tensor_on_device(
             TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
     }
 };
@@ -281,7 +281,7 @@ struct EmptyLike {
         Layout layout_value = layout.value_or(tensor.layout());
         DataType dtype_value = dtype.value_or(tensor.dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
-        return allocate_tensor_on_mesh(
+        return allocate_tensor_on_device(
             TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
             device.has_value() ? &device->get() : tensor.mesh_device());
     }
