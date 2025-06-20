@@ -74,7 +74,7 @@ inline void reblock_and_untilize(
         cb_push_back(reblock_cb_id, out_block_w);
 
         // Untilize
-        untilize_init_short(reblock_cb_id);
+        untilize_init(reblock_cb_id);
         cb_wait_front(reblock_cb_id, out_block_w);
         cb_reserve_back(out_cb_id, out_block_w);
         untilize_block(reblock_cb_id, out_block_w, out_cb_id);
