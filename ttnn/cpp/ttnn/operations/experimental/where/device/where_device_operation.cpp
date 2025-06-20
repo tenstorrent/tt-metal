@@ -19,7 +19,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::ternary::experimental {
+namespace ttnn::operations::experimental::ternary {
 
 static_assert(
     ttnn::device_operation::DeviceOperationConcept<WhereDeviceOperation>,
@@ -101,15 +101,15 @@ WhereDeviceOperation::tensor_return_value_t WhereDeviceOperation::create_output_
 
 tt::stl::hash::hash_t WhereDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
-    TT_ASSERT(
+    TT_FATAL(
         std::holds_alternative<DeviceStorage>(args.condition_tensor.storage()),
         "Unexpected type {} for condition_tensor storage",
         tt::stl::get_active_type_name_in_variant(args.condition_tensor.storage()));
-    TT_ASSERT(
+    TT_FATAL(
         std::holds_alternative<DeviceStorage>(args.true_value_tensor.storage()),
         "Unexpected type {} for true_value_tensor storage",
         tt::stl::get_active_type_name_in_variant(args.true_value_tensor.storage()));
-    TT_ASSERT(
+    TT_FATAL(
         std::holds_alternative<DeviceStorage>(args.false_value_tensor.storage()),
         "Unexpected type {} for false_value_tensor storage",
         tt::stl::get_active_type_name_in_variant(args.false_value_tensor.storage()));
@@ -163,4 +163,4 @@ WhereDeviceOperation::invoke(
             .output_tensor = output_tensor}};
 }
 
-}  // namespace ttnn::operations::ternary::experimental
+}  // namespace ttnn::operations::experimental::ternary

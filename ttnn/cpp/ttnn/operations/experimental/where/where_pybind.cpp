@@ -7,11 +7,11 @@
 #include "ttnn/operations/experimental/where/where_pybind.hpp"
 #include "ttnn/operations/experimental/where/where.hpp"
 
-namespace ttnn::operations::ternary::experimental::detail {
+namespace ttnn::operations::experimental::ternary::detail {
 
 void bind_where(pybind11::module& pymodule) {
-    auto operation = ttnn::operations::ternary::experimental::where;
-    using OperationType = decltype(ttnn::operations::ternary::experimental::where);
+    auto operation = ttnn::operations::experimental::ternary::where;
+    using OperationType = decltype(ttnn::operations::experimental::ternary::where);
 
     auto doc = fmt::format(
         R"doc(
@@ -161,4 +161,4 @@ void bind_where(pybind11::module& pymodule) {
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace ttnn::operations::ternary::experimental::detail
+}  // namespace ttnn::operations::experimental::ternary::detail

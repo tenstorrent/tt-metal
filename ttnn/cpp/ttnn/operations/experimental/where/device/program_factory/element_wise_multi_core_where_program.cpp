@@ -16,7 +16,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 
-namespace ttnn::operations::ternary::experimental {
+namespace ttnn::operations::experimental::ternary {
 
 ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProgram::create(
     const where_ttt_args::operation_attributes_type& operation_attributes,
@@ -155,4 +155,4 @@ void ElementWiseMultiCoreWhereProgram::override_runtime_arguments(
         sh_var.eltwise_kernel_id,
         sh_var.all_device_cores);
 }
-}  // namespace ttnn::operations::ternary::experimental
+}  // namespace ttnn::operations::experimental::ternary

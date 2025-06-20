@@ -123,7 +123,7 @@ void py_module(py::module& module) {
 
     broadcast_to::detail::py_bind_broadcast_to(module);
 
-    operations::ternary::experimental::detail::bind_where(module);
+    operations::experimental::ternary::detail::bind_where(module);
 }
 
 }  // namespace ttnn::operations::experimental

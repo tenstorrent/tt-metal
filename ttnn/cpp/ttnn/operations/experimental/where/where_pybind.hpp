@@ -6,8 +6,8 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace ttnn::operations::ternary::experimental::detail {
+namespace ttnn::operations::experimental::ternary::detail {
 
 void bind_where(pybind11::module& pymodule);
 
-}  // namespace ttnn::operations::ternary::experimental::detail
+}  // namespace ttnn::operations::experimental::ternary::detail

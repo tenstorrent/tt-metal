@@ -13,7 +13,7 @@
 #include <type_traits>
 #include <variant>
 
-namespace ttnn::operations::ternary::experimental {
+namespace ttnn::operations::experimental::ternary {
 
 template <typename T>
 concept FloatOrTensorConcept = std::is_same_v<T, Tensor> || std::floating_point<T>;
@@ -48,4 +48,4 @@ struct WhereDeviceOperation {
         std::optional<Tensor> output_tensor);
 };
 
-}  // namespace ttnn::operations::ternary::experimental
+}  // namespace ttnn::operations::experimental::ternary

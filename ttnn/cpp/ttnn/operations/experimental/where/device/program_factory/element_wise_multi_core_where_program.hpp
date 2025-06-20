@@ -6,7 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/where/device/where_device_operation_types.hpp"
 
-namespace ttnn::operations::ternary::experimental {
+namespace ttnn::operations::experimental::ternary {
 
 struct ElementWiseMultiCoreWhereProgram {
     struct shared_variables_t {
@@ -36,4 +36,4 @@ struct ElementWiseMultiCoreWhereProgram {
         const where_ttt_args::tensor_args_type& tensor_args,
         where_ttt_args::tensor_return_value_type& tensor_return_value);
 };
-}  // namespace ttnn::operations::ternary::experimental
+}  // namespace ttnn::operations::experimental::ternary

@@ -17,7 +17,7 @@
 
 #include <optional>
 
-namespace ttnn::operations::ternary::experimental {
+namespace ttnn::operations::experimental::ternary {
 
 template <bool initialize_args>
 inline void set_eltwise_ternary_runtime_args(
@@ -140,4 +140,4 @@ inline void set_eltwise_ternary_runtime_args(
     }
 }
 
-}  // namespace ttnn::operations::ternary::experimental
+}  // namespace ttnn::operations::experimental::ternary

@@ -13,7 +13,7 @@
 
 namespace ttnn {
 
-namespace operations::ternary::experimental {
+namespace operations::experimental::ternary {
 
 struct WhereOperation {
     template <FloatOrTensorConcept T, FloatOrTensorConcept U>
@@ -57,6 +57,6 @@ struct WhereOperation {
 };
 
 constexpr auto where = ttnn::register_operation<"ttnn::experimental::where", WhereOperation>();
-}  // namespace operations::ternary::experimental
+}  // namespace operations::experimental::ternary
 
 }  // namespace ttnn

@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::ternary::experimental::where_ttt_args {
+namespace ttnn::operations::experimental::ternary::where_ttt_args {
 
 using tensor_return_value_type = Tensor;
 
@@ -29,4 +29,4 @@ struct tensor_args_type {
     Tensor false_value_tensor;
     std::optional<Tensor> output_tensor;
 };
-}  // namespace ttnn::operations::ternary::experimental::where_ttt_args
+}  // namespace ttnn::operations::experimental::ternary::where_ttt_args
