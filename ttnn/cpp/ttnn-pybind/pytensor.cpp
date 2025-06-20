@@ -30,7 +30,6 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/host_buffer.hpp>
@@ -1121,9 +1120,8 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "to",
-            py::overload_cast<Layout, IDevice*>(&Tensor::to_layout, py::const_),
+            py::overload_cast<Layout>(&Tensor::to_layout, py::const_),
             py::arg("target_layout").noconvert(),
-            py::arg("worker") = nullptr,
             R"doc(
             Convert TT Tensor to provided memory layout. Available layouts conversions are:
 
@@ -1135,37 +1133,10 @@ void pytensor_module(py::module& m_tensor) {
             +===========+=================================================+============================+================================+==========+
             | arg0      | Target memory layout                            | ttnn.Layout                | ROW_MAJOR, TILE                | Yes      |
             +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
-            | arg1      | Worker thread performing layout conversion      | ttnn.Device                | Thread tied to TT accelerator  | No       |
-            |           | (optional)                                      |                            | device                         |          |
-            +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
 
             .. code-block:: python
 
-                tt_tensor = tt_tensor.to(ttnn.Layout.TILE, worker)
-        )doc")
-        .def(
-            "to",
-            py::overload_cast<Layout, MeshDevice*>(&Tensor::to_layout, py::const_),
-            py::arg("target_layout").noconvert(),
-            py::arg("mesh_device") = nullptr,
-            R"doc(
-            Convert TT Tensor to provided memory layout. Available layouts conversions are:
-
-            * ROW_MAJOR to TILE
-            * TILE to ROW_MAJOR
-
-            +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
-            | Argument  | Description                                     | Data type                  | Valid range                    | Required |
-            +===========+=================================================+============================+================================+==========+
-            | arg0      | Target memory layout                            | ttnn.Layout                | ROW_MAJOR, TILE                | Yes      |
-            +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
-            | arg1      | Worker thread performing layout conversion      | ttnn.Device                | Thread tied to TT accelerator  | No       |
-            |           | (optional)                                      |                            | device                         |          |
-            +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
-
-            .. code-block:: python
-
-                tt_tensor = tt_tensor.to(ttnn.Layout.TILE, mesh_device)
+                tt_tensor = tt_tensor.to(ttnn.Layout.TILE)
         )doc")
         .def(
             "pad",

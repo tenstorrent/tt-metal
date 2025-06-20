@@ -579,8 +579,7 @@ Result conv2d_L1(
                 // Reshape is used as a workaround to an issue in to_layout mentioned here :
                 // https://github.com/tenstorrent/tt-metal/issues/16330
                 input_tensor_post_tm = ttnn::reshape(input_tensor_post_tm, input_tensor_post_tm.padded_shape());
-                input_tensor_post_tm =
-                    ttnn::to_layout(input_tensor_post_tm, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
+                input_tensor_post_tm = ttnn::to_layout(input_tensor_post_tm, Layout::ROW_MAJOR);
             }
         } else {
             Tensor halo_output = ttnn::halo(
@@ -640,8 +639,7 @@ Result conv2d_L1(
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
         if (input_tensor_post_tm.layout() != Layout::TILE) {
-            input_tensor_post_tm =
-                ttnn::to_layout(input_tensor_post_tm, Layout::TILE, std::nullopt, std::nullopt, device);
+            input_tensor_post_tm = ttnn::to_layout(input_tensor_post_tm, Layout::TILE);
         }
 
         // run conv as matmul

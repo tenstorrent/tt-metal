@@ -631,7 +631,7 @@ def tt_adaptive_to_max_pool2d(input_shape, output_size):
 def ttnn_custom_normalize(x, dim, device):
     # Convert input to tiled layout
     if x.layout != ttnn.TILE_LAYOUT:
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # Square the tensor using multiply
     x_squared = ttnn.multiply(x, x)

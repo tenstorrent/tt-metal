@@ -205,7 +205,7 @@ tt::tt_metal::Tensor from_vector<float, ttnn::DataType::BFLOAT16>(
     // Temporary workaround for the issue with tilize for large size
     // https://github.com/tenstorrent/tt-metal/issues/15950
     if (shape[-1] >= MAX_TILE_DIMENSION && layout == ttnn::Layout::TILE) {
-        output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, output_mem_config, device);
+        output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, output_mem_config);
         output = ttnn::to_device(output, device, output_mem_config);
     } else {
         output = ttnn::to_device(output, device, output_mem_config);
@@ -251,7 +251,7 @@ tt::tt_metal::Tensor from_vector<uint32_t, ttnn::DataType::UINT32>(
         ttml_create_owned_tensor(std::move(buffer_copy), shape, ttnn::DataType::UINT32, ttnn::Layout::ROW_MAJOR);
     if (device != nullptr) {
         if (layout != ttnn::Layout::ROW_MAJOR) {
-            output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config, device);
+            output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config);
         }
         output = ttnn::to_device(output, device, output_mem_config);
     }
@@ -281,7 +281,7 @@ tt::tt_metal::Tensor from_vector<int32_t, ttnn::DataType::INT32>(
         ttml_create_owned_tensor(std::move(buffer_copy), shape, ttnn::DataType::INT32, ttnn::Layout::ROW_MAJOR);
     if (device != nullptr) {
         if (layout != ttnn::Layout::ROW_MAJOR) {
-            output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config, device);
+            output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config);
         }
         output = ttnn::to_device(output, device, output_mem_config);
     }
@@ -318,7 +318,7 @@ tt::tt_metal::Tensor from_xtensor(
 
     if constexpr (std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t>) {
         if (layout != ttnn::Layout::ROW_MAJOR) {
-            output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config, device);
+            output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config);
         }
         output = ttnn::to_device(output, device, output_mem_config);
     } else {

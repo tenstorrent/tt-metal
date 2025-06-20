@@ -451,11 +451,7 @@ std::string to_string(
                     if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
                         return to_string<float>(ttnn::to_dtype(tensor, DataType::FLOAT32), dtype, layout);
                     }
-                    return to_string<T>(
-                        ttnn::to_layout(
-                            tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, static_cast<IDevice*>(nullptr)),
-                        dtype,
-                        layout);
+                    return to_string<T>(ttnn::to_layout(tensor, Layout::ROW_MAJOR), dtype, layout);
                 }
 
                 const auto strides = tensor.tensor_spec().compute_strides();

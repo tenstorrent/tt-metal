@@ -48,8 +48,7 @@ Tensor pre_tosa_scatter_transform_tensor(
     // processed_tensor = expand_tensor(processed_tensor, N, K, W, C, input_tensor_type);
     processed_tensor = ttnn::transpose(processed_tensor, W_DIMENSION, LAST_DIMENSION);
     if (processed_tensor.layout() != Layout::ROW_MAJOR) {
-        processed_tensor =
-            ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, processed_tensor.device());
+        processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
     }
 
     return ttnn::unsqueeze_to_4D(processed_tensor);
@@ -65,8 +64,7 @@ Tensor post_tosa_scatter_transform_tensor(
     Tensor processed_tensor = ttnn::transpose(output_tensor, W_DIMENSION, LAST_DIMENSION);
     processed_tensor = ttnn::squeeze_from_4D(processed_tensor, INPUT_RANK_CONSTRAINT);
     if (original_layout != Layout::ROW_MAJOR) {
-        processed_tensor =
-            ttnn::to_layout(processed_tensor, original_layout, std::nullopt, std::nullopt, processed_tensor.device());
+        processed_tensor = ttnn::to_layout(processed_tensor, original_layout);
     }
 
     return processed_tensor;

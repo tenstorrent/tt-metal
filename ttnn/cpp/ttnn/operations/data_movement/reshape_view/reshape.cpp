@@ -46,10 +46,10 @@ ttnn::Tensor convert_tile_to_rm(
           (tensor.dtype() == DataType::BFLOAT8_B)),
         "illegal dimensions for a bfloat8 tensor");
     auto new_tensor = (tensor.dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(tensor, DataType::BFLOAT16) : tensor;
-    new_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (IDevice*)nullptr);
+    new_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT);
     new_tensor =
         ReshapeViewOperation::invoke(queue_id, new_tensor, logical_shape, padded_shape, memory_config, pad_value);
-    new_tensor = ttnn::to_layout(new_tensor, ttnn::TILE_LAYOUT, new_tensor.dtype(), memory_config, (IDevice*)nullptr);
+    new_tensor = ttnn::to_layout(new_tensor, ttnn::TILE_LAYOUT, new_tensor.dtype(), memory_config);
     new_tensor = (tensor.dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(new_tensor, tensor.dtype()) : new_tensor;
     return new_tensor;
 }

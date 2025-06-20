@@ -702,8 +702,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
             if (is_mm_conv && input_tensor.layout() == Layout::ROW_MAJOR &&
                 parallel_config.shard_scheme != TensorMemoryLayout::HEIGHT_SHARDED) {
                 // Workaround #13979 ttnn::tilize doesn't support BLOCK_SHARDED layout
-                input_tensor =
-                    ttnn::to_layout(input_tensor, Layout::TILE, std::nullopt, std::nullopt, input_tensor.device());
+                input_tensor = ttnn::to_layout(input_tensor, Layout::TILE);
             }
             if (!auto_shard_mm) {
                 ttnn::MemoryConfig input_tensor_sharded_memory_config_to_layout = input_tensor_sharded_memory_config;
