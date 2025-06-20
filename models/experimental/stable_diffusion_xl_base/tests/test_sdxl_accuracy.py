@@ -112,7 +112,7 @@ def test_accuracy_sdxl(
         },
     }
 
-    out_root, file_name = "test_reports", "benchmark_sdxl_results.json"
+    out_root, file_name = "test_reports", "benchmark_sdxl_report.json"
     os.makedirs(out_root, exist_ok=True)
 
     with open(f"{out_root}/{file_name}", "w") as f:
