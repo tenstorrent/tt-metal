@@ -8,27 +8,18 @@ The demo supports a variety of configurations, including different model sizes, 
 
 ## Supported Platforms
 
-- n150
-- n300
 - TG
-- T3K
 
 ## Model Architectures
 
-- Llama 3.2-1B
-- Llama 3.2-3B
-- Llama 3.1-8B
-- Llama 3.2-11B
 - Llama 3.1-70B
 - Llama 3.3-70B
-
-**Note**: the 70B models are only supported on TG
 
 ## Key Features
 
 - **Paged Attention**: Efficient memory management for long-context inference.
 - **Batch Inference**: Supports up to 32 users per batch.
-- **Flexible Sequence Lengths**: Up to 128k tokens (hardware dependent).
+- **Flexible Sequence Lengths**: Up to 128k tokens.
 - **Performance Benchmarking**: Built-in profiler and throughput analysis.
 - **Stress Testing**: Long-context and high-throughput stress test modes.
 - **Sampling Controls**: Supports temperature, top-p, and top-k sampling.
@@ -41,13 +32,13 @@ The Llama 3 demo supports two methods for loading model weights: Meta-style loca
 
 To use a local Meta-style checkpoint, set the following environment variable:
 ```
-export LLAMA_DIR=/path/to/llama3.2-3b-instruct
+export LLAMA_DIR=/path/to/llama3.1-70B-instruct
 ```
 
 ### Hugging Face Models (HF_MODEL)
 To load weights and tokenizer files from Hugging Face, set:
 ```
-export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
+export HF_MODEL=meta-llama/Llama-3.1-70B-Instruct
 ```
 
 **Note**: Only one of LLAMA_DIR or HF_MODEL should be set.
@@ -63,19 +54,19 @@ pytest models/demos/llama3_subdevices/demo/demo.py::test_llama_demo
 **Example: Full Demo (Batch 32, 80 Layers)**
 
 ```
-pytest models/demos/llama3_subdevices/demo/demo.py::test_llama_demo --batch_size=32 --layers=80 --input_prompts=models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json
+pytest models/demos/llama3_subdevices/demo/demo_decode.py::test_llama_demo --batch_size=32 --layers=80 --input_prompts=models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json
 ```
 
 **Example: Quick 1-Layer Demo**
 
 ```
-pytest models/demos/llama3_subdevices/demo/demo.py::test_llama_demo --batch_size=32 --layers=1 --input_prompts=models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json
+pytest models/demos/llama3_subdevices/demo/demo_decode.py::test_llama_demo --batch_size=32 --layers=1 --input_prompts=models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json
 ```
 
 **Example: Stress Test**
 
 ```
-pytest models/demos/llama3_subdevices/demo/demo.py::test_llama_demo --batch_size=32 --layers=80 --max_generated_tokens=500000 --stress_test=True
+pytest models/demos/llama3_subdevices/demo/demo_decode.py::test_llama_demo --batch_size=32 --layers=80 --max_generated_tokens=500000 --stress_test=True
 ```
 
 ## Command-Line Parameters
@@ -93,7 +84,7 @@ pytest models/demos/llama3_subdevices/demo/demo.py::test_llama_demo --batch_size
 - **--stress_test (bool)**: Enable stress test mode
 - **--start_pos (int)**: Start position for decoding
 - **--optimizations (str)**: Optimization level (performance, accuracy)
-- **--FAKE_DEVICE (str)**: Emulate device for testing (N150, N300, T3K, TG)
+- **--FAKE_DEVICE (str)**: Emulate device for testing (TG)
 
 ## Input Prompts
 
@@ -111,11 +102,6 @@ Input prompts should be provided as a JSON file, with each entry containing a pr
   }
 ]
 ```
-
-## Output
-
-- Generated outputs are saved in models/demos/llama3/demo/output/ with a timestamped filename.
-- Performance metrics (tokens/sec/user, throughput, etc.) are logged and can be used for benchmarking.
 
 ## Performance Benchmarking
 
