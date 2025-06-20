@@ -30,7 +30,6 @@ void MAIN {
 
     for (uint32_t block_index = 0; block_index < args.per_core_block_cnt; block_index++) {
         cb_wait_front(cb_condition, args.per_core_block_size);
-        //
 
         tile_regs_acquire();
         copy_tile_to_dst_init_short(cb_condition);
@@ -54,7 +53,6 @@ void MAIN {
         tile_regs_release();
         cb_push_back(cb_true_values_out, args.per_core_block_size);
 
-        //
         cb_wait_front(cb_false_values, args.per_core_block_size);
         cb_wait_front(cb_true_values_out, args.per_core_block_size);
         tile_regs_acquire();
@@ -84,7 +82,6 @@ void MAIN {
         cb_pop_front(cb_condition, args.per_core_block_size);
         cb_pop_front(cb_true_values, args.per_core_block_size);
         cb_pop_front(cb_false_values, args.per_core_block_size);
-        //
 
         cb_push_back(cb_out, args.per_core_block_size);
     }
