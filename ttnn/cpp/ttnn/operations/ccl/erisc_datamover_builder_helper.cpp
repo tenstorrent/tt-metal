@@ -50,11 +50,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     bool build_in_worker_connection_mode,
     Topology topology,
     bool is_galaxy,
-    bool en_dateline_sender_extra_buffer,
-    bool en_dateline_receiver_extra_buffer,
-    bool en_dateline_upstream_sender_extra_buffer,
-    bool en_dateline_upstream_receiver_extra_buffer,
-    bool en_dateline_upstream_adjcent_sender_extra_buffer) :
+    const tt::tt_fabric::FabricRouterBufferConfig& edm_buffer_config) :
     device_sequence(device_sequence), programs(program_sequence) {
     if (topology == Topology::Ring) {
         TT_FATAL(device_sequence.size() > 2, "Ring topology only supports more than 2 devices");
@@ -155,24 +151,23 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
                 }
             }
+
+            auto edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
+            // change to long axis variantion, and using more buffer slots.
+            if (device_sequence.size() >=
+                tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
+                edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Long;
+            }
             // if ring topology set extra buffer on dateline edms.
             auto src_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
                 .edm_type = src_device_edm_type,
-                .enable_dateline_sender_extra_buffer_slots = en_dateline_sender_extra_buffer,
-                .enable_dateline_receiver_extra_buffer_slots = en_dateline_receiver_extra_buffer,
-                .enable_dateline_upstream_sender_extra_buffer_slots = en_dateline_upstream_sender_extra_buffer,
-                .enable_dateline_upstream_receiver_extra_buffer_slots = en_dateline_upstream_receiver_extra_buffer,
-                .enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
-                    en_dateline_upstream_adjcent_sender_extra_buffer,
+                .edm_axis = edm_axis,
+                .edm_buffer_config = edm_buffer_config,
             };
             auto dest_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
                 .edm_type = dest_device_edm_type,
-                .enable_dateline_sender_extra_buffer_slots = en_dateline_sender_extra_buffer,
-                .enable_dateline_receiver_extra_buffer_slots = en_dateline_receiver_extra_buffer,
-                .enable_dateline_upstream_sender_extra_buffer_slots = en_dateline_upstream_sender_extra_buffer,
-                .enable_dateline_upstream_receiver_extra_buffer_slots = en_dateline_upstream_receiver_extra_buffer,
-                .enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
-                    en_dateline_upstream_adjcent_sender_extra_buffer,
+                .edm_axis = edm_axis,
+                .edm_buffer_config = edm_buffer_config,
             };
             const auto src_curr_edm_config =
                 tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, src_edm_options);
@@ -267,7 +262,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
                     for (size_t l = 0; l < num_links; l++) {
                         auto& edm = direction_edm[l];
-                        auto edm_noc_vc = l & edm.config.MAX_EDM_NOC_VC;
+                        auto edm_noc_vc = edm.config.DEFAULT_NOC_VC + (l % edm.config.NUM_EDM_NOC_VCS);
                         edm.config.edm_noc_vc = edm_noc_vc;
                     }
                 }
@@ -301,8 +296,9 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     if (edm_fwd.my_noc_x < edm_bwd.my_noc_x) {
                         log_info(
                             tt::LogOp,
-                            "device {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
-                            edm_fwd.my_chip_id,
+                            "Fabric MeshId {} ChipId {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
+                            *(edm_fwd.local_fabric_node_id.mesh_id),
+                            edm_fwd.local_fabric_node_id.chip_id,
                             edm_fwd.my_noc_x,
                             edm_fwd.my_noc_y,
                             edm_bwd.my_noc_x,
@@ -323,8 +319,9 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     } else if (edm_fwd.my_noc_x > edm_bwd.my_noc_x) {
                         log_info(
                             tt::LogOp,
-                            "device {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
-                            edm_fwd.my_chip_id,
+                            "Fabric MeshId {} ChipId {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
+                            *(edm_fwd.local_fabric_node_id.mesh_id),
+                            edm_fwd.local_fabric_node_id.chip_id,
                             edm_fwd.my_noc_x,
                             edm_fwd.my_noc_y,
                             edm_bwd.my_noc_x,

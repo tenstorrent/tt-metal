@@ -109,7 +109,11 @@ public:
 
     std::set<chip_id_t> all_chip_ids() const { return this->driver_->get_target_device_ids(); };
 
+    std::set<chip_id_t> mmio_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
+
     size_t number_of_pci_devices() const { return this->driver_->get_target_mmio_device_ids().size(); }
+
+    std::set<chip_id_t> all_pci_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
 
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
@@ -306,6 +310,9 @@ public:
     void configure_ethernet_cores_for_fabric_routers(
         tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
 
+    void initialize_fabric_config(
+        tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode);
+
     // Returns whether we are running on Galaxy.
     bool is_galaxy_cluster() const;
 
@@ -361,7 +368,6 @@ private:
     // Disable ethernet cores that retrain
     // This should be removed when we handle retraining or dropped links in control plane properly
     void disable_ethernet_cores_with_retrain();
-
 
     // Set tunnels from mmio
     void set_tunnels_from_mmio_device();

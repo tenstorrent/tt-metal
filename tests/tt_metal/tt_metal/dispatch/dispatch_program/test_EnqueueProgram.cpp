@@ -224,9 +224,8 @@ bool cb_config_successful(IDevice* device, Program& program, const DummyProgramM
     return pass;
 }
 
-bool test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoord& eth_core_coord) {
+void test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoord& eth_core_coord) {
     Program program;
-    bool pass = true;
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core_coord);
 
     constexpr uint32_t num_runtime_args0 = 9;
@@ -257,9 +256,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoor
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED),
         dummy_kernel0_args.size() * sizeof(uint32_t));
 
-    pass &= (dummy_kernel0_args == dummy_kernel0_args_readback);
-
-    return pass;
+    ASSERT_EQ(dummy_kernel0_args, dummy_kernel0_args_readback);
 }
 
 bool test_dummy_EnqueueProgram_with_cbs(IDevice* device, CommandQueue& cq, DummyProgramMultiCBConfig& program_config) {
@@ -1185,7 +1182,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixSetCommonRuntimeArgsMultipleC
 TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthEnqueueDummyProgram) {
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
-            ASSERT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, eth_core));
+            local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, eth_core);
         }
     }
 }
@@ -1876,7 +1873,7 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
             if (i % 10 == 0) {
                 log_debug(
                     tt::LogTest,
-                    "Enqueueing {} programs on cq {} for iter: {}/{} now.",
+                    "Enqueuing {} programs on cq {} for iter: {}/{} now.",
                     programs.size(),
                     (uint32_t)cq_id,
                     i + 1,
@@ -2145,8 +2142,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
         auto rng = std::default_random_engine{};
         std::shuffle(std::begin(programs), std::end(programs), rng);
         if (i % 50 == 0) {
-            log_info(
-                tt::LogTest, "Enqueueing {} programs for iter: {}/{} now.", programs.size(), i + 1, NUM_ITERATIONS);
+            log_info(tt::LogTest, "Enqueuing {} programs for iter: {}/{} now.", programs.size(), i + 1, NUM_ITERATIONS);
         }
         for (Program& program : programs) {
             EnqueueProgram(this->device_->command_queue(), program, false);
