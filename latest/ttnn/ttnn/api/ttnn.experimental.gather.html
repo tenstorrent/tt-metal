@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.group_norm &mdash; TT-NN  documentation</title>
+  <title>ttnn.experimental.gather &mdash; TT-NN  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.group_norm.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.experimental.gather.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -23,8 +23,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.layer_norm" href="ttnn.layer_norm.html" />
-    <link rel="prev" title="ttnn.experimental.gather" href="ttnn.experimental.gather.html" /> 
+    <link rel="next" title="ttnn.group_norm" href="ttnn.group_norm.html" />
+    <link rel="prev" title="ttnn.indexed_fill" href="ttnn.indexed_fill.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -69,14 +69,26 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-ternary">Pointwise Ternary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#losses">Losses</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#reduction">Reduction</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
-<li class="toctree-l3 current"><a class="reference internal" href="../api.html#normalization">Normalization</a><ul class="current">
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.group_norm</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.layer_norm.html">ttnn.layer_norm</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.rms_norm.html">ttnn.rms_norm</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.batch_norm.html">ttnn.batch_norm</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../api.html#data-movement">Data Movement</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="ttnn.concat.html">ttnn.concat</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.nonzero.html">ttnn.nonzero</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.pad.html">ttnn.pad</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.permute.html">ttnn.permute</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.reshape.html">ttnn.reshape</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.repeat.html">ttnn.repeat</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.repeat_interleave.html">ttnn.repeat_interleave</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.slice.html">ttnn.slice</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.tilize.html">ttnn.tilize</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.tilize_with_val_padding.html">ttnn.tilize_with_val_padding</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.fill_rm.html">ttnn.fill_rm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.fill_ones_rm.html">ttnn.fill_ones_rm</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.untilize.html">ttnn.untilize</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.untilize_with_unpadding.html">ttnn.untilize_with_unpadding</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.indexed_fill.html">ttnn.indexed_fill</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.experimental.gather</a></li>
 </ul>
 </li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#normalization">Normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#moreh-operations">Moreh Operations</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
@@ -125,9 +137,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.group_norm</li>
+      <li class="breadcrumb-item active">ttnn.experimental.gather</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.group_norm.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/ttnn/api/ttnn.experimental.gather.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -135,43 +147,69 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-group-norm">
-<h1>ttnn.group_norm<a class="headerlink" href="#ttnn-group-norm" title="Permalink to this heading"></a>
+  <section id="ttnn-experimental-gather">
+<h1>ttnn.experimental.gather<a class="headerlink" href="#ttnn-experimental-gather" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py data">
-<dt class="sig sig-object py" id="ttnn.group_norm">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">group_norm</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.group_norm',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.normalization.group_norm_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.group_norm" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.experimental.gather">
+<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">gather</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.experimental.gather',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.experimental.gather_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=None,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.experimental.gather" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Compute group_norm over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p>
+<p>The <cite>gather</cite> operation extracts values from the input tensor based on indices provided in the index tensor along a specified dimension.</p>
+<p>The input tensor and the index tensor must have the same number of dimensions.
+For all dimensions except the specified one (<cite>dim</cite>), the size of the index tensor must not exceed the size of the input tensor.
+The output tensor will have the same shape as the index tensor. Note that the input and index tensors do not broadcast against each other.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p>
+<ul class="simple">
+<li><p><strong>input</strong> (<em>ttnn.Tensor</em>) – The source tensor from which values are gathered.</p></li>
+<li><p><strong>dim</strong> (<em>int</em>) – The dimension along which values are gathered.</p></li>
+<li><p><strong>index</strong> (<em>ttnn.Tensor</em>) – A tensor containing the indices of elements to gather, with the same number of dimensions as the input tensor.
+The index tensor must be of type uint16 or uint32.</p></li>
+</ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>num_groups</strong> (<em>int</em>) – </p></li>
-<li><p><strong>epsilon</strong> (<em>float</em>) – 1e-12.</p></li>
-<li><p><strong>input_mask</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>weight</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>core_grid</strong> (<em>CoreGrid</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>inplace</strong> (<em>bool</em><em>, </em><em>optional</em>) – Defaults to <cite>True</cite>.</p></li>
-<li><p><strong>output_layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>sparse_grad</strong> (<em>bool</em><em>, </em><em>optional</em>) – If <cite>True</cite>, the gradient computation will be sparse. Defaults to <cite>False</cite>.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Specifies the memory configuration for the output tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>out</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – A preallocated tensor to store the gathered values. Defaults to <cite>None</cite>.</p></li>
 </ul>
 </dd>
-<dt class="field-odd">Returns<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the output tensor.</p>
+</dl>
+<dl class="simple">
+<dt>Additional Information:</dt>
+<dd>
+<ul class="simple">
+<li><p>Currently, the <cite>sparse_grad</cite> argument is not supported.</p></li>
+</ul>
 </dd>
 </dl>
+<p>Example:</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+
+<span class="c1"># Create a 2D input tensor</span>
+<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">10</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="mi">30</span><span class="p">,</span> <span class="mi">40</span><span class="p">],</span>
+                             <span class="p">[</span><span class="mi">50</span><span class="p">,</span> <span class="mi">60</span><span class="p">,</span> <span class="mi">70</span><span class="p">,</span> <span class="mi">80</span><span class="p">]])</span>
+
+<span class="c1"># Create a 2D index tensor</span>
+<span class="n">index_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+                             <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">]])</span>
+
+<span class="c1"># Convert tensors to ttnn format</span>
+<span class="n">input_tensor_ttnn</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">index_tensor_ttnn</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">index_tensor</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">uint16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Layout</span><span class="o">.</span><span class="n">TILE</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+
+<span class="c1"># Perform the gather operation along dimension 1</span>
+<span class="n">gathered_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">experimental</span><span class="o">.</span><span class="n">gather</span><span class="p">(</span><span class="n">input_tensor_ttnn</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">index_tensor_ttnn</span><span class="p">)</span>
+<span class="c1"># Result: gathered_tensor = [[40, 10], [70, 60]]</span>
+</pre></div>
+</div>
 </dd>
 </dl>
 
@@ -182,8 +220,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.experimental.gather.html" class="btn btn-neutral float-left" title="ttnn.experimental.gather" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.layer_norm.html" class="btn btn-neutral float-right" title="ttnn.layer_norm" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.indexed_fill.html" class="btn btn-neutral float-left" title="ttnn.indexed_fill" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.group_norm.html" class="btn btn-neutral float-right" title="ttnn.group_norm" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
