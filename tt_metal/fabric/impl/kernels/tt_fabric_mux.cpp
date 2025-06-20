@@ -55,11 +55,7 @@ void setup_channel(
     size_t& sender_flow_control_address,
     StreamId my_channel_free_slots_stream_id) {
     new (channel_ptr) tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>(
-        channel_base_address,
-        buffer_size_bytes,
-        sizeof(PACKET_HEADER_TYPE),
-        0, /* unused, eth_transaction_ack_word_addr */
-        channel_id);
+        channel_base_address, buffer_size_bytes, sizeof(PACKET_HEADER_TYPE), channel_id);
     channel_base_address += NUM_BUFFERS * buffer_size_bytes;
     init_ptr_val(my_channel_free_slots_stream_id, NUM_BUFFERS);
 
