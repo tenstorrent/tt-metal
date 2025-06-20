@@ -47,7 +47,7 @@ def test_vit_device_ops(
 @pytest.mark.parametrize(
     "expected_kernel_samples_per_sec",
     [
-        1450,
+        1460,
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
