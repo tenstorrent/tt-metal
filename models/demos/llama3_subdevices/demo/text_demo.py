@@ -17,6 +17,7 @@ is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 from models.demos.llama3_subdevices.tt.generator import Generator, SamplingParams
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
+from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
@@ -360,10 +361,29 @@ def test_demo_text(
         )
     profiler.end("loading_inputs")
 
+    # Instantiate the model
+    model_args, model, page_table, tt_kv_cache = create_tt_model(
+        mesh_device,
+        instruct=instruct,
+        max_batch_size=batch_size,
+        optimizations=optimizations,
+        max_seq_len=max_seq_len,
+        page_params=page_params,
+        dtype=ttnn.bfloat8_b,
+        use_paged_kv_cache=paged_attention,
+    )
+
+    tokenizer = model_args.tokenizer
+    generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
+
     # Load expected outputs for comparison
     expected_outputs_data = []
     # Always use this specific path for the expected outputs.
-    expected_outputs_file_path_to_load = "models/demos/llama3_subdevices/demo/outputs_batch_1.json"
+    # The huggingface tokenizer works differently to our tokenizer, so need alternate expected outputs
+    if isinstance(tokenizer, Tokenizer):
+        expected_outputs_file_path_to_load = "models/demos/llama3_subdevices/demo/outputs_batch_1.json"
+    else:
+        expected_outputs_file_path_to_load = "models/demos/llama3_subdevices/demo/outputs_batch_1_hf.json"
 
     if os.path.exists(expected_outputs_file_path_to_load):
         logger.info(f"Attempting to load expected outputs from: {expected_outputs_file_path_to_load}")
@@ -403,21 +423,6 @@ def test_demo_text(
     repeat_batch_prompts = []
     for i in range(repeat_batches):
         repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
-
-    model_args, model, page_table, tt_kv_cache = create_tt_model(
-        mesh_device,
-        instruct=instruct,
-        max_batch_size=batch_size,
-        optimizations=optimizations,
-        max_seq_len=max_seq_len,
-        page_params=page_params,
-        dtype=ttnn.bfloat8_b,
-        use_paged_kv_cache=paged_attention,
-    )
-
-    # model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
-    tokenizer = model_args.tokenizer
-    generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     num_tokens_generated_decode = []
 
