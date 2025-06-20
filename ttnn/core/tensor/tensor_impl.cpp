@@ -843,23 +843,55 @@ Tensor to_device_mesh_tensor(
 }
 
 template <typename T>
-void copy_to_mesh_tensor(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id) {
-    TT_FATAL(host_tensor.storage_type() != StorageType::DEVICE, "Host tensor is on device.");
-    TT_FATAL(mesh_tensor.storage_type() == StorageType::DEVICE, "Mesh tensor is not on device.");
-    TT_FATAL(mesh_tensor.is_allocated(), "Buffer must be allocated on device.");
+void copy_to_host_tensor(const Tensor& device_tensor, Tensor& host_tensor, ttnn::QueueId cq_id) {
+    TT_FATAL(host_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST, "Host tensor is not multi device host.");
+    TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Device tensor is not on device.");
+    TT_FATAL(device_tensor.is_allocated(), "Buffer must be allocated on device.");
 
-    TT_FATAL(host_tensor.logical_shape() == mesh_tensor.logical_shape(), "Host tensor has different shape");
-    TT_FATAL(host_tensor.dtype() == mesh_tensor.dtype(), "Host tensor has different dtype");
+    TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
+    TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Host tensor has different dtype");
     TT_FATAL(
-        host_tensor.tensor_spec().page_config() == mesh_tensor.tensor_spec().page_config(),
+        host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
         "Host tensor has different page config");
 
-    auto mesh_buffer = std::get<DeviceStorage>(mesh_tensor.storage()).mesh_buffer;
+    const auto& device_storage = std::get<DeviceStorage>(device_tensor.storage());
+    const auto& mesh_buffer = device_storage.mesh_buffer;
+    ttnn::MeshDevice* device = mesh_buffer->device();
+    distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue(*cq_id);
+
+    auto distributed_host_buffer = std::get<MultiDeviceHostStorage>(host_tensor.storage()).distributed_buffer();
+
+    TT_FATAL(
+        distributed_host_buffer.shard_coords().size() == device_storage.coords.size(),
+        "Host tensor has different number of shards allocated: {} != {}",
+        distributed_host_buffer.shard_coords().size(),
+        device_storage.coords.size());
+
+    mesh_cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, /*blocking=*/true);
+
+    host_tensor = Tensor(
+        MultiDeviceHostStorage(std::move(distributed_host_buffer)),
+        device_tensor.tensor_spec(),
+        device_tensor.distributed_tensor_config());
+}
+
+template <typename T>
+void copy_to_device_tensor(const Tensor& host_tensor, Tensor& device_tensor, ttnn::QueueId cq_id) {
+    TT_FATAL(host_tensor.storage_type() != StorageType::DEVICE, "Host tensor is on device.");
+    TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Mesh tensor is not on device.");
+    TT_FATAL(device_tensor.is_allocated(), "Buffer must be allocated on device.");
+
+    TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
+    TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Host tensor has different dtype");
+    TT_FATAL(
+        host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
+        "Host tensor has different page config");
+
+    auto mesh_buffer = std::get<DeviceStorage>(device_tensor.storage()).mesh_buffer;
 
     DeviceStorage mesh_storage = to_device_mesh_buffer<T>(
-        host_tensor.storage(), mesh_buffer, mesh_tensor.tensor_spec(), *host_tensor.tensor_attributes, cq_id);
-
-    mesh_tensor.tensor_attributes->get_storage() = mesh_storage;
+        host_tensor.storage(), mesh_buffer, device_tensor.tensor_spec(), *host_tensor.tensor_attributes, cq_id);
+    device_tensor = Tensor(std::move(mesh_storage), host_tensor.tensor_spec(), host_tensor.distributed_tensor_config());
 }
 
 template Tensor to_device_mesh_tensor<bfloat16>(
@@ -911,21 +943,37 @@ Tensor to_device_mesh_tensor<bfloat8_b>(
     return to_device_mesh_tensor<uint32_t>(tensor, target_device, memory_config, cq_id);
 }
 
-template void copy_to_mesh_tensor<bfloat16>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
-template void copy_to_mesh_tensor<float>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
-template void copy_to_mesh_tensor<int32_t>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
-template void copy_to_mesh_tensor<uint32_t>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
-template void copy_to_mesh_tensor<uint16_t>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
-template void copy_to_mesh_tensor<uint8_t>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
+template void copy_to_device_tensor<bfloat16>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
+template void copy_to_device_tensor<float>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
+template void copy_to_device_tensor<int32_t>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
+template void copy_to_device_tensor<uint32_t>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
+template void copy_to_device_tensor<uint16_t>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
+template void copy_to_device_tensor<uint8_t>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id);
+template void copy_to_host_tensor<bfloat16>(const Tensor& device_tensor, Tensor& host_tensor, ttnn::QueueId cq_id);
+template void copy_to_host_tensor<float>(const Tensor& device_tensor, Tensor& host_tensor, ttnn::QueueId cq_id);
+template void copy_to_host_tensor<int32_t>(const Tensor& device_tensor, Tensor& host_tensor, ttnn::QueueId cq_id);
+template void copy_to_host_tensor<uint32_t>(const Tensor& device_tensor, Tensor& host_tensor, ttnn::QueueId cq_id);
+template void copy_to_host_tensor<uint16_t>(const Tensor& device_tensor, Tensor& host_tensor, ttnn::QueueId cq_id);
+template void copy_to_host_tensor<uint8_t>(const Tensor& device_tensor, Tensor& host_tensor, ttnn::QueueId cq_id);
 
 template <>
-void copy_to_mesh_tensor<bfloat4_b>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id) {
-    copy_to_mesh_tensor<uint32_t>(host_tensor, mesh_tensor, cq_id);
+void copy_to_device_tensor<bfloat4_b>(const Tensor& host_tensor, Tensor& device_tensor, ttnn::QueueId cq_id) {
+    copy_to_device_tensor<uint32_t>(host_tensor, device_tensor, cq_id);
 }
 
 template <>
-void copy_to_mesh_tensor<bfloat8_b>(const Tensor& host_tensor, Tensor& mesh_tensor, ttnn::QueueId cq_id) {
-    copy_to_mesh_tensor<uint32_t>(host_tensor, mesh_tensor, cq_id);
+void copy_to_device_tensor<bfloat8_b>(const Tensor& host_tensor, Tensor& device_tensor, ttnn::QueueId cq_id) {
+    copy_to_device_tensor<uint32_t>(host_tensor, device_tensor, cq_id);
+}
+
+template <>
+void copy_to_host_tensor<bfloat4_b>(const Tensor& device_tensor, Tensor& host_tensor, ttnn::QueueId cq_id) {
+    copy_to_host_tensor<uint32_t>(device_tensor, host_tensor, cq_id);
+}
+
+template <>
+void copy_to_host_tensor<bfloat8_b>(const Tensor& device_tensor, Tensor& host_tensor, ttnn::QueueId cq_id) {
+    copy_to_host_tensor<uint32_t>(device_tensor, host_tensor, cq_id);
 }
 
 // ======================================================================================
