@@ -198,6 +198,31 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         }
     };
 
+    auto fill_sender_buffer_slots = [&](auto& num_buffer_slots,
+                                        size_t channel_skip_idx,
+                                        uint32_t default_num_buffer_slots,
+                                        uint32_t extra_num_buffer_slots) {
+        for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
+            if (i == channel_skip_idx) {
+                num_buffer_slots[i] = 0;
+            } else {
+                // tensix worker on channel 0, otherwise extra_num_buffer_slots
+                num_buffer_slots[i] = (i == 0 ? default_num_buffer_slots : extra_num_buffer_slots);
+            }
+        }
+    };
+
+    auto fill_receiver_buffer_slots =
+        [&](auto& num_buffer_slots, size_t channel_skip_idx, uint32_t extra_num_buffer_slots) {
+            for (size_t i = 0; i < this->num_receiver_channels; ++i) {
+                if (i == channel_skip_idx) {
+                    num_buffer_slots[i] = 0;
+                } else {
+                    num_buffer_slots[i] = extra_num_buffer_slots;
+                }
+            }
+        };
+
     auto axis_index = static_cast<std::size_t>(options.edm_axis);
     auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
     size_t arch_index;
@@ -256,138 +281,92 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         num_remote_receiver_buffer_slots.fill(default_num_receiver_buffer_slots);
         num_downstream_sender_buffer_slots.fill(default_num_sender_buffer_slots);
 
+        auto buffer_config = options.edm_buffer_config;
         switch (options.edm_type) {
             case FabricEriscDatamoverType::Dateline:
-                if (options.enable_dateline_sender_extra_buffer_slots) {
+                if (buffer_config.enable_dateline_sender_extra_buffer_slots) {
                     // set num_sender_buffer_slots
-                    for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
-                        bool skip_current_channel = (i == this->dateline_sender_channel_skip_idx);
-                        if (skip_current_channel) {
-                            num_sender_buffer_slots[i] = 0;
-                        } else {
-                            if (i == 0) {  // tensix worker
-                                num_sender_buffer_slots[i] = default_num_sender_buffer_slots;
-                            } else {
-                                num_sender_buffer_slots[i] = dateline_num_sender_buffer_slots;
-                            }
-                        }
-                    }
+                    fill_sender_buffer_slots(
+                        num_sender_buffer_slots,
+                        this->dateline_sender_channel_skip_idx,
+                        default_num_sender_buffer_slots,
+                        dateline_num_sender_buffer_slots);
                     // set remote sender buffer slots equal to local sender, since remote is also dateline
                     num_remote_sender_buffer_slots = num_sender_buffer_slots;
                 }
-                if (options.enable_dateline_receiver_extra_buffer_slots) {
+                if (buffer_config.enable_dateline_receiver_extra_buffer_slots) {
                     // set num_receiver_buffer_slots
-                    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
-                        bool skip_current_channel = (i == this->dateline_receiver_channel_skip_idx);
-                        if (skip_current_channel) {
-                            num_receiver_buffer_slots[i] = 0;
-                        } else {
-                            num_receiver_buffer_slots[i] = dateline_num_receiver_buffer_slots;
-                        }
-                    }
+                    fill_receiver_buffer_slots(
+                        num_receiver_buffer_slots,
+                        this->dateline_receiver_channel_skip_idx,
+                        dateline_num_receiver_buffer_slots);
                     // set remote receiver buffer slots equal to local receiver, since remote is also dateline
                     num_remote_receiver_buffer_slots = num_receiver_buffer_slots;
                 }
-                if (options.enable_dateline_upstream_sender_extra_buffer_slots) {
+                if (buffer_config.enable_dateline_upstream_sender_extra_buffer_slots) {
                     // set downstream_num_sender_buffer_slots, downstream is dateline-upstream-edm
                     num_downstream_sender_buffer_slots.fill(dateline_upstream_num_sender_buffer_slots);
                 }
                 break;
             case FabricEriscDatamoverType::DatelineUpstream:
-                if (options.enable_dateline_upstream_sender_extra_buffer_slots) {
+                if (buffer_config.enable_dateline_upstream_sender_extra_buffer_slots) {
                     // set num_sender_buffer_slots
-                    for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
-                        bool skip_current_channel = (i == this->dateline_upstream_sender_channel_skip_idx);
-                        if (skip_current_channel) {
-                            num_sender_buffer_slots[i] = 0;
-                        } else {
-                            if (i == 0) {  // tensix worker
-                                num_sender_buffer_slots[i] = default_num_sender_buffer_slots;
-                            } else {
-                                num_sender_buffer_slots[i] = dateline_upstream_num_sender_buffer_slots;
-                            }
-                        }
-                    }
+                    fill_sender_buffer_slots(
+                        num_sender_buffer_slots,
+                        this->dateline_upstream_sender_channel_skip_idx,
+                        default_num_sender_buffer_slots,
+                        dateline_upstream_num_sender_buffer_slots);
                     this->skip_sender_channel_1_connection = true;
                 }
                 // set num_receiver_buffer_slots
-                if (options.enable_dateline_upstream_receiver_extra_buffer_slots) {
-                    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
-                        bool skip_current_channel = (i == this->dateline_upstream_receiver_channel_skip_idx);
-                        if (skip_current_channel) {
-                            num_receiver_buffer_slots[i] = 0;
-                        } else {
-                            num_receiver_buffer_slots[i] = dateline_upstream_num_receiver_buffer_slots;
-                        }
-                    }
+                if (buffer_config.enable_dateline_upstream_receiver_extra_buffer_slots) {
+                    fill_receiver_buffer_slots(
+                        num_receiver_buffer_slots,
+                        this->dateline_upstream_receiver_channel_skip_idx,
+                        dateline_upstream_num_receiver_buffer_slots);
                     this->skip_receiver_channel_1_connection = true;
                 }
-                if (options.enable_dateline_sender_extra_buffer_slots) {
+                if (buffer_config.enable_dateline_sender_extra_buffer_slots) {
                     // set downstream_num_sender_buffer_slots, downstream is dateline edm
                     num_downstream_sender_buffer_slots.fill(dateline_num_sender_buffer_slots);
                 }
-                if (options.enable_dateline_upstream_adjacent_sender_extra_buffer_slots) {
+                if (buffer_config.enable_dateline_upstream_adjacent_sender_extra_buffer_slots) {
                     // set remote sender buffer slots equal to dateline upstream dajcent sender buffer slots
-                    for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
-                        bool skip_current_channel = i == this->dateline_upstream_adjcent_sender_channel_skip_idx;
-                        if (skip_current_channel) {
-                            num_remote_sender_buffer_slots[i] = 0;
-                        } else {
-                            if (i == 0) {  // tensix worker
-                                num_remote_sender_buffer_slots[i] = default_num_sender_buffer_slots;
-                            } else {
-                                num_remote_sender_buffer_slots[i] = dateline_upstream_adjcent_num_sender_buffer_slots;
-                            }
-                        }
-                    }
+                    fill_sender_buffer_slots(
+                        num_remote_sender_buffer_slots,
+                        this->dateline_upstream_adjcent_sender_channel_skip_idx,
+                        default_num_sender_buffer_slots,
+                        dateline_upstream_adjcent_num_sender_buffer_slots);
                 }
                 break;
             case FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice:
-                if (options.enable_dateline_upstream_adjacent_sender_extra_buffer_slots) {
+                if (buffer_config.enable_dateline_upstream_adjacent_sender_extra_buffer_slots) {
                     // set num_sender_buffer_slots
-                    for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
-                        bool skip_current_channel = (i == this->dateline_upstream_adjcent_sender_channel_skip_idx);
-                        if (skip_current_channel) {
-                            num_sender_buffer_slots[i] = 0;
-                        } else {
-                            if (i == 0) {  // tensix worker
-                                num_sender_buffer_slots[i] = default_num_sender_buffer_slots;
-                            } else {
-                                num_sender_buffer_slots[i] = dateline_upstream_adjcent_num_sender_buffer_slots;
-                            }
-                        }
-                    }
+                    fill_sender_buffer_slots(
+                        num_sender_buffer_slots,
+                        this->dateline_upstream_adjcent_sender_channel_skip_idx,
+                        default_num_sender_buffer_slots,
+                        dateline_upstream_adjcent_num_sender_buffer_slots);
                     this->skip_sender_vc1_channel_connection = true;
                 }
-                if (options.enable_dateline_upstream_sender_extra_buffer_slots) {
+                if (buffer_config.enable_dateline_upstream_sender_extra_buffer_slots) {
                     // set remote sender buffer slots equal to dateline upstream sender buffer slots
-                    for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
-                        bool skip_current_channel = i == this->dateline_upstream_sender_channel_skip_idx;
-                        if (skip_current_channel) {
-                            num_remote_sender_buffer_slots[i] = 0;
-                        } else {
-                            if (i == 0) {  // tensix worker
-                                num_remote_sender_buffer_slots[i] = default_num_sender_buffer_slots;
-                            } else {
-                                num_remote_sender_buffer_slots[i] = dateline_upstream_num_sender_buffer_slots;
-                            }
-                        }
-                    }
+                    fill_sender_buffer_slots(
+                        num_remote_sender_buffer_slots,
+                        this->dateline_upstream_sender_channel_skip_idx,
+                        default_num_sender_buffer_slots,
+                        dateline_upstream_num_sender_buffer_slots);
                 }
-                if (options.enable_dateline_upstream_receiver_extra_buffer_slots) {
+                if (buffer_config.enable_dateline_upstream_receiver_extra_buffer_slots) {
                     // set remote sender buffer slots equal to dateline upstream sender buffer slots
-                    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
-                        bool skip_current_channel = (i == this->dateline_upstream_receiver_channel_skip_idx);
-                        if (skip_current_channel) {
-                            num_remote_receiver_buffer_slots[i] = 0;
-                        } else {
-                            num_remote_receiver_buffer_slots[i] = dateline_upstream_num_receiver_buffer_slots;
-                        }
-                    }
+                    fill_receiver_buffer_slots(
+                        num_remote_receiver_buffer_slots,
+                        this->dateline_upstream_receiver_channel_skip_idx,
+                        dateline_upstream_num_receiver_buffer_slots);
                 }
                 break;
             case FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream:
-                if (options.enable_dateline_upstream_adjacent_sender_extra_buffer_slots) {
+                if (buffer_config.enable_dateline_upstream_adjacent_sender_extra_buffer_slots) {
                     // set downstream_num_sender_buffer_slots, downstream is dateline upstream adjcent edm
                     num_downstream_sender_buffer_slots.fill(dateline_upstream_adjcent_num_sender_buffer_slots);
                 }
