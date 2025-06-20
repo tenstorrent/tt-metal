@@ -39,15 +39,12 @@ def _ttt_where_test_impl(
     torch_output_tensor = golden_fn(condition_torch, true_torch, false_torch)
 
     condition, true_values, false_values = [
-        ttnn.to_device(
-            ttnn.from_torch(
-                tensor,
-                layout=layout,
-                dtype=tt_dtype,
-                memory_config=mem_config,
-                device=device,
-            ),
-            device,
+        ttnn.from_torch(
+            tensor,
+            layout=layout,
+            dtype=tt_dtype,
+            memory_config=mem_config,
+            device=device,
         )
         for tensor in (condition_torch, true_torch, false_torch)
     ]
