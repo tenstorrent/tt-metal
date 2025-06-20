@@ -7,12 +7,12 @@ import torch
 import ttnn
 from ultralytics import YOLO
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.yolov11.tt.model_preprocessing import (
+from models.demos.yolov11.tt.model_preprocessing import (
     create_yolov11_input_tensors,
     create_yolov11_model_parameters,
 )
-from models.experimental.yolov11.reference import yolov11
-from models.experimental.yolov11.tt import ttnn_yolov11
+from models.demos.yolov11.reference import yolov11
+from models.demos.yolov11.tt import ttnn_yolov11
 
 
 @pytest.mark.parametrize(

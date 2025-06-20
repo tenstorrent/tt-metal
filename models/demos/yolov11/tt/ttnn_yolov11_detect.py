@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.yolov11.tt.common import TtnnConv, deallocate_tensors, Yolov11Conv2D
+from models.demos.yolov11.tt.common import TtnnConv, Yolov11Conv2D, deallocate_tensors
 
 
 class TtnnDetect:

@@ -2,22 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import time
-import torch
+
 import pytest
+import torch
 from loguru import logger
-from models.utility_functions import is_wormhole_b0
-from models.perf.perf_utils import prep_perf_report
-from models.experimental.yolov11.tt import ttnn_yolov11
-from models.experimental.yolov11.reference import yolov11
-from models.utility_functions import enable_persistent_kernel_cache, disable_persistent_kernel_cache
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.experimental.yolov11.tt.model_preprocessing import (
-    create_yolov11_input_tensors,
-    create_yolov11_model_parameters,
-)
 from ultralytics import YOLO
+
+import ttnn
+from models.demos.yolov11.reference import yolov11
+from models.demos.yolov11.tt import ttnn_yolov11
+from models.demos.yolov11.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, is_wormhole_b0
 
 
 def get_expected_times(name):
@@ -83,7 +81,7 @@ def test_yolov11(device, input_tensor, batch_size, use_weights_from_ultralytics,
     expected_compile_time, expected_inference_time = get_expected_times("yolov11")
 
     prep_perf_report(
-        model_name="models/experimental/yolov11",
+        model_name="models/demos/yolov11",
         batch_size=batch_size,
         inference_and_compile_time=inference_and_compile_time,
         inference_time=inference_time,
