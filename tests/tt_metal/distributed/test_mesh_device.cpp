@@ -45,6 +45,7 @@ TEST(MeshDeviceInitTest, Init1x1Mesh) {
 }
 
 using MeshDeviceTest = T3000MeshDeviceFixture;
+using MeshDeviceTestSuite = GenericMeshDeviceFixture;
 
 TEST_F(MeshDeviceTest, SystemMeshTearDownWithoutClose) {
     auto& sys = SystemMesh::instance();
@@ -136,5 +137,19 @@ TEST(GetOptimalDramBankToLogicalWorkerAssignmentAPI, UnitMeshes) {
     }
 }
 
+TEST_F(MeshDeviceTestSuite, CheckFabricNodeIds) {
+    // Check that the fabric node IDs are correctly assigned to the devices in the mesh. Only works for 2D meshes
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    EXPECT_EQ(mesh_device_->shape().dims(), 2);
+    for (size_t i = 0; i < mesh_device_->shape()[0]; ++i) {
+        for (size_t j = 0; j < mesh_device_->shape()[1]; ++j) {
+            tt_fabric::FabricNodeId fabric_node_id = mesh_device_->get_device_fabric_node_id(MeshCoordinate{i, j});
+            EXPECT_EQ(
+                control_plane.get_fabric_node_id_from_physical_chip_id(
+                    mesh_device_->get_device(MeshCoordinate{i, j})->id()),
+                fabric_node_id);
+        }
+    }
+}
 }  // namespace
 }  // namespace tt::tt_metal::distributed
