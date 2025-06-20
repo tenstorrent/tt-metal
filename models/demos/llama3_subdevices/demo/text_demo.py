@@ -244,7 +244,7 @@ def create_tt_model(
             False,  # pcc_check
             80,  # num layers
         ),
-        (  # CI Run for PCC check: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
+        (  # CI Run for PCC check for 1 Layer: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_subdevices/demo/input_data_questions_reference.json",  # input_prompts
             False,  # instruct mode
             1,  # repeat_batches
@@ -259,6 +259,21 @@ def create_tt_model(
             True,  # pcc_check
             1,  # num layers
         ),
+        (  # CI Run for PCC check for 80 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
+            "models/demos/llama3_subdevices/demo/input_data_questions_reference.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+            True,  # pcc_check
+            80,  # num layers
+        ),
     ],
     ids=[
         "batch-32",  # throughput
@@ -266,7 +281,8 @@ def create_tt_model(
         "repeat2",  # latency with 5 repeat batches
         "long-context-batch32",  # max-length for 32 users
         "long-context-32k",  # max-length
-        "batch-32-pcc",  # pcc check
+        "pcc-1L",  # pcc check for 1L
+        "pcc-80L",  # pcc check for 80L + teacher forced
     ],
 )
 @pytest.mark.parametrize(
