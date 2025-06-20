@@ -121,42 +121,98 @@ void kernel_main() {
                     }
                 }
 
+                // TODO: (GR) Un hard-code
+                uint32_t max_tiles_per_packet = 2;
+
                 while (tiles_read < tiles_to_read) {
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                    uint32_t tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
 
+                    uint32_t tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
                     uint32_t tiles_read_in_current_direction = 0;
                     while (tiles_read_in_current_direction < tiles_to_read_in_current_direction) {
-                        cb_wait_front(cb_output_id, 1);
+                        uint32_t tiles_remaining_to_read_in_current_direction =
+                            tiles_to_read_in_current_direction - tiles_read_in_current_direction;
+                        uint32_t tiles_to_put_in_current_packet =
+                            std::min(tiles_remaining_to_read_in_current_direction, max_tiles_per_packet);
+
+                        cb_wait_front(cb_output_id, tiles_to_put_in_current_packet);
                         size_t l1_read_addr = get_read_ptr(cb_output_id);
 
-                        uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
-                        uint64_t remote_noc0_dest_noc_addr =
-                            get_noc_addr(tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                        if (direction) {
-                            write_and_advance_local_read_address_for_fabric_write_forward(
-                                remote_noc0_dest_noc_addr,
-                                pkt_hdr,
-                                fabric_connection,
-                                l1_read_addr,
-                                intermediate_page_size);
-                        } else {
-                            write_and_advance_local_read_address_for_fabric_write_backward(
-                                remote_noc0_dest_noc_addr,
-                                pkt_hdr,
-                                fabric_connection,
-                                l1_read_addr,
-                                intermediate_page_size);
-                        }
-                        cb_pop_front(cb_output_id, 1);
+                        // Will have more cases once scatter-write supports other non-bfloat16 dtypes
+                        switch (tiles_to_put_in_current_packet) {
+                            case 2: {
+                                uint32_t tile_one_id = input_tile_id_start + row_offset + pages_read_in_row;
+                                pages_read_in_row++;
+                                if (pages_read_in_row >= slice_Wt) {
+                                    row_offset += stride_Wt;
+                                    pages_read_in_row = 0;
+                                }
 
-                        tiles_read_in_current_direction++;
+                                uint32_t tile_two_id = input_tile_id_start + row_offset + pages_read_in_row;
+                                pages_read_in_row++;
+                                if (pages_read_in_row >= slice_Wt) {
+                                    row_offset += stride_Wt;
+                                    pages_read_in_row = 0;
+                                }
 
-                        pages_read_in_row++;
-                        if (pages_read_in_row >= slice_Wt) {
-                            row_offset += stride_Wt;
-                            pages_read_in_row = 0;
+                                uint64_t remote_noc0_dest_noc_addr_tile_one =
+                                    get_noc_addr(tile_one_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                                uint64_t remote_noc0_dest_noc_addr_tile_two =
+                                    get_noc_addr(tile_two_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+
+                                if (direction) {
+                                    scatter_write_and_advance_local_read_address_for_fabric_write_forward(
+                                        remote_noc0_dest_noc_addr_tile_one,
+                                        remote_noc0_dest_noc_addr_tile_two,
+                                        pkt_hdr,
+                                        fabric_connection,
+                                        l1_read_addr,
+                                        intermediate_page_size,
+                                        intermediate_page_size);
+                                } else {
+                                    scatter_write_and_advance_local_read_address_for_fabric_write_backward(
+                                        remote_noc0_dest_noc_addr_tile_one,
+                                        remote_noc0_dest_noc_addr_tile_two,
+                                        pkt_hdr,
+                                        fabric_connection,
+                                        l1_read_addr,
+                                        intermediate_page_size,
+                                        intermediate_page_size);
+                                }
+                                break;
+                            }
+                            case 1:
+                            default: {
+                                uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
+                                pages_read_in_row++;
+                                if (pages_read_in_row >= slice_Wt) {
+                                    row_offset += stride_Wt;
+                                    pages_read_in_row = 0;
+                                }
+
+                                uint64_t remote_noc0_dest_noc_addr =
+                                    get_noc_addr(tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+
+                                if (direction) {
+                                    write_and_advance_local_read_address_for_fabric_write_forward(
+                                        remote_noc0_dest_noc_addr,
+                                        pkt_hdr,
+                                        fabric_connection,
+                                        l1_read_addr,
+                                        intermediate_page_size);
+                                } else {
+                                    write_and_advance_local_read_address_for_fabric_write_backward(
+                                        remote_noc0_dest_noc_addr,
+                                        pkt_hdr,
+                                        fabric_connection,
+                                        l1_read_addr,
+                                        intermediate_page_size);
+                                }
+                                break;
+                            }
                         }
+                        cb_pop_front(cb_output_id, tiles_to_put_in_current_packet);
+                        tiles_read_in_current_direction += tiles_to_put_in_current_packet;
                     }
 
                     tiles_read += tiles_read_in_current_direction;
