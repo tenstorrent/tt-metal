@@ -125,7 +125,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     // Initialize Kernels
 
     // Sender Kernel
-    vector<uint32_t> sender_compile_args = {// 0 - 7
+    vector<uint32_t> sender_compile_args = {
                                             (uint32_t)mst_l1_base_address,
                                             (uint32_t)sub_l1_base_address,
                                             (uint32_t)test_config.num_of_transactions,
@@ -138,7 +138,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     if (test_config.is_multicast) {  // Multicast Sender Kernel
         sender_compile_args.insert(
             sender_compile_args.end(),
-            {// 8 - 12
+            {
              (uint32_t)test_config.is_linked,
              (uint32_t)sub_worker_start_coord.x,
              (uint32_t)sub_worker_start_coord.y,
