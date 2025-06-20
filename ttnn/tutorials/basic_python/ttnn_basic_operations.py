@@ -15,23 +15,18 @@ def main():
         def to_tt_tile(torch_tensor):
             return ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-        # Helper to create (32, 32) torch tensor from scalar or numpy
-        def create_host_tensor(fill_value):
-            if isinstance(fill_value, (int, float)):
-                return torch.full((32, 32), fill_value, dtype=torch.float32)
-            elif isinstance(fill_value, np.ndarray):
-                return torch.from_numpy(fill_value.astype(np.float32))
-            else:
-                raise ValueError("Unsupported type for fill_value")
-
         print("\n--- TT-NN Tensor Creation with Tiles (32x32) ---")
-        host_t1 = create_host_tensor(1)
         host_t4 = torch.rand((32, 32), dtype=torch.float32)
         host_np_array = np.array([[5, 6], [7, 8]]).repeat(16, axis=0).repeat(16, axis=1)
-        host_t5 = create_host_tensor(host_np_array)
+        host_t5 = torch.from_numpy(host_np_array.astype(np.float32))
 
-        tt_t1 = to_tt_tile(host_t1)
-
+        tt_t1 = ttnn.full(
+            shape=(32, 32),
+            fill_value=1.0,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
         tt_t2 = ttnn.zeros(
             shape=(32, 32),
             dtype=ttnn.bfloat16,
@@ -44,7 +39,6 @@ def main():
             layout=ttnn.TILE_LAYOUT,
             device=device,
         )
-
         tt_t4 = to_tt_tile(host_t4)
         tt_t5 = to_tt_tile(host_t5)
 
@@ -73,8 +67,6 @@ def main():
         broadcast_tt = to_tt_tile(broadcast_vector)
         broadcast_add_result = ttnn.add(tt_t4, broadcast_tt)
         print("Broadcast Add Result (TT-NN):\n", ttnn.to_torch(broadcast_add_result))
-
-        print("\nAll TT-NN Part 1 tensor basics with tiles tests completed.")
 
     finally:
         ttnn.close_device(device)

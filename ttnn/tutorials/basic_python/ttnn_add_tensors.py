@@ -10,14 +10,14 @@ def main():
 
     try:
         # Create two TT-NN tensors with TILE_LAYOUT
-        tt_tensor1 = tt_t2 = ttnn.full(
+        tt_tensor1 = ttnn.full(
             shape=(32, 32),
             fill_value=1.0,
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             device=device,
         )
-        tt_tensor2 = tt_t2 = ttnn.full(
+        tt_tensor2 = ttnn.full(
             shape=(32, 32),
             fill_value=2.0,
             dtype=ttnn.float32,
