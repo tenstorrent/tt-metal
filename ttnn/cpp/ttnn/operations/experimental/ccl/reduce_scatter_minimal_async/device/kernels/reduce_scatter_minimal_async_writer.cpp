@@ -129,14 +129,15 @@ void kernel_main() {
 
                     uint32_t tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
                     uint32_t tiles_read_in_current_direction = 0;
+
+                    cb_wait_front(cb_output_id, tiles_to_read_in_current_direction);
+                    size_t l1_read_addr = get_read_ptr(cb_output_id);
+
                     while (tiles_read_in_current_direction < tiles_to_read_in_current_direction) {
                         uint32_t tiles_remaining_to_read_in_current_direction =
                             tiles_to_read_in_current_direction - tiles_read_in_current_direction;
                         uint32_t tiles_to_put_in_current_packet =
                             std::min(tiles_remaining_to_read_in_current_direction, max_tiles_per_packet);
-
-                        cb_wait_front(cb_output_id, tiles_to_put_in_current_packet);
-                        size_t l1_read_addr = get_read_ptr(cb_output_id);
 
                         // Will have more cases once scatter-write supports other non-bfloat16 dtypes
                         switch (tiles_to_put_in_current_packet) {
@@ -211,11 +212,11 @@ void kernel_main() {
                                 break;
                             }
                         }
-                        cb_pop_front(cb_output_id, tiles_to_put_in_current_packet);
                         tiles_read_in_current_direction += tiles_to_put_in_current_packet;
                     }
+                    cb_pop_front(cb_output_id, tiles_to_read_in_current_direction);
 
-                    tiles_read += tiles_read_in_current_direction;
+                    tiles_read += tiles_to_read_in_current_direction;
                     tiles_remaining_to_read = tiles_to_read - tiles_read;
 
                     // Skip the tiles going the other direction
