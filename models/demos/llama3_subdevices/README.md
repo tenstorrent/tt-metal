@@ -48,35 +48,13 @@ export HF_MODEL=meta-llama/Llama-3.1-70B-Instruct
 To run the Llama 3 demo:
 
 ```
-pytest models/demos/llama3_subdevices/demo/demo.py::test_llama_demo
-```
-
-**Example: Full Demo (Batch 32, 80 Layers)**
-
-```
-pytest models/demos/llama3_subdevices/demo/demo_decode.py::test_llama_demo --batch_size=32 --layers=80 --input_prompts=models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json
-```
-
-**Example: Quick 1-Layer Demo**
-
-```
-pytest models/demos/llama3_subdevices/demo/demo_decode.py::test_llama_demo --batch_size=32 --layers=1 --input_prompts=models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json
-```
-
-**Example: Stress Test**
-
-```
-pytest models/demos/llama3_subdevices/demo/demo_decode.py::test_llama_demo --batch_size=32 --layers=80 --max_generated_tokens=500000 --stress_test=True
+LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/demo_decode.py -k "full" --timeout 1000
 ```
 
 To run the text demo:
 
 ```
-pytest models/demos/llama3_subdevices/demo/text_demo.py::test_demo_text \
-    --batch_size=32 \
-    --repeat_batches=1 \
-    --input_prompts=models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json \
-    --max_generated_tokens=200
+LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "repeat" --timeout 1000
 ```
 
 ## Command-Line Parameters
