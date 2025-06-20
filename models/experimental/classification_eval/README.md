@@ -10,9 +10,11 @@
 | ResNet50     | (224, 224) | 16         | 512     | 78.52%                 | 75.59%                |
 | MobileNetV2  | (224, 224) | 8          | 512     | 68.36%                 | 65.62%                 |
 
+***Note:*** The accuracy is for the selected random samples from the validation dataset.
+
 Where,
-- **TTNN Accuracy** refers to the ratio of correct predictions made by TTNN model to the total number of predictions, calculated by comparing TTNN outputs against the ground truth data.
-- **Torch Accuracy** refers to the ratio of correct predictions made by torch model to the total number of predictions, calculated by comparing Torch outputs against the ground truth data.
+- **TTNN Accuracy** refers to the ratio of correct predictions made by TTNN model to the total number of predictions, calculated by comparing TTNN outputs against the ground truth data(Labels given in validation dataset).
+- **Torch Accuracy** refers to the ratio of correct predictions made by torch model to the total number of predictions, calculated by comparing Torch outputs against the ground truth data(Labels given in validation dataset).
 
 ## To run the test of ttnn vs ground truth, please follow the following commands:
 
