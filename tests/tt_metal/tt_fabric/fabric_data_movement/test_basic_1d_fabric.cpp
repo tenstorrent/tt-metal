@@ -390,9 +390,6 @@ void RunTestUnicastRaw(
     CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
-    auto receiver_noc_encoding =
-        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
-
     // test parameters
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
     uint32_t num_packets = 10;
@@ -405,9 +402,11 @@ void RunTestUnicastRaw(
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.target_address,
-        0 /* mcast_mode */,
         topology == Topology::Mesh,
-        fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC};
+        fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
+        0 /* is_chip_multicast */,
+        0 /* is_noc_multicast */,
+        0 /* additional_dir */};
 
     std::map<string, string> defines = {};
     if (is_2d_fabric) {
@@ -435,13 +434,22 @@ void RunTestUnicastRaw(
         worker_mem_map.source_l1_buffer_address,
         worker_mem_map.packet_payload_size_bytes,
         num_packets,
-        receiver_noc_encoding,
         time_seed,
+        receiver_virtual_core.x,
+        receiver_virtual_core.y,
+        1,
+        1,
         mesh_shape[1],
-        src_fabric_node_id.chip_id,
-        dst_fabric_node_id.chip_id,
-        *dst_fabric_node_id.mesh_id,
-        num_hops};
+        src_fabric_node_id.chip_id};
+
+    if (topology != Topology::Mesh) {  // 1D
+        sender_runtime_args.push_back(num_hops);
+        sender_runtime_args.push_back(1);
+    } else {  // 2D
+        sender_runtime_args.push_back(dst_fabric_node_id.chip_id);
+        sender_runtime_args.push_back(*dst_fabric_node_id.mesh_id);
+        sender_runtime_args.push_back(1);
+    }
 
     // append the EDM connection rt args
     const auto sender_channel = topology == Topology::Mesh ? edm_direction : 0;
@@ -539,9 +547,6 @@ void run_unicast_test_bw_chips(
     CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
-    auto receiver_noc_encoding =
-        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
-
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
     uint32_t is_2d_fabric = topology == Topology::Mesh;
@@ -556,9 +561,11 @@ void run_unicast_test_bw_chips(
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.target_address,
-        0 /* mcast_mode */,
         topology == Topology::Mesh,
-        fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC};
+        fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
+        0 /* is_chip_multicast */,
+        0 /* is_noc_multicast */,
+        0 /* additional_dir */};
 
     std::map<string, string> defines = {};
     if (is_2d_fabric) {
@@ -587,13 +594,22 @@ void run_unicast_test_bw_chips(
         worker_mem_map.source_l1_buffer_address,
         worker_mem_map.packet_payload_size_bytes,
         num_packets,
-        receiver_noc_encoding,
         time_seed,
+        receiver_virtual_core.x,
+        receiver_virtual_core.y,
+        1,
+        1,
         mesh_shape[1],
-        src_fabric_node_id.chip_id,
-        dst_fabric_node_id.chip_id,
-        *dst_fabric_node_id.mesh_id,
-        num_hops};
+        src_fabric_node_id.chip_id};
+
+    if (topology != Topology::Mesh) {  // 1D
+        sender_runtime_args.push_back(num_hops);
+        sender_runtime_args.push_back(1);
+    } else {  // 2D
+        sender_runtime_args.push_back(dst_fabric_node_id.chip_id);
+        sender_runtime_args.push_back(*dst_fabric_node_id.mesh_id);
+        sender_runtime_args.push_back(1);
+    }
 
     // append the EDM connection rt args
     const auto& available_links = get_forwarding_link_indices(src_physical_device_id, dst_physical_device_id);
@@ -813,9 +829,6 @@ void RunTestMCastConnAPI(
     CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
     CoreCoord receiver_virtual_core = left_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
-    auto receiver_noc_encoding =
-        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
-
     // test parameters
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
     uint32_t num_packets = 100;
@@ -828,9 +841,11 @@ void RunTestMCastConnAPI(
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.target_address,
-        1 /* mcast_mode */,
         topology == Topology::Mesh,
-        fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC};
+        fabric_config == tt_metal::FabricConfig::FABRIC_2D_DYNAMIC,
+        1 /* is_chip_multicast */,
+        0 /* is_noc_multicast */,
+        1 /* additional_dir */};
 
     std::map<string, string> defines = {};
     if (is_2d_fabric) {
@@ -865,14 +880,23 @@ void RunTestMCastConnAPI(
         worker_mem_map.source_l1_buffer_address,
         worker_mem_map.packet_payload_size_bytes,
         num_packets,
-        receiver_noc_encoding,
         time_seed,
+        receiver_virtual_core.x,
+        receiver_virtual_core.y,
+        1,
+        1,
         mesh_shape[1],
         src_fabric_node_id.chip_id,
-        left_fabric_node_id.chip_id,
-        *mesh_id.value(),
-        fwd_hops, /* mcast_fwd_hops */
     };
+
+    if (topology != Topology::Mesh) {  // 1D
+        sender_runtime_args.push_back(1);
+        sender_runtime_args.push_back(fwd_hops); /* fwd_range */
+    } else {                                     // 2D
+        sender_runtime_args.push_back(left_fabric_node_id.chip_id);
+        sender_runtime_args.push_back(*left_fabric_node_id.mesh_id);
+        sender_runtime_args.push_back(fwd_hops);
+    }
 
     // append the EDM connection rt args for fwd connection
     chip_id_t dst_chip_id;
@@ -886,8 +910,15 @@ void RunTestMCastConnAPI(
     link_idx = get_forwarding_link_indices(src_phys_chip_id, dst_chip_id)[0];
     append_fabric_connection_rt_args(
         src_phys_chip_id, dst_chip_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
-    sender_runtime_args.push_back(right_fabric_node_id.chip_id);
-    sender_runtime_args.push_back(bwd_hops); /* mcast_bwd_hops */
+
+    if (topology != Topology::Mesh) {  // 1D
+        sender_runtime_args.push_back(1);
+        sender_runtime_args.push_back(bwd_hops); /* bwd_range */
+    } else {                                     // 2D
+        sender_runtime_args.push_back(right_fabric_node_id.chip_id);
+        sender_runtime_args.push_back(*right_fabric_node_id.mesh_id);
+        sender_runtime_args.push_back(bwd_hops);
+    }
 
     if (is_2d_fabric) {
         dst_chip_id = right_recv_phys_chip_id;

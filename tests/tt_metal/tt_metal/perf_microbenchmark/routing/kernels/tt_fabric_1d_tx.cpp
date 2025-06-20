@@ -23,52 +23,21 @@ constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(0);
 constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
 
-constexpr uint32_t target_address = get_compile_time_arg_val(2);
-constexpr bool mcast_mode = get_compile_time_arg_val(3);
-constexpr bool is_2d_fabric = get_compile_time_arg_val(4);
-constexpr bool use_dynamic_routing = get_compile_time_arg_val(5);
+uint32_t target_address = get_compile_time_arg_val(2);
+constexpr bool is_2d_fabric = get_compile_time_arg_val(3);
+constexpr bool use_dynamic_routing = get_compile_time_arg_val(4);
+constexpr bool is_chip_multicast = get_compile_time_arg_val(5);
+constexpr bool is_noc_multicast = get_compile_time_arg_val(6);
+constexpr bool additional_dir = get_compile_time_arg_val(7);
 
-inline void setup_connection_and_headers(
-    tt::tt_fabric::WorkerToFabricEdmSender& connection,
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-    uint32_t hops,
-    uint64_t noc_dest_addr,
-    uint32_t packet_payload_size_bytes) {
-    // connect to edm
-    connection.open();
-    if constexpr (!is_2d_fabric) {
-        if constexpr (mcast_mode) {
-            packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(hops)});
-        } else {
-            packet_header->to_chip_unicast(static_cast<uint8_t>(hops));
-        }
+inline void setup_header_routing_1d(
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, uint32_t start_distance, uint32_t range) {
+    if constexpr (is_chip_multicast) {
+        packet_header->to_chip_multicast(
+            MulticastRoutingCommandHeader{static_cast<uint8_t>(start_distance), static_cast<uint8_t>(range)});
+    } else {
+        packet_header->to_chip_unicast(static_cast<uint8_t>(start_distance));
     }
-
-    packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_addr}, packet_payload_size_bytes);
-}
-
-inline void send_packet(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-    uint64_t noc_dest_addr,
-    uint32_t source_l1_buffer_address,
-    uint32_t packet_payload_size_bytes,
-    uint32_t seed,
-    tt::tt_fabric::WorkerToFabricEdmSender& connection) {
-#ifndef BENCHMARK_MODE
-    packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_addr}, packet_payload_size_bytes);
-    // fill packet data for sanity testing
-    tt_l1_ptr uint32_t* start_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address);
-    fill_packet_data(start_addr, packet_payload_size_bytes / 16, seed);
-    tt_l1_ptr uint32_t* last_word_addr =
-        reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address + packet_payload_size_bytes - 4);
-#endif
-    connection.wait_for_empty_write_slot();
-#ifdef TEST_ENABLE_FABRIC_TRACING
-    RECORD_FABRIC_HEADER(packet_header);
-#endif
-    connection.send_payload_without_header_non_blocking_from_address(
-        source_l1_buffer_address, packet_payload_size_bytes);
-    connection.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
 void set_mcast_header(
@@ -88,9 +57,88 @@ void set_mcast_header(
         s_num_hops = num_hops;
     }
 
+    // dst_dev_id is ignored since Low Latency Mesh Fabric does not support arbitrary 2D Mcasts yet
+    // dst_mesh_id is ignored since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
     fabric_set_mcast_route(
         (LowLatencyMeshPacketHeader*)packet_header, 0, 0, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
 }
+
+inline void setup_header_routing_2d(
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    eth_chan_directions direction,
+    uint32_t range,
+    uint32_t my_dev_id,
+    uint32_t dst_dev_id,
+    uint32_t dst_mesh_id,
+    uint32_t ew_dim) {
+    if constexpr (is_chip_multicast) {
+        static_assert(
+            !(is_2d_fabric && is_chip_multicast &&
+              use_dynamic_routing));  // dynamic routing not supported for 2D multicast in this test
+        set_mcast_header(packet_header, direction, range);
+    } else {
+        if constexpr (use_dynamic_routing) {
+            fabric_set_unicast_route(
+                (MeshPacketHeader*)packet_header,
+                direction,  // Ignored: Dynamic Routing does not need outgoing_direction specified
+                my_dev_id,  // Ignored: Dynamic Routing does not need src chip ID
+                dst_dev_id,
+                dst_mesh_id,
+                ew_dim);  // Ignored: Dynamic Routing does not need mesh dimensions
+        } else {
+            fabric_set_unicast_route(
+                (LowLatencyMeshPacketHeader*)packet_header,
+                direction,
+                my_dev_id,
+                dst_dev_id,
+                dst_mesh_id,  // Ignored since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
+                ew_dim);
+        }
+    }
+}
+
+inline void setup_header_noc_transfer(
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    uint32_t packet_payload_size_bytes,
+    uint32_t dest_addr,
+    uint8_t noc_x_start,
+    uint8_t noc_y_start,
+    uint8_t mcast_rect_size_x = 1,
+    uint8_t mcast_rect_size_y = 1) {
+    if constexpr (is_noc_multicast) {
+        packet_header->to_noc_multicast(
+            NocMulticastCommandHeader{dest_addr, noc_x_start, noc_y_start, mcast_rect_size_x, mcast_rect_size_y},
+            packet_payload_size_bytes);
+    } else {
+        packet_header->to_noc_unicast_write(
+            NocUnicastCommandHeader{get_noc_addr(noc_x_start, noc_y_start, dest_addr)}, packet_payload_size_bytes);
+    }
+}
+
+inline void send_packet(
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    uint32_t source_l1_buffer_address,
+    uint32_t packet_payload_size_bytes,
+    uint32_t seed,
+    tt::tt_fabric::WorkerToFabricEdmSender& connection) {
+#ifndef BENCHMARK_MODE
+    // fill packet data for sanity testing
+    tt_l1_ptr uint32_t* start_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address);
+    fill_packet_data(start_addr, packet_payload_size_bytes / 16, seed);
+    tt_l1_ptr uint32_t* last_word_addr =
+        reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address + packet_payload_size_bytes - 4);
+#endif
+    connection.wait_for_empty_write_slot();
+#ifdef TEST_ENABLE_FABRIC_TRACING
+    RECORD_FABRIC_HEADER(packet_header);
+#endif
+    connection.send_payload_without_header_non_blocking_from_address(
+        source_l1_buffer_address, packet_payload_size_bytes);
+    connection.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+}
+
+// connect to edm
+inline void setup_connection(tt::tt_fabric::WorkerToFabricEdmSender& connection) { connection.open(); }
 
 inline void teardown_connection(tt::tt_fabric::WorkerToFabricEdmSender& connection) { connection.close(); }
 
@@ -102,14 +150,36 @@ void kernel_main() {
     uint32_t source_l1_buffer_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t packet_payload_size_bytes = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_packets = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t rx_noc_encoding = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t time_seed = get_arg_val<uint32_t>(rt_args_idx++);
+
+    // noc transfer info
+    uint32_t noc_x_start = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t noc_y_start = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t mcast_rect_size_x = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t mcast_rect_size_y = get_arg_val<uint32_t>(rt_args_idx++);
+
+    // routing info
     uint32_t ew_dim = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t my_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t fwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t fwd_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);
-
-    uint64_t noc_dest_addr = get_noc_addr_helper(rx_noc_encoding, target_address);
+    uint32_t fwd_start_distance;
+    uint32_t fwd_range;
+    uint32_t fwd_dev_id;
+    uint32_t fwd_mesh_id;
+    uint32_t bwd_start_distance;
+    uint32_t bwd_range;
+    uint32_t bwd_dev_id;
+    uint32_t bwd_mesh_id;
+    // 1d specific
+    if constexpr (!is_2d_fabric) {
+        fwd_start_distance = get_arg_val<uint32_t>(rt_args_idx++);
+        fwd_range = get_arg_val<uint32_t>(rt_args_idx++);  // for multicast only
+    }
+    // 2d specific
+    else {
+        fwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);   // for unicast only
+        fwd_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);  // for unicast only
+        fwd_range = get_arg_val<uint32_t>(rt_args_idx++);    // for multicast only
+    }
 
     tt::tt_fabric::WorkerToFabricEdmSender fwd_fabric_connection;
     tt::tt_fabric::WorkerToFabricEdmSender bwd_fabric_connection;
@@ -117,66 +187,69 @@ void kernel_main() {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fwd_packet_header;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* bwd_packet_header;
 
-    if constexpr (mcast_mode) {
-        uint32_t mcast_fwd_hops = get_arg_val<uint32_t>(rt_args_idx++);
+    /***************** setup forward dir *****************/
+    fwd_fabric_connection =
+        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-        fwd_fabric_connection =
-            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    fwd_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
+    zero_l1_buf((uint32_t*)packet_header_buffer_address, sizeof(PACKET_HEADER_TYPE));
 
-        uint32_t bwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t mcast_bwd_hops = get_arg_val<uint32_t>(rt_args_idx++);
+    setup_connection(fwd_fabric_connection);
+
+    if constexpr (!is_2d_fabric) {  // 1D
+        setup_header_routing_1d(fwd_packet_header, fwd_start_distance, fwd_range);
+        DPRINT << "fwd_start_distance" << fwd_start_distance << ", fwd_range" << fwd_range << ENDL();
+    } else {  // 2D
+        setup_header_routing_2d(
+            fwd_packet_header,
+            (eth_chan_directions)fwd_fabric_connection.direction,
+            fwd_range,
+            my_dev_id,
+            fwd_dev_id,
+            fwd_mesh_id,
+            ew_dim);
+    }
+
+    /***************** setup bawkward dir *****************/
+    if constexpr (additional_dir) {
+        // routing info for additional direction
+        // 1d specific
+        if constexpr (!is_2d_fabric) {
+            bwd_start_distance = get_arg_val<uint32_t>(rt_args_idx++);
+            bwd_range = get_arg_val<uint32_t>(rt_args_idx++);  // for multicast only
+        }
+        // 2d specific
+        else {
+            bwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);   // for unicast only
+            bwd_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);  // for unicast only
+            bwd_range = get_arg_val<uint32_t>(rt_args_idx++);    // for multicast only
+        }
+
         bwd_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-        fwd_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
         bwd_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
-        zero_l1_buf((uint32_t*)packet_header_buffer_address, sizeof(PACKET_HEADER_TYPE) * 2);
 
-        if constexpr (is_2d_fabric) {
-            set_mcast_header(fwd_packet_header, (eth_chan_directions)fwd_fabric_connection.direction, mcast_fwd_hops);
-            set_mcast_header(bwd_packet_header, (eth_chan_directions)bwd_fabric_connection.direction, mcast_bwd_hops);
+        zero_l1_buf((uint32_t*)packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE), sizeof(PACKET_HEADER_TYPE));
+
+        setup_connection(bwd_fabric_connection);
+
+        if constexpr (!is_2d_fabric) {  // 1D
+            setup_header_routing_1d(bwd_packet_header, bwd_start_distance, bwd_range);
+        } else {  // 2D
+            setup_header_routing_2d(
+                bwd_packet_header,
+                (eth_chan_directions)bwd_fabric_connection.direction,
+                bwd_range,
+                my_dev_id,
+                bwd_dev_id,
+                bwd_mesh_id,
+                ew_dim);
         }
-
-        setup_connection_and_headers(
-            fwd_fabric_connection, fwd_packet_header, mcast_fwd_hops, noc_dest_addr, packet_payload_size_bytes);
-
-        setup_connection_and_headers(
-            bwd_fabric_connection, bwd_packet_header, mcast_bwd_hops, noc_dest_addr, packet_payload_size_bytes);
-
-    } else {
-        uint32_t unicast_hops = get_arg_val<uint32_t>(rt_args_idx++);
-
-        fwd_fabric_connection =
-            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-
-        fwd_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
-        zero_l1_buf((uint32_t*)packet_header_buffer_address, sizeof(PACKET_HEADER_TYPE));
-
-        if constexpr (is_2d_fabric) {
-            if constexpr (use_dynamic_routing) {
-                fabric_set_unicast_route(
-                    (MeshPacketHeader*)packet_header_buffer_address,
-                    (eth_chan_directions)fwd_fabric_connection.direction,
-                    my_dev_id,
-                    fwd_dev_id,
-                    fwd_mesh_id,
-                    ew_dim);
-            } else {
-                fabric_set_unicast_route(
-                    (LowLatencyMeshPacketHeader*)packet_header_buffer_address,
-                    (eth_chan_directions)fwd_fabric_connection.direction,
-                    my_dev_id,
-                    fwd_dev_id,
-                    fwd_mesh_id,
-                    ew_dim);
-            }
-        }
-
-        setup_connection_and_headers(
-            fwd_fabric_connection, fwd_packet_header, unicast_hops, noc_dest_addr, packet_payload_size_bytes);
     }
 
+    /***************** send packets *****************/
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
 
@@ -186,46 +259,51 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_packets; i++) {
 #ifndef BENCHMARK_MODE
         time_seed = prng_next(time_seed);
-#endif
-        if constexpr (mcast_mode) {
-            // fwd packet
-            send_packet(
-                fwd_packet_header,
-                noc_dest_addr,
-                source_l1_buffer_address,
-                packet_payload_size_bytes,
-                time_seed,
-                fwd_fabric_connection);
 
+        setup_header_noc_transfer(
+            fwd_packet_header,
+            packet_payload_size_bytes,
+            target_address,
+            noc_x_start,
+            noc_y_start,
+            mcast_rect_size_x,
+            mcast_rect_size_y);
+
+        if constexpr (additional_dir) {
+            setup_header_noc_transfer(
+                bwd_packet_header,
+                packet_payload_size_bytes,
+                target_address,
+                noc_x_start,
+                noc_y_start,
+                mcast_rect_size_x,
+                mcast_rect_size_y);
+        }
+#endif
+
+        // fwd packet
+        send_packet(
+            fwd_packet_header, source_l1_buffer_address, packet_payload_size_bytes, time_seed, fwd_fabric_connection);
+
+        if constexpr (additional_dir) {
             // bwd packet
             send_packet(
                 bwd_packet_header,
-                noc_dest_addr,
                 source_l1_buffer_address,
                 packet_payload_size_bytes,
                 time_seed,
                 bwd_fabric_connection);
-        } else {
-            send_packet(
-                fwd_packet_header,
-                noc_dest_addr,
-                source_l1_buffer_address,
-                packet_payload_size_bytes,
-                time_seed,
-                fwd_fabric_connection);
         }
 #ifndef BENCHMARK_MODE
-        noc_dest_addr += packet_payload_size_bytes;
+        target_address += packet_payload_size_bytes;
 #endif
     }
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 
-    if constexpr (mcast_mode) {
-        teardown_connection(fwd_fabric_connection);
+    teardown_connection(fwd_fabric_connection);
+    if constexpr (additional_dir) {
         teardown_connection(bwd_fabric_connection);
-    } else {
-        teardown_connection(fwd_fabric_connection);
     }
 
     noc_async_write_barrier();
