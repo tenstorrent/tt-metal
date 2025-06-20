@@ -294,8 +294,33 @@ def test_bitwise_left_shift(device, ttnn_function, ttnn_dtype):
     ],
 )
 def test_bitwise_right_shift(device, ttnn_function, ttnn_dtype):
-    x_torch = torch.tensor([[19, 3, 101, 21, 47, 0]], dtype=torch.int32)
-    y_torch = torch.tensor([[5, 2, 31, 4, 5, 0]], dtype=torch.int32)
+    x_torch = torch.tensor(
+        [
+            [
+                19,
+                101,
+                21,
+                47,
+                0,
+                -4,
+                -99,
+                -278,
+                1000,
+                99999,
+                -99999,
+                -7544,
+                1,
+                -1,
+                2**31 - 1,
+                -(2**31),
+                123456789,
+                -123456789,
+            ]
+        ],
+        dtype=torch.int32,
+    )
+
+    y_torch = torch.tensor([[5, 31, 4, 5, 0, 1, 4, 1, 32, 66, 1, 14, 0, 1, 31, 31, 1, 5]], dtype=torch.int32)
     if ttnn_dtype == ttnn.uint32:  # Stimulate uint32 input
         x_uint32 = x_torch.to(torch.int64) & 0xFFFFFFFF
         y_uint32 = y_torch.to(torch.int64) & 0xFFFFFFFF
