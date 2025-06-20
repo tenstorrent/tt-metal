@@ -191,5 +191,6 @@ def test_conv_dram(
         slice_config=ttnn.Conv2dSliceConfig(
             slice_type=slice_type,
             num_slices=num_slices,
+            output_layout=input_layout,
         ),
     )

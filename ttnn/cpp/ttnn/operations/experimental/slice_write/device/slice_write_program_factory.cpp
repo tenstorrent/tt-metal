@@ -727,7 +727,7 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
         "Slice write expects output start for the second last dimension to be a multiple of tile height");
 
     TT_FATAL(
-        input_shape[-2] % TILE_HEIGHT == 0,
+        input_padded_shape[-2] % TILE_HEIGHT == 0,
         "Slice write expects input shape for the second last dimension to be a multiple of tile height");
 
     TT_FATAL(
@@ -766,23 +766,6 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
     const uint32_t src0_cb_index = tt::CBIndex::c_0;
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
-    std::vector<uint32_t> num_input_sticks_per_dim(num_dims);
-    std::vector<uint32_t> num_output_sticks_per_dim(num_dims);
-    std::vector<uint32_t> id_per_dim(num_dims);
-
-    std::vector<uint32_t> accumulated_total_per_dim(num_dims);
-    num_input_sticks_per_dim[0] = 1;
-    num_output_sticks_per_dim[0] = 0;
-    accumulated_total_per_dim[0] = 1;
-
-    for (int32_t i = 1; i < num_dims; i++) {
-        uint32_t num_unpadded_dim = input_shape[-(i + 1)];
-        uint32_t num_total_dim = output_shape[-(i + 1)];
-        uint32_t num_padded_dim = (num_total_dim - num_unpadded_dim) * accumulated_total_per_dim[i - 1];
-        num_input_sticks_per_dim[i] = num_unpadded_dim;
-        num_output_sticks_per_dim[i] = num_padded_dim;
-        accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
-    }
 
     uint32_t num_tiles_height_per_core = shard_spec.shape[0] / TILE_HEIGHT;
     uint32_t num_tiles_per_channel = shard_spec.shape[1] / TILE_HEIGHT;

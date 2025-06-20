@@ -18,6 +18,7 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
+#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/constants.hpp>
 
@@ -365,10 +366,11 @@ void py_bind_conv2d(py::module& module) {
         | Conv2dSliceConfig determines how this slicing happens.
         )doc");
     py_conv_slice_config.def(
-        py::init<Conv2dSliceConfig::SliceType, uint32_t>(),
+        py::init<Conv2dSliceConfig::SliceType, uint32_t, Layout>(),
         py::kw_only(),
         py::arg("slice_type"),
-        py::arg("num_slices"));
+        py::arg("num_slices"),
+        py::arg("output_layout") = std::nullopt);
     py_conv_slice_config.def_readwrite(
         "slice_type",
         &Conv2dSliceConfig::slice_type,
@@ -385,6 +387,12 @@ void py_bind_conv2d(py::module& module) {
         | The output tensor is divided into num_slices slices along the slice_type dimension.
         | The corresponding input tensor needed to calculate that output is determined and sliced.
         | If the size of the slice dimension is not divisible by num_slices, then the last slice will be smaller than the rest.
+        )doc");
+    py_conv_slice_config.def_readwrite(
+        "output_layout",
+        &Conv2dSliceConfig::output_layout,
+        R"doc(
+        | The layout of the output tensor in DRAM.
         )doc");
     py::enum_<Conv2dSliceConfig::SliceType>(py_conv_slice_config, "SliceTypeEnum")
         .value("SliceHeight", Conv2dSliceConfig::SliceType::HEIGHT)

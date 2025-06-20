@@ -214,15 +214,25 @@ Result conv2d_DRAM(
                 })),
         device);
 
+    uint32_t slice_rounding_value = 1;
+    if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::WIDTH &&
+        output_layout == tt_metal::Layout::TILE) {
+        // For width sharded conv2d with TILE layout, we need to round the slice size to a multiple of TILE_HEIGHT.
+        slice_rounding_value = tt::constants::TILE_HEIGHT;
+    }
+
     bool first_run = true;
-    const uint32_t min_output_slice_size = output_sliced_dim / dram_slice_config.num_slices;
-    const uint32_t output_slice_rem = output_sliced_dim % dram_slice_config.num_slices;
+    const uint32_t min_output_slice_size =
+        tt::div_up(output_sliced_dim, slice_rounding_value) / dram_slice_config.num_slices;
+    const uint32_t output_slice_rem =
+        tt::div_up(output_sliced_dim, slice_rounding_value) % dram_slice_config.num_slices;
 
     uint32_t slice_index = 0;
     uint32_t output_slice_dim_start = 0;
 
     while ((output_slice_dim_start < output_sliced_dim) && (slice_index < dram_slice_config.num_slices)) {
-        const uint32_t output_slice_size = min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0);
+        const uint32_t output_slice_size =
+            slice_rounding_value * (min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0));
         const uint32_t output_slice_dim_end = std::min(output_sliced_dim, output_slice_dim_start + output_slice_size);
         const uint32_t this_output_slice_dim = output_slice_dim_end - output_slice_dim_start;
 
@@ -275,6 +285,22 @@ Result conv2d_DRAM(
                 continue;
             }
         }
+        log_info(
+            LogOp,
+            "Conv2d DRAM Slicing: Slice {}: Output Slice Start: ({}, {}), End: ({}, {})",
+            slice_index,
+            output_slice_height_start,
+            output_slice_width_start,
+            output_slice_height_end,
+            output_slice_width_end);
+        log_info(
+            LogOp,
+            "Conv2d DRAM Slicing: Slice {}: Input Slice Start: ({}, {}), End: ({}, {})",
+            slice_index,
+            input_slice_height_start,
+            input_slice_width_start,
+            input_slice_height_end,
+            input_slice_width_end);
 
         const uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
         const uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
@@ -375,7 +401,7 @@ Result conv2d_DRAM(
             sliced_output_tensor = ttnn::to_memory_config(
                 sliced_output_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
         }
-        if (sliced_output_tensor.layout() != Layout::ROW_MAJOR) {
+        if (sliced_output_tensor.layout() != Layout::ROW_MAJOR && output_layout == Layout::ROW_MAJOR) {
             sliced_output_tensor = ttnn::untilize(sliced_output_tensor);
         }
         if (sliced_output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
