@@ -156,9 +156,13 @@ Full example and output
 -----------------------
 
 Lets put everything together in a complete example that can be run directly. This example will open a Tenstorrent device, create two tensors, perform the addition, and print the output tensor.
+You can run the provided ``train_and_export_mlp.py`` script to generate the weights to a file named ``mlp_mnist_weights.pt``.
 
 .. literalinclude:: ttnn_tutorials_basic_python/ttnn_mlp_inference_mnist.py
-   :caption: Source Code
+   :caption: Example Source Code
+
+.. literalinclude:: ttnn_tutorials_basic_python/train_and_export_mlp.py
+   :caption: Script to generate weights for example
 
 Running this script will output the input tensors and the result of their addition, which should be a tensor filled with 3s. As shown below
 
