@@ -165,12 +165,18 @@ private:
     void resetControlBufferForCore(IDevice* device, const CoreCoord& virtual_core, ProfilerDumpState state);
 
     // Read all L1 data buffers
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> readL1DataBuffers(
-        IDevice* device, const std::vector<CoreCoord>& virtual_cores, ProfilerDumpState state);
+    void readL1DataBuffers(
+        IDevice* device,
+        const std::vector<CoreCoord>& virtual_cores,
+        ProfilerDumpState state,
+        std::unordered_map<CoreCoord, std::vector<uint32_t>>& core_l1_data_buffers);
 
     // Read L1 data buffer for a single core
-    std::vector<uint32_t> readL1DataBufferForCore(
-        IDevice* device, const CoreCoord& virtual_core, ProfilerDumpState state);
+    void readL1DataBufferForCore(
+        IDevice* device,
+        const CoreCoord& virtual_core,
+        ProfilerDumpState state,
+        std::vector<uint32_t>& core_l1_data_buffer);
 
     // Read device profiler buffer
     void readProfilerBuffer(IDevice* device, ProfilerDumpState state);
@@ -182,10 +188,12 @@ private:
     void issueSlowDispatchReadFromProfilerBuffer(IDevice* device);
 
     // Read data from L1 data buffer using fast dispatch
-    std::vector<uint32_t> issueFastDispatchReadFromL1DataBuffer(IDevice* device, const CoreCoord& worker_core);
+    void issueFastDispatchReadFromL1DataBuffer(
+        IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer);
 
     // Read data from L1 data buffer using slow dispatch
-    std::vector<uint32_t> issueSlowDispatchReadFromL1DataBuffer(IDevice* device, const CoreCoord& worker_core);
+    void issueSlowDispatchReadFromL1DataBuffer(
+        IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer);
 
     // Dumping profile result to file
     void logPacketData(

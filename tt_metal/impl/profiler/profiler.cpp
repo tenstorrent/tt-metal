@@ -154,8 +154,8 @@ void DeviceProfiler::issueSlowDispatchReadFromProfilerBuffer(IDevice* device) {
     }
 }
 
-std::vector<uint32_t> DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
-    IDevice* device, const CoreCoord& worker_core) {
+void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
+    IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
 
     TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
@@ -165,63 +165,70 @@ std::vector<uint32_t> DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
     const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);
     profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
     const uint32_t num_risc_processors = hal.get_num_risc_processors(core_type);
-    std::vector<uint32_t> data_buffer(kernel_profiler::PROFILER_L1_VECTOR_SIZE * num_risc_processors);
+    core_l1_data_buffer.resize(kernel_profiler::PROFILER_L1_VECTOR_SIZE * num_risc_processors);
     if (auto mesh_device = device->get_mesh_device()) {
         const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
         dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue())
             .enqueue_read_shard_from_core(
                 distributed::DeviceMemoryAddress{
                     device_coord, worker_core, reinterpret_cast<DeviceAddr>(profiler_msg->buffer)},
-                data_buffer.data(),
+                core_l1_data_buffer.data(),
                 kernel_profiler::PROFILER_L1_BUFFER_SIZE * num_risc_processors,
                 false);
     } else {
         dynamic_cast<HWCommandQueue&>(device->command_queue())
             .enqueue_read_from_core(
                 worker_core,
-                data_buffer.data(),
+                core_l1_data_buffer.data(),
                 reinterpret_cast<DeviceAddr>(profiler_msg->buffer),
                 kernel_profiler::PROFILER_L1_BUFFER_SIZE * num_risc_processors,
                 false);
     }
-
-    return data_buffer;
 }
 
-std::vector<uint32_t> DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
-    IDevice* device, const CoreCoord& worker_core) {
+void DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
+    IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
 
     const chip_id_t device_id = device->id();
     const Hal& hal = MetalContext::instance().hal();
     const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);
     profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    return tt::llrt::read_hex_vec_from_core(
+    core_l1_data_buffer = tt::llrt::read_hex_vec_from_core(
         device_id,
         worker_core,
         reinterpret_cast<uint64_t>(profiler_msg->buffer),
         kernel_profiler::PROFILER_L1_BUFFER_SIZE * hal.get_num_risc_processors(core_type));
 }
 
-std::vector<uint32_t> DeviceProfiler::readL1DataBufferForCore(
-    IDevice* device, const CoreCoord& virtual_core, const ProfilerDumpState state) {
+void DeviceProfiler::readL1DataBufferForCore(
+    IDevice* device,
+    const CoreCoord& virtual_core,
+    const ProfilerDumpState state,
+    std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
     if (useFastDispatchForDataBuffers(state)) {
-        return issueFastDispatchReadFromL1DataBuffer(device, virtual_core);
+        issueFastDispatchReadFromL1DataBuffer(device, virtual_core, core_l1_data_buffer);
     } else {
-        return issueSlowDispatchReadFromL1DataBuffer(device, virtual_core);
+        issueSlowDispatchReadFromL1DataBuffer(device, virtual_core, core_l1_data_buffer);
     }
 }
 
-std::unordered_map<CoreCoord, std::vector<uint32_t>> DeviceProfiler::readL1DataBuffers(
-    IDevice* device, const std::vector<CoreCoord>& virtual_cores, const ProfilerDumpState state) {
+void DeviceProfiler::readL1DataBuffers(
+    IDevice* device,
+    const std::vector<CoreCoord>& virtual_cores,
+    const ProfilerDumpState state,
+    std::unordered_map<CoreCoord, std::vector<uint32_t>>& core_l1_data_buffers) {
     ZoneScoped;
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> core_l1_data_buffers;
+
     for (const CoreCoord& virtual_core : virtual_cores) {
-        core_l1_data_buffers[virtual_core] = readL1DataBufferForCore(device, virtual_core, state);
+        std::vector<uint32_t>& core_l1_data_buffer = core_l1_data_buffers[virtual_core];
+        readL1DataBufferForCore(device, virtual_core, state, core_l1_data_buffer);
     }
 
-    return core_l1_data_buffers;
+    if (useFastDispatchForDataBuffers(state)) {
+        waitForDeviceCommandsToFinish(device);
+    }
 }
 
 void DeviceProfiler::readControlBufferForCore(
@@ -268,27 +275,34 @@ void DeviceProfiler::readControlBuffers(
     for (const CoreCoord& virtual_core : virtual_cores) {
         readControlBufferForCore(device, virtual_core, state);
     }
-}
 
-void DeviceProfiler::resetControlBufferForCore(
-    IDevice* device, const CoreCoord& virtual_core, const ProfilerDumpState state) {
-    ZoneScoped;
-
-    const std::vector<uint32_t>& control_buffer = core_control_buffers.at(virtual_core);
-    std::vector<uint32_t> control_buffer_reset(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-    control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] =
-        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS];
-    control_buffer_reset[kernel_profiler::FLAT_ID] = control_buffer[kernel_profiler::FLAT_ID];
-    control_buffer_reset[kernel_profiler::CORE_COUNT_PER_DRAM] = control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM];
-
-    writeToCoreControlBuffer(device, virtual_core, state, control_buffer_reset);
+    if (useFastDispatchForControlBuffers(state)) {
+        waitForDeviceCommandsToFinish(device);
+    }
 }
 
 void DeviceProfiler::resetControlBuffers(
     IDevice* device, const std::vector<CoreCoord>& virtual_cores, const ProfilerDumpState state) {
     ZoneScoped;
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> core_control_buffer_resets;
     for (const CoreCoord& virtual_core : virtual_cores) {
-        resetControlBufferForCore(device, virtual_core, state);
+        const std::vector<uint32_t>& control_buffer = core_control_buffers.at(virtual_core);
+
+        std::vector<uint32_t>& core_control_buffer_reset = core_control_buffer_resets[virtual_core];
+        core_control_buffer_reset.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
+        core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] =
+            control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS];
+        core_control_buffer_reset[kernel_profiler::FLAT_ID] = control_buffer[kernel_profiler::FLAT_ID];
+        core_control_buffer_reset[kernel_profiler::CORE_COUNT_PER_DRAM] =
+            control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM];
+    }
+
+    for (const auto& [virtual_core, control_buffer_reset] : core_control_buffer_resets) {
+        writeToCoreControlBuffer(device, virtual_core, state, control_buffer_reset);
+    }
+
+    if (useFastDispatchForControlBuffers(state)) {
+        waitForDeviceCommandsToFinish(device);
     }
 }
 
@@ -296,6 +310,7 @@ void DeviceProfiler::readProfilerBuffer(IDevice* device, const ProfilerDumpState
     ZoneScoped;
     if (useFastDispatchForDataBuffers(state)) {
         issueFastDispatchReadFromProfilerBuffer(device);
+        waitForDeviceCommandsToFinish(device);
     } else {
         issueSlowDispatchReadFromProfilerBuffer(device);
     }
@@ -1228,10 +1243,6 @@ void DeviceProfiler::dumpResults(
 
         resetControlBuffers(device, virtual_cores, state);
 
-        if (useFastDispatchForControlBuffers(state) || useFastDispatchForDataBuffers(state)) {
-            waitForDeviceCommandsToFinish(device);
-        }
-
         for (const auto& virtual_core : virtual_cores) {
             readRiscProfilerResults(
                 device,
@@ -1249,12 +1260,8 @@ void DeviceProfiler::dumpResults(
 
         resetControlBuffers(device, virtual_cores, state);
 
-        const std::unordered_map<CoreCoord, std::vector<uint32_t>> core_l1_data_buffers =
-            readL1DataBuffers(device, virtual_cores, state);
-
-        if (useFastDispatchForControlBuffers(state) || useFastDispatchForDataBuffers(state)) {
-            waitForDeviceCommandsToFinish(device);
-        }
+        std::unordered_map<CoreCoord, std::vector<uint32_t>> core_l1_data_buffers;
+        readL1DataBuffers(device, virtual_cores, state, core_l1_data_buffers);
 
         for (const auto& virtual_core : virtual_cores) {
             readRiscProfilerResults(
