@@ -86,11 +86,6 @@ struct DistributionSpec {
 
     static constexpr auto num_banks = BankCoords::num_banks;
     static constexpr auto packed_xy_coords = BankCoords::packed_xy_coords;
-    // Check that the number of shards is greater than or equal to the number of banks
-    // Here, shard_grid_strides[0] * shard_grid[0] is the total number of shards
-    static_assert(
-        shard_grid_strides[0] * shard_grid[0] >= num_banks,
-        "Number of shards must be greater than or equal to number of banks!");
 };
 
 template <size_t BASE, size_t RANK, size_t NUM_BANKS>
