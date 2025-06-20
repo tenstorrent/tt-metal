@@ -16,7 +16,6 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
-#include <magic_enum/magic_enum.hpp>
 
 #include <array>
 #include <unordered_set>
@@ -32,6 +31,8 @@ namespace tt::tt_metal {
 namespace inspector {
 class Data;
 }
+
+constexpr auto CORE_TYPE_COUNT = 12U;
 
 // A class to manage one-time initialization and teardown (FW, dispatch, fabric, cluster) and access to related state.
 // Dispatch-independent state (Cluster) is initialized with the creation of MetalContext and accessible right after.
@@ -104,7 +105,7 @@ private:
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
     std::unique_ptr<inspector::Data> inspector_data_;
-    std::array<std::unique_ptr<DispatchMemMap>, magic_enum::enum_count<CoreType>()> dispatch_mem_map_;
+    std::array<std::unique_ptr<DispatchMemMap>, CORE_TYPE_COUNT> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::GlobalControlPlane> global_control_plane_;
     tt_metal::FabricConfig fabric_config_ = tt_metal::FabricConfig::DISABLED;
 
