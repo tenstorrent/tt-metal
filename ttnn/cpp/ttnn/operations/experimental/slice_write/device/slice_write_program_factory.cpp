@@ -11,6 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 
 #include "slice_write_op.hpp"
+#include "tt-metalium/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
 using namespace tt::constants;
@@ -566,12 +567,11 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     std::vector<uint32_t> size_till_end(num_dims);
 
     num_input_tiles_per_dim[0] = actual_input_shape[-1] / (TILE_WIDTH * num_cores_channels);
-    num_input_tiles_per_dim[1] = actual_input_shape[-2] / TILE_HEIGHT;
+    num_input_tiles_per_dim[1] = tt::div_up(actual_input_shape[-2], TILE_HEIGHT);
 
     num_output_tiles_per_dim[0] = 0;
-    num_output_tiles_per_dim[1] = (output_shape[-2] / TILE_HEIGHT) - num_input_tiles_per_dim[1];
-    num_output_tiles_per_dim[1] *= output_shape[-1] / TILE_WIDTH;
-    ;
+    num_output_tiles_per_dim[1] = tt::div_up(output_shape[-2], TILE_HEIGHT) - num_input_tiles_per_dim[1];
+    num_output_tiles_per_dim[1] *= tt::div_up(output_shape[-1], TILE_WIDTH);
 
     log_debug(
         tt::LogOp,
@@ -582,7 +582,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         input_shape,
         output_shape);
 
-    accumulated_total_tiles_per_dim[0] = output_shape[-1] / TILE_WIDTH;
+    accumulated_total_tiles_per_dim[0] = tt::div_up(output_shape[-1], TILE_WIDTH);
     accumulated_total_tiles_per_dim[1] = tt::div_up(output_shape[-2], TILE_HEIGHT) * accumulated_total_tiles_per_dim[0];
 
     accumulated_input_total_tiles_per_dim[0] = actual_input_shape[-1] / TILE_WIDTH;

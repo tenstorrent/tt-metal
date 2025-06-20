@@ -185,27 +185,34 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
         begins = [0, 0, 0, 0]
         ends = [dims[0], dims[1], dims[2], padded_channels]
         begins[slice_dim] = i * slice_size
-        ends[slice_dim] = (i + 1) * slice_size
+        if i == num_slices - 1:
+            ends[slice_dim] = dims[slice_dim]
+        else:
+            ends[slice_dim] = (i + 1) * slice_size
         this_torch_input = padded_torch_input[
             begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]
         ]
         input_shape = this_torch_input.shape
 
-        input_shape = [1, 1, input_shape[0] * input_shape[1] * input_shape[2], padded_channels]
+        this_ttnn_input = ttnn.from_torch(
+            this_torch_input,
+            layout=layout,
+            dtype=ttnn.bfloat16,
+        )
+        this_ttnn_input = ttnn.to_device(
+            this_ttnn_input,
+            device=device,
+        )
+        this_ttnn_input = ttnn.reshape(this_ttnn_input, this_ttnn_input.padded_shape)
+        this_ttnn_input = ttnn.reshape(this_ttnn_input, [1, 1, -1, this_ttnn_input.padded_shape[-1]])
 
         memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
-            input_shape,
+            this_ttnn_input.shape,
             parallel_config,
             32 if layout == ttnn.TILE_LAYOUT else 1,
         )
 
-        this_ttnn_input = ttnn.from_torch(
-            this_torch_input.reshape(input_shape),
-            device=device,
-            layout=layout,
-            dtype=ttnn.bfloat16,
-            memory_config=memory_config,
-        )
+        this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, memory_config)
         ends[-1] = ttnn_output.shape[-1]
         ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
 
