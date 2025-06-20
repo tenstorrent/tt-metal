@@ -47,22 +47,58 @@ Tensor _xlogy(const Tensor& input_a, const Tensor& input_b, const std::optional<
     return result;
 }
 
-// subalpha(input,other,alpha)=input-alpha*other
-Tensor _subalpha(
-    const Tensor& input_a, const Tensor& input_b, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result = ttnn::add(
-        ttnn::neg(ttnn::multiply(input_b, alpha, std::nullopt, output_mem_config), output_mem_config),
-        input_a,
+// addalpha(input, other, alpha) = input + (alpha * other)
+Tensor ExecuteAddalpha::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    float alpha,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    tt::stl::Span<const unary::UnaryWithParam> post_activations,
+    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    SmallVector<unary::UnaryWithParam> modified_rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    return BinaryOperation<operations::binary::BinaryOpType::ADD>::invoke(
+        queue_id,
+        input_tensor_a,
+        input_tensor_b,
         std::nullopt,
-        output_mem_config);
-    return result;
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        modified_rhs_activations,
+        false);
 }
 
-// addalpha(input, other, alpha) = input + (alpha * other)
-Tensor _addalpha(
-    const Tensor& input_a, const Tensor& input_b, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::add(
-        ttnn::multiply(input_b, alpha, std::nullopt, output_mem_config), input_a, std::nullopt, output_mem_config);
+// subalpha(input, other, alpha) = input - (alpha * other)
+Tensor ExecuteSubalpha::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    float alpha,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    tt::stl::Span<const unary::UnaryWithParam> post_activations,
+    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    SmallVector<unary::UnaryWithParam> modified_rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    return BinaryOperation<operations::binary::BinaryOpType::SUB>::invoke(
+        queue_id,
+        input_tensor_a,
+        input_tensor_b,
+        std::nullopt,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        modified_rhs_activations,
+        false);
 }
 
 // nextafter

@@ -6,6 +6,7 @@ import torch
 import ttnn
 
 import pytest
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
 
 def test_sub_fp32(device):
@@ -393,3 +394,29 @@ def test_ng_scalar_fp32(device, ttnn_function):
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
     assert status
+
+
+@pytest.mark.parametrize("alpha", [-10.0, -5.0, 1.0, 2.0, 5.0, 10.0])
+def test_addalpha_fp32(alpha, device):
+    x_torch = torch.tensor([[1.5, 2, 3.33, 4]], dtype=torch.float32)
+    y_torch = torch.tensor([[2.009, 3.11, 4.22, 5]], dtype=torch.float32)
+    golden_fn = ttnn.get_golden_function(ttnn.addalpha)
+    z_torch = golden_fn(x_torch, y_torch, alpha)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn.addalpha(x_tt, y_tt, alpha)
+    assert_with_ulp(z_tt_out, z_torch)
+    assert_with_pcc(ttnn.to_torch(z_tt_out), z_torch)
+
+
+@pytest.mark.parametrize("alpha", [-100.0, -20.0, 0.0, 2.0, 5.0, 10.0, 50.0])
+def test_subalpha_fp32(alpha, device):
+    x_torch = torch.tensor([[1.5, 2, 3.33, 4]], dtype=torch.float32)
+    y_torch = torch.tensor([[2.009, 3.11, 4.22, 5]], dtype=torch.float32)
+    golden_fn = ttnn.get_golden_function(ttnn.subalpha)
+    z_torch = golden_fn(x_torch, y_torch, alpha)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn.subalpha(x_tt, y_tt, alpha)
+    assert_with_ulp(z_tt_out, z_torch)
+    assert_with_pcc(ttnn.to_torch(z_tt_out), z_torch)
