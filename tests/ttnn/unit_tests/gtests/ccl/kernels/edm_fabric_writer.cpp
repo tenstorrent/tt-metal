@@ -113,9 +113,8 @@ FORCE_INLINE void send_packets_unicast_write_impl(
         0);
 
     if constexpr (scatter_write) {
-        uint32_t send_size1 = params.payload_size_bytes >> 1;
+        uint16_t send_size1 = (uint16_t)params.payload_size_bytes >> 1;
         uint32_t send_size2 = params.payload_size_bytes - send_size1;
-        uint32_t single_payload_size = params.payload_size_bytes >> 1;
         pkt_hdr_fwd->to_noc_unicast_scatter_write(
             NocUnicastScatterCommandHeader{noc0_dest_addr_fwd, noc0_dest_addr_fwd + send_size1, send_size1},
             params.payload_size_bytes);

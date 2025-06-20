@@ -51,11 +51,11 @@ enum EDMStatus : uint32_t {
 enum NocSendType : uint8_t {
     NOC_UNICAST_WRITE = 0,
     NOC_UNICAST_INLINE_WRITE = 1,
-    NOC_MULTICAST_WRITE = 2,
-    NOC_UNICAST_ATOMIC_INC = 3,
-    NOC_FUSED_UNICAST_ATOMIC_INC = 4,
-    NOC_UNICAST_SCATTER_WRITE = 5,
-    NOC_MULTICAST_ATOMIC_INC = 6,
+    NOC_UNICAST_ATOMIC_INC = 2,
+    NOC_FUSED_UNICAST_ATOMIC_INC = 3,
+    NOC_UNICAST_SCATTER_WRITE = 4,
+    NOC_MULTICAST_WRITE = 5,       // mcast has bug
+    NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
     NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE
 };
 // How to send the payload across the cluster
@@ -97,7 +97,7 @@ struct NocUnicastCommandHeader {
 struct NocUnicastScatterCommandHeader {
     uint64_t noc_address1;
     uint64_t noc_address2;
-    uint32_t chunk_size1;
+    uint16_t chunk_size1;
 };
 struct NocUnicastInlineWriteCommandHeader {
     uint64_t noc_address;
