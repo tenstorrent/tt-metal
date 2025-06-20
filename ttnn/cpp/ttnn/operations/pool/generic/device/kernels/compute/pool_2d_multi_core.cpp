@@ -102,9 +102,8 @@ void MAIN {
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
 
     constexpr bool last_tile_is_partial = in_c % 32 != 0;
-    // static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
-    constexpr uint32_t num_faces_in_tile =
-        window_size_hw > 16 ? 4 : ((last_tile_is_partial && in_ntiles_c == 1) ? 1 : 2);
+    constexpr uint32_t num_faces_in_tile = window_size_hw > 16 ? 4 : 2;
+    constexpr uint32_t num_faces_in_last_tile = last_tile_is_partial ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
@@ -151,7 +150,7 @@ void MAIN {
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; ++b_i) {
             reduce_h_fused<
                 max_tiles_per_iter,
-                last_tile_is_partial,
+                false,
                 split_reader,
                 face_r_dim,
                 num_faces_in_tile,
@@ -161,9 +160,9 @@ void MAIN {
 
         if constexpr (tilize_reconfig_needed) {
             UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                in_cb_id_0, curr_scalar_cb_id, partial_iter_output_tiles, num_faces_in_tile, face_r_dim, 1)));
+                in_cb_id_0, curr_scalar_cb_id, partial_iter_output_tiles, num_faces_in_last_tile, face_r_dim, 1)));
         }
-        pack_untilize_dst_init_short<partial_iter_output_tiles>(out_cb_id, num_out_rows, num_faces_in_tile);
+        pack_untilize_dst_init_short<partial_iter_output_tiles>(out_cb_id, num_out_rows, num_faces_in_last_tile);
         // perform the reduction over the either whole or partial chunk N
         DPRINT << "in_blocks_c: " << partial_iter_output_tiles << ENDL();
         reduce_h_fused<
@@ -171,7 +170,7 @@ void MAIN {
             last_tile_is_partial,
             split_reader,
             face_r_dim,
-            num_faces_in_tile,
+            num_faces_in_last_tile,
             neginf_srca_maxpool,
             zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, out_cb_id);
         if constexpr (!one_scalar_per_core) {
