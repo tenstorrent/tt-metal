@@ -68,8 +68,8 @@ TensorSpec compute_tensor_spec_for_shards(
 std::ostream& operator<<(std::ostream& os, const MeshMapperConfig::Placement& placement) {
     std::visit(
         tt::stl::overloaded{
-            [&](const MeshMapperConfig::Replicate& replicate) { os << "Replicate()"; },
-            [&](const MeshMapperConfig::Shard& shard) { os << "Shard(" << shard.dim << ")"; },
+            [&](const MeshMapperConfig::Replicate& replicate) { os << "PlacementReplicate()"; },
+            [&](const MeshMapperConfig::Shard& shard) { os << "PlacementShard(" << shard.dim << ")"; },
         },
         placement);
     return os;
