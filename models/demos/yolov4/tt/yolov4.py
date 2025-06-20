@@ -43,7 +43,7 @@ class TtYOLOv4:
 
     def __call__(self, x):
         N, C, H, W = x.shape
-        min_channels = 8
+        min_channels = 16
         if C < min_channels:
             channel_padding_needed = min_channels - C
             nchw = ttnn.pad(x, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
