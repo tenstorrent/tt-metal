@@ -43,8 +43,8 @@ std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() con
     return wrap_around_mesh;
 }
 
-tt::tt_fabric::Topology FabricContext::get_topology() const {
-    switch (this->fabric_config_) {
+tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_metal::FabricConfig fabric_config) {
+    switch (fabric_config) {
         case tt::tt_metal::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
         case tt::tt_metal::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
         case tt::tt_metal::FabricConfig::FABRIC_2D: return tt::tt_fabric::Topology::Mesh;
@@ -52,7 +52,7 @@ tt::tt_fabric::Topology FabricContext::get_topology() const {
         case tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC: return tt::tt_fabric::Topology::Mesh;
         case tt::tt_metal::FabricConfig::DISABLED:
         case tt::tt_metal::FabricConfig::CUSTOM:
-            TT_THROW("Unsupported fabric config: {}", magic_enum::enum_name(this->fabric_config_));
+            TT_THROW("Unsupported fabric config: {}", magic_enum::enum_name(fabric_config));
     }
     return tt::tt_fabric::Topology::Linear;
 }
@@ -77,22 +77,18 @@ size_t FabricContext::get_max_payload_size_bytes() const {
 
 std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_edm_config_options(
     tt::tt_fabric::FabricEriscDatamoverType edm_type, tt::tt_fabric::FabricEriscDatamoverAxis edm_axis) {
-    constexpr bool enable_dateline_sender_extra_buffer_slots = true;
-    constexpr bool enable_dateline_receiver_extra_buffer_slots = true;
-    constexpr bool enable_dateline_upstream_sender_extra_buffer_slots = true;
-    constexpr bool enable_dateline_upstream_receiver_extra_buffer_slots = true;
-    bool enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
-        edm_axis != tt::tt_fabric::FabricEriscDatamoverAxis::Short;
-
+    auto edm_buffer_config = tt::tt_fabric::FabricRouterBufferConfig{
+        .enable_dateline_sender_extra_buffer_slots = true,
+        .enable_dateline_receiver_extra_buffer_slots = true,
+        .enable_dateline_upstream_sender_extra_buffer_slots = true,
+        .enable_dateline_upstream_receiver_extra_buffer_slots = true,
+        .enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
+            edm_axis != tt::tt_fabric::FabricEriscDatamoverAxis::Short,
+    };
     auto edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
         .edm_type = edm_type,
         .edm_axis = edm_axis,
-        .enable_dateline_sender_extra_buffer_slots = enable_dateline_sender_extra_buffer_slots,
-        .enable_dateline_receiver_extra_buffer_slots = enable_dateline_receiver_extra_buffer_slots,
-        .enable_dateline_upstream_sender_extra_buffer_slots = enable_dateline_upstream_sender_extra_buffer_slots,
-        .enable_dateline_upstream_receiver_extra_buffer_slots = enable_dateline_upstream_receiver_extra_buffer_slots,
-        .enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
-            enable_dateline_upstream_adjacent_sender_extra_buffer_slots,
+        .edm_buffer_config = edm_buffer_config,
     };
 
     return std::make_unique<tt::tt_fabric::FabricEriscDatamoverConfig>(
@@ -107,7 +103,7 @@ FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
     this->fabric_config_ = fabric_config;
 
     this->wrap_around_mesh_ = this->check_for_wrap_around_mesh();
-    this->topology_ = this->get_topology();
+    this->topology_ = this->get_topology_from_config(fabric_config);
 
     this->packet_header_size_bytes_ = this->get_packet_header_size_bytes();
     this->max_payload_size_bytes_ = this->get_max_payload_size_bytes();
