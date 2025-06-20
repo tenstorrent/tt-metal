@@ -76,7 +76,6 @@ def test_rand_with_memory_config(device, mem_config):
     tensor = ttnn.rand(DEFAULT_SHAPE, device=device, memory_config=mem_config)
     assert tensor.memory_config() == mem_config
     assert tuple(tensor.shape) == tuple(DEFAULT_SHAPE)
-    # How to verify that it is uses l1/dram?
 
 
 def test_rand_invalid_args():
