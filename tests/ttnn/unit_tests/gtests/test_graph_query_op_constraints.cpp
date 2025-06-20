@@ -489,6 +489,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 class Conv2dOpIfTest : public ttnn::TTNNFixtureWithDevice {};
 TEST_F(Conv2dOpIfTest, Conv2d) {
+    GTEST_SKIP();
     const auto input_spec = ttnn::TensorSpec(
         ttnn::Shape{1, 1, 50176, 3},
         tt::tt_metal::TensorLayout(

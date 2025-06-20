@@ -129,7 +129,8 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
     bool in_place = false);
 
 struct HaloGatherKernelConfig {
-    std::vector<std::vector<uint16_t>> pad_config;
+    std::vector<std::vector<uint16_t>> pad_config0;
+    std::vector<std::vector<uint16_t>> pad_config1;
     std::vector<std::vector<uint16_t>> gather_config0;
     std::vector<std::vector<uint16_t>> gather_config1;
     std::vector<uint16_t> number_of_blocks_per_core;
