@@ -27,12 +27,13 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, determine_
 
 
 class TokenAccuracy:
-    def __init__(self, model_name=None):
+    def __init__(self, model_name):
         self.gt_pos = -1
         self.store_predicted_tokens = []
-        reference_data_file = f"models/tt_transformers/tests/reference_outputs/{model_name}.refpt"
-        logger.info(f"Loading reference data from {reference_data_file}")
+        file_list = [str(path) for path in Path("models/tt_transformers/tests/reference_outputs/").glob("*.refpt")]
+        reference_data_file = [f for f in file_list if model_name in f][0]
         assert os.path.exists(reference_data_file)
+        logger.info(f"Loading reference data from {reference_data_file}")
         reference_data = torch.load(reference_data_file)
         self.reference_tokens = reference_data["reference_tokens"]
         split_point = self.reference_tokens.shape[-1] // 2 + 1
