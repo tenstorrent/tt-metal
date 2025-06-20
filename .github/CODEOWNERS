@@ -264,6 +264,7 @@ models/experimental/stable_diffusion_35_large/ @jonathansuTT @cglagovichTT @tens
 models/experimental/swin_s @tenstorrent/cse-developer-ttnn
 models/demos/yolov7 @tenstorrent/cse-developer-ttnn
 models/experimental/classification_eval @tenstorrent/cse-developer-ttnn
+models/experimental/yolov11 @tenstorrent/cse-developer-ttnn
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra

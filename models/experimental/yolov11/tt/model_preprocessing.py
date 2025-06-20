@@ -9,16 +9,21 @@ from ttnn.model_preprocessing import infer_ttnn_module_args, preprocess_model_pa
 from models.experimental.yolov11.reference.yolov11 import YoloV11, Conv
 
 
-def create_yolov11_input_tensors(device, batch=1, input_channels=3, input_height=640, input_width=640):
+def create_yolov11_input_tensors(
+    device, batch=1, input_channels=3, input_height=640, input_width=640, is_sub_module=True
+):
     torch_input_tensor = torch.randn(batch, input_channels, input_height, input_width)
-    ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-    ttnn_input_tensor = ttnn_input_tensor.reshape(
-        1,
-        1,
-        ttnn_input_tensor.shape[0] * ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2],
-        ttnn_input_tensor.shape[3],
-    )
-    ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    if is_sub_module:
+        ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+        ttnn_input_tensor = ttnn_input_tensor.reshape(
+            1,
+            1,
+            ttnn_input_tensor.shape[0] * ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2],
+            ttnn_input_tensor.shape[3],
+        )
+        ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    else:
+        ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
     return torch_input_tensor, ttnn_input_tensor
 
 
