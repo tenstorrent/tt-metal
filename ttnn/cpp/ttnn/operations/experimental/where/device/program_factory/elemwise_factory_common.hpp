@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "ttnn/operations/experimental/where/device/kernel/dataflow/elemwise_reader_kernel_args.hpp"
-#include "ttnn/operations/experimental/where/device/kernel/dataflow/elemwise_writer_kernel_args.hpp"
-#include "ttnn/operations/experimental/where/device/kernel/compute/elemwise_where_kernel_args.hpp"
+#include "ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_reader_kernel_args.hpp"
+#include "ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_writer_kernel_args.hpp"
+#include "ttnn/operations/experimental/where/device/kernels/compute/elemwise_where_kernel_args.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 

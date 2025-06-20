@@ -5,8 +5,8 @@
 
 #include "ttnn/operations/experimental/where/device/program_factory/element_wise_multi_core_where_program.hpp"
 #include "ttnn/operations/experimental/where/device/program_factory/elemwise_factory_common.hpp"
-#include "ttnn/operations/experimental/where/device/kernel/dataflow/elemwise_reader_kernel_args.hpp"
-#include "ttnn/operations/experimental/where/device/kernel/dataflow/elemwise_writer_kernel_args.hpp"
+#include "ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_reader_kernel_args.hpp"
+#include "ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_writer_kernel_args.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
@@ -86,7 +86,7 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
     std::map<string, string> reader_defines;
     KernelHandle reader_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/where/device/kernel/dataflow/elemwise_reader_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_reader_kernel.cpp",
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(ttnn::kernel_utils::to_vector(reader_compile_time_args), reader_defines));
 
@@ -97,14 +97,14 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
     std::map<string, string> writer_defines;
     KernelHandle writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/where/device/kernel/dataflow/elemwise_writer_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_writer_kernel.cpp",
         all_device_cores,
         tt_metal::WriterDataMovementConfig(ttnn::kernel_utils::to_vector(writer_compile_time_args), writer_defines));
 
     /* Use the add_tiles operation in the compute kernel */
     KernelHandle compute_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/where/device/kernel/compute/elemwise_where_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/where/device/kernels/compute/elemwise_where_kernel.cpp",
         all_device_cores,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
