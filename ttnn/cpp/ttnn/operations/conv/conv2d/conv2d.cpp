@@ -640,8 +640,13 @@ Result conv2d_L1(
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
         if (input_tensor_post_tm.layout() != Layout::TILE) {
-            input_tensor_post_tm =
+            Tensor input_tensor_post_tm_tilized =
                 ttnn::to_layout(input_tensor_post_tm, Layout::TILE, std::nullopt, std::nullopt, device);
+            if (conv_config.deallocate_activation) {
+                input_tensor_post_tm.deallocate(/*force*/ true);
+                input_tensor_post_tm_tilized = ttnn::move(input_tensor_post_tm_tilized);
+            }
+            input_tensor_post_tm = input_tensor_post_tm_tilized;
         }
 
         // run conv as matmul
@@ -676,6 +681,9 @@ Result conv2d_L1(
             activation,
             compute_config);
 
+        if (conv_config.deallocate_activation) {
+            input_tensor_post_tm.deallocate(/*force*/ true);
+        }
         if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
             matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
         }
