@@ -17,7 +17,7 @@
 #include "llk_pack_common.h"
 #include "llk_pack_untilize.h"
 #include "llk_param_structs.h"
-
+#include "debug/dprint.h"
 /*************************************************************************
  * LLK PACK
  *************************************************************************/
@@ -186,6 +186,7 @@ inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32
             get_local_cb_interface(output_id).fifo_wr_tile_ptr += get_local_cb_interface(output_id).fifo_page_size;
         }
     }
+    DPRINT << "pack tile addr " << pack_tile_addr << ENDL();
     return pack_tile_addr;
 }
 

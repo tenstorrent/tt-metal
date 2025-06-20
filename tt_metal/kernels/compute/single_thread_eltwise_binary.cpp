@@ -9,7 +9,7 @@
 #include "debug/dprint_tensix.h"
 #include "debug/dprint.h"
 
-#if 1
+#if 0
 #define DUNPACK(x) UNPACK(x)
 #else
 #define DUNPACK(x)
@@ -22,6 +22,17 @@ inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize 
             UNPACK(( DPRINT << (uint)r << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL() ));
         }
         UNPACK(( DPRINT << "++++++" << ENDL() ));
+}
+
+inline void print_cb_details(uint32_t cb_id) {
+    UNPACK(DPRINT<< "cb_id " << cb_id << ": { "
+                 << "size: " << get_local_cb_interface(cb_id).fifo_size << ", "
+                 << "limit: " << get_local_cb_interface(cb_id).fifo_limit << ", "
+                 << "page_size: " << get_local_cb_interface(cb_id).fifo_page_size << ", "
+                 << "num_pages: " << get_local_cb_interface(cb_id).fifo_num_pages << ", "
+                 << "rd_ptr: " << get_local_cb_interface(cb_id).fifo_rd_ptr << ", "
+                 << "wr_ptr: " << get_local_cb_interface(cb_id).fifo_wr_ptr << ", "
+                 << "wr_tile_ptr: " << get_local_cb_interface(cb_id).fifo_wr_tile_ptr << " }");
 }
 
 namespace NAMESPACE {
@@ -71,11 +82,12 @@ void MAIN {
         tile_regs_commit_st();
 
         DUNPACK(DPRINT << "RCOMMD" << ENDL());
-
+       
         tile_regs_wait_st();
 
         DUNPACK(DPRINT << "RWD" << ENDL());
 
+	print_cb_details(cb_out0);
         //	print_full_tile(cb_out0);
         // Pack all the output tiles from destination register out to
         // the output circular buffer that resides in L1 memory
@@ -92,6 +104,7 @@ void MAIN {
         // Update the write pointer and counts for the output circular buffer.
         cb_push_back_st(cb_out0, per_core_block_size);
 
+	print_cb_details(cb_out0);
 //	print_full_tile(cb_out0);
 
         DUNPACK(DPRINT << "PBD" << ENDL());
