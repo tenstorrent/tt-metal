@@ -120,6 +120,12 @@ private:
     // Per-core sync info used to make tracy context
     std::unordered_map<CoreCoord, SyncInfo> core_sync_info;
 
+    // (Device ID, Core Coord) pairs that keep track of cores which need to have their Tracy contexts updated
+    std::unordered_set<std::pair<chip_id_t, CoreCoord>, pair_hash<chip_id_t, CoreCoord>> device_cores;
+
+    // Storage for all core's control buffers
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> core_control_buffers;
+
     // 32bit FNV-1a hashing
     uint32_t hash32CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261));
 
@@ -143,9 +149,6 @@ private:
     CoreCoord getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const;
 
     ZoneDetails getZoneDetails(uint16_t timer_id) const;
-
-    // Storage for all core's control buffers
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> core_control_buffers;
 
     // Read all control buffers
     void readControlBuffers(
@@ -261,9 +264,6 @@ public:
     // Number of bytes reserved in each DRAM bank for storing device profiling data
     uint32_t profile_buffer_bank_size_bytes;
 
-    // (Device ID, Core Coord) pairs that keep track of cores which need to have their Tracy contexts updated
-    std::unordered_set<std::pair<chip_id_t, CoreCoord>, pair_hash<chip_id_t, CoreCoord>> device_cores;
-
     // Device events
     std::unordered_set<tracy::TTDeviceEvent> device_events;
 
@@ -275,7 +275,7 @@ public:
     int64_t shift = 0;
 
     // frequency scale
-    double freqScale = 1.0;
+    double freq_scale = 1.0;
 
     // Freshen device logs
     void freshDeviceLog();

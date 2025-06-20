@@ -1463,7 +1463,7 @@ void DeviceProfiler::pushTracyDeviceResults() {
 
         const tracy::TTDeviceEvent& orig_event = event_ref.get();
         tracy::TTDeviceEvent event_with_adjusted_timestamp;
-        const uint64_t adjusted_timestamp = orig_event.timestamp * this->freqScale + this->shift;
+        const uint64_t adjusted_timestamp = orig_event.timestamp * this->freq_scale + this->shift;
         if (adjusted_timestamp != orig_event.timestamp) {
             event_with_adjusted_timestamp = tracy::TTDeviceEvent(
                 orig_event.run_num,

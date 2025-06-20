@@ -308,7 +308,7 @@ void setShift(int device_id, int64_t shift, double scale, const SyncInfo& root_s
 
     auto device_profiler_it = tt_metal_device_profiler_map.find(device_id);
     if (device_profiler_it != tt_metal_device_profiler_map.end()) {
-        device_profiler_it->second.freqScale = scale;
+        device_profiler_it->second.freq_scale = scale;
         device_profiler_it->second.shift = shift;
         device_profiler_it->second.setSyncInfo(root_sync_info);
 
