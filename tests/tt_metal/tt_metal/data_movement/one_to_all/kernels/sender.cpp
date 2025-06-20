@@ -42,7 +42,7 @@ void kernel_main() {
     }
 
     DeviceTimestampedData("Number of transactions", num_of_transactions);
-    DeviceTimestampedData("Transaction size in bytes", total_transaction_size_bytes);
+    DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
     DeviceTimestampedData("Test id", test_id);
     noc_async_atomic_barrier();
 }

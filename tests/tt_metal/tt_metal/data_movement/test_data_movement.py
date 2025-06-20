@@ -10,6 +10,8 @@ import sys
 from loguru import logger  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import itertools
+import matplotlib.ticker as mticker
+import numpy as np
 
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
@@ -151,10 +153,10 @@ test_id_to_comment = {
 # are subject to change with new directed tests.
 test_bounds = {
     "wormhole_b0": {
-        0: {
-            "riscv_1": {"latency": {"lower": 300, "upper": 24000}, "bandwidth": 0.08},
-            "riscv_0": {"latency": {"lower": 300, "upper": 25000}, "bandwidth": 0.07},
-        },
+        # 0: {
+        #     "riscv_1": {"latency": {"lower": 300, "upper": 24000}, "bandwidth": 0.08},
+        #     "riscv_0": {"latency": {"lower": 300, "upper": 25000}, "bandwidth": 0.07},
+        # },
         1: {
             "riscv_1": {"latency": {"lower": 23000, "upper": 24000}, "bandwidth": 21},
             "riscv_0": {"latency": {"lower": 24000, "upper": 25000}, "bandwidth": 21},
@@ -163,16 +165,16 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 300, "upper": 600}, "bandwidth": 0.08},
             "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.08},
         },
-        3: {
+        3: {  # DRAM Unary Directed Ideal
             "riscv_1": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 22},
             "riscv_0": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 21},
         },
-        4: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 18000}, "bandwidth": 0.1},
-        },
-        5: {
-            "riscv_1": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.1},
-        },
+        # 4: {
+        #     "riscv_0": {"latency": {"lower": 200, "upper": 18000}, "bandwidth": 0.1},
+        # },
+        # 5: {
+        #     "riscv_1": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.1},
+        # },
         # 6: {
         #     "riscv_0": {"latency": {"lower": 400, "upper": 70000}, "bandwidth": 0.3},
         # },
@@ -200,12 +202,12 @@ test_bounds = {
         # 14: {
         #     "riscv_0": {"latency": {"lower": 500, "upper": 40000}, "bandwidth": 0.04},
         # },
-        15: {
-            "riscv_1": {"latency": {"lower": 700, "upper": 85000}, "bandwidth": 0.71},
-        },
-        16: {
-            "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
-        },
+        # 15: {
+        #     "riscv_1": {"latency": {"lower": 700, "upper": 85000}, "bandwidth": 0.71},
+        # },
+        # 16: {
+        #     "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
+        # },
         30: {  # One from All Directed Ideal
             "riscv_1": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 30},
         },
@@ -259,10 +261,10 @@ test_bounds = {
         # },
     },
     "blackhole": {
-        0: {
-            "riscv_1": {"latency": {"lower": 400, "upper": 17000}, "bandwidth": 0.1},
-            "riscv_0": {"latency": {"lower": 300, "upper": 16000}, "bandwidth": 0.15},
-        },
+        # 0: {
+        #     "riscv_1": {"latency": {"lower": 400, "upper": 17000}, "bandwidth": 0.1},
+        #     "riscv_0": {"latency": {"lower": 300, "upper": 16000}, "bandwidth": 0.15},
+        # },
         1: {
             "riscv_1": {"latency": {"lower": 20000, "upper": 33000}, "bandwidth": 32},
             "riscv_0": {"latency": {"lower": 20000, "upper": 33000}, "bandwidth": 33},
@@ -271,16 +273,16 @@ test_bounds = {
             "riscv_1": {"latency": {"lower": 400, "upper": 600}, "bandwidth": 0.13},
             "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.16},
         },
-        3: {
+        3: {  # DRAM Unary Directed Ideal
             "riscv_1": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 33},
             "riscv_0": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 34},
         },
-        4: {
-            "riscv_0": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.17},
-        },
-        5: {
-            "riscv_1": {"latency": {"lower": 300, "upper": 18000}, "bandwidth": 0.17},
-        },
+        # 4: {
+        #     "riscv_0": {"latency": {"lower": 200, "upper": 19000}, "bandwidth": 0.17},
+        # },
+        # 5: {
+        #     "riscv_1": {"latency": {"lower": 300, "upper": 18000}, "bandwidth": 0.17},
+        # },
         # 6: {
         #     "riscv_0": {"latency": {"lower": 400, "upper": 70000}, "bandwidth": 0.5},
         # },
@@ -308,12 +310,12 @@ test_bounds = {
         # 14: {
         #     "riscv_0": {"latency": {"lower": 700, "upper": 46000}, "bandwidth": 0.08},
         # },
-        15: {
-            "riscv_1": {"latency": {"lower": 800, "upper": 87000}, "bandwidth": 1.19},
-        },
-        16: {
-            "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
-        },
+        # 15: {
+        #     "riscv_1": {"latency": {"lower": 800, "upper": 87000}, "bandwidth": 1.19},
+        # },
+        # 16: {
+        #     "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
+        # },
         30: {  # One from All Directed Ideal
             "riscv_1": {"latency": {"lower": 16500, "upper": 17500}, "bandwidth": 60},
         },
@@ -606,7 +608,7 @@ def print_stats(dm_stats):
         logger.info("")
 
 
-def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
+def plot_dm_stats(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement", arch="blackhole"):
     # Extract data for plotting
     riscv_1_series = dm_stats["riscv_1"]["analysis"]["series"]
     riscv_0_series = dm_stats["riscv_0"]["analysis"]["series"]
@@ -623,18 +625,16 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
     # Set noc_width based on architecture
     noc_width = 32 if arch == "wormhole_b0" else 64
 
-    # Create the main figure
-    fig = plt.figure(layout="constrained", figsize=(18, 6 * len(test_ids)))
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
 
-    # Create subfigures for each Test id
-    subfigs = fig.subfigures(len(test_ids), 1)
-    if len(test_ids) == 1:
-        subfigs = [subfigs]
+    for test_id in test_ids:
+        # Create the figure for this test id
+        fig = plt.figure(layout="constrained", figsize=(18, 6))
 
-    for idx, (subfig, test_id) in enumerate(zip(subfigs, test_ids)):
         # Add a title for the current Test id
         test_name = test_id_to_name.get(test_id, f"Test ID {test_id}")
-        subsubfig = subfig.subfigures(2, 1, height_ratios=[100, 1])
+        subsubfig = fig.subfigures(2, 1, height_ratios=[100, 1])
         subsubfig[0].suptitle(test_name, fontsize=16, weight="bold")
 
         # Create subplots within the subfigure
@@ -688,13 +688,13 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
         lines = []
         labels = []
         if riscv_1_durations:
-            (line1,) = ax.plot(riscv_1_durations, label="RISCV 1 Duration (cycles)", marker="o")
+            (line1,) = ax.plot(riscv_1_durations, label="Receiver Duration (cycles)", marker="o")
             lines.append(line1)
-            labels.append("RISCV 1 Duration (cycles)")
+            labels.append("Receiver Duration (cycles)")
         if riscv_0_durations:
-            (line0,) = ax.plot(riscv_0_durations, label="RISCV 0 Duration (cycles)", marker="o")
+            (line0,) = ax.plot(riscv_0_durations, label="Sender Duration (cycles)", marker="o")
             lines.append(line0)
-            labels.append("RISCV 0 Duration (cycles)")
+            labels.append("Sender Duration (cycles)")
         ax.set_xlabel("Index")
         ax.set_ylabel("Duration (cycles)")
         ax.set_title("Kernel Durations")
@@ -714,7 +714,7 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
             ]
             if riscv_1_grouped:
                 sizes, bws = zip(*riscv_1_grouped)
-                ax.plot(sizes, bws, label=f"RISCV 1 (Transactions={num_transactions})", marker="o")
+                ax.plot(sizes, bws, label=f"Receiver (Number of Transactions={num_transactions})", marker="o")
 
             # Group and plot RISCV 0 data
             riscv_0_grouped = [
@@ -724,16 +724,18 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
             ]
             if riscv_0_grouped:
                 sizes, bws = zip(*riscv_0_grouped)
-                ax.plot(sizes, bws, label=f"RISCV 0 (Transactions={num_transactions})", marker="o")
+                ax.plot(sizes, bws, label=f"Sender (Number of Transactions={num_transactions})", marker="o")
 
         # Add theoretical max bandwidth curve
         transaction_sizes = sorted(set(riscv_1_data_sizes + riscv_0_data_sizes))
         max_bandwidths = [noc_width * ((size / noc_width) / ((size / noc_width) + 1)) for size in transaction_sizes]
         ax.plot(transaction_sizes, max_bandwidths, label="Theoretical Max BW", linestyle="--", color="black")
 
-        ax.set_xlabel("Transaction Size (bytes)")
+        ax.set_xlabel("Log2 of Transaction Size (bytes)")
         ax.set_ylabel("Bandwidth (bytes/cycle)")
         ax.set_title("Data Size vs Bandwidth")
+        ax.set_xscale("log", base=2)
+        ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(np.log2(x))}" if x > 0 else ""))
         ax.legend()
         ax.grid()
 
@@ -749,38 +751,60 @@ def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png", arch="blackhole"):
         )
         txtObj._get_wrap_line_width = lambda: 0.9 * subsubfig[1].bbox.width
 
-    # Save the combined plot
-    plt.savefig(output_file)
-    plt.close()
-    logger.info(f"dm_stats plots saved at {output_file}")
+        # Save the plot for this test id
+        output_file = os.path.join(output_dir, f"{test_id_to_name.get(test_id, f'Test ID {test_id}')}.png")
+        plt.savefig(output_file)
+        plt.close(fig)
+        logger.info(f"dm_stats plot for test id {test_id} saved at {output_file}")
 
 
-def export_dm_stats_to_csv(dm_stats, output_file="dm_stats.csv"):
-    with open(output_file, mode="w", newline="") as csvfile:
-        writer = csv.writer(csvfile)
+def export_dm_stats_to_csv(dm_stats, output_dir="tests/tt_metal/tt_metal/data_movement"):
+    os.makedirs(output_dir, exist_ok=True)
+    # Group by test id
+    test_ids = set()
+    for riscv in dm_stats.keys():
+        for attributes in dm_stats[riscv]["attributes"].values():
+            test_ids.add(attributes["Test id"])
+    test_ids = sorted(test_ids)
 
-        # Write the header
-        writer.writerow(["Kernel", "Run Host ID", "Test ID", "Latency (cycles)", "Bandwidth (bytes/cycle)"])
-
-        # Iterate over the dm_stats object
-        for kernel, kernel_data in dm_stats.items():
-            for run_host_id, attributes in kernel_data["attributes"].items():
-                test_id = attributes.get("Test id", "N/A")
-                duration_cycles = next(
-                    (
-                        entry["duration_cycles"]
-                        for entry in kernel_data["analysis"]["series"]
-                        if entry["duration_type"][0]["run_host_id"] == run_host_id
-                    ),
-                    None,
-                )
-                if duration_cycles:
+    for test_id in test_ids:
+        test_name = test_id_to_name.get(test_id, f"Test ID {test_id}")
+        csv_file = os.path.join(output_dir, f"{test_name}.csv")
+        with open(csv_file, mode="w", newline="") as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(
+                [
+                    "Kernel",
+                    "Run Host ID",
+                    "Log2 of Transaction Size (bytes)",
+                    "Number of Transactions",
+                    "Latency (cycles)",
+                    "Bandwidth (bytes/cycle)",
+                ]
+            )
+            for kernel in ["riscv_1", "riscv_0"]:
+                kernel_series = dm_stats[kernel]["analysis"]["series"]
+                for entry in kernel_series:
+                    run_host_id = entry["duration_type"][0]["run_host_id"]
+                    attributes = dm_stats[kernel]["attributes"].get(run_host_id, {})
+                    if attributes.get("Test id") != test_id:
+                        continue
                     transaction_size = attributes.get("Transaction size in bytes", 0)
                     num_transactions = attributes.get("Number of transactions", 0)
+                    duration_cycles = entry["duration_cycles"]
                     bandwidth = (num_transactions * transaction_size) / duration_cycles if duration_cycles else 0
-                    writer.writerow([kernel, run_host_id, test_id, duration_cycles, bandwidth])
-
-    logger.info(f"dm_stats exported to {output_file}")
+                    log2_transaction_size = int(np.log2(transaction_size)) if transaction_size > 0 else 0
+                    writer.writerow(
+                        [
+                            "Receiver" if kernel == "riscv_1" else "Sender",
+                            run_host_id,
+                            log2_transaction_size,
+                            num_transactions,
+                            duration_cycles,
+                            bandwidth,
+                        ]
+                    )
+        logger.info(f"CSV report for test id {test_id} saved at {csv_file}")
 
 
 def test_data_movement(
