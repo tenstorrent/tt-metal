@@ -24,14 +24,14 @@ void kernel_main() {
     {
         DeviceZoneScopedN("RISCV0");
 
-        for (uint32_t i = 0; i < num_of_transactions; i++) {
-            for (uint32_t subordinate_num = 0; subordinate_num < num_subordinates; subordinate_num++) {
-                uint32_t dest_coord_packed = get_arg_val<uint32_t>(subordinate_num);
-                uint32_t dest_coord_x = dest_coord_packed >> 16;
-                uint32_t dest_coord_y = dest_coord_packed & 0xFFFF;
+        for (uint32_t subordinate_num = 0; subordinate_num < num_subordinates; subordinate_num++) {
+            uint32_t dest_coord_packed = get_arg_val<uint32_t>(subordinate_num);
+            uint32_t dest_coord_x = dest_coord_packed >> 16;
+            uint32_t dest_coord_y = dest_coord_packed & 0xFFFF;
 
-                uint64_t dst_noc_addr = get_noc_addr(dest_coord_x, dest_coord_y, sub_base_addr);
+            uint64_t dst_noc_addr = get_noc_addr(dest_coord_x, dest_coord_y, sub_base_addr);
 
+            for (uint32_t i = 0; i < num_of_transactions; i++) {
                 noc_async_write(mst_base_addr, dst_noc_addr, bytes_per_transaction);
             }
         }
