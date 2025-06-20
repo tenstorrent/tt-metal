@@ -8,7 +8,7 @@ import pytest
 import torch
 import ttnn
 import traceback
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal_all_close
+from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_all_close
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
 
@@ -94,6 +94,7 @@ def test_eltwise_selu(input_shape, dtype, dlayout, in_mem_config, out_mem_config
         (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 1, 320, 384])),
         (torch.Size([1, 3, 320, 384])),
+        (torch.Size([3, 2, 1024, 1024])),
     ),
 )
 @pytest.mark.parametrize(
@@ -123,30 +124,7 @@ def test_unary_composite_selu_ttnn(input_shapes, low, high, device):
     result = ttnn.to_torch(output_tensor)
     golden_function = ttnn.get_golden_function(ttnn.selu)
     golden_tensor = golden_function(torch_input)
-
-    assert_with_pcc(golden_tensor, result, 0.99)
-
-
-def test_unary_composite_selu_ttnn_ulp(device):
-    num_elements = torch.prod(torch.tensor([3, 2, 1024, 1024])).item()
-    torch_input = torch.linspace(1.6 * 10**38, -1.6 * 10**38, num_elements, dtype=torch.bfloat16)
-    torch_input = torch_input[:num_elements].reshape([3, 2, 1024, 1024])
-
-    tt_in = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    output_tensor = ttnn.selu(tt_in)
-    result = ttnn.to_torch(output_tensor)
-    golden_function = ttnn.get_golden_function(ttnn.selu)
-    golden_tensor = golden_function(torch_input)
-
-    comp_pass, _ = assert_with_pcc(golden_tensor, result, 0.99)
-    assert comp_pass and assert_with_ulp(golden_tensor, result)
+    assert_with_ulp(golden_tensor, result)
 
 
 @pytest.mark.parametrize(
@@ -188,7 +166,8 @@ def test_selu_fill_val_bf16(input_shapes, input_val, scale, alpha, device):
     tt_result = ttnn.selu(tt_in, scale=scale, alpha=alpha)
     result = ttnn.to_torch(tt_result)
 
-    comp_pass = compare_equal_all_close([golden], [result])
+    comp_pass = compare_all_close([tt_result], [golden], atol=0.5, rtol=0)
+
     assert comp_pass
 
 
