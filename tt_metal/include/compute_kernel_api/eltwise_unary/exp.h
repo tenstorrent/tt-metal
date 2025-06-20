@@ -47,8 +47,8 @@ ALWI void exp_tile_init() {
  * | Argument    | Description                                                                | Type     | Valid Range                                           | Required |
  * |-------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst        | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | vector_mode | Specifies the vector mode for computation (default: VectorMode::RC)        | int      | Subject to specific hardware/kernel limits            | False    |
- * | scale       | Scale factor to apply in approximate or non-approximate mode if scale_en is true (default: 0x3F80, 1.0f in FP16b) | uint16_t | Valid FP16b representation                            | False    |
+ * | vector_mode | Specifies the vector mode for computation (default: VectorMode::RC)        | int      | Must be a valid VectorMode                            | False    |
+ * | fast_and_approx | Computation to be done faster and approximate                              | bool     |                                                       | False    |
  */
 // clang-format on
 template <
