@@ -320,14 +320,25 @@ void DevicePool::initialize_host(IDevice* dev) const {
 }
 
 void DevicePool::init_fabric(const std::vector<tt_metal::IDevice*>& active_devices) const {
-    std::vector<std::shared_future<void>> events;
+    std::vector<std::shared_future<tt_metal::IDevice*>> events;
     for (uint32_t i = 0; i < active_devices.size(); i++) {
         auto& dev = active_devices[i];
-        events.emplace_back(detail::async([dev]() { dev->init_fabric(); }));
+        events.emplace_back(detail::async([dev]() {
+            if (dev->compile_fabric()) {
+                return dev;
+            } else {
+                return (tt_metal::IDevice*)nullptr;
+            }
+        }));
     }
+
+    // Sequentially execute fabric configuration on all devices
+    // Empirically TG hanged when this is alsow parallelized
     for (const auto& event : events) {
-        // Wait for all fabric programs to be initialized
-        event.get();
+        auto dev = event.get();
+        if (dev) {
+            dev->configure_fabric();
+        }
     }
 }
 
