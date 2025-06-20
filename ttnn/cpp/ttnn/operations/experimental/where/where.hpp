@@ -42,18 +42,6 @@ struct WhereOperation {
             return Tensor();
         }
     }
-
-    template <FloatOrTensorConcept T, FloatOrTensorConcept U>
-    static Tensor invoke(
-        const Tensor& condition,
-        const T& value_true,
-        const U& value_false,
-        std::optional<const DataType> output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> output_tensor = std::nullopt) {
-        return invoke(
-            DefaultQueueId, condition, value_true, value_false, output_dtype, memory_config, std::move(output_tensor));
-    }
 };
 
 constexpr auto where = ttnn::register_operation<"ttnn::experimental::where", WhereOperation>();
