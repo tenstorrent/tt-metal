@@ -251,9 +251,9 @@ operation::ProgramWithCallbacks PagedUpdateCacheDeviceOperation::create_program(
             if (this->op_type == PagedUpdateCacheOpType::UPDATE) {
                 const auto& cache_tensor = input_tensors.at(0);
                 const auto& input_tensor = input_tensors.at(1);
-                const auto update_idxs_tensor =
+                const auto& update_idxs_tensor =
                     optional_input_tensors.at(0);  // TODO: Is this tensor passed around by value?
-                const auto page_table = optional_input_tensors.at(1);
+                const auto& page_table = optional_input_tensors.at(1);
                 return detail::paged_update_cache_multi_core(
                     cache_tensor,
                     input_tensor,
@@ -268,9 +268,9 @@ operation::ProgramWithCallbacks PagedUpdateCacheDeviceOperation::create_program(
                 const auto& input_tensor1 = input_tensors.at(1);
                 const auto& cache_tensor2 = input_tensors.at(2);
                 const auto& input_tensor2 = input_tensors.at(3);
-                const auto update_idxs_tensor =
+                const auto& update_idxs_tensor =
                     optional_input_tensors.at(0);  // TODO: Is this tensor passed around by value?
-                const auto page_table = optional_input_tensors.at(1);
+                const auto& page_table = optional_input_tensors.at(1);
                 return detail::paged_fused_update_cache_multi_core(
                     cache_tensor1,
                     input_tensor1,

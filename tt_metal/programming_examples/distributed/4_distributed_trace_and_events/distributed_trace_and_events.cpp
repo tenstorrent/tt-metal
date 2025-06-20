@@ -46,7 +46,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
     const std::vector<std::string> op_id_to_op_type_define = {
         "EltwiseBinaryType::ELWADD", "EltwiseBinaryType::ELWMUL", "EltwiseBinaryType::ELWSUB"};
 
-    const auto cores_for_program = sub_device_for_program.cores(HalProgrammableCoreType::TENSIX);
+    const auto& cores_for_program = sub_device_for_program.cores(HalProgrammableCoreType::TENSIX);
 
     std::shared_ptr<Program> program = std::make_shared<Program>();
 

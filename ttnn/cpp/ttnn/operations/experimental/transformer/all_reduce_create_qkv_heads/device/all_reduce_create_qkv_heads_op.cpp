@@ -89,7 +89,7 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
     TT_FATAL(num_users <= num_users_supported, "Unsupported input shape = {}", input_shape);  // 32 users
     TT_FATAL(input_shape[1] == 1, "Unsupported input shape = {}", input_shape);
     TT_FATAL(input_shape[0] == 1, "Unsupported input shape = {}", input_shape);
-    const auto QKV_memcfg = input_tensor.memory_config();
+    const auto& QKV_memcfg = input_tensor.memory_config();
     if (input_tensor.is_sharded()) {
         TT_FATAL(
             QKV_memcfg.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
@@ -163,7 +163,7 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
 
     const Shape q_output_shape({input_shape[0], batch, this->num_heads, head_dim});
     const Shape v_output_shape({input_shape[0], batch, this->num_kv_heads, head_dim});
-    const Shape k_output_shape = v_output_shape;
+    const Shape& k_output_shape = v_output_shape;
 
     auto num_q_heads_padded = ((this->num_heads - 1) / tt::constants::TILE_HEIGHT + 1) * tt::constants::TILE_HEIGHT;
     auto num_kv_heads_padded = ((this->num_heads - 1) / tt::constants::TILE_HEIGHT + 1) * tt::constants::TILE_HEIGHT;
@@ -336,7 +336,7 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     std::optional<const uint32_t> slice_size,
     const std::optional<MemoryConfig>& final_memory_config,
     const std::optional<const DataType> dtype) {
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     uint32_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();

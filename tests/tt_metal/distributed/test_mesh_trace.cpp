@@ -159,8 +159,8 @@ TEST_F(MeshTraceTestT3000, EltwiseBinaryMeshTrace) {
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
 
     // Separate Mesh into top and bottom rows
-    MeshCoordinateRange row_0 = t3k_top_row();
-    MeshCoordinateRange row_1 = t3k_bottom_row();
+    const MeshCoordinateRange& row_0 = t3k_top_row();
+    const MeshCoordinateRange& row_1 = t3k_bottom_row();
     // Separate Mesh into 3 columns
     MeshCoordinateRange col_0({0, 0}, {1, 1});
     MeshCoordinateRange col_1({0, 2}, {1, 2});

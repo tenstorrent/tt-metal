@@ -68,7 +68,7 @@ void AllGatherMatmul::validate(
 std::vector<ttnn::TensorSpec> AllGatherMatmul::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     // All Gather shape
     ttnn::TensorSpec all_gather_output_shape = this->all_gather_struct.compute_output_specs({input_tensors[0]})[0];
-    ttnn::TensorSpec datacopy_output_shape = all_gather_output_shape;
+    const ttnn::TensorSpec& datacopy_output_shape = all_gather_output_shape;
 
     // Matmul shape
     ttnn::TensorSpec matmul_output_specs =

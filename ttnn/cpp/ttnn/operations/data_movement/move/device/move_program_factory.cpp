@@ -214,7 +214,7 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
     auto shard_spec = input.shard_spec().value();
     auto shard_shape = shard_spec.shape;
     auto shard_grid = shard_spec.grid;
-    auto input_shape = input.logical_shape();
+    const auto& input_shape = input.logical_shape();
     auto input_dtype = input.dtype();
     auto input_layout = input.layout();
     TT_FATAL(

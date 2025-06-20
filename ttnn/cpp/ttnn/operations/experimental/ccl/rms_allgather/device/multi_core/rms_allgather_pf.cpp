@@ -196,7 +196,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
     // tensor shape
-    const auto shape = a.padded_shape();
+    const auto& shape = a.padded_shape();
     uint32_t M = a.physical_volume() / shape[-1];
     uint32_t K = shape[-1];
     uint32_t Mt = M / TILE_WIDTH;
@@ -1216,8 +1216,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto src_buffer_a = input_tensors.at(0).buffer();
-            const auto b_tensor = optional_input_tensors.at(0);
-            const auto gamma_tensor = optional_input_tensors.at(1);
+            const auto& b_tensor = optional_input_tensors.at(0);
+            const auto& gamma_tensor = optional_input_tensors.at(1);
             const auto stats_tensor = optional_input_tensors.at(2).value();
             const auto dst_buffer = output_tensors.at(0).buffer();
             bool skip_write_back =

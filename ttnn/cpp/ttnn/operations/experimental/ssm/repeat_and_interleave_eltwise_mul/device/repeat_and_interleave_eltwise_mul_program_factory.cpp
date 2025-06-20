@@ -19,7 +19,8 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     const uint32_t hidden_size,
     MathFidelity math_fidelity,
     CoreCoord compute_with_storage_grid_size) {
-    const auto &ashape = a.padded_shape(), bshape = b.padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
 
     tt::tt_metal::IDevice* device = a.device();
 

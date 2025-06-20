@@ -84,7 +84,7 @@ void AllToAllAsync::validate_with_output_tensors(
 
         // For AllToAll, the shape of the *local* tensor shard should typically be the same.
         // Global logical shape also remains the same.
-        auto output_shape = output_tensor.padded_shape();
+        const auto& output_shape = output_tensor.padded_shape();
         TT_FATAL(output_shape.size() == 4, "AllToAllAsync: output tensor must have 4 dimensions");
         auto input_shape = input_tensor.padded_shape();
         input_shape[this->in_dim] *= this->ring_size;
@@ -185,10 +185,10 @@ tt::tt_metal::operation::ProgramWithCallbacks AllToAllAsync::create_program_at(
 
 tt::tt_metal::operation::Hash AllToAllAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     auto input_memory_layout = input_tensor.layout();
     auto input_dtype = input_tensor.dtype();
-    auto input_memory_config = input_tensor.memory_config();
+    const auto& input_memory_config = input_tensor.memory_config();
 
     return tt::tt_metal::operation::hash_operation<AllToAllAsync>(
         this->in_dim,

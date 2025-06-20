@@ -14,7 +14,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
     const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    const auto input_shape = a.logical_shape();
+    const auto& input_shape = a.logical_shape();
     const auto input_core_grid = a.shard_spec()->grid;
     const auto input_cores = corerange_to_cores(
         input_core_grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);

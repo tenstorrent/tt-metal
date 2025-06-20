@@ -56,7 +56,7 @@ Tensor ExecuteTosaGather::invoke(
     const auto memory_config_value = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
 
     // Input tensor
-    const ttnn::Shape original_input_tensor_lshape = input_tensor.logical_shape();  // [N, K, C]
+    const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();  // [N, K, C]
     const auto input_tensor_rank = input_tensor.padded_shape().rank();
     TT_FATAL(
         input_tensor_rank == input_tensor_rank_constraint,
@@ -68,7 +68,7 @@ Tensor ExecuteTosaGather::invoke(
     const auto C = original_input_tensor_lshape[-1];
 
     // Index tensor
-    const auto original_input_index_tensor_lshape = input_index_tensor.logical_shape();  // [N, W]
+    const auto& original_input_index_tensor_lshape = input_index_tensor.logical_shape();  // [N, W]
     const auto input_index_tensor_rank = input_index_tensor.padded_shape().rank();
     TT_FATAL(
         input_index_tensor_rank == input_index_tensor_rank_constraint,

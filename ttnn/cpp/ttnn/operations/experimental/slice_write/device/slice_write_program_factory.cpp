@@ -360,8 +360,6 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = input.device();
-    const auto output_padded_shape = output.padded_shape();
-    const auto input_padded_shape = input.padded_shape();
 
     auto input_shape = input.logical_shape();
     auto output_shape = output.logical_shape();
@@ -476,8 +474,8 @@ operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_tensor = input_tensors.at(0);
-        auto dst_tensor = output_tensors.at(0);
+        const auto& src_tensor = input_tensors.at(0);
+        const auto& dst_tensor = output_tensors.at(0);
 
         UpdateDynamicCircularBufferAddress(program, input_cb_handle, *src_tensor.buffer());
 
@@ -500,13 +498,11 @@ operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
     const Tensor& output,
     const ttnn::Shape& output_tensor_start,
     const ttnn::Shape& output_tensor_end) {
-    const ttnn::Shape output_shape = output.padded_shape();
-
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = input.device();
-    const auto output_padded_shape = output.padded_shape();
-    const auto input_padded_shape = input.padded_shape();
+    const auto& output_padded_shape = output.padded_shape();
+    const auto& input_padded_shape = input.padded_shape();
 
     uint32_t num_unpadded_sticks = input.physical_volume() / input.padded_shape()[-1];
 
@@ -615,8 +611,8 @@ operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
-            auto src_tensor = input_tensors.at(0);
-            auto dst_tensor = output_tensors.at(0);
+            const auto& src_tensor = input_tensors.at(0);
+            const auto& dst_tensor = output_tensors.at(0);
             uint32_t num_cores_x = compute_with_storage_grid_size.x;
             uint32_t num_cores_y = compute_with_storage_grid_size.y;
             uint32_t num_cores_total = num_cores_x * num_cores_y;

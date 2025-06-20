@@ -38,7 +38,7 @@ std::vector<Tensor> post_topk_transform_tensor(
     const Shape& original_lshape,
     const MemoryConfig& input_memory_config,
     const CoreRangeSet& sub_core_grids) {
-    auto input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     const auto orig_rank = input_shape.rank();
 
     Shape final_lshape = original_lshape;
@@ -109,7 +109,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
-    ttnn::Shape original_lshape = input_tensor.logical_shape();
+    const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 
     auto rank = input_tensor.padded_shape().rank();
     const bool is_dim_last_idx = (dim == -1 || dim == rank - 1);

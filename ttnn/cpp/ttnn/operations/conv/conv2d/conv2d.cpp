@@ -429,7 +429,7 @@ Result conv2d_L1(
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     auto input_tensor = input_tensor_;
-    auto weight_tensor = weight_tensor_;
+    const auto& weight_tensor = weight_tensor_;
     std::optional<ttnn::Tensor> bias_tensor = bias_tensor_;
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     // Store the original stride size for weight folding
