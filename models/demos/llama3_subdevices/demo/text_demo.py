@@ -609,7 +609,9 @@ def test_demo_text(
 
         # Replace the prefill token with reference token if PCC check enabled
         out_tok = prefilled_token if not pcc_check else ref_tokens[max_encoded_prompt_len]
-        if out_tok.shape == torch.Size([]):
+
+        breakpoint()
+        if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
             out_tok = out_tok.repeat(32, 1)
 
         try:
@@ -661,8 +663,9 @@ def test_demo_text(
                 pcc_check and max_encoded_prompt_len + iteration + 1 < len(ref_tokens) and num_layers == 80
             )
             out_tok = tt_out_tok[0] if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
-            if out_tok.shape == torch.Size([]):
-                out_tok = out_tok.repeat(batch_size, 1)
+
+            if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
+                out_tok = out_tok.repeat(32, 1)
 
             if teacher_forcing:
                 torch_output_logits = torch_output[iteration + 1]
