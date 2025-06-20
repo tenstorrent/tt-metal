@@ -53,12 +53,7 @@ public:
      * Expected that *buffer_index_ptr is initialized outside of this object
      */
     EthChannelBuffer(
-        size_t channel_base_address,
-        size_t buffer_size_bytes,
-        size_t header_size_bytes,
-        size_t eth_transaction_ack_word_addr,  // Assume for receiver channel, this address points to a chunk of memory
-                                               // that can fit 2 eth_channel_syncs cfor ack
-        uint8_t channel_id) :
+        size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes, uint8_t channel_id) :
         buffer_size_in_bytes(buffer_size_bytes),
         max_eth_payload_size_in_bytes(buffer_size_in_bytes),
         channel_id(channel_id) {
@@ -134,7 +129,6 @@ struct EthChannelBufferTuple {
         const size_t channel_base_address[],
         const size_t buffer_size_bytes,
         const size_t header_size_bytes,
-        const size_t eth_transaction_ack_word_addr,
         const size_t channel_base_id) {
         size_t idx = 0;
 
@@ -144,7 +138,6 @@ struct EthChannelBufferTuple {
                       channel_base_address[idx],
                       buffer_size_bytes,
                       header_size_bytes,
-                      eth_transaction_ack_word_addr,
                       static_cast<uint8_t>(channel_base_id + idx)),
                   ++idx),
                  ...);
