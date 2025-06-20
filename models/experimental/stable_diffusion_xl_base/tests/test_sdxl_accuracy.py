@@ -105,14 +105,18 @@ def test_accuracy_sdxl(
             "num_prompts": num_prompts,
             "model_name": "sdxl",
         },
-        "metrics": {
-            "average_clip": average_clip_score,
-            "deviation_clip": deviation_clip_score,
-            "fid_score": fid_score,
-        },
+        "benchmarks": [
+            {
+                "device": "N150",
+                "model_id": "sdxl",
+                "average_clip": average_clip_score,
+                "deviation_clip": deviation_clip_score,
+                "fid_score": fid_score,
+            }
+        ],
     }
 
-    out_root, file_name = "test_reports", "benchmark_sdxl_report.json"
+    out_root, file_name = "test_reports", "sdxl_test_results.json"
     os.makedirs(out_root, exist_ok=True)
 
     with open(f"{out_root}/{file_name}", "w") as f:
