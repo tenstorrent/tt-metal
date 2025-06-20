@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <sys/types.h>
-#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <tuple>
@@ -15,7 +14,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
-#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
