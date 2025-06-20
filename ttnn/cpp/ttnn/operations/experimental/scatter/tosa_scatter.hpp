@@ -24,8 +24,8 @@ struct TOSAScatterOperation {
 }  // namespace operations::experimental
 
 namespace experimental {
-constexpr auto tosa_scatter =
-    ttnn::register_operation<"ttnn::experimental::tosa_scatter", ttnn::operations::experimental::TOSAScatterOperation>();
+constexpr auto tosa_scatter = ttnn::
+    register_operation<"ttnn::experimental::tosa_scatter", ttnn::operations::experimental::TOSAScatterOperation>();
 }  // namespace experimental
 
 }  // namespace ttnn
