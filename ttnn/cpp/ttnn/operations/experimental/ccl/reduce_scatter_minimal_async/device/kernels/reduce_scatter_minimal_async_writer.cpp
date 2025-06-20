@@ -123,120 +123,171 @@ void kernel_main() {
 
                 while (tiles_read < tiles_to_read) {
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                    if (true) {
-                        uint32_t group = std::min(tiles_remaining_to_read, tile_granularity);
-                        for (uint32_t i = 0; i < group; ++i) {
-                            cb_wait_front(cb_output_id, 1);
-                            size_t l1_read_addr = get_read_ptr(cb_output_id);
+                    uint32_t tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
 
-                            uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
-                            uint64_t remote_noc0_dest_noc_addr =
-                                get_noc_addr(tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                            if (direction) {
-                                write_and_advance_local_read_address_for_fabric_write_forward(
-                                    remote_noc0_dest_noc_addr,
-                                    pkt_hdr,
-                                    fabric_connection,
-                                    l1_read_addr,
-                                    intermediate_page_size);
-                            } else {
-                                write_and_advance_local_read_address_for_fabric_write_backward(
-                                    remote_noc0_dest_noc_addr,
-                                    pkt_hdr,
-                                    fabric_connection,
-                                    l1_read_addr,
-                                    intermediate_page_size);
-                            }
-                            cb_pop_front(cb_output_id, 1);
-
-                            tiles_read++;
-
-                            pages_read_in_row++;
-                            if (pages_read_in_row >= slice_Wt) {
-                                row_offset += stride_Wt;
-                                pages_read_in_row = 0;
-                            }
-                        }
-
-                        // Skip the tiles going the other direction
-                        if (tiles_read < tiles_to_read) {
-                            uint32_t temp = std::min(tiles_to_read - tiles_read, tile_granularity);
-                            tiles_read += temp;
-                            pages_read_in_row += temp;
-                            if (pages_read_in_row >= slice_Wt) {
-                                row_offset += stride_Wt;
-                                pages_read_in_row = pages_read_in_row % slice_Wt;
-                            }
-                        }
-                    } else {
-                        cb_wait_front(cb_output_id, 2);
+                    uint32_t tiles_read_in_current_direction = 0;
+                    while (tiles_read_in_current_direction < tiles_to_read_in_current_direction) {
+                        cb_wait_front(cb_output_id, 1);
                         size_t l1_read_addr = get_read_ptr(cb_output_id);
 
-                        uint32_t tile_one_id = input_tile_id_start + row_offset + pages_read_in_row;
-                        pages_read_in_row++;
-                        if (pages_read_in_row >= slice_Wt) {
-                            row_offset += stride_Wt;
-                            pages_read_in_row = 0;
-                        }
-
-                        // TODO: (GR) Temp
-                        if (tiles_read < tiles_to_read) {
-                            uint32_t temp = std::min(tiles_to_read - tiles_read, tile_granularity);
-                            tiles_read += temp;
-                            pages_read_in_row += temp;
-                            if (pages_read_in_row >= slice_Wt) {
-                                row_offset += stride_Wt;
-                                pages_read_in_row = pages_read_in_row % slice_Wt;
-                            }
-                        }
-
-                        uint32_t tile_two_id = input_tile_id_start + row_offset + pages_read_in_row;
-                        pages_read_in_row++;
-                        if (pages_read_in_row >= slice_Wt) {
-                            row_offset += stride_Wt;
-                            pages_read_in_row = 0;
-                        }
-
-                        // TODO: (GR) Temp
-                        if (tiles_read < tiles_to_read) {
-                            uint32_t temp = std::min(tiles_to_read - tiles_read, tile_granularity);
-                            tiles_read += temp;
-                            pages_read_in_row += temp;
-                            if (pages_read_in_row >= slice_Wt) {
-                                row_offset += stride_Wt;
-                                pages_read_in_row = pages_read_in_row % slice_Wt;
-                            }
-                        }
-
-                        uint64_t remote_noc0_dest_noc_addr_tile_one =
-                            get_noc_addr(tile_one_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                        uint64_t remote_noc0_dest_noc_addr_tile_two =
-                            get_noc_addr(tile_two_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
+                        uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
+                        uint64_t remote_noc0_dest_noc_addr =
+                            get_noc_addr(tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
                         if (direction) {
-                            scatter_write_and_advance_local_read_address_for_fabric_write_forward(
-                                remote_noc0_dest_noc_addr_tile_one,
-                                remote_noc0_dest_noc_addr_tile_two,
+                            write_and_advance_local_read_address_for_fabric_write_forward(
+                                remote_noc0_dest_noc_addr,
                                 pkt_hdr,
                                 fabric_connection,
                                 l1_read_addr,
-                                intermediate_page_size,
                                 intermediate_page_size);
                         } else {
-                            scatter_write_and_advance_local_read_address_for_fabric_write_backward(
-                                remote_noc0_dest_noc_addr_tile_one,
-                                remote_noc0_dest_noc_addr_tile_two,
+                            write_and_advance_local_read_address_for_fabric_write_backward(
+                                remote_noc0_dest_noc_addr,
                                 pkt_hdr,
                                 fabric_connection,
                                 l1_read_addr,
-                                intermediate_page_size,
                                 intermediate_page_size);
                         }
+                        cb_pop_front(cb_output_id, 1);
 
-                        cb_pop_front(cb_output_id, 2);
-                        tiles_read += 2;
+                        tiles_read_in_current_direction++;
+
+                        pages_read_in_row++;
+                        if (pages_read_in_row >= slice_Wt) {
+                            row_offset += stride_Wt;
+                            pages_read_in_row = 0;
+                        }
                     }
 
+                    tiles_read += tiles_read_in_current_direction;
+                    tiles_remaining_to_read = tiles_to_read - tiles_read;
+
+                    // Skip the tiles going the other direction
+                    if (tiles_remaining_to_read > 0) {
+                        uint32_t tiles_to_read_in_other_direction = std::min(tiles_remaining_to_read, tile_granularity);
+                        tiles_read += tiles_to_read_in_other_direction;
+                        pages_read_in_row += tiles_to_read_in_other_direction;
+                        if (pages_read_in_row >= slice_Wt) {
+                            row_offset += stride_Wt;
+                            pages_read_in_row = pages_read_in_row % slice_Wt;
+                        }
+                    }
+
+                    // if (true) {
+                    //     uint32_t group = std::min(tiles_remaining_to_read, tile_granularity);
+                    //     for (uint32_t i = 0; i < group; ++i) {
+                    //         cb_wait_front(cb_output_id, 1);
+                    //         size_t l1_read_addr = get_read_ptr(cb_output_id);
+
+                    //         uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
+                    //         uint64_t remote_noc0_dest_noc_addr =
+                    //             get_noc_addr(tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                    //         if (direction) {
+                    //             write_and_advance_local_read_address_for_fabric_write_forward(
+                    //                 remote_noc0_dest_noc_addr,
+                    //                 pkt_hdr,
+                    //                 fabric_connection,
+                    //                 l1_read_addr,
+                    //                 intermediate_page_size);
+                    //         } else {
+                    //             write_and_advance_local_read_address_for_fabric_write_backward(
+                    //                 remote_noc0_dest_noc_addr,
+                    //                 pkt_hdr,
+                    //                 fabric_connection,
+                    //                 l1_read_addr,
+                    //                 intermediate_page_size);
+                    //         }
+                    //         cb_pop_front(cb_output_id, 1);
+
+                    //         tiles_read++;
+
+                    //         pages_read_in_row++;
+                    //         if (pages_read_in_row >= slice_Wt) {
+                    //             row_offset += stride_Wt;
+                    //             pages_read_in_row = 0;
+                    //         }
+                    //     }
+
+                    //     // Skip the tiles going the other direction
+                    //     if (tiles_read < tiles_to_read) {
+                    //         uint32_t temp = std::min(tiles_to_read - tiles_read, tile_granularity);
+                    //         tiles_read += temp;
+                    //         pages_read_in_row += temp;
+                    //         if (pages_read_in_row >= slice_Wt) {
+                    //             row_offset += stride_Wt;
+                    //             pages_read_in_row = pages_read_in_row % slice_Wt;
+                    //         }
+                    //     }
+                    // } else {
+                    //     cb_wait_front(cb_output_id, 2);
+                    //     size_t l1_read_addr = get_read_ptr(cb_output_id);
+
+                    //     uint32_t tile_one_id = input_tile_id_start + row_offset + pages_read_in_row;
+                    //     pages_read_in_row++;
+                    //     if (pages_read_in_row >= slice_Wt) {
+                    //         row_offset += stride_Wt;
+                    //         pages_read_in_row = 0;
+                    //     }
+
+                    //     // TODO: (GR) Temp
+                    //     if (tiles_read < tiles_to_read) {
+                    //         uint32_t temp = std::min(tiles_to_read - tiles_read, tile_granularity);
+                    //         tiles_read += temp;
+                    //         pages_read_in_row += temp;
+                    //         if (pages_read_in_row >= slice_Wt) {
+                    //             row_offset += stride_Wt;
+                    //             pages_read_in_row = pages_read_in_row % slice_Wt;
+                    //         }
+                    //     }
+
+                    //     uint32_t tile_two_id = input_tile_id_start + row_offset + pages_read_in_row;
+                    //     pages_read_in_row++;
+                    //     if (pages_read_in_row >= slice_Wt) {
+                    //         row_offset += stride_Wt;
+                    //         pages_read_in_row = 0;
+                    //     }
+
+                    //     // TODO: (GR) Temp
+                    //     if (tiles_read < tiles_to_read) {
+                    //         uint32_t temp = std::min(tiles_to_read - tiles_read, tile_granularity);
+                    //         tiles_read += temp;
+                    //         pages_read_in_row += temp;
+                    //         if (pages_read_in_row >= slice_Wt) {
+                    //             row_offset += stride_Wt;
+                    //             pages_read_in_row = pages_read_in_row % slice_Wt;
+                    //         }
+                    //     }
+
+                    //     uint64_t remote_noc0_dest_noc_addr_tile_one =
+                    //         get_noc_addr(tile_one_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                    //     uint64_t remote_noc0_dest_noc_addr_tile_two =
+                    //         get_noc_addr(tile_two_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+
+                    //     if (direction) {
+                    //         scatter_write_and_advance_local_read_address_for_fabric_write_forward(
+                    //             remote_noc0_dest_noc_addr_tile_one,
+                    //             remote_noc0_dest_noc_addr_tile_two,
+                    //             pkt_hdr,
+                    //             fabric_connection,
+                    //             l1_read_addr,
+                    //             intermediate_page_size,
+                    //             intermediate_page_size);
+                    //     } else {
+                    //         scatter_write_and_advance_local_read_address_for_fabric_write_backward(
+                    //             remote_noc0_dest_noc_addr_tile_one,
+                    //             remote_noc0_dest_noc_addr_tile_two,
+                    //             pkt_hdr,
+                    //             fabric_connection,
+                    //             l1_read_addr,
+                    //             intermediate_page_size,
+                    //             intermediate_page_size);
+                    //     }
+
+                    //     cb_pop_front(cb_output_id, 2);
+                    //     tiles_read += 2;
+                    // }
+
+                    // TODO: (GR) Remove old logic
                     // uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
                     // cb_wait_front(cb_output_id, num_pages_to_read);
                     // size_t l1_read_addr = get_read_ptr(cb_output_id);
