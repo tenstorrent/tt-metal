@@ -6,9 +6,10 @@ target_precompile_headers(ttnn_op_experimental_scatter REUSE_FROM TT::CommonPCH)
 target_sources(
     ttnn_op_experimental_scatter
     PRIVATE
+        scatter.cpp
         device/scatter_device_operation.cpp
         device/scatter_program_factory.cpp
-        scatter.cpp
+        tosa_scatter.cpp
 )
 
 target_include_directories(ttnn_op_experimental_scatter PRIVATE ${FixmeOpIncDirs})

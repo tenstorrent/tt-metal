@@ -68,4 +68,4 @@ void bind_tosa_scatter_operation(py::module& module) {
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace ttnn::operations::experimental::scatter::detail
+}  // namespace ttnn::operations::experimental::tosa_scatter::detail
