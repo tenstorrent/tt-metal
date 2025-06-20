@@ -106,7 +106,8 @@ def get_output_tensor(input_tokens, expert_indices, expert_mapping, seq_len, mes
     hidden_size = input_tokens.shape[3]
     selected_experts_k = expert_indices.shape[3]
 
-    output_tensor = 7 * torch.ones(devices, batch, seq_len, hidden_size, dtype=dtype)
+    # initialize the output tensor with random values so we can test the non-populated rows too
+    output_tensor = torch.rand(devices, batch, seq_len, hidden_size, dtype=dtype)
 
     for b in range(batch):
         for s in range(seq_len):

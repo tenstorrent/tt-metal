@@ -296,7 +296,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
     log_debug(
-        tt::LogAlways,
+        tt::LogOp,
         "\nCreating all to all dispatch program for mesh coordinate: ({}, {}) with physical device id: {} mesh id: {} "
         "chip id: {}",
         mesh_coordinate[0],
@@ -357,7 +357,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     uint32_t aligned_input_page_size = detail::get_aligned_page_size(input_tensor);
     log_debug(
-        tt::LogAlways,
+        tt::LogOp,
         "input shape: {}, input_pages: {}, input_page_size: {}, aligned_input_page_size: {}",
         input_tensor.logical_shape(),
         input_pages,
@@ -366,7 +366,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     uint32_t aligned_indices_page_size = detail::get_aligned_page_size(indices_tensor);
     log_debug(
-        tt::LogAlways,
+        tt::LogOp,
         "indices shape: {}, indices_pages: {}, indices_page_size: {}, aligned_indices_page_size: {}",
         indices_tensor.logical_shape(),
         indices_pages,
@@ -375,7 +375,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     uint32_t aligned_mapping_page_size = detail::get_aligned_page_size(mapping_tensor);
     log_debug(
-        tt::LogAlways,
+        tt::LogOp,
         "mapping shape: {}, mapping_pages: {}, mapping_page_size: {}, aligned_mapping_page_size: {}",
         mapping_tensor.logical_shape(),
         mapping_pages,
@@ -384,7 +384,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     uint32_t aligned_output_page_size = detail::get_aligned_page_size(output_tensor);
     log_debug(
-        tt::LogAlways,
+        tt::LogOp,
         "output shape: {}, output_pages: {}, output_page_size: {}, aligned_output_page_size: {}",
         output_tensor.logical_shape(),
         output_pages,
@@ -393,7 +393,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     uint32_t aligned_metadata_page_size = detail::get_aligned_page_size(metadata_tensor);
     log_debug(
-        tt::LogAlways,
+        tt::LogOp,
         "metadata shape: {}, metadata_pages: {}, metadata_page_size: {}, aligned_metadata_page_size: {}",
         metadata_tensor.logical_shape(),
         metadata_pages,
@@ -455,9 +455,9 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         dest_mesh_id.push_back(*fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)fabric_node_id.chip_id);
     }
-    log_debug(tt::LogAlways, "dest_chip_id: {}", detail::stringify_vector(dest_chip_id));
-    log_debug(tt::LogAlways, "dest_mesh_id: {}", detail::stringify_vector(dest_mesh_id));
-    log_debug(tt::LogAlways, "directions: {}", detail::stringify_array(directions));
+    log_debug(tt::LogOp, "dest_chip_id: {}", detail::stringify_vector(dest_chip_id));
+    log_debug(tt::LogOp, "dest_mesh_id: {}", detail::stringify_vector(dest_mesh_id));
+    log_debug(tt::LogOp, "directions: {}", detail::stringify_array(directions));
 
     // TODO: add fabric node and mesh id to the compile time args
     // TODO: add an array mapping logical device id to physical device id
@@ -577,7 +577,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
         uint32_t link_id = detail::select_link(mesh_view, mesh_coordinate, neighbor_coordinate, num_links, topology);
         log_debug(
-            tt::LogAlways,
+            tt::LogOp,
             "Connection between ({}, {}) and ({}, {}) will choose link_id: {}",
             mesh_coordinate[0],
             mesh_coordinate[1],
