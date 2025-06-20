@@ -289,7 +289,7 @@ void packet_sizes_test(
                  pages_reservable_per_transaction <= max_pages_reservable_per_transaction;
                  pages_reservable_per_transaction *= 2) {
                 // Check if the total data size is within the limits
-                if (num_of_transactions * pages_reservable_per_transaction > max_pages_reservable) {
+                if (pages_reservable_per_transaction > max_pages_reservable) {
                     continue;
                 }
 
