@@ -92,7 +92,6 @@ def main():
         default=False,
     )
     parser.add_option(
-        "-a",
         "--device-analysis-types",
         dest="device_analysis_types",
         action="append",
