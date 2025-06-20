@@ -613,10 +613,10 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
             }
             if (this->is_fw_) {
                 this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) +
-                                 "/firmware_subordinate_ierisc.ld ";
+                                 "/firmware_subordinate_aerisc.ld ";
             } else {
-                this->lflags_ +=
-                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_aerisc.ld ";
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) +
+                                 "/kernel_subordinate_aerisc.ld ";
             }
             break;
         }

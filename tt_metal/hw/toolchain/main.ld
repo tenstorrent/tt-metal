@@ -4,12 +4,8 @@
 
 #if (defined(COMPILE_FOR_BRISC) + defined(COMPILE_FOR_NCRISC) +         \
      defined(COMPILE_FOR_IERISC) + defined(COMPILE_FOR_SUBORDINATE_IERISC) +  \
-     defined(COMPILE_FOR_TRISC) + defined(COMPILE_FOR_AERISC)) != 1
+     defined(COMPILE_FOR_TRISC) + defined(COMPILE_FOR_AERISC) + defined(COMPILE_FOR_SUBORDINATE_AERISC)) != 1
 #error "Exactly one COMPILE_FOR_${PROC}RISC must be defined"
-#endif
-
-#if (defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC > 1)
-#error "COMPILE_FOR_AERISC must be equal to 0 or 1"
 #endif
 
 OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
@@ -77,7 +73,7 @@ OUTPUT_ARCH(riscv)
 #define TEXT_SIZE TRISC_SELECT(MEM_,_KERNEL_SIZE)
 #endif
 
-#elif (defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0)
+#elif defined(COMPILE_FOR_AERISC)
 /* Yes, using IERISC sizes.  */
 #define DATA_START MEM_LOCAL_BASE
 #define DATA_SIZE MEM_AERISC_LOCAL_SIZE
@@ -89,7 +85,7 @@ OUTPUT_ARCH(riscv)
 #define TEXT_SIZE MEM_AERISC_KERNEL_SIZE
 #endif
 
-#elif (defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 1)
+#elif defined(COMPILE_FOR_SUBORDINATE_AERISC)
 #define DATA_START MEM_LOCAL_BASE
 #define DATA_SIZE MEM_SUBORDINATE_AERISC_LOCAL_SIZE
 #define STACK_MIN_SIZE MEM_AERISC_STACK_MIN_SIZE
@@ -144,7 +140,7 @@ SECTIONS
 #if defined(TYPE_FIRMWARE)
 /* Need separation beteen end of firmware and start of kernel, so that
    they don't share unflushable i$ cache lines.  */
-#if defined(COMPILE_FOR_IERISC) || defined(COMPILE_FOR_SUBORDINATE_IERISC) || defined(COMPILE_FOR_AERISC)
+#if defined(COMPILE_FOR_IERISC) || defined(COMPILE_FOR_SUBORDINATE_IERISC) || defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_SUBORDINATE_AERISC)
 #define MEM_PAD MEM_IERISC_KERNEL_PAD
 #else
 #define MEM_PAD 0
