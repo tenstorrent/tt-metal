@@ -57,8 +57,10 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
 
     auto input_shape = input_tensor.get_tensor_spec().logical_shape();
     auto indices_shape = indices_tensor.get_tensor_spec().logical_shape();
-
-    for (uint32_t i = 0; i < input_shape.size() - 1; i++) {
+    TT_FATAL(
+        input_shape.rank() == 4 && (input_shape.rank() == indices_shape.rank()),
+        "Input and indices tensor must have the same number of dimensions");
+    for (uint32_t i = 0; i < indices_shape.rank() - 1; i++) {
         TT_FATAL(
             input_shape[i] == indices_shape[i],
             "Input and indices tensor must have the same shape for all dimensions except the last. Mismatch at "
@@ -107,27 +109,27 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
     uint32_t hidden_size = input_shape[-1];
     if (operation_attributes.axis.has_value()) {
         uint32_t axis = operation_attributes.axis.value();
-        tt::log_debug(tt::LogAlways, "axis: {}", axis);
+        log_debug(tt::LogOp, "axis: {}", axis);
         dispatch_devices = axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
     }
 
     // final batch in the metadata tensor
     uint32_t dispatched_tokens = tokens_per_device * dispatch_devices;
     uint32_t selected_experts_k = indices_shape[-1];
-    uint32_t seq_len = indices_shape[-21];
+    uint32_t seq_len = indices_shape[-2];
 
     auto output_shape = ttnn::Shape({1, dispatched_tokens, seq_len, hidden_size});
     auto metadata_shape = ttnn::Shape({1, dispatched_tokens, seq_len, selected_experts_k});
 
-    tt::log_debug(tt::LogAlways, "output_shape: {}", output_shape);
-    tt::log_debug(tt::LogAlways, "metadata_shape: {}", metadata_shape);
-    tt::log_debug(tt::LogAlways, "input_tensor_shape: {}", input_shape);
-    tt::log_debug(tt::LogAlways, "indices_shape: {}", indices_shape);
-    tt::log_debug(tt::LogAlways, "mapping_shape: {}", mapping_shape);
-    tt::log_debug(tt::LogAlways, "dispatch_devices: {}", dispatch_devices);
-    tt::log_debug(tt::LogAlways, "hidden_size: {}", hidden_size);
-    tt::log_debug(tt::LogAlways, "dispatched_tokens: {}", dispatched_tokens);
-    tt::log_debug(tt::LogAlways, "selected_experts_k: {}", selected_experts_k);
+    log_debug(tt::LogOp, "output_shape: {}", output_shape);
+    log_debug(tt::LogOp, "metadata_shape: {}", metadata_shape);
+    log_debug(tt::LogOp, "input_tensor_shape: {}", input_shape);
+    log_debug(tt::LogOp, "indices_shape: {}", indices_shape);
+    log_debug(tt::LogOp, "mapping_shape: {}", mapping_shape);
+    log_debug(tt::LogOp, "dispatch_devices: {}", dispatch_devices);
+    log_debug(tt::LogOp, "hidden_size: {}", hidden_size);
+    log_debug(tt::LogOp, "dispatched_tokens: {}", dispatched_tokens);
+    log_debug(tt::LogOp, "selected_experts_k: {}", selected_experts_k);
 
     auto mem_config = operation_attributes.output_mem_config;
     auto output_tokens_spec = TensorSpec(

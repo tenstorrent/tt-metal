@@ -59,7 +59,7 @@ void append_fabric_connection_rt_args(
     std::vector<uint32_t>& worker_args,
     CoreType core_type = CoreType::WORKER);
 
-ControlPlane* get_control_plane();
+ControlPlane& get_control_plane();
 
 namespace experimental {
 size_t get_number_of_available_routing_planes(
