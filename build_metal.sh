@@ -72,6 +72,7 @@ light_metal_trace="ON"
 build_all="OFF"
 cxx_compiler_path=""
 cpm_source_cache=""
+cpm_use_local_packages="OFF"
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
 toolchain_path="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
@@ -190,6 +191,8 @@ while true; do
             cxx_compiler_path="$2";shift;;
         --cpm-source-cache)
             cpm_source_cache="$2";shift;;
+        --cpm-use-local-packages)
+            cpm_use_local_packages="ON";;
         --c-compiler-path)
             c_compiler_path="$2";shift;;
         --toolchain-path)
@@ -276,6 +279,11 @@ fi
 if [ "$cpm_source_cache" != "" ]; then
     echo "INFO: CPM_SOURCE_CACHE: $cpm_source_cache"
     cmake_args+=("-DCPM_SOURCE_CACHE=$cpm_source_cache")
+fi
+
+if [ "$cpm_use_local_packages" = "ON" ]; then
+    echo "INFO: CPM_USE_LOCAL_PACKAGES: $cpm_use_local_packages"
+    cmake_args+=("-DCPM_USE_LOCAL_PACKAGES=ON")
 fi
 
 if [ "$enable_ccache" = "ON" ]; then
