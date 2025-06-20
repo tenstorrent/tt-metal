@@ -146,6 +146,7 @@ void MAIN {
             UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                 in_cb_id_0, curr_scalar_cb_id, max_tiles_per_iter, num_faces_in_tile, face_r_dim, 1)));
         }
+        pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_tile);
         DPRINT << "in_blocks_c: " << in_nblocks_c << ENDL();
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; ++b_i) {
             reduce_h_fused<
@@ -162,6 +163,7 @@ void MAIN {
             UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                 in_cb_id_0, curr_scalar_cb_id, partial_iter_output_tiles, num_faces_in_tile, face_r_dim, 1)));
         }
+        pack_untilize_dst_init_short<partial_iter_output_tiles>(out_cb_id, num_out_rows, num_faces_in_tile);
         // perform the reduction over the either whole or partial chunk N
         DPRINT << "in_blocks_c: " << partial_iter_output_tiles << ENDL();
         reduce_h_fused<
