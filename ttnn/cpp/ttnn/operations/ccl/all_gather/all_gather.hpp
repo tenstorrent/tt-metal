@@ -14,43 +14,43 @@ namespace ccl {
 struct ExecuteAllGather {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const int32_t dim,
-        const uint32_t num_links = 1,
+        int32_t dim,
+        uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<size_t> num_workers = std::nullopt,
-        const std::optional<size_t> num_buffers_per_channel = std::nullopt,
-        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
+        std::optional<size_t> num_workers = std::nullopt,
+        std::optional<size_t> num_buffers_per_channel = std::nullopt,
+        ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
 
     static std::vector<ttnn::Tensor> invoke(
         const std::vector<ttnn::Tensor>& input_tensors,
-        const int32_t dim,
-        const uint32_t num_links = 1,
+        int32_t dim,
+        uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<size_t> num_workers = std::nullopt,
-        const std::optional<size_t> num_buffers_per_channel = std::nullopt,
-        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
+        std::optional<size_t> num_workers = std::nullopt,
+        std::optional<size_t> num_buffers_per_channel = std::nullopt,
+        ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const int32_t dim,
-        const uint32_t cluster_axis,
+        int32_t dim,
+        uint32_t cluster_axis,
         const MeshDevice& mesh_device,
-        const uint32_t num_links = 1,
+        uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<size_t> num_workers = std::nullopt,
-        const std::optional<size_t> num_buffers_per_channel = std::nullopt,
-        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
+        std::optional<size_t> num_workers = std::nullopt,
+        std::optional<size_t> num_buffers_per_channel = std::nullopt,
+        ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
 
     static std::vector<ttnn::Tensor> invoke(
         const std::vector<ttnn::Tensor>& input_tensors,
-        const int32_t dim,
-        const uint32_t cluster_axis,
+        int32_t dim,
+        uint32_t cluster_axis,
         const MeshDevice& mesh_device,
-        const uint32_t num_links = 1,
+        uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<size_t> num_workers = std::nullopt,
-        const std::optional<size_t> num_buffers_per_channel = std::nullopt,
-        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
+        std::optional<size_t> num_workers = std::nullopt,
+        std::optional<size_t> num_buffers_per_channel = std::nullopt,
+        ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
 };
 
 }  // namespace ccl

@@ -81,11 +81,13 @@ jobs:
             hw-topology: wh_6u
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+            techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
             test-command: tests/scripts/wh_6u/run_wh_6u_upstream_profiler_tests.sh
             hw-topology: wh_6u
             build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+            techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
@@ -152,6 +154,8 @@ jobs:
           push: true
           tags: ${{ matrix.image-config.image-tag }}
           context: ${{ github.workspace }}
+          build-args: |
+            TECHDEBT_INSTALL_TTT_REQS=${{ matrix.image-config.techdebt-install-ttt-reqs && 'true' || 'false' }}
   test-wh-6u-image:
     needs:
       - get-image-tags
@@ -172,10 +176,10 @@ jobs:
         env:
           SOURCE_LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
           LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
   test-bh-llmbox-image:
     needs:
       - get-image-tags
