@@ -33,6 +33,9 @@ def run_demo_inference(
     if isinstance(prompts, str):
         prompts = [prompts]
 
+    needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
+    prompts = prompts + [""] * needed_padding
+
     # In case of classifier free guidance this is set:
     # - guidance_scale = 5.0
     # - 2 runs of unet per iteration
