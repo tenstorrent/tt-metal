@@ -36,6 +36,15 @@ struct NDShardingOpCompatParams {
     Shape shard_shape;
     CoreCoord grid_size;
 };
+struct NDShardingBufferSizeParams {
+    Shape shape;
+    Shape shard_shape;
+    CoreCoord grid_size;
+    size_t expected_buffer_size = 0;
+    size_t expected_num_pages = 0;
+    size_t expected_num_dev_pages = 0;
+    size_t expected_aligned_size_per_bank = 0;
+};
 }  // namespace
 
 class NDShardingTests
@@ -202,6 +211,29 @@ TEST_F(NDShardingPerfTests, TestBatchShardingPerf) {
 
     EXPECT_TRUE(batch_nd_sharding_time_ns < block_2d_sharding_time_ns * 6);
     EXPECT_TRUE(small_shards_nd_sharding_time_ns < block_2d_sharding_time_ns * 6);
+}
+
+class NDShardingBufferSizeTests : public ttnn::TTNNFixtureWithDevice,
+                                  public ::testing::WithParamInterface<NDShardingBufferSizeParams> {};
+
+TEST_P(NDShardingBufferSizeTests, TestBufferSize) {
+    const auto& params = GetParam();
+
+    CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{params.grid_size.x - 1, params.grid_size.y - 1}));
+    NdShardSpec nd_shard_spec{params.shard_shape, cores, ShardOrientation::ROW_MAJOR};
+    MemoryConfig memory_config{BufferType::L1, nd_shard_spec};
+    TensorLayout tensor_layout(DataType::UINT8, PageConfig(Layout::TILE), memory_config);
+    TensorSpec tensor_spec(params.shape, tensor_layout);
+
+    size_t volume = params.shape.volume();
+    std::vector<uint8_t> data(volume);
+    auto tensor = Tensor::from_vector(data, tensor_spec, device_);
+
+    auto buffer = tensor.buffer();
+    EXPECT_EQ(buffer->size(), params.expected_buffer_size);
+    EXPECT_EQ(buffer->num_pages(), params.expected_num_pages);
+    EXPECT_EQ(buffer->num_dev_pages(), params.expected_num_dev_pages);
+    EXPECT_EQ(buffer->aligned_size_per_bank(), params.expected_aligned_size_per_bank);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -753,4 +785,27 @@ INSTANTIATE_TEST_SUITE_P(
             .shape = Shape({1, 2, 32 * 4, 32 * 5}),
             .shard_shape = Shape({1, 1, 32 * 2, 32 * 2}),
             .grid_size = CoreCoord{3, 4},
+        }));
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorShardingTests,
+    NDShardingBufferSizeTests,
+    ::testing::Values(
+        NDShardingBufferSizeParams{
+            .shape = Shape({4, 4, 32 * 2, 32 * 2}),
+            .shard_shape = Shape({1, 1, 32, 32}),
+            .grid_size = CoreCoord{4, 4},
+            .expected_buffer_size = 64 * 32 * 32,
+            .expected_num_pages = 64,
+            .expected_num_dev_pages = 64,
+            .expected_aligned_size_per_bank = 4 * 32 * 32,
+        },
+        NDShardingBufferSizeParams{
+            .shape = Shape({4, 7, 32 * 2, 32 * 2}),
+            .shard_shape = Shape({2, 2, 32, 32}),
+            .grid_size = CoreCoord{1, 3},
+            .expected_buffer_size = 112 * 32 * 32,
+            .expected_num_pages = 112,
+            .expected_num_dev_pages = 3 * 11 * 4,
+            .expected_aligned_size_per_bank = 11 * 4 * 32 * 32,
         }));
