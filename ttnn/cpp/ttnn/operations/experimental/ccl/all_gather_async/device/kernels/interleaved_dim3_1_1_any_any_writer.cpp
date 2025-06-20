@@ -102,7 +102,7 @@ void kernel_main() {
         // Will always pack two pages into a single packet, except for possibly the
         // very last packet which would have a single page (if we have an uneven number of tiles).
         // Can't pack 3+ pages into a single packet since tiles are interleaved (non-contiguous in memory) and
-        // the scatter-write currently just supports 2 distinct memory addresses for the packet contents.
+        // the scatter-write implementation currently just supports 2 distinct memory addresses for the packet contents.
 
         // When packing two pages into a packet need to be careful as to calculate tile_id wrt row_offset
         while (tiles_read < tiles_to_read) {
@@ -128,7 +128,7 @@ void kernel_main() {
                 }
                 cb_pop_front(cb_output_id, 1);
                 tiles_read++;
-                // Don't need to increment other id counters since this is the last page
+                // Don't need to increment other page id counters since this is the last page
                 } else {
                     // 2+ tiles remaining to read, pack 2 into a packet
                     cb_wait_front(cb_output_id, 2);
@@ -184,7 +184,7 @@ void kernel_main() {
                 }
             }
 
-            // TODO: (GR) Old implementation (non scatter write)
+            // TODO: (GR) Remove old implementation
             // while (tiles_read < tiles_to_read) {
             //     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
             //     cb_wait_front(cb_output_id, num_pages_to_read);
@@ -313,40 +313,109 @@ void kernel_main() {
         } else {
             tile_id_start = actual_slice_chip_id * input_tensor_Ht * input_tensor_Wt;
         }
-        // TODO: (GR) Replicate logic here
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
             while (tiles_read < tiles_to_read) {
-                uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-                cb_wait_front(cb_output_id, packet_size_in_pages);
-                size_t l1_read_addr = get_read_ptr(cb_output_id);
-                for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-                    uint64_t noc0_dest_noc_addr = get_noc_addr(
-                        tile_id_start + row_offset + pages_read_in_row, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                    pages_read_in_row += 1;
+                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+                if (tiles_remaining_to_read == 1) {
+                    // Last tile to read
+                    cb_wait_front(cb_output_id, 1);
+                    size_t l1_read_addr = get_read_ptr(cb_output_id);
+
+                    uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
+                    uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                    if (direction == 1) {
+                        write_and_advance_local_read_address_for_fabric_write_backward(
+                            noc0_dest_noc_addr, pkt_hdr, fabric_connection, l1_read_addr, output_page_size);
+                    } else {
+                        write_and_advance_local_read_address_for_fabric_write_forward(
+                            noc0_dest_noc_addr, pkt_hdr, fabric_connection, l1_read_addr, output_page_size);
+                    }
+                    cb_pop_front(cb_output_id, 1);
+                    tiles_read++;
+                    // Don't need to increment other page id counters since this is the last page
+                } else {
+                    // 2+ tiles remaining to read, pack 2 into a packet
+                    cb_wait_front(cb_output_id, 2);
+                    size_t l1_read_addr = get_read_ptr(cb_output_id);
+
+                    uint32_t tile_one_id = tile_id_start + row_offset + pages_read_in_row;
+                    pages_read_in_row++;
                     if (pages_read_in_row >= slice_Wt) {
                         row_offset += stride_Wt;
                         pages_read_in_row = 0;
                     }
 
-                    if (direction == 1) {
-                        write_and_advance_local_read_address_for_fabric_write_backward(
-                            noc0_dest_noc_addr,
-                            pkt_hdr,
-                            fabric_connection,
-                            l1_read_addr,
-                            contig_pages_advanced * output_page_size);
-                    } else {
-                        write_and_advance_local_read_address_for_fabric_write_forward(
-                            noc0_dest_noc_addr,
-                            pkt_hdr,
-                            fabric_connection,
-                            l1_read_addr,
-                            contig_pages_advanced * output_page_size);
+                    uint32_t tile_two_id = tile_id_start + row_offset + pages_read_in_row;
+                    pages_read_in_row++;
+                    if (pages_read_in_row >= slice_Wt) {
+                        row_offset += stride_Wt;
+                        pages_read_in_row = 0;
                     }
-                    tiles_read += contig_pages_advanced;
+
+                    uint64_t noc0_dest_noc_addr_tile_one =
+                        get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                    uint64_t noc0_dest_noc_addr_tile_two =
+                        get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+
+                    if (direction == 1) {
+                        scatter_write_and_advance_local_read_address_for_fabric_write_backward(
+                            noc0_dest_noc_addr_tile_one,
+                            noc0_dest_noc_addr_tile_two,
+                            pkt_hdr,
+                            fabric_connection,
+                            l1_read_addr,
+                            output_page_size,
+                            output_page_size);
+                    } else {
+                        scatter_write_and_advance_local_read_address_for_fabric_write_forward(
+                            noc0_dest_noc_addr_tile_one,
+                            noc0_dest_noc_addr_tile_two,
+                            pkt_hdr,
+                            fabric_connection,
+                            l1_read_addr,
+                            output_page_size,
+                            output_page_size);
+                    }
+
+                    cb_pop_front(cb_output_id, 2);
+                    tiles_read += 2;
                 }
-                cb_pop_front(cb_output_id, packet_size_in_pages);
             }
+
+            // TODO: (GR) Remove old implementation
+            // while (tiles_read < tiles_to_read) {
+            //     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
+            //     cb_wait_front(cb_output_id, num_pages_to_read);
+            //     size_t l1_read_addr = get_read_ptr(cb_output_id);
+            //     for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
+            //         uint64_t noc0_dest_noc_addr = get_noc_addr(
+            //             tile_id_start + row_offset + pages_read_in_row, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+            //         pages_read_in_row += 1;
+            //         if (pages_read_in_row >= slice_Wt) {
+            //             row_offset += stride_Wt;
+            //             pages_read_in_row = 0;
+            //         }
+
+            //         if (direction == 1) {
+            //             write_and_advance_local_read_address_for_fabric_write_backward(
+            //                 noc0_dest_noc_addr,
+            //                 pkt_hdr,
+            //                 fabric_connection,
+            //                 l1_read_addr,
+            //                 contig_pages_advanced * output_page_size);
+            //         } else {
+            //             write_and_advance_local_read_address_for_fabric_write_forward(
+            //                 noc0_dest_noc_addr,
+            //                 pkt_hdr,
+            //                 fabric_connection,
+            //                 l1_read_addr,
+            //                 contig_pages_advanced * output_page_size);
+            //         }
+            //         tiles_read += contig_pages_advanced;
+            //     }
+            //     cb_pop_front(cb_output_id, num_pages_to_read);
+            // }
+
             tile_id_start += output_tensor_Wt * output_tensor_Ht;
             tiles_read = input_tile_id_start;
             tiles_to_read = input_tile_id_end;
