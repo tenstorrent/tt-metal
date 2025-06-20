@@ -135,17 +135,6 @@ class T3kCustomMeshGraphFabric2DDynamicFixture
     }
 };
 
-// Disjoint Multi-Mesh Test - Using parameterized test with disjoint mesh descriptor
-class T3kDisjointMeshGraphFabric2DDynamicFixture
-    : public CustomMeshGraphFabric2DDynamicFixture,
-      public ::testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<eth_coord_t>>>> {
-    void SetUp() override {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::ClusterType::T3K) {
-            GTEST_SKIP();
-        }
-    }
-};
-
 struct McastRoutingInfo {
     RoutingDirection mcast_dir;
     uint32_t num_mcast_hops;

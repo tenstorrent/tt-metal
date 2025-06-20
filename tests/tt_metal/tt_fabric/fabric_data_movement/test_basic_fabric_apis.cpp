@@ -858,6 +858,9 @@ TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestUnicastRaw) {
 }
 
 TEST_F(Fabric2DDynamicFixture, TestGetNextHopRouterDirection1MeshAllToAll) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG) {
+        GTEST_SKIP() << "Test not applicable for TG cluster type";
+    }
     RunGetNextHopRouterDirectionTest(this, false);
 }
 
@@ -869,7 +872,7 @@ TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestGetNextHopRouterDirectionMu
     RunGetNextHopRouterDirectionTest(this, true);
 }
 
-TEST_P(T3kDisjointMeshGraphFabric2DDynamicFixture, TestGetNextHopRouterDirectionDisjointMultiMesh) {
+TEST_P(T3kCustomMeshGraphFabric2DDynamicFixture, TestGetNextHopRouterDirectionDisjointMultiMesh) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = GetParam();
     CustomMeshGraphFabric2DDynamicFixture::SetUp(
         mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
@@ -878,7 +881,7 @@ TEST_P(T3kDisjointMeshGraphFabric2DDynamicFixture, TestGetNextHopRouterDirection
 
 INSTANTIATE_TEST_SUITE_P(
     T3kDisjointMeshGraphFabric2DDynamicTests,
-    T3kDisjointMeshGraphFabric2DDynamicFixture,
+    T3kCustomMeshGraphFabric2DDynamicFixture,
     ::testing::ValuesIn(t3k_disjoint_mesh_descriptor_chip_mappings));
 
 INSTANTIATE_TEST_SUITE_P(
