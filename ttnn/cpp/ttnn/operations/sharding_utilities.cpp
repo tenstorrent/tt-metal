@@ -834,12 +834,10 @@ ShardedAccessorArgs get_sharded_accessor_args(
     auto shard_shape_rt = args_config.test(ArgConfig::ShardShapeCRTA);
     auto bank_coords_rt = args_config.test(ArgConfig::BankCoordsCRTA);
 
-    TT_FATAL(
-        !rank_rt or (rank_rt and tensor_shape_rt and shard_shape_rt),
-        "If rank is runtime, tensor_shape and shard_shape must also be runtime");
-    TT_FATAL(
-        !num_banks_rt or (num_banks_rt and bank_coords_rt),
-        "If num_banks is runtime, bank_coords must also be runtime");
+    TT_FATAL(!rank_rt || (tensor_shape_rt && shard_shape_rt),
+             "If rank is runtime, tensor_shape and shard_shape must also be runtime");
+    TT_FATAL(!num_banks_rt || bank_coords_rt,
+             "If num_banks is runtime, bank_coords must also be runtime");
     size_t n_compile_time_args = 1 + !rank_rt + !num_banks_rt + tensor_shape.size() * !tensor_shape_rt +
                                  shard_shape.size() * !shard_shape_rt +
                                  bank_coords.size() * !bank_coords_rt;  // +1 for the crta config
