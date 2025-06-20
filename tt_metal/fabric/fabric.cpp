@@ -12,6 +12,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/routing_table_generator.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <optional>
 #include <set>
@@ -32,10 +33,15 @@ class Program;
 namespace {
 
 // checks if the connection b/w src and dst is a connection b/w TG gateway and a remote chip
-bool is_TG_gateway_connection(const chip_id_t src_chip_id, const chip_id_t dst_chip_id) {
+bool is_TG_gateway_connection(
+    const tt::tt_fabric::FabricNodeId src_node_id, const tt::tt_fabric::FabricNodeId dst_node_id) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::ClusterType::TG) {
         return false;
     }
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_node_id);
+    const auto dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_node_id);
 
     const auto mmio_chip_id1 =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(src_chip_id);
@@ -66,55 +72,52 @@ size_t get_tt_fabric_packet_header_size_bytes() {
 }
 
 void append_fabric_connection_rt_args(
-    const chip_id_t src_chip_id,
-    const chip_id_t dst_chip_id,
+    const FabricNodeId src_node_id,
+    const FabricNodeId dst_node_id,
     const uint32_t link_idx,
     tt::tt_metal::Program& worker_program,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type) {
     TT_FATAL(
-        src_chip_id != dst_chip_id,
-        "Expected different src and dst chip ids but got same, src: {}, dst: {}",
-        src_chip_id,
-        dst_chip_id);
+        src_node_id != dst_node_id,
+        "Expected different src and dst node ids but got same, src: ({}, {}), dst: ({}, {})",
+        src_node_id.mesh_id,
+        src_node_id.chip_id,
+        dst_node_id.mesh_id,
+        dst_node_id.chip_id);
 
-    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    const auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_chip_id);
-    const auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id);
-
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
     const bool is_2d_fabric = topology == Topology::Mesh;
 
     // Make an exception for TG gateway connections. TG gateways are on a different mesh compared to remote chips
     // but the routing is simple and doesnt need any special inter-mesh handling
-    if (!is_2d_fabric && !is_TG_gateway_connection(src_chip_id, dst_chip_id)) {
+    if (!is_2d_fabric && !is_TG_gateway_connection(src_node_id, dst_node_id)) {
         TT_FATAL(
-            src_fabric_node_id.mesh_id == dst_fabric_node_id.mesh_id,
+            src_node_id.mesh_id == dst_node_id.mesh_id,
             "Currently only the chips on the same mesh are supported for 1D fabric. Src mesh id: {}, Dst mesh id: {}",
-            src_fabric_node_id.mesh_id,
-            dst_fabric_node_id.mesh_id);
+            src_node_id.mesh_id,
+            dst_node_id.mesh_id);
     }
 
-    // get the direction in which the data will be forwarded from the src_chip_id
+    // get the direction in which the data will be forwarded from the src_node_id
     std::optional<RoutingDirection> forwarding_direction;
     if (is_2d_fabric) {
-        forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+        forwarding_direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
     } else {
         // TODO: Workaround for #22524 routing tables not having wraparound links
         // for 1D fabric, we loop to match the dst chip since we need to ensure src and dst are on the same line
         // remove this once control plane has row/col info/view
         for (const auto& direction : FabricContext::routing_directions) {
             // This assumes all neighbor chips to the dst mesh are the same
-            auto neighbors = control_plane.get_chip_neighbors(src_fabric_node_id, direction);
-            auto neighbor_mesh_chips = neighbors.find(dst_fabric_node_id.mesh_id);
+            auto neighbors = control_plane.get_chip_neighbors(src_node_id, direction);
+            auto neighbor_mesh_chips = neighbors.find(dst_node_id.mesh_id);
             if (neighbor_mesh_chips == neighbors.end() ||
                 (std::find(
-                     neighbor_mesh_chips->second.begin(),
-                     neighbor_mesh_chips->second.end(),
-                     dst_fabric_node_id.chip_id) == neighbor_mesh_chips->second.end())) {
+                     neighbor_mesh_chips->second.begin(), neighbor_mesh_chips->second.end(), dst_node_id.chip_id) ==
+                 neighbor_mesh_chips->second.end())) {
                 continue;
             }
 
@@ -124,12 +127,14 @@ void append_fabric_connection_rt_args(
     }
     TT_FATAL(
         forwarding_direction.has_value(),
-        "Could not find any forwarding direction from src {} to dst {}",
-        src_chip_id,
-        dst_chip_id);
+        "Could not find any forwarding direction from src: ({}, {}) to dst: ({}, {})",
+        src_node_id.mesh_id,
+        src_node_id.chip_id,
+        dst_node_id.mesh_id,
+        dst_node_id.chip_id);
 
     const auto candidate_eth_chans =
-        control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
+        control_plane.get_active_fabric_eth_channels_in_direction(src_node_id, forwarding_direction.value());
     TT_FATAL(
         link_idx < candidate_eth_chans.size(),
         "requested link idx {}, out of bounds, max available {}",
@@ -137,17 +142,20 @@ void append_fabric_connection_rt_args(
         candidate_eth_chans.size());
 
     const auto forwarding_links =
-        get_forwarding_link_indices_in_direction(src_chip_id, dst_chip_id, forwarding_direction.value());
+        get_forwarding_link_indices_in_direction(src_node_id, dst_node_id, forwarding_direction.value());
     TT_FATAL(
         std::find(forwarding_links.begin(), forwarding_links.end(), link_idx) != forwarding_links.end(),
-        "requested link idx {}, cannot be used for forwarding b/w src {} and dst {}",
+        "requested link idx {}, cannot be used for forwarding b/w src: ({}, {}) and dst: ({}, {})",
         link_idx,
-        src_chip_id,
-        dst_chip_id);
+        src_node_id.mesh_id,
+        src_node_id.chip_id,
+        dst_node_id.mesh_id,
+        dst_node_id.chip_id);
 
     const auto fabric_router_channel = candidate_eth_chans[link_idx];
     const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
 
+    const auto src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_node_id);
     CoreCoord fabric_router_virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
             src_chip_id, fabric_router_channel);
@@ -175,6 +183,23 @@ void append_fabric_connection_rt_args(
         worker_teardown_semaphore_id,
         worker_buffer_index_semaphore_id,
         worker_args);
+}
+
+void append_fabric_connection_rt_args(
+    const chip_id_t src_chip_id,
+    const chip_id_t dst_chip_id,
+    const uint32_t link_idx,
+    tt::tt_metal::Program& worker_program,
+    const CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    CoreType core_type) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    const auto src_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_chip_id);
+    const auto dst_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id);
+
+    append_fabric_connection_rt_args(
+        src_node_id, dst_node_id, link_idx, worker_program, worker_core, worker_args, core_type);
 }
 
 }  // namespace tt::tt_fabric

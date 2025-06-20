@@ -28,10 +28,15 @@ void set_routing_mode(Topology topology, tt::tt_metal::FabricConfig fabric_confi
 FabricType get_fabric_type(tt::tt_metal::FabricConfig fabric_config, tt::ClusterType cluster_type);
 
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
+    FabricNodeId src_node_id, FabricNodeId dst_node_id, RoutingDirection direction);
+
+std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     chip_id_t src_chip_id, chip_id_t dst_chip_id, RoutingDirection direction);
 
 // returns which links on a given src chip are available for forwarding the data to a dst chip
 // these link indices can then be used to establish connection with the fabric routers
+std::vector<uint32_t> get_forwarding_link_indices(FabricNodeId src_node_id, FabricNodeId dst_node_id);
+
 std::vector<uint32_t> get_forwarding_link_indices(chip_id_t src_chip_id, chip_id_t dst_chip_id);
 
 void get_optimal_noc_for_edm(

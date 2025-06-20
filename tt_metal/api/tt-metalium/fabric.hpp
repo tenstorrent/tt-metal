@@ -16,11 +16,24 @@ namespace tt {
 namespace tt_metal {
 class Program;
 }  // namespace tt_metal
+
+namespace tt_fabric {
+class FabricNodeId;
+}  // namespace tt_fabric
 }  // namespace tt
 
 namespace tt::tt_fabric {
 
 size_t get_tt_fabric_channel_buffer_size_bytes();
+
+void append_fabric_connection_rt_args(
+    const FabricNodeId src_node_id,
+    const FabricNodeId dst_node_id,
+    const uint32_t link_idx,
+    tt::tt_metal::Program& worker_program,
+    const CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    CoreType core_type = CoreType::WORKER);
 
 // Used to get the run-time args for estabilishing connection with the fabric router.
 // The API appends the connection specific run-time args to the set of exisiting
