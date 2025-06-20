@@ -186,16 +186,24 @@ struct NocUnicastWriteAtomicIncFields {
 
 // this also has to consider the memory map which has addresses for synchronization etc
 
-struct TestTrafficDataConfig {
+struct TrafficParameters {
+    // from TrafficPatternConfig
     ChipSendType chip_send_type;
     NocSendType noc_send_type;
-    uint32_t seed;
-    size_t num_packets;
     size_t payload_size_bytes;
+    size_t num_packets;
+    std::optional<uint16_t> atomic_inc_val;
+    std::optional<uint16_t> atomic_inc_wrap;
+    std::optional<uint32_t> mcast_start_hops;
+
+    // Global context
+    uint32_t seed;
+    Topology topology;
+    tt::tt_metal::distributed::MeshShape mesh_shape;
 };
 
 struct TestTrafficConfig {
-    TestTrafficDataConfig data_config;
+    TrafficParameters parameters;
     FabricNodeId src_node_id;
     std::optional<std::vector<FabricNodeId>> dst_node_ids;
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
@@ -207,7 +215,8 @@ struct TestTrafficConfig {
 };
 
 struct TestTrafficSenderConfig {
-    TestTrafficDataConfig data_config;
+    TrafficParameters parameters;
+    FabricNodeId src_node_id;
     std::vector<FabricNodeId> dst_node_ids;
     std::unordered_map<RoutingDirection, uint32_t> hops;
     CoreCoord dst_logical_core;
@@ -218,7 +227,7 @@ struct TestTrafficSenderConfig {
 };
 
 struct TestTrafficReceiverConfig {
-    TestTrafficDataConfig data_config;
+    TrafficParameters parameters;
     uint32_t sender_id;
     size_t target_address;
 
@@ -226,60 +235,102 @@ struct TestTrafficReceiverConfig {
 };
 
 inline std::vector<uint32_t> TestTrafficSenderConfig::get_args() const {
-    // for now only expect hops in a single direction
-    uint32_t hops = 0;
-    for (const auto& [_, hops_in_dir] : this->hops) {
-        if (hops_in_dir > 0) {
-            hops = hops_in_dir;
-            break;
-        }
-    }
-
-    if (hops == 0) {
-        log_fatal(tt::LogTest, "Expected non-zero hops only in one direction for 1D");
-        throw std::runtime_error("Unexpected traffic config");
-    }
-
     std::vector<uint32_t> args;
 
     // TODO: get the payload buffer size from the config
     uint32_t payload_buffer_size = 0x10000;
     const auto metadata =
-        SenderMetadataFields(this->data_config.num_packets, this->data_config.seed, payload_buffer_size);
+        SenderMetadataFields(this->parameters.num_packets, this->parameters.seed, payload_buffer_size);
     const auto metadata_args = metadata.get_args();
     args.insert(args.end(), metadata_args.begin(), metadata_args.end());
 
-    // TODO: get the topology
-    bool is_2d_fabric = false;  // query the interface to get outgoing direction from routing direction
+    bool is_2d_fabric = (this->parameters.topology == Topology::Mesh);
 
     // push chip send type
-    args.push_back(this->data_config.chip_send_type);
+    args.push_back(this->parameters.chip_send_type);
 
     if (is_2d_fabric) {
-        log_fatal(tt::LogTest, "2D not supported yet");
-        throw std::runtime_error("Unexpected traffic config");
-    } else {
-        if (this->data_config.chip_send_type == ChipSendType::CHIP_UNICAST) {
-            const auto chip_unicast_fields = ChipUnicastFields1D(hops);
+        if (this->parameters.chip_send_type == ChipSendType::CHIP_UNICAST) {
+            TT_FATAL(this->dst_node_ids.size() == 1, "2D unicast should have exactly one destination node.");
+            const auto& dst_node_id = this->dst_node_ids[0];
+            const auto& mesh_shape = this->parameters.mesh_shape;
+            // From tt_fabric_test_common.hpp
+            const uint32_t EW_DIM = 1;
+            const auto unicast_fields = ChipUnicastFields2D(
+                this->src_node_id.chip_id, dst_node_id.chip_id, *dst_node_id.mesh_id, mesh_shape[EW_DIM]);
+            const auto unicast_args = unicast_fields.get_args();
+            args.insert(args.end(), unicast_args.begin(), unicast_args.end());
+        } else if (this->parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
+            TT_FATAL(!this->dst_node_ids.empty(), "2D multicast should have at least one destination node.");
+            const auto& dst_rep_node_id = this->dst_node_ids[0];  // Representative destination
+            const auto mcast_fields =
+                ChipMulticastFields2D(dst_rep_node_id.chip_id, *dst_rep_node_id.mesh_id, this->hops);
+            const auto mcast_args = mcast_fields.get_args();
+            args.insert(args.end(), mcast_args.begin(), mcast_args.end());
+        } else {
+            TT_FATAL(false, "Unsupported chip send type for 2D fabric");
+        }
+    } else {  // 1D logic
+        uint32_t num_hops_1d = 0;
+        for (const auto& [_, hops_in_dir] : this->hops) {
+            if (hops_in_dir > 0) {
+                num_hops_1d = hops_in_dir;
+                break;
+            }
+        }
+
+        if (this->parameters.chip_send_type == ChipSendType::CHIP_UNICAST) {
+            const auto chip_unicast_fields = ChipUnicastFields1D(num_hops_1d);
             const auto chip_unicast_args = chip_unicast_fields.get_args();
             args.insert(args.end(), chip_unicast_args.begin(), chip_unicast_args.end());
+        } else if (this->parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
+            auto mcast_fields = ChipMulticastFields1D(num_hops_1d);
+            if (this->parameters.mcast_start_hops.has_value()) {
+                mcast_fields.set_mcast_start_hops(this->parameters.mcast_start_hops.value());
+            }
+            const auto mcast_args = mcast_fields.get_args();
+            args.insert(args.end(), mcast_args.begin(), mcast_args.end());
         } else {
-            log_fatal(tt::LogTest, "Other chip send types not supported yet");
-            throw std::runtime_error("Unexpected traffic config");
+            TT_FATAL(false, "Unsupported chip send type for 1D fabric");
         }
     }
 
     // push noc send type
-    args.push_back(this->data_config.noc_send_type);
+    args.push_back(this->parameters.noc_send_type);
 
-    if (this->data_config.noc_send_type == NocSendType::NOC_UNICAST_WRITE) {
-        const auto unicast_write_fields =
-            NocUnicastWriteFields(this->data_config.payload_size_bytes, this->target_address, this->dst_noc_encoding);
-        const auto unicast_write_args = unicast_write_fields.get_args<true>();
-        args.insert(args.end(), unicast_write_args.begin(), unicast_write_args.end());
-    } else {
-        log_fatal(tt::LogTest, "Other noc send types not supported yet");
-        throw std::runtime_error("Unexpected traffic config");
+    switch (this->parameters.noc_send_type) {
+        case NocSendType::NOC_UNICAST_WRITE: {
+            const auto unicast_write_fields = NocUnicastWriteFields(
+                this->parameters.payload_size_bytes, this->target_address, this->dst_noc_encoding);
+            const auto unicast_write_args = unicast_write_fields.get_args<true>();
+            args.insert(args.end(), unicast_write_args.begin(), unicast_write_args.end());
+        } break;
+        case NocSendType::NOC_UNICAST_ATOMIC_INC: {
+            auto atomic_inc_fields = NocUnicastAtomicIncFields(this->target_address, this->dst_noc_encoding);
+            if (this->parameters.atomic_inc_val.has_value()) {
+                atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+            }
+            if (this->parameters.atomic_inc_wrap.has_value()) {
+                atomic_inc_fields.set_atomic_inc_wrap(this->parameters.atomic_inc_wrap.value());
+            }
+            const auto atomic_inc_args = atomic_inc_fields.get_args<true>();
+            args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
+        } break;
+        case NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
+            const auto write_fields = NocUnicastWriteFields(
+                this->parameters.payload_size_bytes, this->target_address, this->dst_noc_encoding);
+            auto atomic_inc_fields = NocUnicastAtomicIncFields(this->target_address, this->dst_noc_encoding);
+            if (this->parameters.atomic_inc_val.has_value()) {
+                atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+            }
+            if (this->parameters.atomic_inc_wrap.has_value()) {
+                atomic_inc_fields.set_atomic_inc_wrap(this->parameters.atomic_inc_wrap.value());
+            }
+            const auto fused_fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
+            const auto fused_args = fused_fields.get_args<true>();
+            args.insert(args.end(), fused_args.begin(), fused_args.end());
+        } break;
+        default: TT_FATAL(false, "Unsupported noc send type");
     }
 
     return args;
@@ -291,21 +342,33 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
     // TODO: get the payload buffer size from the config
     uint32_t payload_buffer_size = 0x10000;
     const auto metadata =
-        ReceiverMetadataFields(this->data_config.num_packets, this->data_config.seed, payload_buffer_size);
+        ReceiverMetadataFields(this->parameters.num_packets, this->parameters.seed, payload_buffer_size);
     const auto metadata_args = metadata.get_args();
     args.insert(args.end(), metadata_args.begin(), metadata_args.end());
 
     // push noc send type
-    args.push_back(this->data_config.noc_send_type);
+    args.push_back(this->parameters.noc_send_type);
 
-    if (this->data_config.noc_send_type == NocSendType::NOC_UNICAST_WRITE) {
-        const auto unicast_write_fields =
-            NocUnicastWriteFields(this->data_config.payload_size_bytes, this->target_address);
-        const auto unicast_write_args = unicast_write_fields.get_args<false>();
-        args.insert(args.end(), unicast_write_args.begin(), unicast_write_args.end());
-    } else {
-        log_fatal(tt::LogTest, "Other noc send types not supported yet");
-        throw std::runtime_error("Unexpected traffic config");
+    switch (this->parameters.noc_send_type) {
+        case NocSendType::NOC_UNICAST_WRITE: {
+            const auto unicast_write_fields =
+                NocUnicastWriteFields(this->parameters.payload_size_bytes, this->target_address);
+            const auto unicast_write_args = unicast_write_fields.get_args<false>();
+            args.insert(args.end(), unicast_write_args.begin(), unicast_write_args.end());
+        } break;
+        case NocSendType::NOC_UNICAST_ATOMIC_INC: {
+            const auto atomic_inc_fields = NocUnicastAtomicIncFields(this->target_address);
+            const auto atomic_inc_args = atomic_inc_fields.get_args<false>();
+            args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
+        } break;
+        case NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
+            const auto write_fields = NocUnicastWriteFields(this->parameters.payload_size_bytes, this->target_address);
+            const auto atomic_inc_fields = NocUnicastAtomicIncFields(this->target_address);
+            const auto fused_fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
+            const auto fused_args = fused_fields.get_args<false>();
+            args.insert(args.end(), fused_args.begin(), fused_args.end());
+        } break;
+        default: TT_FATAL(false, "Unsupported noc send type");
     }
 
     return args;

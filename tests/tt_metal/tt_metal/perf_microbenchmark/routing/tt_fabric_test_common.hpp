@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <algorithm>
 #include <optional>
+#include <random>
 
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
@@ -37,19 +38,12 @@ namespace tt::tt_fabric {
 namespace fabric_tests {
 
 class TestFixture : public IDeviceInfoProvider, public IRouteManager {
+    static constexpr uint32_t ROW_DIM = 0;
+    static constexpr uint32_t COL_DIM = 1;
+
     // mapping to convert coords to directions
     static constexpr uint32_t EW_DIM = 1;
     static constexpr uint32_t NS_DIM = 0;
-
-    static constexpr uint32_t NE_IDX = 0;
-    static constexpr uint32_t NW_IDX = 1;
-    static constexpr uint32_t SE_IDX = 2;
-    static constexpr uint32_t SW_IDX = 3;
-
-    static constexpr uint32_t N_IDX = 0;
-    static constexpr uint32_t S_IDX = 1;
-    static constexpr uint32_t E_IDX = 2;
-    static constexpr uint32_t W_IDX = 3;
 
 public:
     void init() {
@@ -153,6 +147,10 @@ public:
         return tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
     }
 
+    uint32_t get_max_payload_size_bytes() const override {
+        return control_plane_ptr_->get_fabric_context().get_fabric_max_payload_size_bytes();
+    }
+
     // ======================================================================================
     // IRouteManager methods
     // ======================================================================================
@@ -192,12 +190,9 @@ public:
     }
 
     bool are_devices_linear(const std::vector<FabricNodeId>& node_ids) const override {
-        /*
         if (node_ids.size() <= 1) {
             return true;
         }
-
-        // TODO: validation for node ids
 
         auto first_coord = node_id_to_mesh_coordinate_.at(node_ids[0]);
         bool all_same_row = true;
@@ -205,16 +200,14 @@ public:
 
         for (size_t i = 1; i < node_ids.size(); ++i) {
             auto next_coord = node_id_to_mesh_coordinate_.at(node_ids[i]);
-            if (next_coord.x != first_coord.x) {
+            if (next_coord[COL_DIM] != first_coord[COL_DIM]) {
                 all_same_col = false;
             }
-            if (next_coord.y != first_coord.y) {
+            if (next_coord[ROW_DIM] != first_coord[ROW_DIM]) {
                 all_same_row = false;
             }
         }
         return all_same_row || all_same_col;
-        */
-        return true;
     }
 
     std::unordered_map<RoutingDirection, uint32_t> get_hops_to_chip(
@@ -225,6 +218,91 @@ public:
         const auto displacement = get_displacement(src_coord, dst_coord);
         return get_hops_from_displacement(displacement);
     }
+
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> get_full_device_random_pairs(std::mt19937& gen) const override {
+        auto unpaired = get_all_node_ids();
+
+        if (unpaired.size() % 2 != 0) {
+            log_warning(
+                tt::LogTest,
+                "full_device_random_pairing pattern requires an even number of devices, but found {}. One device will "
+                "be left unpaired.",
+                unpaired.size());
+        }
+
+        std::shuffle(unpaired.begin(), unpaired.end(), gen);
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
+
+        while (unpaired.size() >= 2) {
+            FabricNodeId src_node = unpaired.back();
+            unpaired.pop_back();
+
+            std::vector<size_t> valid_dst_indices;
+            for (size_t i = 0; i < unpaired.size(); ++i) {
+                const auto& dst_node = unpaired[i];
+                bool is_valid_pair =
+                    (this->topology_ != Topology::Linear) || this->are_devices_linear({src_node, dst_node});
+                if (is_valid_pair) {
+                    valid_dst_indices.push_back(i);
+                }
+            }
+
+            if (valid_dst_indices.empty()) {
+                log_warning(
+                    tt::LogTest,
+                    "Could not find a valid partner for device {}. Unable to create a full random pairing.",
+                    src_node);
+                log_warning(tt::LogTest, "Exiting early with {} pairs", pairs.size());
+                break;
+            }
+
+            std::shuffle(valid_dst_indices.begin(), valid_dst_indices.end(), gen);
+            size_t picked_idx = valid_dst_indices.front();
+            FabricNodeId dst_node = unpaired[picked_idx];
+            pairs.push_back({src_node, dst_node});
+
+            std::swap(unpaired[picked_idx], unpaired.back());
+            unpaired.pop_back();
+        }
+
+        return pairs;
+    }
+
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_to_all_unicast_pairs() const override {
+        const auto device_ids = get_all_node_ids();
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
+        for (const auto& src_node : device_ids) {
+            for (const auto& dst_node : device_ids) {
+                if (src_node == dst_node) {
+                    continue;
+                }
+                if (this->topology_ == Topology::Linear) {
+                    if (!this->are_devices_linear({src_node, dst_node})) {
+                        continue;
+                    }
+                }
+                pairs.push_back({src_node, dst_node});
+            }
+        }
+        return pairs;
+    }
+
+    std::unordered_map<RoutingDirection, uint32_t> get_full_mcast_hops(const FabricNodeId& src_node_id) const override {
+        std::unordered_map<RoutingDirection, uint32_t> hops;
+        for (const auto& direction : FabricContext::routing_directions) {
+            hops[direction] = 0;
+        }
+
+        const auto src_coord = get_device_coord(src_node_id);
+        hops[RoutingDirection::N] = src_coord[NS_DIM];
+        hops[RoutingDirection::S] = mesh_shape_[NS_DIM] - src_coord[NS_DIM];
+        hops[RoutingDirection::E] = src_coord[EW_DIM];
+        hops[RoutingDirection::W] = mesh_shape_[EW_DIM] - src_coord[EW_DIM];
+
+        return hops;
+    }
+
+    MeshShape get_mesh_shape() const { return mesh_shape_; }
 
 private:
     ControlPlane* control_plane_ptr_;
@@ -290,7 +368,7 @@ private:
         return hops;
     }
 
-    MeshCoordinate get_coords_from_hops(const std::vector<std::pair<RoutingDirection, uint32_t>>& hops) const {
+    MeshCoordinate get_displacement_from_hops(const std::vector<std::pair<RoutingDirection, uint32_t>>& hops) const {
         std::vector<uint32_t> displacement(mesh_shape_.dims(), 0);
         for (const auto& [direction, hop] : hops) {
             switch (direction) {
@@ -312,18 +390,18 @@ private:
         std::vector<MeshCoordinate> displacements;
 
         if (topology_ == Topology::Linear) {
-            displacements.push_back(get_coords_from_hops({{RoutingDirection::N, hops[RoutingDirection::N]}}));
-            displacements.push_back(get_coords_from_hops({{RoutingDirection::S, hops[RoutingDirection::S]}}));
-            displacements.push_back(get_coords_from_hops({{RoutingDirection::E, hops[RoutingDirection::E]}}));
-            displacements.push_back(get_coords_from_hops({{RoutingDirection::W, hops[RoutingDirection::W]}}));
+            displacements.push_back(get_displacement_from_hops({{RoutingDirection::N, hops[RoutingDirection::N]}}));
+            displacements.push_back(get_displacement_from_hops({{RoutingDirection::S, hops[RoutingDirection::S]}}));
+            displacements.push_back(get_displacement_from_hops({{RoutingDirection::E, hops[RoutingDirection::E]}}));
+            displacements.push_back(get_displacement_from_hops({{RoutingDirection::W, hops[RoutingDirection::W]}}));
         } else if (topology_ == Topology::Mesh) {
-            displacements.push_back(get_coords_from_hops(
+            displacements.push_back(get_displacement_from_hops(
                 {{RoutingDirection::N, hops[RoutingDirection::N]}, {RoutingDirection::E, hops[RoutingDirection::E]}}));
-            displacements.push_back(get_coords_from_hops(
+            displacements.push_back(get_displacement_from_hops(
                 {{RoutingDirection::N, hops[RoutingDirection::N]}, {RoutingDirection::W, hops[RoutingDirection::W]}}));
-            displacements.push_back(get_coords_from_hops(
+            displacements.push_back(get_displacement_from_hops(
                 {{RoutingDirection::S, hops[RoutingDirection::S]}, {RoutingDirection::E, hops[RoutingDirection::E]}}));
-            displacements.push_back(get_coords_from_hops(
+            displacements.push_back(get_displacement_from_hops(
                 {{RoutingDirection::S, hops[RoutingDirection::S]}, {RoutingDirection::W, hops[RoutingDirection::W]}}));
         } else {
             TT_FATAL(false, "Unsupported topology: {}", topology_);

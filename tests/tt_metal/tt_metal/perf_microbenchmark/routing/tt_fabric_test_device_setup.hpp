@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <string>
 #include <string_view>
+#include <memory>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
@@ -174,7 +175,10 @@ public:
 
 struct TestDevice {
 public:
-    TestDevice(const MeshCoordinate& coord, IDeviceInfoProvider& device_info_provider, IRouteManager& route_manager);
+    TestDevice(
+        const MeshCoordinate& coord,
+        std::shared_ptr<IDeviceInfoProvider> device_info_provider,
+        std::shared_ptr<IRouteManager> route_manager);
     tt::tt_metal::Program& get_program_handle();
     const FabricNodeId& get_node_id();
     void add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config);
@@ -187,8 +191,8 @@ private:
     void create_receiver_kernels();
 
     MeshCoordinate coord_;
-    IDeviceInfoProvider& device_info_provider_;
-    IRouteManager& route_manager_;
+    std::shared_ptr<IDeviceInfoProvider> device_info_provider_;
+    std::shared_ptr<IRouteManager> route_manager_;
 
     FabricNodeId fabric_node_id_ = FabricNodeId(MeshId{0}, 0);
 
@@ -479,10 +483,12 @@ inline bool TestReceiver::is_shared_receiver() { return this->is_shared_; }
  * TestDevice Methods *
  **********************/
 inline TestDevice::TestDevice(
-    const MeshCoordinate& coord, IDeviceInfoProvider& device_info_provider, IRouteManager& route_manager) :
-    coord_(coord), device_info_provider_(device_info_provider), route_manager_(route_manager) {
+    const MeshCoordinate& coord,
+    std::shared_ptr<IDeviceInfoProvider> device_info_provider,
+    std::shared_ptr<IRouteManager> route_manager) :
+    coord_(coord), device_info_provider_(std::move(device_info_provider)), route_manager_(std::move(route_manager)) {
     program_handle_ = tt::tt_metal::CreateProgram();
-    fabric_node_id_ = device_info_provider_.get_fabric_node_id(coord);
+    fabric_node_id_ = device_info_provider_->get_fabric_node_id(coord);
 
     // TODO: init routers
 }

@@ -10,6 +10,7 @@
 #include <fstream>
 #include <random>
 #include <optional>
+#include <memory>
 
 #include "tt_fabric_test_config.hpp"
 #include "tt_fabric_test_common.hpp"
@@ -20,7 +21,7 @@
 using TestFixture = tt::tt_fabric::fabric_tests::TestFixture;
 using TestDevice = tt::tt_fabric::fabric_tests::TestDevice;
 using TestConfig = tt::tt_fabric::fabric_tests::TestConfig;
-using TestTrafficDataConfig = tt::tt_fabric::fabric_tests::TestTrafficDataConfig;
+using TrafficParameters = tt::tt_fabric::fabric_tests::TrafficParameters;
 using TestTrafficConfig = tt::tt_fabric::fabric_tests::TestTrafficConfig;
 using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderConfig;
 using TestTrafficReceiverConfig = tt::tt_fabric::fabric_tests::TestTrafficReceiverConfig;
@@ -43,7 +44,7 @@ const std::string default_built_tests_dump_file = "built_tests.yaml";
 
 class TestContext {
 public:
-    void init(TestFixture& fixture, const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies);
+    void init(std::shared_ptr<TestFixture> fixture, const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies);
     void setup_devices();
     void reset_devices();
     void process_traffic_config(TestConfig& config);
@@ -56,7 +57,7 @@ public:
 private:
     void add_traffic_config(const TestTrafficConfig& traffic_config);
 
-    TestFixture* fixture_;
+    std::shared_ptr<TestFixture> fixture_;
     std::unordered_map<MeshCoordinate, TestDevice> test_devices_;
     std::unique_ptr<tt::tt_fabric::fabric_tests::GlobalAllocator> allocator_;
 };
@@ -83,7 +84,7 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
     if (traffic_config.hops.has_value()) {
         hops = traffic_config.hops.value();
         dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
-            traffic_config.src_node_id, hops, traffic_config.data_config.chip_send_type);
+            traffic_config.src_node_id, hops, traffic_config.parameters.chip_send_type);
     } else {
         dst_node_ids = traffic_config.dst_node_ids.value();
         hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
@@ -94,15 +95,17 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
     uint32_t sender_id = fixture_->get_worker_id(traffic_config.src_node_id, src_logical_core);
 
     TestTrafficSenderConfig sender_config = {
-        .data_config = traffic_config.data_config,
+        .parameters = traffic_config.parameters,
+        .src_node_id = traffic_config.src_node_id,
         .dst_node_ids = dst_node_ids,
         .hops = hops,
         .dst_logical_core = dst_logical_core,
         .target_address = target_address,
-        .dst_noc_encoding = dst_noc_encoding};
+        .dst_noc_encoding = dst_noc_encoding,
+    };
 
     TestTrafficReceiverConfig receiver_config = {
-        .data_config = traffic_config.data_config, .sender_id = sender_id, .target_address = target_address};
+        .parameters = traffic_config.parameters, .sender_id = sender_id, .target_address = target_address};
 
     src_test_device.add_sender_traffic_config(src_logical_core, sender_config);
     for (const auto& dst_node_id : dst_node_ids) {
@@ -111,8 +114,9 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
     }
 }
 
-void TestContext::init(TestFixture& fixture, const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies) {
-    fixture_ = &fixture;
+void TestContext::init(
+    std::shared_ptr<TestFixture> fixture, const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies) {
+    fixture_ = std::move(fixture);
     this->allocator_ =
         std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(*this->fixture_, *this->fixture_, policies);
 }
@@ -120,7 +124,7 @@ void TestContext::init(TestFixture& fixture, const tt::tt_fabric::fabric_tests::
 void TestContext::setup_devices() {
     const auto& available_coords = this->fixture_->get_available_device_coordinates();
     for (const auto& coord : available_coords) {
-        test_devices_.emplace(coord, TestDevice(coord, *this->fixture_, *this->fixture_));
+        test_devices_.emplace(coord, TestDevice(coord, this->fixture_, this->fixture_));
     }
 }
 
@@ -154,16 +158,21 @@ void TestContext::process_traffic_config(TestConfig& config) {
             // We just need to construct the TrafficConfig and pass it to add_traffic_config.
             const auto& dest = pattern.destination.value();
 
-            TestTrafficDataConfig data_config = {
+            TrafficParameters traffic_parameters = {
                 .chip_send_type = pattern.ftype.value(),
                 .noc_send_type = pattern.ntype.value(),
-                .seed = config.seed,
-                .num_packets = pattern.num_packets.value(),
                 .payload_size_bytes = pattern.size.value(),
+                .num_packets = pattern.num_packets.value(),
+                .atomic_inc_val = pattern.atomic_inc_val,
+                .atomic_inc_wrap = pattern.atomic_inc_wrap,
+                .mcast_start_hops = pattern.mcast_start_hops,
+                .seed = config.seed,
+                .topology = config.fabric_setup.topology,
+                .mesh_shape = this->fixture_->get_mesh_shape(),
             };
 
             TestTrafficConfig traffic_config = {
-                .data_config = data_config,
+                .parameters = traffic_parameters,
                 .src_node_id = sender.device,
                 .src_logical_core = sender.core,
                 .dst_logical_core = dest.core,
@@ -185,17 +194,17 @@ void TestContext::process_traffic_config(TestConfig& config) {
 int main(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
 
-    TestFixture fixture;
-    fixture.init();
+    auto fixture = std::make_shared<TestFixture>();
+    fixture->init();
 
     // fixture is passed to both the parsers since it implements the device interface
 
-    CmdlineParser cmdline_parser(input_args, fixture);
+    CmdlineParser cmdline_parser(input_args, *fixture);
     std::vector<TestConfig> raw_test_configs;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies;
 
     if (auto yaml_path = cmdline_parser.get_yaml_config_path()) {
-        YamlConfigParser yaml_parser(fixture);
+        YamlConfigParser yaml_parser(*fixture);
         auto parsed_yaml = yaml_parser.parse_file(yaml_path.value());
         raw_test_configs = parsed_yaml.test_configs;
         if (parsed_yaml.allocation_policies.has_value()) {
@@ -225,24 +234,31 @@ int main(int argc, char** argv) {
     // fixture is passed twice since it implements both interfaces
     // the builder object does the initial processing of the tests parsed from yaml/cmd line and tries to fill
     // any gaps/optionals/missing values
-    TestConfigBuilder builder(fixture, fixture, gen);
-    auto built_tests = builder.build_tests(raw_test_configs);
-
-    if (cmdline_parser.dump_built_tests()) {
-        auto dump_path = cmdline_parser.get_built_tests_dump_file_path(default_built_tests_dump_file);
-        YamlTestConfigSerializer::dump(built_tests, allocation_policies, dump_path);
-    }
+    TestConfigBuilder builder(*fixture, *fixture, gen);
 
     // TODO: for now assume we are working with the same fabric config, later we need to close and re-open with
     // different config
     test_context.open_devices(tt::tt_metal::FabricConfig::FABRIC_1D);
 
-    for (auto& test_config : built_tests) {
+    for (auto& test_config : raw_test_configs) {
         log_info(tt::LogTest, "Running Test: {}", test_config.name);
 
         test_context.setup_devices();
 
-        test_context.process_traffic_config(test_config);
+        log_info(tt::LogTest, "building tests");
+        auto built_tests = builder.build_tests({test_config});
+        log_info(tt::LogTest, "built tests");
+
+        for (auto& test : built_tests) {
+            test_context.process_traffic_config(test);
+        }
+
+        if (cmdline_parser.dump_built_tests()) {
+            log_info(tt::LogTest, "dumping tests");
+            auto dump_path = cmdline_parser.get_built_tests_dump_file_path(default_built_tests_dump_file);
+            YamlTestConfigSerializer::dump(built_tests, allocation_policies, dump_path);
+            log_info(tt::LogTest, "dumped tests");
+        }
 
         test_context.compile_programs();
 

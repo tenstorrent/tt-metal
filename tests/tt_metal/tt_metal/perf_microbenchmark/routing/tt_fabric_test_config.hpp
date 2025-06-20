@@ -44,6 +44,9 @@ inline TrafficPatternConfig merge_patterns(const TrafficPatternConfig& base, con
     merged.ntype = specific.ntype.has_value() ? specific.ntype : base.ntype;
     merged.size = specific.size.has_value() ? specific.size : base.size;
     merged.num_packets = specific.num_packets.has_value() ? specific.num_packets : base.num_packets;
+    merged.atomic_inc_val = specific.atomic_inc_val.has_value() ? specific.atomic_inc_val : base.atomic_inc_val;
+    merged.atomic_inc_wrap = specific.atomic_inc_wrap.has_value() ? specific.atomic_inc_wrap : base.atomic_inc_wrap;
+    merged.mcast_start_hops = specific.mcast_start_hops.has_value() ? specific.mcast_start_hops : base.mcast_start_hops;
 
     // Special handling for nested destination
     if (specific.destination.has_value()) {
@@ -119,7 +122,8 @@ private:
 
 const std::string no_default_test_yaml_config = "";
 
-const std::vector<std::string> supported_high_level_patterns = {"all_to_all_unicast", "full_device_random_pairing"};
+const std::vector<std::string> supported_high_level_patterns = {
+    "all_to_all_unicast", "full_device_random_pairing", "all_to_all_multicast"};
 
 // ======================================================================================
 // Section 2: Enum and String Conversion Utilities
@@ -264,6 +268,15 @@ inline TrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const
     }
     if (pattern_yaml["destination"]) {
         config.destination = parse_destination_config(pattern_yaml["destination"]);
+    }
+    if (pattern_yaml["atomic_inc_val"]) {
+        config.atomic_inc_val = parse_scalar<uint16_t>(pattern_yaml["atomic_inc_val"]);
+    }
+    if (pattern_yaml["atomic_inc_wrap"]) {
+        config.atomic_inc_wrap = parse_scalar<uint16_t>(pattern_yaml["atomic_inc_wrap"]);
+    }
+    if (pattern_yaml["mcast_start_hops"]) {
+        config.mcast_start_hops = parse_scalar<uint32_t>(pattern_yaml["mcast_start_hops"]);
     }
     return config;
 }
@@ -461,8 +474,6 @@ inline std::vector<TestConfig> CmdlineParser::generate_default_configs() {
         FabricNodeId src_device_id = this->device_info_provider_.get_fabric_node_id(std::stoul(src_device_str));
         FabricNodeId dst_device_id = this->device_info_provider_.get_fabric_node_id(std::stoul(dst_device_str));
 
-        fabric_setup.topology = tt::tt_fabric::Topology::Linear;
-
         TrafficPatternConfig pattern = {.destination = DestinationConfig{.device = dst_device_id}};
         SenderConfig sender = {.device = src_device_id, .patterns = {pattern}};
         default_test.senders = {sender};
@@ -597,144 +608,227 @@ public:
         std::vector<TestConfig> built_tests;
 
         for (const auto& raw_config : raw_configs) {
-            std::vector<TestConfig> parametrized_configs;
-            parametrized_configs.push_back(raw_config);
-
-            if (raw_config.parametrization_params.has_value()) {
-                for (const auto& [param_name, values_variant] : raw_config.parametrization_params.value()) {
-                    std::vector<TestConfig> next_level_configs;
-
-                    for (const auto& current_config : parametrized_configs) {
-                        // Handle string-based parameters
-                        if (std::holds_alternative<std::vector<std::string>>(values_variant)) {
-                            const auto& values = std::get<std::vector<std::string>>(values_variant);
-                            for (const auto& value : values) {
-                                TestConfig next_config = current_config;
-                                next_config.name += "_" + param_name + "_" + value;
-                                if (!next_config.defaults.has_value()) {
-                                    next_config.defaults = TrafficPatternConfig{};
-                                }
-
-                                if (param_name == "ftype") {
-                                    next_config.defaults->ftype =
-                                        detail::chip_send_type_mapper.from_string(value, "ftype");
-                                } else if (param_name == "ntype") {
-                                    next_config.defaults->ntype =
-                                        detail::noc_send_type_mapper.from_string(value, "ntype");
-                                }
-                                next_level_configs.push_back(next_config);
-                            }
-                        }
-                        // Handle integer-based parameters
-                        else if (std::holds_alternative<std::vector<uint32_t>>(values_variant)) {
-                            const auto& values = std::get<std::vector<uint32_t>>(values_variant);
-                            for (const auto& value : values) {
-                                TestConfig next_config = current_config;
-                                next_config.name += "_" + param_name + "_" + std::to_string(value);
-                                if (!next_config.defaults.has_value()) {
-                                    next_config.defaults = TrafficPatternConfig{};
-                                }
-
-                                if (param_name == "size") {
-                                    next_config.defaults->size = value;
-                                } else if (param_name == "num_packets") {
-                                    next_config.defaults->num_packets = value;
-                                }
-                                next_level_configs.push_back(next_config);
-                            }
-                        }
-                    }
-                    // Move the newly generated configs to be the input for the next parameter loop.
-                    parametrized_configs = std::move(next_level_configs);
-                }
-            }
+            std::vector<TestConfig> parametrized_configs = this->expand_parametrizations(raw_config);
 
             // For each newly generated parametrized config, expand its high-level patterns
             for (auto& p_config : parametrized_configs) {
-                p_config.parametrization_params.reset();  // Clear now-used params before final expansion
-
-                uint32_t max_iterations = 1;
-                if (p_config.patterns) {
-                    for (const auto& p : p_config.patterns.value()) {
-                        max_iterations = std::max(max_iterations, p.iterations.value_or(1));
-                    }
-                }
-
-                if (max_iterations > 1 && p_config.patterns.has_value() && p_config.patterns.value().size() > 1) {
-                    log_warning(
-                        LogTest,
-                        "Test '{}' has multiple high-level patterns and specifies iterations. All patterns will be "
-                        "expanded "
-                        "together in each iteration. This may lead to a very large number of connections.",
-                        p_config.name);
-                }
-
-                for (uint32_t i = 0; i < max_iterations; ++i) {
-                    TestConfig iteration_test = p_config;
-                    iteration_test.patterns.reset();  // Will be expanded into concrete senders.
-
-                    if (max_iterations > 1) {
-                        iteration_test.name += "_iter_" + std::to_string(i);
-                    }
-
-                    iteration_test.seed = std::uniform_int_distribution<uint32_t>()(this->gen_);
-
-                    if (p_config.patterns.has_value()) {
-                        if (!p_config.senders.empty()) {
-                            log_warning(
-                                LogTest,
-                                "Test '{}' has both concrete 'senders' and high-level 'patterns'. The patterns will be "
-                                "expanded and added to the existing senders.",
-                                p_config.name);
-                        }
-                        expand_patterns_into_test(iteration_test, p_config.patterns.value(), i);
-                    }
-
-                    // After patterns are expanded, resolve any missing params based on policy
-                    resolve_missing_params(iteration_test);
-
-                    validate_test(iteration_test);
-                    built_tests.push_back(iteration_test);
-                }
+                auto expanded_tests = this->expand_high_level_patterns(p_config);
+                built_tests.insert(built_tests.end(), expanded_tests.begin(), expanded_tests.end());
             }
         }
         return built_tests;
     }
 
 private:
-    void validate_test(const TestConfig& test) const {
-        const auto& fabric_setup = test.fabric_setup;
+    std::vector<TestConfig> expand_high_level_patterns(TestConfig& p_config) {
+        std::vector<TestConfig> expanded_tests;
 
-        // validate fabric
-        // validate sender/patterns
+        p_config.parametrization_params.reset();  // Clear now-used params before final expansion
 
-        /*
-        if (test.fabric_setup->topology == tt::tt_fabric::Topology::Linear) {
+        uint32_t max_iterations = 1;
+        if (p_config.patterns) {
+            for (const auto& p : p_config.patterns.value()) {
+                max_iterations = std::max(max_iterations, p.iterations.value_or(1));
+            }
+        }
+
+        if (max_iterations > 1 && p_config.patterns.has_value() && p_config.patterns.value().size() > 1) {
+            log_warning(
+                LogTest,
+                "Test '{}' has multiple high-level patterns and specifies iterations. All patterns will be "
+                "expanded "
+                "together in each iteration. This may lead to a very large number of connections.",
+                p_config.name);
+        }
+
+        for (uint32_t i = 0; i < max_iterations; ++i) {
+            TestConfig iteration_test = p_config;
+            iteration_test.patterns.reset();  // Will be expanded into concrete senders.
+
+            if (max_iterations > 1) {
+                iteration_test.name += "_iter_" + std::to_string(i);
+            }
+
+            iteration_test.seed = std::uniform_int_distribution<uint32_t>()(this->gen_);
+
+            if (p_config.patterns.has_value()) {
+                if (!p_config.senders.empty()) {
+                    TT_FATAL(
+                        false,
+                        "Test '{}' has both concrete 'senders' and high-level 'patterns' specified. This is ambiguous. "
+                        "Please specify one or the other.",
+                        p_config.name);
+                }
+                expand_patterns_into_test(iteration_test, p_config.patterns.value(), i);
+            }
+
+            // After patterns are expanded, resolve any missing params based on policy
+            resolve_missing_params(iteration_test);
+
+            validate_test(iteration_test);
+            expanded_tests.push_back(iteration_test);
+        }
+        return expanded_tests;
+    }
+
+    std::vector<TestConfig> expand_parametrizations(const TestConfig& raw_config) {
+        std::vector<TestConfig> parametrized_configs;
+        parametrized_configs.push_back(raw_config);
+
+        if (raw_config.parametrization_params.has_value()) {
+            for (const auto& [param_name, values_variant] : raw_config.parametrization_params.value()) {
+                std::vector<TestConfig> next_level_configs;
+
+                for (const auto& current_config : parametrized_configs) {
+                    // Handle string-based parameters
+                    if (std::holds_alternative<std::vector<std::string>>(values_variant)) {
+                        const auto& values = std::get<std::vector<std::string>>(values_variant);
+                        for (const auto& value : values) {
+                            TestConfig next_config = current_config;
+                            next_config.name += "_" + param_name + "_" + value;
+                            if (!next_config.defaults.has_value()) {
+                                next_config.defaults = TrafficPatternConfig{};
+                            }
+
+                            if (param_name == "ftype") {
+                                next_config.defaults->ftype = detail::chip_send_type_mapper.from_string(value, "ftype");
+                            } else if (param_name == "ntype") {
+                                next_config.defaults->ntype = detail::noc_send_type_mapper.from_string(value, "ntype");
+                            }
+                            next_level_configs.push_back(next_config);
+                        }
+                    }
+                    // Handle integer-based parameters
+                    else if (std::holds_alternative<std::vector<uint32_t>>(values_variant)) {
+                        const auto& values = std::get<std::vector<uint32_t>>(values_variant);
+                        for (const auto& value : values) {
+                            TestConfig next_config = current_config;
+                            next_config.name += "_" + param_name + "_" + std::to_string(value);
+                            if (!next_config.defaults.has_value()) {
+                                next_config.defaults = TrafficPatternConfig{};
+                            }
+
+                            if (param_name == "size") {
+                                next_config.defaults->size = value;
+                            } else if (param_name == "num_packets") {
+                                next_config.defaults->num_packets = value;
+                            }
+                            next_level_configs.push_back(next_config);
+                        }
+                    }
+                }
+                // Move the newly generated configs to be the input for the next parameter loop.
+                parametrized_configs = std::move(next_level_configs);
+            }
+        }
+        return parametrized_configs;
+    }
+
+    void validate_pattern(const TrafficPatternConfig& pattern, const TestConfig& test) const {
+        // 1. Validate destination ambiguity
+        TT_FATAL(
+            pattern.destination.has_value(),
+            "Test '{}': Pattern is missing a destination. This should have been resolved by the builder.",
+            test.name);
+        const auto& dest = pattern.destination.value();
+        TT_FATAL(
+            !(dest.device.has_value() && dest.hops.has_value()),
+            "Test '{}': A pattern's destination cannot have both 'device' and 'hops' specified.",
+            test.name);
+        TT_FATAL(
+            dest.device.has_value() || dest.hops.has_value(),
+            "Test '{}': A pattern's destination must specify either a 'device' or 'hops'.",
+            test.name);
+
+        // 2. Validate atomic-related fields
+        if (pattern.ntype.has_value() && pattern.ntype.value() == NocSendType::NOC_UNICAST_WRITE) {
             TT_FATAL(
-                this->route_manager_.are_devices_linear(physical_devices_in_test),
-                "For a 'Linear' topology, all specified devices must be in the same row or column. Test: {}",
+                !pattern.atomic_inc_val.has_value(),
+                "Test '{}': 'atomic_inc_val' should not be specified for 'unicast_write' ntype.",
+                test.name);
+            TT_FATAL(
+                !pattern.atomic_inc_wrap.has_value(),
+                "Test '{}': 'atomic_inc_wrap' should not be specified for 'unicast_write' ntype.",
                 test.name);
         }
 
+        // 3. Validate payload size
+        if (pattern.size.has_value()) {
+            const uint32_t max_payload_size = this->device_info_provider_.get_max_payload_size_bytes();
+            TT_FATAL(
+                pattern.size.value() <= max_payload_size,
+                "Test '{}': Payload size {} exceeds the maximum of {} bytes",
+                test.name,
+                pattern.size.value(),
+                max_payload_size);
+        }
+    }
+
+    void validate_chip_unicast(
+        const TrafficPatternConfig& pattern, const SenderConfig& sender, const TestConfig& test) const {
+        TT_FATAL(
+            pattern.destination.has_value() && pattern.destination->device.has_value(),
+            "Test '{}': Unicast pattern for sender on device {} is missing a destination device.",
+            test.name,
+            sender.device);
+        TT_FATAL(
+            sender.device != pattern.destination->device.value(),
+            "Test '{}': Sender on device {} cannot have itself as a destination.",
+            test.name,
+            sender.device);
+        TT_FATAL(
+            !pattern.mcast_start_hops.has_value(),
+            "Test '{}': 'mcast_start_hops' cannot be specified for a 'unicast' ftype pattern.",
+            test.name);
+    }
+
+    void validate_chip_multicast(
+        const TrafficPatternConfig& pattern, const SenderConfig& sender, const TestConfig& test) const {
+        TT_FATAL(
+            pattern.destination.has_value() && pattern.destination->hops.has_value(),
+            "Test '{}': Multicast pattern for sender on device {} must have a destination specified by 'hops'.",
+            test.name,
+            sender.device);
+    }
+
+    void validate_test(const TestConfig& test) const {
         for (const auto& sender : test.senders) {
-            chip_id_t src_chip = this->device_info_provider_.get_physical_chip_id(sender.device);
             for (const auto& pattern : sender.patterns) {
-                TT_FATAL(
-                    pattern.destination.has_value() && pattern.destination->device.has_value(),
-                    "Pattern for sender {} is missing a destination.",
-                    src_chip);
-                chip_id_t dst_chip =
-                    this->device_info_provider_.get_physical_chip_id(pattern.destination->device.value());
-                TT_FATAL(src_chip != dst_chip, "Sender on chip {} cannot have itself as a destination.", src_chip);
+                validate_pattern(pattern, test);
+
+                if (pattern.ftype.value() == ChipSendType::CHIP_UNICAST) {
+                    validate_chip_unicast(pattern, sender, test);
+                } else if (pattern.ftype.value() == ChipSendType::CHIP_MULTICAST) {
+                    validate_chip_multicast(pattern, sender, test);
+                }
             }
-        } */
+        }
+
+        if (test.fabric_setup.topology == tt::tt_fabric::Topology::Linear) {
+            std::vector<FabricNodeId> devices_in_test;
+            for (const auto& sender : test.senders) {
+                devices_in_test.push_back(sender.device);
+                for (const auto& pattern : sender.patterns) {
+                    if (pattern.destination->device.has_value()) {
+                        devices_in_test.push_back(pattern.destination->device.value());
+                    }
+                }
+            }
+            // Remove duplicates
+            std::sort(devices_in_test.begin(), devices_in_test.end());
+            devices_in_test.erase(std::unique(devices_in_test.begin(), devices_in_test.end()), devices_in_test.end());
+
+            if (devices_in_test.size() > 1) {
+                TT_FATAL(
+                    this->route_manager_.are_devices_linear(devices_in_test),
+                    "For a 'Linear' topology, all specified devices must be in the same row or column. Test: {}",
+                    test.name);
+            }
+        }
     }
 
     void expand_patterns_into_test(
         TestConfig& test, const std::vector<HighLevelPatternConfig>& patterns, uint32_t iteration_idx) {
-        std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
-        TT_FATAL(!devices.empty(), "Cannot expand patterns because no devices were found.");
-
         const auto& defaults = test.defaults.value_or(TrafficPatternConfig{});
 
         for (const auto& pattern : patterns) {
@@ -743,65 +837,52 @@ private:
             }
 
             if (pattern.type == "all_to_all_unicast") {
-                expand_all_to_all_unicast(test, devices, defaults);
-            }
-            // Add other patterns like "all_to_all_multicast" here
-            else if (pattern.type == "full_device_random_pairing") {
-                expand_full_device_random_pairing(test, devices, defaults);
+                expand_all_to_all_unicast(test, defaults);
+            } else if (pattern.type == "full_device_random_pairing") {
+                expand_full_device_random_pairing(test, defaults);
+            } else if (pattern.type == "all_to_all_multicast") {
+                expand_all_to_all_multicast(test, defaults);
             } else {
                 TT_THROW("Unsupported pattern type: {}", pattern.type);
             }
         }
     }
 
-    void expand_all_to_all_unicast(
-        TestConfig& test, const std::vector<FabricNodeId>& devices, const TrafficPatternConfig& base_pattern) {
+    void expand_all_to_all_unicast(TestConfig& test, const TrafficPatternConfig& base_pattern) {
         log_info(LogTest, "Expanding all_to_all_unicast pattern for test: {}", test.name);
-
-        std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
-        for (const auto& src_node : devices) {
-            for (const auto& dst_node : devices) {
-                if (src_node == dst_node) {
-                    continue;
-                }
-                // For linear topology, only allow connections between chips on the same line.
-                if (test.fabric_setup.topology == Topology::Linear) {
-                    if (!this->route_manager_.are_devices_linear({src_node, dst_node})) {
-                        continue;
-                    }
-                }
-                pairs.push_back({src_node, dst_node});
-            }
-        }
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs = this->route_manager_.get_all_to_all_unicast_pairs();
         add_senders_from_pairs(test, pairs, base_pattern);
     }
 
-    void expand_full_device_random_pairing(
-        TestConfig& test,
-        std::vector<FabricNodeId> devices,  // Pass by value to allow shuffling
-        const TrafficPatternConfig& base_pattern) {
+    void expand_full_device_random_pairing(TestConfig& test, const TrafficPatternConfig& base_pattern) {
         log_info(LogTest, "Expanding full_device_random_pairing pattern for test: {}", test.name);
+        auto random_pairs = this->route_manager_.get_full_device_random_pairs(this->gen_);
+        add_senders_from_pairs(test, random_pairs, base_pattern);
+    }
 
-        TT_FATAL(
-            devices.size() % 2 == 0,
-            "full_device_random_pairing pattern requires an even number of devices, but found {}.",
-            devices.size());
+    void expand_all_to_all_multicast(TestConfig& test, const TrafficPatternConfig& base_pattern) {
+        log_info(LogTest, "Expanding all_to_all_multicast pattern for test: {}", test.name);
+        std::vector<FabricNodeId> devices = device_info_provider_.get_all_node_ids();
+        TT_FATAL(!devices.empty(), "Cannot expand all_to_all_multicast because no devices were found.");
 
-        if (devices.empty()) {
-            return;
+        for (const auto& src_node : devices) {
+            auto hops = this->route_manager_.get_full_mcast_hops(src_node);
+
+            TrafficPatternConfig specific_pattern;
+            specific_pattern.destination = DestinationConfig{.hops = hops};
+            specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
+
+            auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
+
+            auto it = std::find_if(
+                test.senders.begin(), test.senders.end(), [&](const SenderConfig& s) { return s.device == src_node; });
+
+            if (it != test.senders.end()) {
+                it->patterns.push_back(merged_pattern);
+            } else {
+                test.senders.push_back(SenderConfig{.device = src_node, .patterns = {merged_pattern}});
+            }
         }
-
-        // 1. Shuffle the list of devices
-        std::shuffle(devices.begin(), devices.end(), this->gen_);
-
-        // 2. Create pairs
-        // TODO: random pairs need consideration for the topology as well, cannot assign any device pair for 1D
-        std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
-        for (size_t i = 0; i < devices.size(); i += 2) {
-            pairs.push_back({devices[i], devices[i + 1]});
-        }
-
-        add_senders_from_pairs(test, pairs, base_pattern);
     }
 
     // Helper to reduce code duplication
@@ -957,6 +1038,10 @@ private:
         return detail::routing_direction_mapper.to_string(dir, "RoutingDirection");
     }
 
+    static std::string to_string(tt::tt_fabric::Topology topology) {
+        return detail::topology_mapper.to_string(topology, "Topology");
+    }
+
     static void to_yaml(YAML::Emitter& out, const TrafficPatternConfig& config) {
         out << YAML::BeginMap;
 
@@ -980,6 +1065,18 @@ private:
             out << YAML::Key << "destination";
             out << YAML::Value;
             to_yaml(out, config.destination.value());
+        }
+        if (config.atomic_inc_val) {
+            out << YAML::Key << "atomic_inc_val";
+            out << YAML::Value << config.atomic_inc_val.value();
+        }
+        if (config.atomic_inc_wrap) {
+            out << YAML::Key << "atomic_inc_wrap";
+            out << YAML::Value << config.atomic_inc_wrap.value();
+        }
+        if (config.mcast_start_hops) {
+            out << YAML::Key << "mcast_start_hops";
+            out << YAML::Value << config.mcast_start_hops.value();
         }
 
         out << YAML::EndMap;
@@ -1006,10 +1103,6 @@ private:
         out << YAML::EndSeq;
 
         out << YAML::EndMap;
-    }
-
-    static std::string to_string(tt::tt_fabric::Topology topology) {
-        return detail::topology_mapper.to_string(topology, "Topology");
     }
 
     static void to_yaml(YAML::Emitter& out, const TestFabricSetup& config) {

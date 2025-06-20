@@ -32,8 +32,11 @@ struct TrafficPatternConfig {
     std::optional<ChipSendType> ftype;
     std::optional<NocSendType> ntype;
     std::optional<uint32_t> size;
-    std::optional<DestinationConfig> destination;
     std::optional<uint32_t> num_packets;
+    std::optional<DestinationConfig> destination;
+    std::optional<uint16_t> atomic_inc_val;
+    std::optional<uint16_t> atomic_inc_wrap;
+    std::optional<uint32_t> mcast_start_hops;
 };
 
 struct SenderConfig {

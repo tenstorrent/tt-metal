@@ -9,6 +9,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/fabric_edm_packet_header.hpp>
+#include <random>
 
 namespace tt {
 namespace tt_fabric {
@@ -16,7 +17,8 @@ class FabricNodeId;
 }  // namespace tt_fabric
 }  // namespace tt
 
-namespace tt::tt_fabric::fabric_tests {
+namespace tt::tt_fabric {
+namespace fabric_tests {
 
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 
@@ -33,6 +35,7 @@ public:
     virtual std::vector<FabricNodeId> get_all_node_ids() const = 0;
     virtual uint32_t get_l1_unreserved_base(const FabricNodeId& node_id) const = 0;
     virtual uint32_t get_l1_alignment() const = 0;
+    virtual uint32_t get_max_payload_size_bytes() const = 0;
 };
 
 class IRouteManager {
@@ -44,8 +47,13 @@ public:
         ChipSendType chip_send_type) const = 0;
     virtual std::unordered_map<RoutingDirection, uint32_t> get_hops_to_chip(
         FabricNodeId src_node_id, FabricNodeId dst_node_id) const = 0;
-
     virtual bool are_devices_linear(const std::vector<FabricNodeId>& node_ids) const = 0;
+    virtual std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_to_all_unicast_pairs() const = 0;
+    virtual std::vector<std::pair<FabricNodeId, FabricNodeId>> get_full_device_random_pairs(
+        std::mt19937& gen) const = 0;
+    virtual std::unordered_map<RoutingDirection, uint32_t> get_full_mcast_hops(
+        const FabricNodeId& src_node_id) const = 0;
 };
 
-}  // namespace tt::tt_fabric::fabric_tests
+}  // namespace fabric_tests
+}  // namespace tt::tt_fabric
