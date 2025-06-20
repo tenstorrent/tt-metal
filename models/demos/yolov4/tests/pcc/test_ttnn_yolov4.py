@@ -44,7 +44,7 @@ def run_yolov4(device, reset_seeds, model_location_generator, use_pretrained_wei
 
     n, c, h, w = torch_input.shape
     if c == 3:
-        c = 8
+        c = 16
     input_mem_config = ttnn.create_sharded_memory_config(
         [n, c, h, w],
         ttnn.CoreGrid(x=8, y=8),
