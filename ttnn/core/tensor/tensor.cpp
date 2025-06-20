@@ -729,25 +729,32 @@ Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshD
     return Tensor(std::move(device_storage), tensor_spec, ReplicateTensor{});
 }
 
-void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id) {
+void write_tensor(const Tensor& src, Tensor& dst, QueueId cq_id) {
     ZoneScoped;
-    TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Destination tensor must be on device");
     TT_FATAL(
-        host_tensor.storage_type() == StorageType::HOST or host_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST,
-        "write_tensor only supports host_tensor to device_tensor data transfer");
+        (is_device_tensor(src) && is_multi_device_host_tensor(dst)) ||                            // device to host
+            ((is_cpu_tensor(src) || is_multi_device_host_tensor(src)) && is_device_tensor(dst)),  // host to device
+        "Unsupported data transfer direction; source storage type: {}, destination storage type: {}",
+        src.storage_type(),
+        dst.storage_type());
 
-    auto& device_storage = std::get<DeviceStorage>(device_tensor.storage());
-    if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
-        tensor_impl::copy_to_mesh_tensor_wrapper(host_tensor, device_tensor, cq_id);
+    if (is_device_tensor(src)) {
+        tensor_impl::copy_to_device_tensor_wrapper(src, dst, cq_id);
         return;
     }
 
-    TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Error");
-    TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Error");
-    TT_FATAL(host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(), "Error");
+    auto& device_storage = std::get<DeviceStorage>(dst.storage());
+    if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
+        tensor_impl::copy_to_device_tensor_wrapper(src, dst, cq_id);
+        return;
+    }
+
+    TT_FATAL(src.logical_shape() == dst.logical_shape(), "Error");
+    TT_FATAL(src.dtype() == dst.dtype(), "Error");
+    TT_FATAL(src.tensor_spec().page_config() == dst.tensor_spec().page_config(), "Error");
     std::visit(
         tt::stl::overloaded{
-            [cq_id, &host_tensor, &device_tensor](const DeviceStorage& device_storage) {
+            [cq_id, &src, &dst](const DeviceStorage& device_storage) {
                 // Copying from host to a single device.
                 const void* host_data = std::visit(
                     tt::stl::overloaded{
@@ -766,15 +773,15 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
                         },
                         [](auto&&) -> const void* { TT_THROW("Unreachable"); },
                     },
-                    host_tensor.storage());
-                if (auto mesh_device = device_tensor.mesh_device()) {
-                    tt::tt_metal::memcpy(mesh_device->mesh_command_queue(*cq_id), device_tensor, host_data);
+                    src.storage());
+                if (auto mesh_device = dst.mesh_device()) {
+                    tt::tt_metal::memcpy(mesh_device->mesh_command_queue(*cq_id), dst, host_data);
                 } else {
-                    tt::tt_metal::memcpy(device_tensor.device()->command_queue(*cq_id), device_tensor, host_data);
+                    tt::tt_metal::memcpy(dst.device()->command_queue(*cq_id), dst, host_data);
                 }
             },
             [](auto&& s) { TT_THROW("Unreachable"); }},
-        device_tensor.storage());
+        dst.storage());
 }
 
 Tensor set_tensor_id(const Tensor& tensor) {

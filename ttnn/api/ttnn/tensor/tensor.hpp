@@ -323,7 +323,8 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
 // Allocates a tensor on a mesh device through mesh buffer.
 Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 
-void write_tensor(const Tensor& host_tensor, Tensor device_tensor, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+// Writes tensor from `src` to `dst`; supports only host-to-device and device-to-host transfers.
+void write_tensor(const Tensor& src, Tensor& dst, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 Tensor set_tensor_id(const Tensor& tensor);
 

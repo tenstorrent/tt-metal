@@ -216,7 +216,10 @@ Tensor to_device_mesh_tensor(
     QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
-void copy_to_mesh_tensor(const Tensor& host_tensor, Tensor& mesh_tensor, QueueId cq_id = ttnn::DefaultQueueId);
+void copy_to_device_tensor(const Tensor& host_tensor, Tensor& device_tensor, QueueId cq_id = ttnn::DefaultQueueId);
+
+template <typename T>
+void copy_to_host_tensor(const Tensor& device_tensor, Tensor& host_tensor, QueueId cq_id = ttnn::DefaultQueueId);
 
 // ======================================================================================
 //                                  .to_layout()
