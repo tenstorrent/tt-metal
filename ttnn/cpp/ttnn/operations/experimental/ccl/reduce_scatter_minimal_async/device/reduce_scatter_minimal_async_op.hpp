@@ -34,6 +34,7 @@ struct ReduceScatterMinimalAsync {
     const ccl::Topology topology;
     const std::vector<GlobalSemaphore> semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
+    std::optional<uint32_t> cluster_axis;
 
     ReduceScatterMinimalAsync(
         std::vector<IDevice*> devices,
@@ -43,7 +44,8 @@ struct ReduceScatterMinimalAsync {
         MemoryConfig output_mem_config,
         ccl::Topology topology,
         std::vector<GlobalSemaphore> semaphore,
-        std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) :
+        std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+        std::optional<uint32_t> cluster_axis = std::nullopt) :
         devices(std::move(devices)),
         dim(dim),
         num_links(num_links),
@@ -51,7 +53,8 @@ struct ReduceScatterMinimalAsync {
         output_mem_config(output_mem_config),
         topology(topology),
         semaphore(semaphore),
-        sub_device_id(sub_device_id) {}
+        sub_device_id(sub_device_id),
+        cluster_axis(cluster_axis) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -97,7 +100,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
     uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<uint32_t>& cluster_axis);
 
 tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helper(
     tt::tt_metal::Program& program,
@@ -130,7 +134,8 @@ Tensor reduce_scatter_minimal_async(
     uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    std::optional<uint32_t> cluster_axis = std::nullopt);
 
 }  // namespace ccl
 }  // namespace experimental
