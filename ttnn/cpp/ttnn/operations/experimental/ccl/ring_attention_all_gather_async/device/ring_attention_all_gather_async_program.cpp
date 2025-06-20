@@ -137,10 +137,12 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
-    uint32_t num_pages_per_packet = 2;                 // packet_size_bytes / l1_scratch_cb_page_size_bytes;
-    uint32_t cb_num_pages = 3 * num_pages_per_packet;  // triple buffering
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor[0].get_dtype());
+    const uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
+    const uint32_t max_scatter_write_pages = 2;
+    const uint32_t num_pages_per_packet =
+        std::min((uint32_t)(packet_size_bytes / l1_scratch_cb_page_size_bytes), max_scatter_write_pages);
+    const uint32_t cb_num_pages = 3 * num_pages_per_packet;  // triple buffering
+    const tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor[0].get_dtype());
 
     // CBs for transferring data between sender_reader and sender_writer
     uint32_t sender_forward_cb_index = tt::CB::c_in0;

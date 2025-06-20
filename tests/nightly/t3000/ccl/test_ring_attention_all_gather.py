@@ -217,7 +217,7 @@ def run_ring_attention_all_gather_impl(
         (8, 1, [1, 1, 4096, 2560], 1, 2, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (8, 1, [1, 5, 4096, 2560], 1, 3, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (8, 1, [1, 5, 4096, 64], 1, 2, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, 1, [1, 5, 4096, 64], 2, 2, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 1, [1, 10, 4096, 64], 2, 2, 1, 4, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (8, 1, [1, 5, 4096, 64], 2, 2, 0, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
@@ -226,8 +226,8 @@ def run_ring_attention_all_gather_impl(
         "dim2_1input",
         "dim31input_batches",
         "dim21input_batches",
-        "dim2_2input_batches_rp2",
-        "dim2_2input_batches_rp4_yaxis",
+        "sd35_tp4_rp4",
+        "sd35_tp8_rp2",
     ],
 )
 @pytest.mark.parametrize(
