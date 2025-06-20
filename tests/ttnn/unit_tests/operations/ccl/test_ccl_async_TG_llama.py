@@ -248,7 +248,7 @@ def test_all_gather_tg_llama(
         {
             "trace_region_size": 23887872,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
         }
     ],
     indirect=True,
