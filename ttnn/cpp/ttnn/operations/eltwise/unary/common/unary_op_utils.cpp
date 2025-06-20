@@ -312,7 +312,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("unary_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             break;
         case UnaryOpType::SELU: {
-            TT_ASSERT(params.size() == 2, "Expected selu to take 2 parameters");
+            TT_FATAL(params.size() == 2, "Expected selu to take 2 parameters");
             float param1 = params[1];
             op_init_and_name = {
                 "selu_tile_init();",
