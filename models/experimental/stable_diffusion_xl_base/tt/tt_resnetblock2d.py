@@ -303,7 +303,6 @@ class TtResnetBlock2D(nn.Module):
 
         if self.tt_conv3_weights is not None:
             input_tensor_pre_conv = input_tensor
-            print(input_tensor.shape)
             input_tensor = ttnn.linear(
                 input_tensor,
                 self.tt_conv3_weights,
