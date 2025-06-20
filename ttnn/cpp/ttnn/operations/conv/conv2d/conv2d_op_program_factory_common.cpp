@@ -53,7 +53,7 @@ std::vector<CBInfo> get_cb_info(
 
     const uint32_t weights_tile_size = tt::tile_size(weights_df);
     const uint32_t bias_tile_size = weights_tile_size;
-    const uint32_t output_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_config.dtype));
+    const uint32_t output_tile_size = tt::tile_size(output_df);
 
     // Block dims
     const uint32_t act_block_num_tiles = block_config.act_block_h_ntiles * block_config.act_block_w_ntiles;
