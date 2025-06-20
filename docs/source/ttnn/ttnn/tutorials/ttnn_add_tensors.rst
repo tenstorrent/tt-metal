@@ -15,7 +15,6 @@ Import the necessary libraries
 
 .. code-block:: python
 
-   import torch
    import ttnn
 
 Open Tenstorrent device
@@ -32,48 +31,39 @@ Create necessary device on which we will run our program.
 Host Tensor Creation
 --------------------
 
-Create two PyTorch tensors, and initialize them with values 1 and 2 respectively.  The preferred shape of the tensors is (32, 32) which will match the hardware's tile size.
+Create two TT-NN tensors, and initialize them with values 1 and 2 respectively.  The preferred shape of the tensors is (32, 32) which will match the hardware's tile size.
 
 .. code-block:: python
 
-   # Create two PyTorch tensors filled with 1s and 2s
-   torch_tensor1 = torch.full((32, 32), 1.0, dtype=torch.float32)
-   torch_tensor2 = torch.full((32, 32), 2.0, dtype=torch.float32)
-
-Convert PyTorch tensors to TT-NN tensors
-----------------------------------------
-
-Convert the PyTorch tensors to TT-NN tensors with the desired data type and layout. In this case, we will use `bfloat16` as the data type and `TILE_LAYOUT` for the layout.
-
-.. code-block:: python
-
-   # Convert PyTorch tensors to TT-NN tensors with TILE_LAYOUT
-   tt_tensor1 = ttnn.from_torch(
-      torch_tensor1,
-      dtype=ttnn.bfloat16,
-      layout=ttnn.TILE_LAYOUT,
-      device=device
-   )
-
-   tt_tensor2 = ttnn.from_torch(
-      torch_tensor2,
-      dtype=ttnn.bfloat16,
-      layout=ttnn.TILE_LAYOUT,
-      device=device
-   )
+   # Create two TT-NN tensors with TILE_LAYOUT
+        tt_tensor1 =  tt_t2 = ttnn.full(
+            shape=(32, 32),
+            fill_value=1.0,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        tt_tensor2 =  tt_t2 = ttnn.full(
+            shape=(32, 32),
+            fill_value=2.0,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
 
 Perform the addition operation and convert back
 -----------------------------------------------
 
-Now we can perform the addition operation on the two TT-NN tensors and convert the result back to a PyTorch tensor.
+Now we can perform the addition operation on the two TT-NN tensors and print out the result.
 
 .. code-block:: python
 
    # Perform eltwise addition on the device
    tt_result = ttnn.add(tt_tensor1, tt_tensor2)
 
-   # Convert the result back to a PyTorch tensor for inspection
-   torch_result = ttnn.to_torch(tt_result)
+   # Print output tensor
+   print("Output tensor:")
+   print(tt_result)
 
 Full example and output
 -----------------------
@@ -89,27 +79,19 @@ Running this script will output the input tensors and the result of their additi
 
    $ python3 $TT_METAL_HOME/ttnn/tutorials/basic_python/ttnn_add_tensors.py
    Input tensors:
-   tensor([[1., 1., 1.,  ..., 1., 1., 1.],
-           [1., 1., 1.,  ..., 1., 1., 1.],
-           [1., 1., 1.,  ..., 1., 1., 1.],
-            ...,
-           [1., 1., 1.,  ..., 1., 1., 1.],
-           [1., 1., 1.,  ..., 1., 1., 1.],
-           [1., 1., 1.,  ..., 1., 1., 1.]])
-   tensor([[2., 2., 2.,  ..., 2., 2., 2.],
-           [2., 2., 2.,  ..., 2., 2., 2.],
-           [2., 2., 2.,  ..., 2., 2., 2.],
-           ...,
-           [2., 2., 2.,  ..., 2., 2., 2.],
-           [2., 2., 2.,  ..., 2., 2., 2.],
-           [2., 2., 2.,  ..., 2., 2., 2.]])
+   ttnn.Tensor([[ 1.00000,  1.00000,  ...,  1.00000,  1.00000],
+             [ 1.00000,  1.00000,  ...,  1.00000,  1.00000],
+             ...,
+             [ 1.00000,  1.00000,  ...,  1.00000,  1.00000],
+             [ 1.00000,  1.00000,  ...,  1.00000,  1.00000]], shape=Shape([32, 32]), dtype=DataType::FLOAT32, layout=Layout::TILE)
+   ttnn.Tensor([[ 2.00000,  2.00000,  ...,  2.00000,  2.00000],
+             [ 2.00000,  2.00000,  ...,  2.00000,  2.00000],
+             ...,
+             [ 2.00000,  2.00000,  ...,  2.00000,  2.00000],
+             [ 2.00000,  2.00000,  ...,  2.00000,  2.00000]], shape=Shape([32, 32]), dtype=DataType::FLOAT32, layout=Layout::TILE)
    Output tensor:
-   tensor([[3., 3., 3.,  ..., 3., 3., 3.],
-           [3., 3., 3.,  ..., 3., 3., 3.],
-           [3., 3., 3.,  ..., 3., 3., 3.],
-           ...,
-           [3., 3., 3.,  ..., 3., 3., 3.],
-           [3., 3., 3.,  ..., 3., 3., 3.],
-         [3., 3., 3.,  ..., 3., 3., 3.]], dtype=torch.bfloat16)
-                     Metal | INFO     | Closing device 0
-                     Metal | INFO     | Disabling and clearing program cache on device 0
+   ttnn.Tensor([[ 3.00000,  3.00000,  ...,  3.00000,  3.00000],
+             [ 3.00000,  3.00000,  ...,  3.00000,  3.00000],
+             ...,
+             [ 3.00000,  3.00000,  ...,  3.00000,  3.00000],
+             [ 3.00000,  3.00000,  ...,  3.00000,  3.00000]], shape=Shape([32, 32]), dtype=DataType::FLOAT32, layout=Layout::TILE)
