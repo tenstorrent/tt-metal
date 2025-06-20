@@ -572,14 +572,12 @@ void validate_weights_format(const std::string& weights_format) {
     TT_FATAL(weights_format == "OIHW", "Conv2d weights format must be \"OIHW\"");
 }
 
-template <typename T>
 ttnn::Tensor conv_bias_layout_convert(
     const ttnn::Tensor& bias_tensor,
     DataType bias_dtype,
     uint32_t weight_block_h_ntiles,
     uint32_t weight_block_w_ntiles,
     const ParallelConfig& parallel_config,
-    T* device,
     uint32_t out_channels) {
     ttnn::Tensor bias_tensor_ = bias_tensor;
     validate_bias_tensor(bias_tensor_);
@@ -588,7 +586,7 @@ ttnn::Tensor conv_bias_layout_convert(
     ttnn::Shape bias_channels_padded_shape({1, 1, 32, round_up(out_channels, weight_block_w_ntiles * 32)});
     bias_tensor_ =
         ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D{0, 0, 0, 0}, 0);
-    bias_tensor_ = ttnn::to_layout(bias_tensor_, Layout::TILE, std::nullopt, std::nullopt, (T*)nullptr);
+    bias_tensor_ = ttnn::to_layout(bias_tensor_, Layout::TILE);
     if (bias_tensor_.dtype() != bias_dtype) {
         bias_tensor_ = ttnn::to_dtype(bias_tensor_, bias_dtype);
     }
@@ -1123,7 +1121,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
                 params.weight_block_h_ntiles,
                 params.weight_block_w_ntiles,
                 params.output_parallel_config,
-                device,
                 out_channels_padded);
             bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
         }
@@ -1416,7 +1413,6 @@ ttnn::Tensor prepare_conv_bias(
             opt_conv_op_block_config.act_block_h_ntiles,
             weight_block_w_ntiles,
             output_parallel_config,
-            device,
             out_channels);
         bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
     }
@@ -1525,24 +1521,6 @@ template ttnn::Tensor prepare_conv_bias<MeshDevice>(
     MeshDevice* device,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
-
-template ttnn::Tensor conv_bias_layout_convert(
-    const ttnn::Tensor& bias_tensor,
-    DataType bias_dtype,
-    uint32_t weight_block_h_ntiles,
-    uint32_t weight_block_w_ntiles,
-    const sliding_window::ParallelConfig& parallel_config,
-    IDevice* device,
-    uint32_t out_channels);
-
-template ttnn::Tensor conv_bias_layout_convert(
-    const ttnn::Tensor& bias_tensor,
-    DataType bias_dtype,
-    uint32_t weight_block_h_ntiles,
-    uint32_t weight_block_w_ntiles,
-    const sliding_window::ParallelConfig& parallel_config,
-    MeshDevice* device,
-    uint32_t out_channels);
 
 }  // namespace conv2d
 }  // namespace operations::conv
