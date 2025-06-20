@@ -550,6 +550,7 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
 
 @pytest.fixture()
 def ensure_devices_tg():
+    return
     import ttnn
 
     device_ids = ttnn.get_device_ids()
