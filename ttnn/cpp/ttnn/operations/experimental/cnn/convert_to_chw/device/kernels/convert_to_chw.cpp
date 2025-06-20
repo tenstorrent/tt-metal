@@ -34,10 +34,11 @@ void MAIN {
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_transpose_in = get_compile_time_arg_val(1);
 
+    compute_kernel_hw_startup(cb_in, cb_transpose_in);
     pack_untilize_init(cb_in, cb_transpose_in);
     transpose_wh_init(cb_in, cb_transpose_in);
 
-    pack_untilize_dst_init_short<1>(cb_transpose_in);
+    pack_untilize_dst_init<1>(cb_transpose_in);
 
     for (uint32_t i = 0; i < num_batches; i++) {
         transpose<BATCH_SIZE>(cb_in, cb_transpose_in);
