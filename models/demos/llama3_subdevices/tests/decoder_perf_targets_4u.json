@@ -2,7 +2,7 @@
     "decoder": {
         "AllGatherAsync_0": {
             "op_name": "AllGatherAsync_Binary_Mult",
-            "kernel_duration": 12892.074968434345,
+            "kernel_duration": 9380.868055555555,
             "op_to_op": 906.2979797979798,
             "first_to_last_start": 95.9040404040404,
             "non-overlapped-dispatch-time": 4273.311111111111,
@@ -24,7 +24,7 @@
         },
         "AllReduceAsync_0": {
             "op_name": "AllReduceAsync_DO",
-            "kernel_duration": 21284.079545454544,
+            "kernel_duration": 23027,
             "op_to_op": 727.929292929293,
             "first_to_last_start": 1748.0404040404042,
             "non-overlapped-dispatch-time": 7015.244444444444,
@@ -186,17 +186,6 @@
             "op_to_op_duration_relative_margin": 0.2,
             "first_to_last_start_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.3
-        },
-        "Untilize_0": {
-            "op_name": "Untilize",
-            "kernel_duration": 1319.248263888889,
-            "op_to_op": 1023.5151515151515,
-            "first_to_last_start": 1944.732323232323,
-            "non-overlapped-dispatch-time": 3035.188888888889,
-            "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.4,
-            "first_to_last_start_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 0.5
         }
     },
     "model_tail": {
@@ -356,7 +345,7 @@
         "TopK_0": {
             "op_name": "TopK_0",
             "kernel_duration": 615934.5340909091,
-            "op_to_op": 756.2727272727273,
+            "op_to_op": 1508.0,
             "non-overlapped-dispatch-time": 5187.35,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.3,

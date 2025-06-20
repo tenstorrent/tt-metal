@@ -145,7 +145,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     }
     auto sender_worker_cores = corerange_to_cores(sender_worker_core_range, num_links, true);
     // Tensor Info
-    const uint32_t logical_dim_2 = input_tensor.logical_shape()[2];
+    const uint32_t logical_dim_2 = std::min(input_tensor.logical_shape()[2], num_heads);
     const auto input_tensor_num_pages =
         input_tensor.logical_shape()[0] * input_tensor.logical_shape()[1] * logical_dim_2;
     const auto input_tensor_cores = input_tensor.memory_config().shard_spec()->grid;
