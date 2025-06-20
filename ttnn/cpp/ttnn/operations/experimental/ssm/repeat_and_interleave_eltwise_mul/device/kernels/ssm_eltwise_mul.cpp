@@ -6,7 +6,7 @@
 
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -43,7 +43,7 @@ void MAIN {
         transpose_init(cb_id_in0);
         reconfig_data_format_srca(cb_out_transposed, cb_id_in0);
         pack_reconfig_data_format(cb_id_out, cb_in0_transposed);
-        transpose_wh_tile(cb_id_in0, 0, 0);
+        transpose_tile(cb_id_in0, 0, 0);
 
         cb_reserve_back(cb_in0_transposed, onetile);
         pack_tile(0, cb_in0_transposed);
@@ -81,7 +81,7 @@ void MAIN {
             transpose_init(cb_id_in1);
             reconfig_data_format_srca(cb_id_in1);
             pack_reconfig_data_format(cb_in1_transposed);
-            transpose_wh_tile(cb_id_in1, 0, 0);
+            transpose_tile(cb_id_in1, 0, 0);
 
             cb_reserve_back(cb_in1_transposed, onetile);
             pack_tile(0, cb_in1_transposed);
@@ -102,7 +102,7 @@ void MAIN {
                 transpose_init(cb_id_in0);
                 reconfig_data_format_srca(cb_id_in0);
                 pack_reconfig_data_format(cb_in0_transposed);
-                transpose_wh_tile(cb_id_in0, 0, 0);
+                transpose_tile(cb_id_in0, 0, 0);
 
                 cb_reserve_back(cb_in0_transposed, onetile);
                 pack_tile(0, cb_in0_transposed);
@@ -143,7 +143,7 @@ void MAIN {
                 transpose_init(cb_out_transposed);
                 reconfig_data_format(cb_in0_transposed, cb_out_transposed);
                 pack_reconfig_data_format(cb_out_transposed, cb_id_out);
-                transpose_wh_tile(cb_out_transposed, 0, 0);
+                transpose_tile(cb_out_transposed, 0, 0);
 
                 cb_reserve_back(cb_id_out, onetile);
                 pack_tile(0, cb_id_out);

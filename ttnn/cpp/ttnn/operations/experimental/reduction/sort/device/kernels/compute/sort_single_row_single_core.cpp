@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_kernel_api.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"

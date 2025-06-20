@@ -25,7 +25,8 @@ ALWI void transpose_init(uint32_t icb) {
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(true, true, icb)));
 
     if (is_int32) {
-        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(true, false)));
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+            true, false)));
         MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(true, false, icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
     } else {
@@ -53,7 +54,7 @@ ALWI void transpose_init(uint32_t icb) {
  * | in_tile_index  | The index of tile A within the first CB                 | uint32_t | Must be less than the size of the CB           | True     |
  * | dst_tile_index | The index of the tile in DST REG for the result B       | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
     UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile, false)));
     MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(idst)));

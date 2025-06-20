@@ -6,7 +6,7 @@
 #include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 #include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 
 namespace NAMESPACE {
 
@@ -41,13 +41,13 @@ FORCE_INLINE void unravel_output_tidx(uint32_t output_tidx, uint32_t* output_idx
 }
 
 // TODO: move it to moreh_common.hpp if more use cases.
-FORCE_INLINE void transpose_wh_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_t idst = 0) {
+FORCE_INLINE void transpose_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_t idst = 0) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format_srca(icb);
 #endif
     transpose_init(icb);
     tile_regs_acquire();
-    transpose_wh_tile(icb, itile, idst);
+    transpose_tile(icb, itile, idst);
     tile_regs_commit();
     cb_reserve_back(ocb, onetile);
     tile_regs_wait();
@@ -66,12 +66,12 @@ FORCE_INLINE void transpose_tile(uint32_t& mm_src, bool transpose, bool need_mas
 
     if (need_mask) {
         cb_wait_front(mm_src, onetile);
-        transpose_wh_tile_to_cb(mm_src, mm_src);
+        transpose_tile_to_cb(mm_src, mm_src);
         cb_pop_front(mm_src, onetile);
     } else {
         uint32_t trans_src = (is_input) ? (cb_in0) : (cb_in1);
         mm_src = (is_input) ? (cb_intermed1) : (cb_intermed2);
-        transpose_wh_tile_to_cb(trans_src, mm_src);
+        transpose_tile_to_cb(trans_src, mm_src);
     }
 }
 

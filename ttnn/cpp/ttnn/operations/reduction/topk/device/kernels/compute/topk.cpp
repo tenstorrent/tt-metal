@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
@@ -21,7 +21,7 @@ FORCE_INLINE void transpose_and_pack(uint32_t input_cb_index, uint32_t dest_cb_i
     for (uint32_t i = 0; i < total_tiles; ++i) {
         acquire_dst();
         cb_reserve_back(dest_cb_index, 1);
-        transpose_wh_tile(input_cb_index, i, 0);
+        transpose_tile(input_cb_index, i, 0);
         pack_tile(0, dest_cb_index);
         cb_push_back(dest_cb_index, 1);
         release_dst();
@@ -41,9 +41,9 @@ FORCE_INLINE void pack_results(uint32_t cb0, uint32_t cb1, uint32_t base_offset)
 FORCE_INLINE void read_cb_and_transpose(uint32_t cb, uint32_t base_offset, bool get_two = true) {
     reconfig_data_format_srca(cb);
     transpose_init(cb);
-    transpose_wh_tile(cb, 0, base_offset + 0);
+    transpose_tile(cb, 0, base_offset + 0);
     if (get_two) {
-        transpose_wh_tile(cb, 1, base_offset + 1);
+        transpose_tile(cb, 1, base_offset + 1);
     }
 }
 
@@ -74,8 +74,8 @@ void MAIN {
 
     ckernel::topk_tile_init();
     compute_kernel_hw_startup(input_val_cb_index, output_val_cb_index);
-    transpose_init(input_val_cb_index, output_val_cb_index);
-    transpose_init(input_ind_cb_index, output_ind_cb_index);
+    transpose_init(input_val_cb_index);
+    transpose_init(input_ind_cb_index);
 
     int end_phase = 5;  // The end phase of the local sort, based on topk_local_sort documentation
     for (uint32_t ht = 0; ht < Ht; ++ht) {

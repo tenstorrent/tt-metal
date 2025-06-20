@@ -51,7 +51,7 @@ This page will soon contain the summary of tt-metal concepts relevant for the us
   signbit_tile
   square_tile
   reduce_tile
-  transpose_wh_tile
+  transpose_tile
 
   tanh_tile
   tan_tile
