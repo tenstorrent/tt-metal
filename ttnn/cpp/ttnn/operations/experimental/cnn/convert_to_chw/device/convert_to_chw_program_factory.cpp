@@ -19,6 +19,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
     const auto input_cores = corerange_to_cores(
         input_core_grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
+    const auto output_shard_shape = output.shard_spec()->shape;
+
     const auto HW = input_shape[2];
     const auto C = input_shape[3];
 
@@ -67,8 +69,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
     const tt::DataFormat output_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const uint32_t cb_out_id = tt::CBIndex::c_1;
     const uint32_t element_size = tt::datum_size(output_format);
-    const uint32_t cb_out_total_size = tt::div_up(C * HW * element_size, input_cores.size());
-    const uint32_t cb_out_page_size = tt::div_up(HW * element_size, input_cores.size());
+    const uint32_t cb_out_total_size = output_shard_shape[0] * output_shard_shape[1] * element_size;
+    const uint32_t cb_out_page_size = output_shard_shape[1] * element_size;
     const auto cb_out =
         create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
 

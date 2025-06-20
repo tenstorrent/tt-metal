@@ -67,7 +67,8 @@ def run_unet_model(batch, groups, device, iterations=1):
 def test_unet_model(batch, groups, device, use_program_cache, reset_seeds):
     if (
         not is_wormhole_b0(device)
-        and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110
+        and (device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110
+        and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 130)
     ):
         pytest.skip(f"Shallow UNet only support 110 cores on BH (was {device.compute_with_storage_grid_size()})")
     run_unet_model(batch, groups, device)
