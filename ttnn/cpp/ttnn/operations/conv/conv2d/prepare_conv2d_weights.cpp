@@ -611,6 +611,8 @@ static OptimizedConvBlockConfig get_opt_block_config(
     T* device,
     Conv2dConfig& conv_config,
     Layout input_layout,
+    DataType input_dtype,
+    DataType output_dtype,
     const DeviceComputeKernelConfig& compute_config,
     const MemoryConfig& input_memory_config,
     const bool has_bias) {
@@ -629,7 +631,8 @@ static OptimizedConvBlockConfig get_opt_block_config(
         input_width,
         compute_grid_size,
         input_layout,
-        conv_config.dtype,
+        input_dtype,
+        output_dtype,
         input_memory_config,
         kernel_size,
         groups,
@@ -1152,6 +1155,8 @@ ttnn::Tensor prepare_conv_weights(
     const bool has_bias,
     uint32_t groups,
     T* device,
+    DataType input_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
@@ -1163,6 +1168,7 @@ ttnn::Tensor prepare_conv_weights(
             weights_format);
     }
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    DataType conv_output_dtype = output_dtype.value_or(input_dtype);
 
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
@@ -1229,6 +1235,8 @@ ttnn::Tensor prepare_conv_weights(
         device,
         conv_config,
         input_layout,
+        input_dtype,
+        conv_output_dtype,
         compute_config,
         input_memory_config,
         has_bias);
@@ -1320,10 +1328,12 @@ ttnn::Tensor prepare_conv_bias(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     T* device,
+    DataType input_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-
+    DataType conv_output_dtype = output_dtype.value_or(input_dtype);
     TT_ASSERT(conv_config.weights_dtype.has_value(), "prepare_conv_bias requires conv_config.weights_dtype to be set.");
 
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
@@ -1359,6 +1369,8 @@ ttnn::Tensor prepare_conv_bias(
         device,
         conv_config,
         input_layout,
+        input_dtype,
+        conv_output_dtype,
         compute_config,
         input_memory_config,
         true);
@@ -1440,6 +1452,8 @@ template ttnn::Tensor prepare_conv_weights<IDevice>(
     const bool has_bias,
     uint32_t groups,
     IDevice* device,
+    DataType input_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
@@ -1461,6 +1475,8 @@ template ttnn::Tensor prepare_conv_weights<MeshDevice>(
     const bool has_bias,
     uint32_t groups,
     MeshDevice* device,
+    DataType input_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
@@ -1505,6 +1521,8 @@ template ttnn::Tensor prepare_conv_bias<IDevice>(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     IDevice* device,
+    DataType input_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
@@ -1523,6 +1541,8 @@ template ttnn::Tensor prepare_conv_bias<MeshDevice>(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     MeshDevice* device,
+    DataType input_dtype,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
