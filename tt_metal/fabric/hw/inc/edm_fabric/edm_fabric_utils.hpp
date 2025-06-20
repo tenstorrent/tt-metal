@@ -25,10 +25,10 @@ FORCE_INLINE void send_chunk_from_address_with_trid(
     uint8_t noc,
     uint8_t cmd_buf) {
     if constexpr (stateful_api) {
-        noc_async_write_one_packet_with_trid_with_state<false, false>(
+        noc_async_write_one_packet_with_trid_with_state<false, true>(
             local_l1_address, remote_l1_write_addr_l, page_size * num_pages, trid, cmd_buf, noc);
     } else {
-        noc_async_write_one_packet_with_trid<false, false>(
+        noc_async_write_one_packet_with_trid<false, true>(
             local_l1_address,
             get_noc_addr_helper(remote_l1_write_addr_h, remote_l1_write_addr_l),
             page_size * num_pages,
