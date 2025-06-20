@@ -18,7 +18,7 @@
 
 #include "tt-metalium/mesh_device_view.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
+#include "tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include <tt-metalium/host_buffer.hpp>
@@ -486,13 +486,7 @@ Tensor Tensor::extract_shard(const uint32_t& core_id) const {
     return tensor_impl::extract_shard_wrapper(*this, core_id);
 }
 
-Tensor Tensor::to_layout(Layout target_layout, IDevice* worker) const {
-    return tensor_ops::tensor_to_layout(*this, target_layout, worker);
-}
-
-Tensor Tensor::to_layout(Layout target_layout, distributed::MeshDevice* mesh_device) const {
-    return tensor_ops::tensor_to_layout(*this, target_layout, mesh_device);
-}
+Tensor Tensor::to_layout(Layout target_layout) const { return tensor_ops::tensor_to_layout(*this, target_layout); }
 
 std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }
 

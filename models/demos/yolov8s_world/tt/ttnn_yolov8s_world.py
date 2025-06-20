@@ -194,7 +194,7 @@ class TtBottleneck:
         ttnn.deallocate(cv1)
 
         if self.tilize:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, device=self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         x = ttnn.to_memory_config(x, memory_config=cv2.memory_config())
 

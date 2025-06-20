@@ -22,7 +22,8 @@ namespace operations {
 
 namespace core {
 
-namespace detail {
+namespace CMAKE_UNIQUE_NAMESPACE {
+namespace {
 
 bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
     auto tile = tensor.tensor_spec().tile();
@@ -38,13 +39,11 @@ bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
     return tensor.padded_shape() != padded_spec.padded_shape();
 }
 
-template <typename T>
 Tensor to_layout_impl(
     const ttnn::Tensor& tensor_arg,
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    T* device) {
+    const std::optional<ttnn::MemoryConfig>& memory_config) {
     if (tensor_arg.layout() == layout) {
         if (dtype.has_value() and dtype.value() != tensor_arg.dtype()) {
             log_warning(
@@ -175,11 +174,11 @@ Tensor to_layout_impl(
             TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
         }
     } else {
-        TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting layout on host!");
-        if (not requires_padding_change(tensor, layout)) {
-            return device ? tensor.to_layout(layout, device) : tensor.to_layout(layout);
+        TT_ASSERT(!dtype.has_value(), "dtype cannot be specified when converting layout on host!");
+        if (!requires_padding_change(tensor, layout)) {
+            return tensor.to_layout(layout);
         } else if (layout == ttnn::ROW_MAJOR_LAYOUT) {
-            tensor = device ? tensor.to_layout(layout, device) : tensor.to_layout(layout);
+            tensor = tensor.to_layout(layout);
             tensor = tensor.unpad_from_tile(tensor.logical_shape());
             return ttnn::reshape(tensor, ttnn::Shape{output_shape});
         } else if (layout == ttnn::TILE_LAYOUT) {
@@ -188,35 +187,24 @@ Tensor to_layout_impl(
                 padded_input_start.push_back(0);
             }
             tensor = tensor.pad(ttnn::Shape(padded_output_shape), ttnn::Shape(std::move(padded_input_start)), 0);
-            tensor = device ? tensor.to_layout(layout, device) : tensor.to_layout(layout);
+            tensor = tensor.to_layout(layout);
             return ttnn::experimental::view(tensor, output_shape, padded_output_shape);
         } else {
             TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
         }
     }
 }
-}  // namespace detail
+}  // namespace
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 
-/* static */ Tensor ToLayout::invoke(
+Tensor ToLayout::invoke(
     const ttnn::Tensor& tensor_arg,
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    IDevice* device) {
-    return detail::to_layout_impl(tensor_arg, layout, dtype, memory_config, device);
-}
-
-/* static */ Tensor ToLayout::invoke(
-    const ttnn::Tensor& tensor_arg,
-    const ttnn::Layout layout,
-    const std::optional<ttnn::DataType>& dtype,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    MeshDevice* device) {
-    return detail::to_layout_impl(tensor_arg, layout, dtype, memory_config, device);
+    const std::optional<ttnn::MemoryConfig>& memory_config) {
+    return CMAKE_UNIQUE_NAMESPACE::to_layout_impl(tensor_arg, layout, dtype, memory_config);
 }
 
 }  // namespace core
-
 }  // namespace operations
-
 }  // namespace ttnn
