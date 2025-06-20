@@ -20,8 +20,8 @@ std::vector<std::optional<T>> tuple_to_vector_optional(Tuple&& tuple) {
 }
 
 ttnn::Tensor perform_transpose(
-    const ttnn::Tensor& input_tensor, const bool is_dim_last_idx, const int8_t dim1 = -1, const int8_t dim2 = -1);
+    const ttnn::Tensor& input_tensor, bool is_dim_last_idx, int8_t dim1 = -1, int8_t dim2 = -1);
 
-ttnn::Tensor transform_to_4d_tensor(const ttnn::Tensor& input_tensor, const bool is_rank_le_4d);
+ttnn::Tensor transform_to_4d_tensor(const ttnn::Tensor& input_tensor, bool is_rank_le_4d);
 
 }  // namespace reduction_common

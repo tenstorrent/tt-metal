@@ -1425,8 +1425,6 @@ void kernel_main() {
     //
     // COMMON CT ARGS (not specific to sender or receiver)
     //
-    *reinterpret_cast<volatile uint32_t*>(handshake_addr) = 0;
-    auto eth_transaction_ack_word_addr = handshake_addr + sizeof(eth_channel_sync_t);
 
     // Initialize stream register state for credit management across the Ethernet link.
     // We make sure to do this before we handshake to guarantee that the registers are
@@ -1464,14 +1462,6 @@ void kernel_main() {
         init_ptr_val<to_sender_packets_acked_streams[4]>(0);
         init_ptr_val<to_sender_packets_completed_streams[3]>(0);
         init_ptr_val<to_sender_packets_completed_streams[4]>(0);
-    }
-
-    if constexpr (enable_ethernet_handshake) {
-        if constexpr (is_handshake_sender) {
-            erisc::datamover::handshake::sender_side_start(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
-        } else {
-            erisc::datamover::handshake::receiver_side_start(handshake_addr);
-        }
     }
 
     // TODO: CONVERT TO SEMAPHORE
@@ -1875,7 +1865,6 @@ void kernel_main() {
         local_receiver_buffer_addresses.data(),
         channel_buffer_size,
         sizeof(PACKET_HEADER_TYPE),
-        eth_transaction_ack_word_addr,
         receiver_channel_base_id);
 
     // initialize the remote receiver channel buffers
@@ -1883,16 +1872,11 @@ void kernel_main() {
         remote_receiver_buffer_addresses.data(),
         channel_buffer_size,
         sizeof(PACKET_HEADER_TYPE),
-        eth_transaction_ack_word_addr,
         receiver_channel_base_id);
 
     // initialize the local sender channel worker interfaces
     local_sender_channels.init(
-        local_sender_buffer_addresses.data(),
-        channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE),
-        0,  // For sender channels there is no eth_transaction_ack_word_addr because they don't send acks
-        sender_channel_base_id);
+        local_sender_buffer_addresses.data(), channel_buffer_size, sizeof(PACKET_HEADER_TYPE), sender_channel_base_id);
 
     // initialize the local sender channel worker interfaces
     init_local_sender_channel_worker_interfaces(
@@ -1921,9 +1905,11 @@ void kernel_main() {
 
     if constexpr (enable_ethernet_handshake) {
         if constexpr (is_handshake_sender) {
-            erisc::datamover::handshake::sender_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+            erisc::datamover::handshake::sender_side_handshake(
+                handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         } else {
-            erisc::datamover::handshake::receiver_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+            erisc::datamover::handshake::receiver_side_handshake(
+                handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         }
 
         *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;

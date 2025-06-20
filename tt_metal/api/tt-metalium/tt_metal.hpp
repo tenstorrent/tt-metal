@@ -28,6 +28,7 @@
 namespace tt {
 namespace tt_metal {
 enum class FabricConfig : uint32_t;
+enum class FabricReliabilityMode : uint32_t;
 }  // namespace tt_metal
 }  // namespace tt
 
@@ -55,17 +56,20 @@ bool DispatchStateCheck(bool isFastDispatch);
  * | fabric_config      | Fabric config to set                | FabricConfig      |             | Yes      |
  * | num_routing_planes | Number of routing planes for fabric | optional<uint8_t> |             | No       |
  */
-void SetFabricConfig(FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
+void SetFabricConfig(
+    FabricConfig fabric_config,
+    FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+    std::optional<uint8_t> num_routing_planes = std::nullopt);
 
 std::map<chip_id_t, IDevice*> CreateDevices(
     // TODO: delete this in favour of DevicePool
     const std::vector<chip_id_t>& device_ids,
-    const uint8_t num_hw_cqs = 1,
-    const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-    const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+    uint8_t num_hw_cqs = 1,
+    size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+    size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
     const tt_metal::DispatchCoreConfig& dispatch_core_config = tt_metal::DispatchCoreConfig{},
     const std::vector<uint32_t>& l1_bank_remap = {},
-    const size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
+    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
     bool init_profiler = true,
     bool use_max_eth_core_count_on_all_devices = false,
     bool initialize_fabric_and_dispatch_fw = true);

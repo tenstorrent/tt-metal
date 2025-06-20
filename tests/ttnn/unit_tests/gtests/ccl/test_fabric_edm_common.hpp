@@ -18,19 +18,19 @@
 #include <tt-metalium/fabric_edm_packet_header.hpp>
 
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
-#include "ttnn/cpp/ttnn/operations/creation.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
-#include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tile.hpp>
 
@@ -107,8 +107,8 @@ protected:
 public:
     BaseFabricFixture() : device_open(false) {}
 
-    BaseFabricFixture(tt::tt_metal::FabricConfig fabric_config) : device_open(false) {
-        tt::tt_metal::detail::SetFabricConfig(fabric_config);
+    BaseFabricFixture(tt::tt_metal::FabricConfig fabric_config, tt::tt_metal::FabricReliabilityMode reliability_mode = tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) : device_open(false) {
+        tt::tt_metal::detail::SetFabricConfig(fabric_config, reliability_mode);
     }
 
     virtual ~BaseFabricFixture() { tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED); }
@@ -148,11 +148,80 @@ public:
 
     Fabric1DFixture() : BaseFabricFixture() { this->SetupDevices(); }
 
-    Fabric1DFixture(tt::tt_metal::FabricConfig fabric_config) : BaseFabricFixture(fabric_config) {
+    Fabric1DFixture(
+        tt::tt_metal::FabricConfig fabric_config,
+        tt::tt_metal::FabricReliabilityMode reliability_mode =
+            tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
+        BaseFabricFixture(fabric_config, reliability_mode) {
         this->SetupDevices();
     }
 
     ~Fabric1DFixture() override { TearDown(); }
+};
+
+class Fabric1DDeviceInitFixture {
+public:
+    tt::ARCH arch_;
+    std::size_t num_devices_;
+    bool device_open = false;
+
+    // Common constants for both fixtures
+    static constexpr size_t TG_NUM_DEVICES = 36;
+    static constexpr size_t GALAXY_6U_NUM_DEVICES = 32;
+
+    std::shared_ptr<MeshDevice> mesh_device_;
+
+    // Gets the appropriate mesh shape based on device configuration
+    MeshShape GetDeterminedMeshShape() const { return SystemMesh::instance().get_shape(); }
+
+    // Validates environment and hardware for tests
+    void ValidateEnvironment() {
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch) {
+            TT_THROW("This suite can only be run without TT_METAL_SLOW_DISPATCH_MODE set");
+        }
+
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        num_devices_ = tt::tt_metal::GetNumAvailableDevices();
+
+        if (!(arch_ == tt::ARCH::WORMHOLE_B0 && num_devices_ >= 8 &&
+              (tt::tt_metal::GetNumPCIeDevices() == 4 || tt::tt_metal::GetNumPCIeDevices() == GALAXY_6U_NUM_DEVICES))) {
+            TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
+        }
+    }
+
+    void SetupDevices() {
+        ValidateEnvironment();
+
+        const MeshShape cluster_shape = GetDeterminedMeshShape();
+        const auto& physical_device_ids = SystemMesh::instance().get_mapped_physical_device_ids(cluster_shape);
+
+        mesh_device_ = MeshDevice::create(MeshDeviceConfig(cluster_shape));
+        device_open = true;
+    }
+
+    void TearDown() {
+        if (device_open) {
+            mesh_device_->close();
+            device_open = false;
+        }
+    }
+
+    Fabric1DDeviceInitFixture() : device_open(false) { this->SetupDevices(); }
+
+    Fabric1DDeviceInitFixture(
+        tt::tt_metal::FabricConfig fabric_config,
+        tt::tt_metal::FabricReliabilityMode reliability_mode =
+            tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
+        device_open(false) {
+        tt::tt_metal::detail::SetFabricConfig(fabric_config, reliability_mode);
+        this->SetupDevices();
+    }
+
+    ~Fabric1DDeviceInitFixture() {
+        TearDown();
+        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+    }
 };
 
 class MeshFabric1DFixture : public BaseFabricFixture {
@@ -174,7 +243,11 @@ public:
 
     MeshFabric1DFixture() : BaseFabricFixture() { this->SetupDevices(); }
 
-    MeshFabric1DFixture(tt::tt_metal::FabricConfig fabric_config) : BaseFabricFixture(fabric_config) {
+    MeshFabric1DFixture(
+        tt::tt_metal::FabricConfig fabric_config,
+        tt::tt_metal::FabricReliabilityMode reliability_mode =
+            tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
+        BaseFabricFixture(fabric_config, reliability_mode) {
         this->SetupDevices();
     }
 
@@ -193,6 +266,20 @@ public:
 class Fabric1DRingDeviceInitFixture : public Fabric1DFixture {
 public:
     Fabric1DRingDeviceInitFixture() : Fabric1DFixture(tt::tt_metal::FabricConfig::FABRIC_1D_RING) {}
+};
+class Fabric1DRingStrictDeviceInitFixture : public Fabric1DDeviceInitFixture {
+public:
+    Fabric1DRingStrictDeviceInitFixture() :
+        Fabric1DDeviceInitFixture(
+            tt::tt_metal::FabricConfig::FABRIC_1D_RING,
+            tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {}
+};
+class Fabric1DRingRelaxedDeviceInitFixture : public Fabric1DDeviceInitFixture {
+public:
+    Fabric1DRingRelaxedDeviceInitFixture() :
+        Fabric1DDeviceInitFixture(
+            tt::tt_metal::FabricConfig::FABRIC_1D_RING,
+            tt::tt_metal::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE) {}
 };
 
 class MeshFabric1DLineDeviceInitFixture : public MeshFabric1DFixture {
@@ -1977,7 +2064,7 @@ bool RunPipelinedWorkersTest(
     return pass;
 }
 
-#include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include <tt-metalium/bfloat16.hpp>
 
 static void wait_for_worker_program_completion(
@@ -1991,7 +2078,7 @@ static void wait_for_worker_program_completion(
     }
 }
 
-#include "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_links, ttnn::Shape const& input_shape) {
     log_info(tt::LogTest, "entering test");
     constexpr auto layout = Layout::TILE;
@@ -2556,9 +2643,11 @@ void Run1DFabricPacketSendTest(
         // HalfRing test is more optimal with extra recv buffer on upstream edm.
         en_dateline_sender_extra_buffer = true;
         en_dateline_receiver_extra_buffer = true;
-        en_dateline_upstream_sender_extra_buffer = false;
+        // TODO: this will be cleaned up once we bundle these config into arch/cluster dependent helper.
+        en_dateline_upstream_sender_extra_buffer = !use_t3k;
         en_dateline_upstream_receiver_extra_buffer = true;
-        en_dateline_upstream_adjcent_sender_extra_buffer = true;
+        // TODO: this will be cleaned up once we bundle these config into arch/cluster dependent helper.
+        en_dateline_upstream_adjcent_sender_extra_buffer = use_t3k;
     } else if (fabric_mode == FabricTestMode::FullRing) {
         // FullRing is more optimal with extra buffer on both send/recv channels.
         en_dateline_sender_extra_buffer = false;
@@ -3594,29 +3683,115 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     Run1DFabricPacketSendTest(test_fixture, test_specs, params_copy, 0);
 }
 
+size_t get_number_of_links_for_ring_deadlock_stability_test(
+    const MeshDevice& mesh_device,
+    ClusterType cluster_type,
+    std::optional<size_t> num_links_opt,
+    size_t num_devices,
+    std::optional<size_t> row_or_col) {
+    size_t num_links = num_links_opt.value_or(0);
+    if (num_links == 0) {
+        if (cluster_type == ClusterType::GALAXY) {
+            for (size_t i = 0; i < mesh_device.shape()[0]; i++) {
+                size_t cluster_axis = 1;
+                auto nl =
+                    tt::tt_fabric::experimental::get_number_of_available_routing_planes(mesh_device, cluster_axis, i);
+                log_debug(tt::LogTest, "Number of links for Galaxy cluster_axis 0, row {}: {}", i, nl);
+            }
+            for (size_t i = 0; i < mesh_device.shape()[1]; i++) {
+                size_t cluster_axis = 0;
+                auto nl =
+                    tt::tt_fabric::experimental::get_number_of_available_routing_planes(mesh_device, cluster_axis, i);
+                log_debug(tt::LogTest, "Number of links for Galaxy cluster_axis 1, row {}: {}", i, nl);
+            }
+
+            bool is_long_edge = num_devices == 8;
+            size_t cluster_axis = !is_long_edge ? 1 : 0;
+            num_links = tt::tt_fabric::experimental::get_number_of_available_routing_planes(
+                mesh_device, cluster_axis, row_or_col.value());
+        } else {
+            TT_THROW("This test can only be run on 4 or 8 chips on Galaxy devices");
+        }
+    }
+
+    return num_links;
+}
+
+std::vector<IDevice*> get_devices_for_ring_deadlock_stability_test(
+    const MeshDeviceView& view, ClusterType cluster_type, size_t num_devices, std::optional<size_t> row_or_col) {
+    std::vector<IDevice*> devices_;
+    log_debug(tt::LogTest, "Getting devices for ring deadlock stability test. Row or col: {}", row_or_col.value_or(0));
+
+    if (cluster_type == ClusterType::GALAXY) {
+        if (num_devices == 4) {
+            log_debug(
+                tt::LogTest,
+                "Getting 4 devices for ring deadlock stability test. Row or col: {}",
+                row_or_col.value_or(0));
+            devices_ = {
+                view.get_device(MeshCoordinate(row_or_col.value_or(0), 0)),
+                view.get_device(MeshCoordinate(row_or_col.value_or(0), 1)),
+                view.get_device(MeshCoordinate(row_or_col.value_or(0), 2)),
+                view.get_device(MeshCoordinate(row_or_col.value_or(0), 3))};
+        } else if (num_devices == 8) {
+            log_debug(
+                tt::LogTest,
+                "Getting 8 devices for ring deadlock stability test. Row or col: {}",
+                row_or_col.value_or(0));
+            devices_ = {
+                view.get_device(MeshCoordinate(0, row_or_col.value_or(0))),
+                view.get_device(MeshCoordinate(1, row_or_col.value_or(0))),
+                view.get_device(MeshCoordinate(2, row_or_col.value_or(0))),
+                view.get_device(MeshCoordinate(3, row_or_col.value_or(0))),
+                view.get_device(MeshCoordinate(4, row_or_col.value_or(0))),
+                view.get_device(MeshCoordinate(5, row_or_col.value_or(0))),
+                view.get_device(MeshCoordinate(6, row_or_col.value_or(0))),
+                view.get_device(MeshCoordinate(7, row_or_col.value_or(0)))};
+        }
+    } else {
+        log_debug(
+            tt::LogTest, "Getting 8 devices for ring deadlock stability test. Row or col: {}", row_or_col.value_or(0));
+        TT_FATAL(!row_or_col.has_value(), "Row or col must be provided for T3000 devices");
+        devices_ = {
+            view.get_device(MeshCoordinate(0, 0)),
+            view.get_device(MeshCoordinate(0, 1)),
+            view.get_device(MeshCoordinate(0, 2)),
+            view.get_device(MeshCoordinate(0, 3)),
+            view.get_device(MeshCoordinate(1, 3)),
+            view.get_device(MeshCoordinate(1, 2)),
+            view.get_device(MeshCoordinate(1, 1)),
+            view.get_device(MeshCoordinate(1, 0))};
+    }
+    return devices_;
+}
+
+template <typename DeviceInitFixture = Fabric1DRingStrictDeviceInitFixture>
 void RunRingDeadlockStabilityTestWithPersistentFabric(
     size_t num_mcasts,
-    size_t num_links,
+    std::optional<size_t> num_links_opt,
     size_t num_devices,
     size_t num_op_invocations,
     bool has_forward_connection,
     bool has_backward_connection,
-    size_t packet_payload_size_bytes = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes) {
+    size_t packet_payload_size_bytes = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes,
+    std::optional<size_t> row_or_col = std::nullopt) {
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+
     auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
     switch (cluster_type) {
         case ClusterType::T3K:
             if (num_devices != 8) {
-                log_info(tt::LogTest, "This test can only be run 8 chips on T3000 devices");
+                log_debug(tt::LogTest, "This test can only be run 8 chips on T3000 devices");
                 return;
             }
             break;
         case ClusterType::GALAXY:
             if (num_devices != 4 && num_devices != 8) {
-                log_info(tt::LogTest, "This test can only be run on 4 or 8 chips on Galaxy devices");
+                log_debug(tt::LogTest, "This test can only be run on 4 or 8 chips on Galaxy devices");
                 return;
             }
             break;
-        default: log_info(tt::LogTest, "This test can only be run on T3000 or Galaxy devices"); return;
+        default: log_debug(tt::LogTest, "This test can only be run on T3000 or Galaxy devices"); return;
     }
 
     using namespace ttnn::ccl;
@@ -3635,47 +3810,19 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     size_t dest_buffer_size = packet_payload_size_bytes * 4;
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
 
-    Fabric1DRingDeviceInitFixture test_fixture;
-    auto view = *(test_fixture.view_);
+    DeviceInitFixture test_fixture;
+    auto view = test_fixture.mesh_device_->get_view();
 
-    std::vector<IDevice*> devices_;
-
-    if (cluster_type == ClusterType::GALAXY) {
-        if (num_devices == 4) {
-            devices_ = {
-                view.get_device(MeshCoordinate(0, 0)),
-                view.get_device(MeshCoordinate(0, 1)),
-                view.get_device(MeshCoordinate(0, 2)),
-                view.get_device(MeshCoordinate(0, 3))};
-        } else if (num_devices == 8) {
-            devices_ = {
-                view.get_device(MeshCoordinate(0, 0)),
-                view.get_device(MeshCoordinate(1, 0)),
-                view.get_device(MeshCoordinate(2, 0)),
-                view.get_device(MeshCoordinate(3, 0)),
-                view.get_device(MeshCoordinate(4, 0)),
-                view.get_device(MeshCoordinate(5, 0)),
-                view.get_device(MeshCoordinate(6, 0)),
-                view.get_device(MeshCoordinate(7, 0))};
-        }
-    } else {
-        devices_ = {
-            view.get_device(MeshCoordinate(0, 0)),
-            view.get_device(MeshCoordinate(0, 1)),
-            view.get_device(MeshCoordinate(0, 2)),
-            view.get_device(MeshCoordinate(0, 3)),
-            view.get_device(MeshCoordinate(1, 3)),
-            view.get_device(MeshCoordinate(1, 2)),
-            view.get_device(MeshCoordinate(1, 1)),
-            view.get_device(MeshCoordinate(1, 0))};
-    }
+    std::vector<IDevice*> devices_ =
+        get_devices_for_ring_deadlock_stability_test(view, cluster_type, num_devices, row_or_col);
+    size_t num_links = get_number_of_links_for_ring_deadlock_stability_test(
+        *test_fixture.mesh_device_.get(), cluster_type, num_links_opt, num_devices, row_or_col);
 
     std::vector<IDevice*> devices;
     devices.reserve(line_size);
     for (size_t i = 0; i < line_size; i++) {
         devices.push_back(devices_[i]);
     }
-    // build the mesh device
 
     // Other boiler plate setup
     CoreRangeSet worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_links - 1, 0)));
@@ -3690,6 +3837,7 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     ttnn::SmallVector<std::shared_ptr<Buffer>> device_dest_buffers;
     device_dest_buffers.reserve(line_size);
     for (auto* d : devices) {
+        TT_FATAL(d != nullptr, "Device is nullptr");
         auto local_input_buffer =
             CreateBuffer(InterleavedBufferConfig{d, dest_buffer_size, dest_buffer_size, BufferType::L1});
         device_dest_buffers.push_back(local_input_buffer);
@@ -3707,13 +3855,11 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     global_semaphore_addrs.reserve(line_size + 1);
     std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> global_semaphore_handles;
     for (size_t i = 0; i < line_size * 4; i++) {
-        auto global_semaphores = ttnn::global_semaphore::create_global_semaphore_with_same_address(
+        auto global_semaphores = ttnn::global_semaphore::create_global_semaphore(
             devices_,
             devices_[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-            0,                             // initial value
-            tt::tt_metal::BufferType::L1,  // buffer type
-            1000                           // attempts
-        );
+            0,                              // initial value
+            tt::tt_metal::BufferType::L1);  //,  // buffer type
         global_semaphore_handles.push_back(global_semaphores);
         auto global_semaphore_addr =
             ttnn::global_semaphore::get_global_semaphore_address(global_semaphores.global_semaphores.at(0));
@@ -3735,6 +3881,7 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     std::vector<KernelHandle> worker_kernel_ids;
     std::vector<size_t> per_device_global_sem_addr_rt_arg;
     uint32_t num_dirs = (uint32_t)has_forward_connection + (uint32_t)has_backward_connection;
+    log_debug(tt::LogTest, "Initializing worker programs");
     for (size_t i = 0; i < num_devices_with_workers; i++) {
         const size_t line_index = i;
         auto& program = programs[i];
