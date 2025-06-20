@@ -325,7 +325,7 @@ class ConcatMeshToTensor(MeshToTensor):
 
 
 @contextlib.contextmanager
-def distribute(default: Union[TensorToMesh, MeshToTensor]):
+def distribute(default: Union[ttnn.CppTensorToMesh, ReplicateTensorToMeshWrapper, MeshToTensor]):
     """
     Context manager to temporarily modify the behavior of ttnn.from_torch and ttnn.to_torch to use the specified
     mesh_mapper or mesh_composer for tensor distribution and composition to/from MeshDevice.
@@ -333,7 +333,7 @@ def distribute(default: Union[TensorToMesh, MeshToTensor]):
     Invocations of ttnn.to_torch(..) will use the mesh_composer as defined by the default in ttnn.distribute.
 
     Args:
-        mesh_mapper_or_composer (Union[TensorToMesh, MeshToTensor]): An instance of either TensorToMesh or MeshToTensor
+        mesh_mapper_or_composer (Union[ttnn.CppTensorToMesh, ReplicateTensorToMeshWrapper, MeshToTensor]): An instance of either TensorToMesh or MeshToTensor
             used to map tensors to a mesh or compose tensors from a mesh.
 
     Example:
@@ -348,7 +348,7 @@ def distribute(default: Union[TensorToMesh, MeshToTensor]):
     _original_from_torch = ttnn.from_torch
 
     try:
-        if isinstance(default, TensorToMesh):
+        if isinstance(default, ttnn.CppTensorToMesh) or isinstance(default, ReplicateTensorToMeshWrapper):
             ttnn.from_torch = functools.partial(_original_from_torch, mesh_mapper=default)
         elif isinstance(default, MeshToTensor):
             ttnn.to_torch = functools.partial(_original_to_torch, mesh_composer=default)
