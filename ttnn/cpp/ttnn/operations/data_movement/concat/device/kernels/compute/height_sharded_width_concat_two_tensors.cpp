@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 
 constexpr uint32_t MAX_BATCH_SIZE = 8;
 
@@ -17,9 +17,9 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
 
     cb_reserve_back(cb_out, BatchSize);
 
-    transpose_wh_init_short(cb_in);
+    transpose_init(cb_in);
     for (uint32_t i = 0; i < BatchSize; i++) {
-        transpose_wh_tile(cb_in, i, i);
+        transpose_tile(cb_in, i, i);
         pack_tile(i, cb_out);
     }
 
@@ -48,7 +48,8 @@ void MAIN {
     constexpr uint32_t tile_size = get_compile_time_arg_val(11);
     constexpr uint32_t groups = get_compile_time_arg_val(12);
 
-    transpose_wh_init(input0_cb, input0_transpose_cb);
+    compute_kernel_hw_startup(input0_cb, input0_transpose_cb);
+    transpose_init(input0_cb);
 
     constexpr uint32_t output_num_tiles_width = input0_num_tiles_width + input1_num_tiles_width;
 
