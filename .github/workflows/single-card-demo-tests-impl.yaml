@@ -28,6 +28,7 @@ jobs:
           { name: "bert_tiny", runner-label: "N150", performance: false, cmd: run_bert_tiny_func, owner_id: U024A4EFV6U}, # Brian Liu
           { name: "bert", runner-label: "N150", performance: false, cmd: run_bert_func, owner_id: U024A4EFV6U}, # Brian Liu
           { name: "resnet", runner-label: "N150", performance: false, cmd: run_resnet_func, owner_id: U0837MYG788}, # Marko Radosavljevic
+          { name: "ttnn_resnet", runner-label: "N150", performance: false, cmd: run_resnet_perf, owner_id: U0837MYG788}, # Marko Radosavljevic
           { name: "distilbert", runner-label: "N150", performance: false, cmd: run_distilbert_func, owner_id: U013121KDH9}, # Austin Ho
           { name: "covnet_mnist", runner-label: "N150", performance: false, cmd: run_covnet_mnist_func, owner_id: U06LRK6JDGB}, # Saad Jameel
           { name: "mnist", runner-label: "N150", performance: false, cmd: run_mnist_func, owner_id: U06ECNVR0EN}, # Evan Smal
@@ -69,6 +70,8 @@ jobs:
           { name: "yolov8s_world", runner-label: "N300", performance: false, cmd: run_yolov8s_world_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
           { name: "vanilla_unet", runner-label: "N300", performance: false, cmd: run_vanilla_unet_demo, owner_id: U045U3DEKM4}, # Mohamed Bahnas (keerthana-r-mcw)
           { name: "vgg_unet", runner-label: "N300", performance: false, cmd: run_vgg_unet_demo, owner_id: U045U3DEKM4}, # Mohamed Bahnas (keerthana-r-mcw)
+          { name: "ttnn_resnet", runner-label: "N300", performance: false, cmd: run_resnet_perf, owner_id: U0837MYG788}, # Marko Radosavljevic
+
           # Moved to t3k tests until OOM on single card runners resolved
           # { name: "qwen7b", runner-label: "N300", performance: false, cmd: run_qwen7b_func, owner_id: U03PUAKE719}, # Mark O'Connor
         ]
