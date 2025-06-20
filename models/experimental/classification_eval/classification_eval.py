@@ -12,7 +12,7 @@ import transformers
 from transformers import AutoImageProcessor
 
 import ttnn
-from models.experimental.classification_models_evaluation.classification_eval_utils import get_data_loader
+from models.experimental.classification_eval.classification_eval_utils import get_data_loader
 
 
 def evaluation(
@@ -159,7 +159,7 @@ def evaluation(
         ("torch_model"),
     ],
 )
-def test_vit_classification(
+def test_vit_image_classification_eval(
     mesh_device,
     model_type,
     use_program_cache,
@@ -212,7 +212,7 @@ def test_vit_classification(
     "batch_size, act_dtype, weight_dtype",
     ((16, ttnn.bfloat8_b, ttnn.bfloat8_b),),
 )
-def test_resnet50_classification(
+def test_resnet50_image_classification_eval(
     device,
     model_type,
     batch_size,
@@ -262,7 +262,7 @@ def test_resnet50_classification(
     ],
 )
 @pytest.mark.parametrize("batch_size, res", [[8, 224]])
-def test_mobilenetv2_classification(
+def test_mobilenetv2_image_classification_eval(
     device, model_type, batch_size, res, model_location_generator, use_program_cache, reset_seeds
 ):
     from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
