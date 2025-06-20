@@ -18,7 +18,7 @@ def create_yolov11_input_tensors(device, batch=1, input_channels=3, input_height
         ttnn_input_tensor.shape[0] * ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2],
         ttnn_input_tensor.shape[3],
     )
-    ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
     return torch_input_tensor, ttnn_input_tensor
 
 

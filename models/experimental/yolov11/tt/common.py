@@ -50,7 +50,7 @@ class Yolov11Conv2D:
             enable_act_double_buffer=False,
             enable_split_reader=False,
             enable_subblock_padding=False,
-            reshard_if_not_optimal=True if self.reshard else False,
+            reshard_if_not_optimal=True,  # if self.reshard else False,
             activation=self.activation,
         )
         if config_override and "act_block_h" in config_override:

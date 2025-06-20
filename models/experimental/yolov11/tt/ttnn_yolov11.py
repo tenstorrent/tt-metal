@@ -17,7 +17,7 @@ from models.experimental.yolov11.tt.ttnn_yolov11_c2psa import TtnnC2PSA
 from models.experimental.yolov11.tt.ttnn_yolov11_detect import TtnnDetect
 
 
-class TttnnYoloV11:
+class TtnnYoloV11:
     def __init__(self, device, parameters):
         self.device = device
         self.conv1 = TtnnConv(device, parameters.conv_args[0], parameters.model[0])
