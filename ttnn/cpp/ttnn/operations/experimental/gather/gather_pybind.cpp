@@ -20,17 +20,16 @@ void bind_gather_operation(py::module& module) {
         For all dimensions except the specified one (`dim`), the size of the index tensor must not exceed the size of the input tensor.
         The output tensor will have the same shape as the index tensor. Note that the input and index tensors do not broadcast against each other.
 
-        .. code-block:: python
-
-        Parameters:
-            * `input` (Tensor): The source tensor from which values are gathered.
-            * `dim` (int): The dimension along which values are gathered.
-            * `index` (Tensor): A tensor containing the indices of elements to gather, with the same number of dimensions as the input tensor.
+        Args:
+            input (ttnn.Tensor): The source tensor from which values are gathered.
+            dim (int): The dimension along which values are gathered.
+            index (ttnn.Tensor): A tensor containing the indices of elements to gather, with the same number of dimensions as the input tensor.
+                                The index tensor must be of type uint16 or uint32.
 
         Keyword Arguments:
-            * `sparse_grad` (bool, optional): If `True`, the gradient computation will be sparse. Defaults to `False`.
-            * `memory_config` (MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
-            * `out` (Tensor, optional): A preallocated tensor to store the gathered values. Defaults to `None`.
+            sparse_grad (bool, optional): If `True`, the gradient computation will be sparse. Defaults to `False`.
+            memory_config (ttnn.MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
+            out (ttnn.Tensor, optional): A preallocated tensor to store the gathered values. Defaults to `None`.
 
         Additional Information:
             * Currently, the `sparse_grad` argument is not supported.
