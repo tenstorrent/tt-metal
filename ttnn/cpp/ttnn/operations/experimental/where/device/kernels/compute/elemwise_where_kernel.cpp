@@ -48,6 +48,8 @@ void MAIN {
 
         tile_regs_commit();
         tile_regs_wait();
+
+        cb_reserve_back(cb_true_values_out, args.per_core_block_size);
         pack_tile(0, cb_true_values_out);
         tile_regs_release();
         cb_push_back(cb_true_values_out, args.per_core_block_size);
