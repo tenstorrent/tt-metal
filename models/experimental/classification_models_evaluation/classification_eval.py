@@ -128,6 +128,15 @@ def evaluation(
             for i in range(batch_size):
                 pred_id.append(predicted_id[i].item())
                 gt_id.append(labels[i])
+
+    if model_type == "tt_model":
+        if model_name == "mobilenetv2":
+            model.release_mobilenetv2_trace_2cqs_inference()
+        elif model_name == "resnet50":
+            model.release_resnet50_trace_2cqs_inference()
+        elif model_name == "vit":
+            model.release_vit_trace_2cqs_inference()
+
     # Evaluation : Here we use correct_predection/total items
     correct_prediction = 0
     correct_prediction = sum(1 for a, b in zip(gt_id, pred_id) if a == b)
