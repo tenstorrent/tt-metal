@@ -118,10 +118,6 @@ int main() {
         }
     };
 
-    // Since we are going to validate cache entries, we need to clear the cache
-    device->disable_and_clear_program_cache();
-    device->enable_program_cache();
-
     run_binary_ops();
     run_binary_ops();
 

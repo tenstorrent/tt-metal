@@ -595,15 +595,10 @@ def get_devices(request):
     return devices
 
 
+# Deprecated, cache is active by default
 @pytest.fixture(scope="function")
 def use_program_cache(request):
     devices = get_devices(request)
-    if not devices:
-        logger.warning("No device fixture found to apply program cache to: PROGRAM CACHE DISABLED")
-    for dev in devices:
-        # Clean up before reenabling program cache
-        dev.disable_and_clear_program_cache()
-        dev.enable_program_cache()
     yield
     for dev in devices:
         dev.disable_and_clear_program_cache()

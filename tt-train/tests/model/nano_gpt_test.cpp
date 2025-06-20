@@ -79,9 +79,6 @@ void train_test(bool use_moreh_adamw = false, bool memory_efficient = false) {
     }
 
     auto *device = &ttml::autograd::ctx().get_device();
-    // Since we are going to validate cache entries, we need to clear the cache
-    device->disable_and_clear_program_cache();
-    device->enable_program_cache();
 
     auto sequence_length = config.transformer_config.max_sequence_length;
 

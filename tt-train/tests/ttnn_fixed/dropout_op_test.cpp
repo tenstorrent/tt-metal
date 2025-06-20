@@ -30,9 +30,7 @@ TEST_F(DropoutTest, TestSeed) {
     float prob = 0.5F;
     xt::random::seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
-    // Since we are going to validate cache entries, we need to clear the cache
-    device->disable_and_clear_program_cache();
-    device->enable_program_cache();
+
     auto shapes = {std::vector<int>{64, 1, 256, 384}, std::vector<int>{1, 1, 32, 32}};
     for (auto& shape : shapes) {
         fmt::println("Testing shape: {}", shape);

@@ -80,9 +80,6 @@ def run_reduce_scatter_test(
     dtype=ttnn.bfloat8_b,
     profiler=BenchmarkProfiler(),
 ):
-    # Since we are going to validate cache entries, we need to clear the cache
-    mesh_device.disable_and_clear_program_cache()
-    mesh_device.enable_program_cache()
     num_pages_per_packet = 4
     cyclic_buffer_size = 8
 
