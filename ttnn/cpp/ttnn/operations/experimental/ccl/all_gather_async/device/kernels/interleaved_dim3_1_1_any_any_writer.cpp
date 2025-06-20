@@ -129,109 +129,109 @@ void kernel_main() {
                 cb_pop_front(cb_output_id, 1);
                 tiles_read++;
                 // Don't need to increment other page id counters since this is the last page
-                } else {
-                    // 2+ tiles remaining to read, pack 2 into a packet
-                    cb_wait_front(cb_output_id, 2);
-                    size_t l1_read_addr = get_read_ptr(cb_output_id);
+            } else {
+                // 2+ tiles remaining to read, pack 2 into a packet
+                cb_wait_front(cb_output_id, 2);
+                size_t l1_read_addr = get_read_ptr(cb_output_id);
 
-                    uint32_t tile_one_id = tile_id_start + row_offset + pages_read_in_row;
-                    pages_read_in_row++;
-                    if (pages_read_in_row >= input_tensor_Wt) {
-                        row_offset += output_tensor_Wt;
-                        pages_read_in_row = 0;
-                    }
-
-                    uint32_t tile_two_id = tile_id_start + row_offset + pages_read_in_row;
-                    pages_read_in_row++;
-                    if (pages_read_in_row >= input_tensor_Wt) {
-                        row_offset += output_tensor_Wt;
-                        pages_read_in_row = 0;
-                    }
-
-                    uint64_t noc0_dest_noc_addr_tile_one =
-                        get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                    uint64_t noc0_dest_noc_addr_tile_two =
-                        get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
-                    if (direction == 1) {
-                        noc_async_write_tile(tile_one_id, output_addrgen, l1_read_addr);
-                        noc_async_write_tile(tile_two_id, output_addrgen, l1_read_addr + output_page_size);
-                        if (num_targets_backward_direction) {
-                            scatter_write_and_advance_local_read_address_for_fabric_write_backward(
-                                noc0_dest_noc_addr_tile_one,
-                                noc0_dest_noc_addr_tile_two,
-                                pkt_hdr,
-                                fabric_connection,
-                                l1_read_addr,
-                                output_page_size,
-                                output_page_size);
-                        }
-                    } else {
-                        if (num_targets_forward_direction) {
-                            scatter_write_and_advance_local_read_address_for_fabric_write_forward(
-                                noc0_dest_noc_addr_tile_one,
-                                noc0_dest_noc_addr_tile_two,
-                                pkt_hdr,
-                                fabric_connection,
-                                l1_read_addr,
-                                output_page_size,
-                                output_page_size);
-                        }
-                    }
-
-                    cb_pop_front(cb_output_id, 2);
-                    tiles_read += 2;
+                uint32_t tile_one_id = tile_id_start + row_offset + pages_read_in_row;
+                pages_read_in_row++;
+                if (pages_read_in_row >= input_tensor_Wt) {
+                    row_offset += output_tensor_Wt;
+                    pages_read_in_row = 0;
                 }
+
+                uint32_t tile_two_id = tile_id_start + row_offset + pages_read_in_row;
+                pages_read_in_row++;
+                if (pages_read_in_row >= input_tensor_Wt) {
+                    row_offset += output_tensor_Wt;
+                    pages_read_in_row = 0;
+                }
+
+                uint64_t noc0_dest_noc_addr_tile_one =
+                    get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                uint64_t noc0_dest_noc_addr_tile_two =
+                    get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+
+                if (direction == 1) {
+                    noc_async_write_tile(tile_one_id, output_addrgen, l1_read_addr);
+                    noc_async_write_tile(tile_two_id, output_addrgen, l1_read_addr + output_page_size);
+                    if (num_targets_backward_direction) {
+                        scatter_write_and_advance_local_read_address_for_fabric_write_backward(
+                            noc0_dest_noc_addr_tile_one,
+                            noc0_dest_noc_addr_tile_two,
+                            pkt_hdr,
+                            fabric_connection,
+                            l1_read_addr,
+                            output_page_size,
+                            output_page_size);
+                    }
+                } else {
+                    if (num_targets_forward_direction) {
+                        scatter_write_and_advance_local_read_address_for_fabric_write_forward(
+                            noc0_dest_noc_addr_tile_one,
+                            noc0_dest_noc_addr_tile_two,
+                            pkt_hdr,
+                            fabric_connection,
+                            l1_read_addr,
+                            output_page_size,
+                            output_page_size);
+                    }
+                }
+
+                cb_pop_front(cb_output_id, 2);
+                tiles_read += 2;
             }
+        }
 
-            // TODO: (GR) Remove old implementation
-            // while (tiles_read < tiles_to_read) {
-            //     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-            //     cb_wait_front(cb_output_id, num_pages_to_read);
-            //     size_t l1_read_addr = get_read_ptr(cb_output_id);
+        // TODO: (GR) Remove old implementation
+        // while (tiles_read < tiles_to_read) {
+        //     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
+        //     cb_wait_front(cb_output_id, num_pages_to_read);
+        //     size_t l1_read_addr = get_read_ptr(cb_output_id);
 
-            //     for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-            //         uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
-            //         uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-            //         if (direction == 1) {
-            //             noc_async_write_tile(tile_id, output_addrgen, l1_read_addr);
-            //             if (num_targets_backward_direction) {
-            //                 write_and_advance_local_read_address_for_fabric_write_backward(
-            //                     noc0_dest_noc_addr,
-            //                     pkt_hdr,
-            //                     fabric_connection,
-            //                     l1_read_addr,
-            //                     output_page_size * contig_pages_advanced);
-            //             } else {
-            //                 l1_read_addr += output_page_size * contig_pages_advanced;
-            //             }
-            //         } else {
-            //             if (num_targets_forward_direction) {
-            //                 write_and_advance_local_read_address_for_fabric_write_forward(
-            //                     noc0_dest_noc_addr,
-            //                     pkt_hdr,
-            //                     fabric_connection,
-            //                     l1_read_addr,
-            //                     output_page_size * contig_pages_advanced);
-            //             } else {
-            //                 l1_read_addr += output_page_size * contig_pages_advanced;
-            //             }
-            //         }
-            //         pages_read_in_row += 1;
-            //         if (pages_read_in_row >= input_tensor_Wt) {
-            //             row_offset += output_tensor_Wt;
-            //             pages_read_in_row = 0;
-            //         }
-            //         tiles_read += contig_pages_advanced;
-            //     }
-            //     cb_pop_front(cb_output_id, num_pages_to_read);
-            // }
+        //     for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
+        //         uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
+        //         uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+        //         if (direction == 1) {
+        //             noc_async_write_tile(tile_id, output_addrgen, l1_read_addr);
+        //             if (num_targets_backward_direction) {
+        //                 write_and_advance_local_read_address_for_fabric_write_backward(
+        //                     noc0_dest_noc_addr,
+        //                     pkt_hdr,
+        //                     fabric_connection,
+        //                     l1_read_addr,
+        //                     output_page_size * contig_pages_advanced);
+        //             } else {
+        //                 l1_read_addr += output_page_size * contig_pages_advanced;
+        //             }
+        //         } else {
+        //             if (num_targets_forward_direction) {
+        //                 write_and_advance_local_read_address_for_fabric_write_forward(
+        //                     noc0_dest_noc_addr,
+        //                     pkt_hdr,
+        //                     fabric_connection,
+        //                     l1_read_addr,
+        //                     output_page_size * contig_pages_advanced);
+        //             } else {
+        //                 l1_read_addr += output_page_size * contig_pages_advanced;
+        //             }
+        //         }
+        //         pages_read_in_row += 1;
+        //         if (pages_read_in_row >= input_tensor_Wt) {
+        //             row_offset += output_tensor_Wt;
+        //             pages_read_in_row = 0;
+        //         }
+        //         tiles_read += contig_pages_advanced;
+        //     }
+        //     cb_pop_front(cb_output_id, num_pages_to_read);
+        // }
 
-            tile_id_start += output_tensor_Wt * output_tensor_Ht;
-            tiles_read = input_tile_id_start;
-            tiles_to_read = input_tile_id_end;
-            pages_read_in_row = input_tile_id_start % input_tensor_Wt;
-            row_offset = (input_tile_id_start / input_tensor_Wt) * output_tensor_Wt;
+        tile_id_start += output_tensor_Wt * output_tensor_Ht;
+        tiles_read = input_tile_id_start;
+        tiles_to_read = input_tile_id_end;
+        pages_read_in_row = input_tile_id_start % input_tensor_Wt;
+        row_offset = (input_tile_id_start / input_tensor_Wt) * output_tensor_Wt;
     }
 
     // 2. unicast output ready semaphore
