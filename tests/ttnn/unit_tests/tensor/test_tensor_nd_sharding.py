@@ -92,3 +92,72 @@ def test_tensor_nd_sharding_loopback(tensor_shape, shard_shape, layout, buffer_t
         assert_with_pcc(py_tensor, py_tensor_after_round_trip, 0.95)
     else:
         assert torch.allclose(py_tensor, py_tensor_after_round_trip)
+
+
+core_ranges = ttnn.num_cores_to_corerangeset(16, [4, 4], True)
+
+
+@pytest.mark.parametrize(
+    "shape, layout, dims, expected_shard_shape",
+    [
+        ((5, 3, 4 * 32, 4 * 32), ttnn.TILE_LAYOUT, [-1], [1, 1, 32, 4 * 32]),
+        ((5, 3, 4 * 32, 4 * 32), ttnn.TILE_LAYOUT, [-2], [1, 1, 4 * 32, 32]),
+        ((5, 3, 4 * 32, 4 * 32), ttnn.TILE_LAYOUT, [-1, -2], [1, 1, 4 * 32, 4 * 32]),
+        ((5, 3, 4 * 32, 4 * 32), ttnn.TILE_LAYOUT, [0], [5, 1, 32, 32]),
+        ((5, 3, 4 * 32, 4 * 32), ttnn.TILE_LAYOUT, [0, 1], [5, 3, 32, 32]),
+        ((1, 1, 1, 1), ttnn.ROW_MAJOR_LAYOUT, [0], [1, 1, 1, 4]),
+        ((5, 3, 8, 8), ttnn.ROW_MAJOR_LAYOUT, [-1], [1, 1, 1, 8]),
+        ((5, 3, 8, 8), ttnn.ROW_MAJOR_LAYOUT, [-2], [1, 1, 8, 4]),
+        ((5, 3, 8, 8), ttnn.ROW_MAJOR_LAYOUT, [-1, -2], [1, 1, 8, 8]),
+        ((5, 3, 8, 8), ttnn.ROW_MAJOR_LAYOUT, [0], [5, 1, 1, 4]),
+        ((5, 3, 8, 8), ttnn.ROW_MAJOR_LAYOUT, [0, 1], [5, 3, 1, 4]),
+    ],
+)
+def test_sharded_by_dims(shape, layout, dims, expected_shard_shape):
+    spec = ttnn.TensorSpec(shape, ttnn.float32, layout, buffer_type=ttnn.BufferType.L1).sharded_by_dims(
+        dims, core_ranges
+    )
+    assert spec.memory_config.nd_shard_spec.shard_shape == expected_shard_shape
+
+
+@pytest.mark.parametrize(
+    "shape, layout, dims, expected_shard_shape",
+    [
+        ((5, 3, 4 * 32, 4 * 32), ttnn.TILE_LAYOUT, [-1], [5, 3, 4 * 32, 32]),
+        ((5, 3, 4 * 32, 4 * 32), ttnn.TILE_LAYOUT, [-2], [5, 3, 32, 4 * 32]),
+        ((5, 3, 4 * 32, 4 * 32), ttnn.TILE_LAYOUT, [-1, -2], [5, 3, 32, 32]),
+        ((5, 3, 4 * 32, 4 * 32), ttnn.TILE_LAYOUT, [0], [1, 3, 4 * 32, 4 * 32]),
+        ((5, 3, 4 * 32, 4 * 32), ttnn.TILE_LAYOUT, [0, 1], [1, 1, 4 * 32, 4 * 32]),
+        ((1, 1, 1, 1), ttnn.ROW_MAJOR_LAYOUT, [0], [1, 1, 1, 4]),
+        ((5, 3, 8, 8), ttnn.ROW_MAJOR_LAYOUT, [-1], [5, 3, 8, 4]),
+        ((5, 3, 8, 8), ttnn.ROW_MAJOR_LAYOUT, [-2], [5, 3, 1, 8]),
+        ((5, 3, 8, 8), ttnn.ROW_MAJOR_LAYOUT, [-1, -2], [5, 3, 1, 4]),
+        ((5, 3, 8, 8), ttnn.ROW_MAJOR_LAYOUT, [0], [1, 3, 8, 8]),
+        ((5, 3, 8, 8), ttnn.ROW_MAJOR_LAYOUT, [0, 1], [1, 1, 8, 8]),
+    ],
+)
+def test_sharded_across_dims(shape, layout, dims, expected_shard_shape):
+    spec = ttnn.TensorSpec(shape, ttnn.float32, layout, buffer_type=ttnn.BufferType.L1).sharded_across_dims(
+        dims, core_ranges
+    )
+    assert spec.memory_config.nd_shard_spec.shard_shape == expected_shard_shape
+
+
+@pytest.mark.parametrize(
+    "shape, layout, expected_shard_shape",
+    [
+        ((4 * 32, 4 * 32), ttnn.TILE_LAYOUT, [32, 32]),
+        ((8 * 32, 4 * 32), ttnn.TILE_LAYOUT, [2 * 32, 32]),
+        ((4 * 32, 8 * 32), ttnn.TILE_LAYOUT, [32, 2 * 32]),
+        ((8 * 32, 8 * 32), ttnn.TILE_LAYOUT, [2 * 32, 2 * 32]),
+        ((500, 500), ttnn.TILE_LAYOUT, [4 * 32, 4 * 32]),
+        ((4, 5, 30, 500), ttnn.TILE_LAYOUT, [5 * 32, 4 * 32]),
+        ((1, 1), ttnn.ROW_MAJOR_LAYOUT, [1, 4]),
+        ((800, 1200), ttnn.ROW_MAJOR_LAYOUT, [200, 300]),
+        ((333, 555), ttnn.ROW_MAJOR_LAYOUT, [84, 140]),
+        ((2, 3, 333, 555), ttnn.ROW_MAJOR_LAYOUT, [500, 140]),
+    ],
+)
+def test_auto_block_sharded(shape, layout, expected_shard_shape):
+    spec = ttnn.TensorSpec(shape, ttnn.float32, layout, buffer_type=ttnn.BufferType.L1).block_sharded(core_ranges)
+    assert spec.memory_config.shard_spec.shape == expected_shard_shape

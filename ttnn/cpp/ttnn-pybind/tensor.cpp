@@ -251,11 +251,11 @@ void tensor_mem_config_module(py::module& m_tensor) {
             R"doc(
                 Shard tensor across 2D grid of cores using block sharding.
             )doc")
-        .def("shape", &TensorSpec::logical_shape, "Logical shape of a tensor")
-        .def("layout", &TensorSpec::layout, "Layout of a tensor")
-        .def("dtype", &TensorSpec::data_type, "Dtype of a tensor")
-        .def("tile", &TensorSpec::tile, "Tile of a tensor")
-        .def("memory_config", &TensorSpec::memory_config, "Memory config of a tensor");
+        .def_property_readonly("shape", &TensorSpec::logical_shape, "Logical shape of a tensor")
+        .def_property_readonly("layout", &TensorSpec::layout, "Layout of a tensor")
+        .def_property_readonly("dtype", &TensorSpec::data_type, "Dtype of a tensor")
+        .def_property_readonly("tile", &TensorSpec::tile, "Tile of a tensor")
+        .def_property_readonly("memory_config", &TensorSpec::memory_config, "Memory config of a tensor");
 
     auto pyMemoryConfig = static_cast<py::class_<MemoryConfig>>(m_tensor.attr("MemoryConfig"));
     pyMemoryConfig

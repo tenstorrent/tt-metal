@@ -307,12 +307,12 @@ def from_torch_with_spec(
 ) -> ttnn.Tensor:
     return from_torch(
         tensor,
-        dtype=tensor_spec.dtype(),
-        tile=tensor_spec.tile(),
+        dtype=tensor_spec.dtype,
+        tile=tensor_spec.tile,
         pad_value=pad_value,
-        layout=tensor_spec.layout(),
+        layout=tensor_spec.layout,
         device=device,
-        memory_config=tensor_spec.memory_config(),
+        memory_config=tensor_spec.memory_config,
         mesh_mapper=mesh_mapper,
         cq_id=cq_id,
     )

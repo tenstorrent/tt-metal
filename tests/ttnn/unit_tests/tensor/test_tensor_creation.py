@@ -334,8 +334,8 @@ core_ranges = ttnn.num_cores_to_corerangeset(56, grid_size, True)
     ],
 )
 def test_tensor_creation_with_tensor_spec(tensor_spec, device):
-    dtype = tt_dtype_to_torch_dtype[tensor_spec.dtype()]
-    shape = list(tensor_spec.shape())
+    dtype = tt_dtype_to_torch_dtype[tensor_spec.dtype]
+    shape = list(tensor_spec.shape)
     py_tensor = torch.rand(shape, dtype=dtype)
     tt_tensor = ttnn.from_torch_with_spec(py_tensor, tensor_spec, device=device)
     py_tensor_after_round_trip = ttnn.to_torch(tt_tensor)
