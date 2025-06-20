@@ -295,7 +295,7 @@ Tensor ScatterOperation::invoke(
             ? output_memory_config.value()
             : input_tensor.memory_config()};
 
-    Tensor output = ttnn::prim::scatter_(
+    Tensor output = ttnn::prim::scatter(
         transformed_input_tensor,
         dim,
         transformed_index_tensor,

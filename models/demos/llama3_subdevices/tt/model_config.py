@@ -903,7 +903,7 @@ class TtModelArgs:
 
                 return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(7, 7),
-                    in0_block_w=4,
+                    in0_block_w=2,  # seeing this to 2 because 4 gives oom for long seqlen continuous batching
                     out_subblock_h=1,
                     out_subblock_w=5,
                     out_block_h=out_block_h,

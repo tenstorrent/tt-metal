@@ -11,7 +11,7 @@
 #include <variant>
 #include <limits>
 
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 // For command dest type
 #include <tt-metalium/fabric_edm_packet_header.hpp>
 
