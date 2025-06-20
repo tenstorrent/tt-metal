@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.yolov10.tt.performant_runner_infra import YOLOv10PerformanceRunnerInfra
+from models.experimental.yolov10x.tests.performant_runner_infra import YOLOv10PerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -16,9 +16,11 @@ class YOLOv10PerformantRunner:
         weight_dtype=ttnn.bfloat16,
         model_location_generator=None,
         resolution=(640, 640),
+        torch_input_tensor=None,
     ):
         self.device = device
         self.resolution = resolution
+        self.torch_input_tensor = torch_input_tensor
         self.runner_infra = YOLOv10PerformanceRunnerInfra(
             device,
             device_batch_size,
@@ -26,6 +28,7 @@ class YOLOv10PerformantRunner:
             weight_dtype,
             model_location_generator,
             resolution=resolution,
+            torch_input_tensor=self.torch_input_tensor,
         )
 
         (

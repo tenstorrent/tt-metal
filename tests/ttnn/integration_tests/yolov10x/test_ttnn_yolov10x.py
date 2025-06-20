@@ -7,19 +7,19 @@ import torch
 import pytest
 from ultralytics import YOLO
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.yolov10.reference.yolov10 import YOLOv10
-from models.experimental.yolov10.tt.bottleneck import TtnnBottleNeck
-from models.experimental.yolov10.tt.scdown import TtnnSCDown
-from models.experimental.yolov10.tt.sppf import TtnnSPPF
-from models.experimental.yolov10.tt.cib import TtnnCIB
-from models.experimental.yolov10.tt.psa import TtnnPSA
-from models.experimental.yolov10.tt.c2f import TtnnC2f
-from models.experimental.yolov10.tt.attention import TtnnAttention
-from models.experimental.yolov10.tt.c2fcib import TtnnC2fCIB
-from models.experimental.yolov10.tt.v10detect import TtnnV10Detect
-from models.experimental.yolov10.tt.yolov10 import TtnnYolov10
+from models.experimental.yolov10x.reference.yolov10x import YOLOv10
+from models.experimental.yolov10x.tt.bottleneck import TtnnBottleNeck
+from models.experimental.yolov10x.tt.scdown import TtnnSCDown
+from models.experimental.yolov10x.tt.sppf import TtnnSPPF
+from models.experimental.yolov10x.tt.cib import TtnnCIB
+from models.experimental.yolov10x.tt.psa import TtnnPSA
+from models.experimental.yolov10x.tt.c2f import TtnnC2f
+from models.experimental.yolov10x.tt.attention import TtnnAttention
+from models.experimental.yolov10x.tt.c2fcib import TtnnC2fCIB
+from models.experimental.yolov10x.tt.v10detect import TtnnV10Detect
+from models.experimental.yolov10x.tt.yolov10x import TtnnYolov10
 
-from models.experimental.yolov10.tt.model_preprocessing import (
+from models.experimental.yolov10x.tt.model_preprocessing import (
     create_yolov10x_input_tensors,
     create_yolov10x_model_parameters,
     create_yolov10_model_parameters_detect,
