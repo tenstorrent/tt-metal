@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Note: The sender kernels in One To All write the same transaction_size_bytes amount of data to the same location
+// num_of_transactions times
+
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -102,6 +105,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
         log_error(tt::LogTest, "Insufficient L1 size for the test configuration");
         return false;
     }
+
     // Checks that both master and all subordinate cores have the same L1 base address and size
     for (auto& sub_logical_core : sub_core_list) {
         L1AddressInfo sub_l1_info = tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, sub_logical_core);
@@ -110,6 +114,7 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
             return false;
         }
     }
+
     // Assigns an L1 local address for the master and subordinate cores
     // An offset if needed for the subordinate L1 base address if loopback is enabled,
     // as both blocks must be distinct in that case to avoid overwriting data
@@ -120,7 +125,6 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     // Initialize Kernels
 
     // Sender Kernel
-
     vector<uint32_t> sender_compile_args = {// 0 - 7
                                             (uint32_t)mst_l1_base_address,
                                             (uint32_t)sub_l1_base_address,
@@ -144,7 +148,6 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     } else {  // Unicast Sender Kernel
         sender_kernel_path += "sender.cpp";
     }
-
     auto sender_kernel = CreateKernel(
         program,
         sender_kernel_path,
@@ -155,7 +158,6 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
             .compile_args = sender_compile_args});
 
     // Runtime Arguments
-
     std::vector<uint32_t> sender_runtime_args = {};
     sender_runtime_args.insert(sender_runtime_args.end(), sub_worker_coordinates.begin(), sub_worker_coordinates.end());
 
@@ -202,7 +204,6 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
             return false;
         }
     }
-
     return true;
 }
 
