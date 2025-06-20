@@ -60,8 +60,6 @@ Create several tensors for our tests and fill with different values. We will use
 
    print("\n--- TT-NN Tensor Creation with Tiles (32x32) ---")
    host_t1 = create_host_tensor(1)
-   host_t2 = torch.zeros((32, 32), dtype=torch.float32)
-   host_t3 = torch.ones((32, 32), dtype=torch.float32)
    host_t4 = torch.rand((32, 32), dtype=torch.float32)
    host_np_array = np.array([[5, 6], [7, 8]]).repeat(16, axis=0).repeat(16, axis=1)
    host_t5 = create_host_tensor(host_np_array)
@@ -70,12 +68,25 @@ Convert Host Tensors to TT-NN Tiled Tensors
 -------------------------------------------
 
 Tensix cores operate most efficiently on tiled data, allowing them to perform a large amount of compute in parallel.
+Create natively using TT-NN where possible.
 
 .. code-block:: python
 
    tt_t1 = to_tt_tile(host_t1)
-   tt_t2 = to_tt_tile(host_t2)
-   tt_t3 = to_tt_tile(host_t3)
+
+   tt_t2 = ttnn.zeros(
+      shape=(32, 32),
+      dtype=ttnn.bfloat16,
+      layout=ttnn.TILE_LAYOUT,
+      device=device,
+   )
+   tt_t3 = ttnn.ones(
+      shape=(32, 32),
+      dtype=ttnn.bfloat16,
+      layout=ttnn.TILE_LAYOUT,
+      device=device,
+   )
+
    tt_t4 = to_tt_tile(host_t4)
    tt_t5 = to_tt_tile(host_t5)
 
