@@ -82,7 +82,7 @@ jobs:
             pytest models/demos/squeezebert/tests -m models_device_performance_bare_metal
             pytest models/demos/roberta/tests/ -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/resnet50/tests -m models_device_performance_bare_metal
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/sentence_bert/tests -m models_device_performance_bare_metal
+            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/sentence_bert/tests -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_unet/tests/test_unet_perf.py -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/mamba/tests -m models_device_performance_bare_metal
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/metal_BERT_large_11/tests -m models_device_performance_bare_metal

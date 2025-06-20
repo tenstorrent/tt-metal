@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.sentence_bert.ttnn.common import ff2_program_config, layernorm_program_config
+from models.demos.sentence_bert.ttnn.common import layernorm_program_config, self_out_program_config
 
 
-class TtnnSentenceBertOutput:
+class TtnnSentenceBertSelfOutput:
     def __init__(self, parameters, config):
         self.parameters = parameters
         self.config = config
@@ -14,17 +14,17 @@ class TtnnSentenceBertOutput:
         self.LayerNorm = ttnn.layer_norm
 
     def __call__(self, hidden_states: ttnn.Tensor, input_tensor: ttnn.Tensor):
-        bert_output_lin = self.dense(
+        output = self.dense(
             hidden_states,
             self.parameters.dense.weight,
             bias=self.parameters.dense.bias,
             memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-            program_config=ff2_program_config,
+            program_config=self_out_program_config,
             dtype=ttnn.bfloat8_b,
         )
-        bert_output_lin = ttnn.reshard(bert_output_lin, input_tensor.memory_config())
-        bert_output_lin = self.LayerNorm(
-            bert_output_lin,
+        input_tensor = ttnn.reshard(input_tensor, output.memory_config())
+        output = self.LayerNorm(
+            output,
             residual_input_tensor=input_tensor,
             weight=self.parameters.LayerNorm.weight,
             bias=self.parameters.LayerNorm.bias,
@@ -33,4 +33,4 @@ class TtnnSentenceBertOutput:
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
             program_config=layernorm_program_config,
         )
-        return bert_output_lin
+        return output

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.sentence_bert.ttnn.common import layernorm_program_config
+from models.demos.sentence_bert.ttnn.common import layernorm_program_config
 
 
 class TtnnSentenceBertEmbeddings:
@@ -29,15 +29,26 @@ class TtnnSentenceBertEmbeddings:
             padding_idx=self.config.pad_token_id,
         )
 
+        if token_type_ids.is_sharded():
+            token_type_ids_interleaved = ttnn.sharded_to_interleaved(token_type_ids, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(token_type_ids)
+        else:
+            token_type_ids_interleaved = token_type_ids
+
         token_type_embeddings = self.token_type_embeddings(
-            token_type_ids,
+            token_type_ids_interleaved,
             self.parameters.token_type_embeddings.weight,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        if position_ids.is_sharded():
+            position_ids_interleaved = ttnn.sharded_to_interleaved(position_ids, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(position_ids)
+        else:
+            position_ids_interleaved = position_ids
 
         position_embeddings = self.position_embeddings(
-            position_ids,
+            position_ids_interleaved,
             self.parameters.position_embeddings.weight,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.L1_MEMORY_CONFIG,
