@@ -76,7 +76,7 @@ bool reader_kernel_no_send(
     auto input_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_byte_address = input_dram_buffer->address();
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_reader_core);
-    log_debug(
+    log_info(
         tt::LogTest,
         "Device {}: reading {} bytes from dram bank 0 addr {} to ethernet core {} addr {}",
         device->id(),
@@ -142,7 +142,7 @@ bool writer_kernel_no_receive(
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_byte_address = output_dram_buffer->address();
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_writer_core);
-    log_debug(
+    log_info(
         tt::LogTest,
         "Device {}: writing {} bytes from ethernet core {} addr {} to dram bank 0 addr {}",
         device->id(),
@@ -208,7 +208,7 @@ bool noc_reader_and_writer_kernels(
     auto reader_dram_buffer = CreateBuffer(dram_config);
     auto writer_dram_buffer = CreateBuffer(dram_config);
 
-    log_debug(
+    log_info(
         tt::LogTest,
         "Device {}: reading {} bytes from dram bank 0 addr {} to ethernet core {} addr {}",
         device->id(),
@@ -216,7 +216,7 @@ bool noc_reader_and_writer_kernels(
         reader_dram_buffer->address(),
         logical_eth_core.str(),
         eth_dst_l1_address);
-    log_debug(
+    log_info(
         tt::LogTest,
         "Device {}: writing {} bytes from ethernet core {} addr {} to dram bank 0 addr {}",
         device->id(),
@@ -297,10 +297,13 @@ void RunBlackholeBasicEthKernelTest(tt::tt_metal::DispatchFixture* fixture, tt::
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t eth_l1_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(core_type, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
 
+    auto eth_mode = core_type == tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH ? tt::tt_metal::Eth::SENDER
+                                                                                   : tt::tt_metal::Eth::IDLE;
+
     tt_metal::EthernetConfig noc0_ethernet_config{
-        .eth_mode = tt::tt_metal::Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = processor_1};
+        .eth_mode = eth_mode, .noc = tt_metal::NOC::NOC_0, .processor = processor_1};
     tt_metal::EthernetConfig noc1_ethernet_config{
-        .eth_mode = tt::tt_metal::Eth::IDLE, .noc = tt_metal::NOC::NOC_1, .processor = processor_2};
+        .eth_mode = eth_mode, .noc = tt_metal::NOC::NOC_1, .processor = processor_2};
 
     const auto cores =
         core_type == tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH ? device->get_active_ethernet_cores(true) : device->get_inactive_ethernet_cores();
