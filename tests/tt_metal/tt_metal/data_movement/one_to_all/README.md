@@ -3,7 +3,7 @@
 This test suite implements tests that measure the functionality and performance (i.e. bandwidth) of data movement transactions between Tensix cores.
 
 ## Test Flow
-Sharded L1 buffers are created on all Tensix cores: one sender and multiple receiver cores getting the same data. Data is written into the L1 buffer on the sender core. The sender kernel issues NOC transactions to transfer this data into the L1 buffer on the receiver core. Once data is transferred, the sender kernel signals to the receiver kernel that it is done by incrementing a semaphore. Receiver kernel waits on/polls this semaphore and completes its execution when it is incremented.
+Data is written directly into the L1 memory on the sender Tensix core. The sender kernel issues NOC transactions to transfer this data into the L1 memory of each receiver core in a grid. Once data is transferred, the sender kernel signals to the receiver kernel that it is done by incrementing a semaphore. Receiver kernel waits on/polls this semaphore and completes its execution when it is incremented.
 
 Test attributes such as transaction sizes and number of transactions as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through a pcc check.
 
@@ -39,4 +39,4 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 7. One to All Multicast Linked 2x2 Packet Sizes: Tests one to all linked multicast on a 2x2 grid.
 8. One to All Multicast Linked 5x5 Packet Sizes: Tests one to all linked multicast on a 5x5 grid.
 9. One to All Multicast Linked 11x10 Packet Sizes: Tests one to all linked multicast on a 11x10 grid.
-10. One to All Directed Ideal: Tests the most optimal one to all linked multicast data movement setup. A high number of transactions is performed to amortize initialization overhead.
+10. One to All Directed Ideal: Tests the most optimal one to all linked multicast data movement setup. Large transaction size and high number of transactions amortizes initialization overhead and maximizes bandwidth utilization.
