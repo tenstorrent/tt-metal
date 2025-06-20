@@ -174,7 +174,7 @@ class TT_CCL:
             torch.zeros((1, 1, 32, 256)),  # TODO: fix for k > 32, see issue #22925
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
