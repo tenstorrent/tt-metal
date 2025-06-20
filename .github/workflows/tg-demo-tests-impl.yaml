@@ -20,18 +20,48 @@ on:
         required: false
         type: string
         default: "config-tg"
+      model_name:
+        required: false
+        type: string
+        default: "all"
 
 jobs:
+  # 🧠 This job dynamically filters the test matrix based on the selected model_name input.
+  # If 'all' is selected, it returns the full test matrix.
+  # Otherwise, it filters the matrix to include only the selected model.
+  # This ensures only relevant jobs are created in tg-demo-tests, avoiding unnecessary runs.
+  filter-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          MODEL_NAME="${{ inputs.model_name }}"
+          if [[ "$MODEL_NAME" == "all" ]]; then
+            MATRIX='[
+              {"name": "Galaxy Llama3 demo tests", "arch": "wormhole_b0", "model": "llama3_70b", "timeout": 30, "owner_id": "U053W15B6JF"},
+              {"name": "Galaxy Llama3 8B data-parallel demo tests", "arch": "wormhole_b0", "model": "llama3_8b_dp", "timeout": 30, "owner_id": "U08BH66EXAL"},
+              {"name": "Galaxy Llama3 70B data-parallel demo tests", "arch": "wormhole_b0", "model": "llama3_70b_dp", "timeout": 30, "owner_id": "U08BH66EXAL"},
+              {"name": "Galaxy Falcon7b demo tests", "arch": "wormhole_b0", "model": "falcon7b", "timeout": 30, "owner_id": "U05RWH3QUPM"}
+            ]'
+          else
+            MATRIX=$(jq -n --arg m "$MODEL_NAME" '
+              [
+                {"name": "Galaxy Llama3 demo tests", "arch": "wormhole_b0", "model": "llama3_70b", "timeout": 30, "owner_id": "U053W15B6JF"},
+                {"name": "Galaxy Llama3 8B data-parallel demo tests", "arch": "wormhole_b0", "model": "llama3_8b_dp", "timeout": 30, "owner_id": "U08BH66EXAL"},
+                {"name": "Galaxy Llama3 70B data-parallel demo tests", "arch": "wormhole_b0", "model": "llama3_70b_dp", "timeout": 30, "owner_id": "U08BH66EXAL"},
+                {"name": "Galaxy Falcon7b demo tests", "arch": "wormhole_b0", "model": "falcon7b", "timeout": 30, "owner_id": "U05RWH3QUPM"}
+              ] | map(select(.model == $m))
+            ')
+          fi
+          echo "matrix=$(echo "$MATRIX" | jq -c .)" >> $GITHUB_OUTPUT
   tg-demo-tests:
+    needs: filter-tests
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { name: "Galaxy Llama3 demo tests", arch: wormhole_b0, model: llama3, timeout: 30, owner_id: U053W15B6JF}, # Djordje Ivanovic
-          { name: "Galaxy Llama3 8B data-parallel demo tests", arch: wormhole_b0, model: llama3_8b_dp, timeout: 30, owner_id: U08BH66EXAL}, # Radoica Draskic
-          { name: "Galaxy Llama3 70B data-parallel demo tests", arch: wormhole_b0, model: llama3_70b_dp, timeout: 30, owner_id: U08BH66EXAL}, # Radoica Draskic
-          { name: "Galaxy Falcon7b demo tests", arch: wormhole_b0, model: falcon7b, timeout: 30, owner_id: U05RWH3QUPM}, # Salar Hosseini
-        ]
+        test-group: ${{ fromJson(needs.filter-tests.outputs.matrix) }}
     runs-on:
       - arch-wormhole_b0
       - ${{ inputs.topology }}
