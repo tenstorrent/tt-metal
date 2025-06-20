@@ -78,6 +78,7 @@ public:
 private:
     friend class tt::stl::Indestructible<MetalContext>;
     MetalContext();
+    // Note: The destructor won't be called ever.
     ~MetalContext();
     void teardown();
 
