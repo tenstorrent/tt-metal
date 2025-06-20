@@ -13,11 +13,11 @@ from loguru import logger
 from ultralytics import YOLO
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import disable_persistent_kernel_cache
-from models.experimental.yolov8s.tt.tt_yolov8s_utils import (
+from models.demos.yolov8s.tt.tt_yolov8s_utils import (
     ttnn_decode_bboxes,
     custom_preprocessor,
 )
-from models.experimental.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel, TtConv, TtC2f, TtSppf, TtDFL
+from models.demos.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel, TtConv, TtC2f, TtSppf, TtDFL
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True, ids=["0"])

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.yolov8s.tests.yolov8s_test_infra import create_test_infra
+from models.demos.yolov8s.tests.yolov8s_test_infra import create_test_infra
 
 try:
     pass
@@ -82,6 +82,10 @@ class Yolov8sTrace2CQ:
         outputs = ttnn.from_device(self.test_infra.output_tensor, blocking=True)
 
         return outputs
+
+    def run(self, torch_input_tensor):
+        self.tt_inputs_host, _ = self.test_infra.setup_l1_sharded_input(self.device, torch_input_tensor)
+        return self.execute_yolov8s_trace_2cqs_inference(self.tt_inputs_host)
 
     def release_yolov8s_trace_2cqs_inference(self):
         ttnn.release_trace(self.device, self.tid)
