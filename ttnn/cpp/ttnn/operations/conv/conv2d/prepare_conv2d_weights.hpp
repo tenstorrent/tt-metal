@@ -51,14 +51,12 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
 Tensor convert_conv_weight_tensor_to_depthwise_layout(
     const Tensor& conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
 
-template <typename T>
 ttnn::Tensor conv_bias_layout_convert(
     const ttnn::Tensor& bias_tensor,
     DataType bias_dtype,
     uint32_t weight_block_h_ntiles,
     uint32_t weight_block_w_ntiles,
     const sliding_window::ParallelConfig& parallel_config,
-    T* device,
     uint32_t out_channels,
     bool is_non_tile_mul_width);
 

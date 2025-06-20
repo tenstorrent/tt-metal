@@ -43,7 +43,7 @@ inline Tensor to_layout(const Tensor& input, Layout layout) {
         return input;
     }
 
-    return ttnn::to_layout(input, layout, std::nullopt, std::nullopt, (IDevice*)nullptr);
+    return ttnn::to_layout(input, layout);
 }
 
 inline float to_layout(float input, [[maybe_unused]] Layout layout) { return input; }

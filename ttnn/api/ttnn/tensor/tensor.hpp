@@ -153,9 +153,7 @@ public:
         const MemoryConfig& mem_config = MemoryConfig{},
         ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
-    [[nodiscard]] Tensor to_layout(Layout target_layout, IDevice* worker = nullptr) const;
-
-    [[nodiscard]] Tensor to_layout(Layout target_layout, distributed::MeshDevice* mesh_device) const;
+    [[nodiscard]] Tensor to_layout(Layout target_layout) const;
 
     [[nodiscard]] Tensor pad(
         const ttnn::Shape& output_padded_shape, const ttnn::Shape& input_tensor_start, float pad_value) const;

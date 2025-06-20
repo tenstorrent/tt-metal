@@ -44,7 +44,7 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     bool rm_only = !no_step && input_tensor.layout() == Layout::TILE;
     ttnn::Tensor input = input_tensor;
     if (rm_only) {
-        input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (IDevice*)nullptr);
+        input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
     }
     TT_FATAL(
         (!input_tensor.is_sharded()) ||
