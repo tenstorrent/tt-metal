@@ -215,8 +215,8 @@ def ShardTensor2dMesh(mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims
         mesh_device,
         ttnn.MeshMapperConfig(
             [
-                ttnn.PlacementShard(dims[0]) if dims[0] else ttnn.PlacementReplicate(),
-                ttnn.PlacementShard(dims[1]) if dims[1] else ttnn.PlacementReplicate(),
+                ttnn.PlacementReplicate() if dims[0] is None else ttnn.PlacementShard(dims[0]),
+                ttnn.PlacementReplicate() if dims[1] is None else ttnn.PlacementShard(dims[1]),
             ],
             ttnn.MeshShape(mesh_shape[0], mesh_shape[1]),
         ),
