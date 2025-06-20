@@ -610,7 +610,6 @@ def test_demo_text(
         # Replace the prefill token with reference token if PCC check enabled
         out_tok = prefilled_token if not pcc_check else ref_tokens[max_encoded_prompt_len]
 
-        breakpoint()
         if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
             out_tok = out_tok.repeat(32, 1)
 
