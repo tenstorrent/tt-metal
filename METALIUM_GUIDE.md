@@ -166,7 +166,7 @@ This approach reduces the need for aggressive operator fusion that CPUs and GPUs
 
 The physical placement of DRAM controllers on the chip can be exploited to optimize memory access patterns. By default, memory operations use "interleaved" mode, which distributes data across all available DRAM controllers. This provides the most balanced performance characteristics and works well for general-purpose workloads.
 
-For specific operations, data can instead be stored in "sharded" mode, where tensors are distributed across multiple Tensix cores based on the physical topology of the chip. This approach reduces the physical distance data must travel and minimizes cross-chip communication overhead. Sharded memory placement is particularly beneficial for attention mechanisms and convolution operations where the computation pattern aligns well with the data distribution strategy.
+For specific operations, data can instead be stored in "sharded" mode (see the [Tensor and Memory Layout report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md) for details), where tensors are distributed across multiple Tensix cores based on the physical topology of the chip. This approach reduces the physical distance data must travel and minimizes cross-chip communication overhead. Sharded memory placement is particularly beneficial for attention mechanisms and convolution operations where the computation pattern aligns well with the data distribution strategy.
 
 <img width="900" alt="image" src="docs/source/common/images/tenstorrent-wormhole-sharded-noc-access.webp">
 
@@ -183,7 +183,7 @@ The 32×32 tile size allows hardware to process data efficiently within a few cl
 
 <img width="900" alt="image" src="docs/source/common/images/matmul-blocked-row-column-diagram.webp">
 
-GPUs face significant challenges efficiently feeding data to their tensor cores due to their vector-first architecture, which creates inherent limitations in memory access patterns for tensor operations. Tenstorrent hardware is designed specifically for tile-based computation from the ground up - both vector and matrix units are natively optimized for 32×32 tile operations, resulting in more predictable performance and simpler programming models.
+GPUs often struggle to efficiently supply data to their tensor cores because their architectures are primarily designed around vector operations. This can lead to less optimal memory access patterns for tensor workloads. In contrast, Tenstorrent hardware is built for tile-based computation from the start—both the vector and matrix units operate natively on 32×32 tiles. This approach leads to more predictable performance and a simpler programming model. For detailed performance numbers, see the [Matrix Multiplcation performance report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/GEMM_FLOPS/GEMM_FLOPS.md) as well as the [Convolution Networks on Tenstorrent Chips](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md) report.
 
 ### Where is the cache hierarchy
 
@@ -229,6 +229,8 @@ While 8 chips provides substantial computational capacity, larger configurations
 Multiple 32-chip boxes can be connected together to form a mesh spanning several hosts. These meshes can then be linked, with traffic routed between them using the tt-Fabric firmware. This approach allows scaling to data center configurations while keeping the same programming model, API, and development concerns as a single machine.
 
 <img width="900" alt="image" src="docs/source/common/images/tenstorrent-fabric-scale-out-machine.webp">
+
+Please refer to the [tt-Fabric technical report](tech_reports/TT-Fabric/TT-Fabric-Architecture.md) for more details on the interconnect architecture and how it enables efficient scaling across multiple chips and hosts. And [Basic Ethernet Multichip](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/EthernetMultichip/BasicEthernetGuide.md) for a guide on Ethernet performance on Wormhole processors.
 
 ## tt-Metalium
 
