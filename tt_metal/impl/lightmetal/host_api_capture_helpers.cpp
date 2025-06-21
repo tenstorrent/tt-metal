@@ -123,7 +123,7 @@ void CaptureBufferCreate(
     auto address_offset = address.has_value() ? flatbuffer::CreateUint32Optional(fbb, address.value()) : 0;
     auto bottom_up_offset = bottom_up.has_value() ? flatbuffer::CreateBoolOptional(fbb, bottom_up.value()) : 0;
     auto sub_device_id_offset = sub_device_id.has_value() ? flatbuffer::CreateUint8Optional(fbb, **sub_device_id) : 0;
-    auto shard_parameters_offset = to_flatbuffer(sharding_args.shard_parameters_, fbb);
+    auto shard_parameters_offset = to_flatbuffer(sharding_args.shard_spec_, fbb);
 
     auto cmd = tt::tt_metal::flatbuffer::CreateBufferCreateCommand(
         fbb,

@@ -49,7 +49,7 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
 
     auto device = input_buffer->device();
     auto full_grid = device->compute_with_storage_grid_size();
-    CoreCoord end_core = (*output_buffer->shard_spec().grid().ranges().rbegin()).end_coord;
+    CoreCoord end_core = (*output_buffer->shard_spec()->grid().ranges().rbegin()).end_coord;
     uint32_t output_core_id = 0;
     for (auto output_core : output_cores) {
         ret_map.try_emplace(output_core, std::vector<PageStride>{});

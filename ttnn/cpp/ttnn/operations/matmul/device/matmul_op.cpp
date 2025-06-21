@@ -195,7 +195,7 @@ inline uint32_t get_estimated_size_of_cbs(
     uint32_t in2_block_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
     if (input_tensor_a.is_sharded()) {
-        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
+        in0_shard_width_in_tiles = in0_buffer->shard_spec()->shape()[1] / in0_tile.get_tile_shape()[1];
     }
     in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
 

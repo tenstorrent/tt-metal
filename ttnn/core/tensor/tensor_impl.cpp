@@ -1503,7 +1503,7 @@ Tensor unpad<bfloat4_b>(
 template <typename T>
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
     auto buffer = tensor.buffer();
-    auto buffer_shard_shape = buffer->shard_spec().shape();
+    auto buffer_shard_shape = buffer->shard_spec()->shape();
     ttnn::Shape shard_shape({1, 1, buffer_shard_shape[0], buffer_shard_shape[1]});
     std::vector<T> device_data;
     ::detail::ReadShard(*buffer, device_data, core_id);

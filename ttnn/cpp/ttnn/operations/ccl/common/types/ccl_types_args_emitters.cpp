@@ -170,7 +170,7 @@ std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(IDevice const* d, T
 std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_ct_args(Tensor const& t) {
     std::vector<uint32_t> args;
     TT_ASSERT(t.is_sharded());
-    auto const& [pages_per_shard_y, pages_per_shard_x] = t.buffer()->shard_spec().shape_in_pages();
+    const auto& [pages_per_shard_y, pages_per_shard_x] = t.buffer()->shard_spec()->shape_in_pages();
     auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(t.shard_spec().value());
     bool shard_grid_transposed = shard_grid_is_transposed(t);
     TT_FATAL(
@@ -220,7 +220,7 @@ bool ShardedAddrGenArgBuilder::shard_grid_is_transposed(Tensor const& t) {
 }
 
 void ShardedAddrGenArgBuilder::log_sharded_tensor_kernel_args(Tensor const& t, std::string const& prefix) {
-    auto const& [pages_per_shard_y, pages_per_shard_x] = t.buffer()->shard_spec().shape_in_pages();
+    const auto& [pages_per_shard_y, pages_per_shard_x] = t.buffer()->shard_spec()->shape_in_pages();
     auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(t.shard_spec().value());
     bool shard_grid_transposed = shard_grid_is_transposed(t);
 

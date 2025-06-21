@@ -143,8 +143,8 @@ process_mcast_in0_program_and_create_override_variables(
     uint32_t in0_shard_width_in_tiles = 0;
     uint32_t in0_shard_height_in_tiles = 0;
     if (in0_is_sharded) {
-        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
-        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_tile_shape()[0];
+        in0_shard_width_in_tiles = in0_buffer->shard_spec()->shape()[1] / in0_tile.get_tile_shape()[1];
+        in0_shard_height_in_tiles = in0_buffer->shard_spec()->shape()[0] / in0_tile.get_tile_shape()[0];
         in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
     }
     uint32_t in2_CB_tiles = in2_block_tiles;
@@ -156,7 +156,7 @@ process_mcast_in0_program_and_create_override_variables(
         in1_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
     }
     if (in1_is_sharded) {
-        uint32_t in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_tile_shape()[0];
+        uint32_t in1_shard_height_in_tiles = in1_buffer->shard_spec()->shape()[0] / in1_tile.get_tile_shape()[0];
         in1_CB_tiles = per_core_N * in1_shard_height_in_tiles;
     }
 
@@ -989,8 +989,8 @@ process_mcast_in1_program_and_create_override_variables(
     uint32_t in0_shard_height_in_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
     if (in0_is_sharded) {
-        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_tile_shape()[0];
-        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
+        in0_shard_height_in_tiles = in0_buffer->shard_spec()->shape()[0] / in0_tile.get_tile_shape()[0];
+        in0_shard_width_in_tiles = in0_buffer->shard_spec()->shape()[1] / in0_tile.get_tile_shape()[1];
         // NOTE: Criteria for extract_shard_sub_blocks is different from mcast in0
         // In the reader kernel, always need to copy to cb0 even for height=1 shards since we may not always do mcast
         // In mcast in0 sharded reader kernel, this is handled by mcast with loopback src
@@ -1672,7 +1672,7 @@ process_gather_in0_program_and_create_override_variables(
     bool use_hop_cores = num_hop_cores > 0;
 
     /* Inner dim padding */
-    const uint32_t Kt_pad = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1] * num_cores;
+    const uint32_t Kt_pad = in0_buffer->shard_spec()->shape()[1] / in0_tile.get_tile_shape()[1] * num_cores;
     in0_block_w = Kt_pad / num_cores;
 
     uint32_t num_blocks = Kt_pad / in0_block_w;
@@ -1693,7 +1693,7 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     /* in0 */
-    uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
+    uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec()->shape()[1] / in0_tile.get_tile_shape()[1];
     uint32_t in0_CB_tiles = per_core_M * in0_shard_width_in_tiles;
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
@@ -1706,9 +1706,9 @@ process_gather_in0_program_and_create_override_variables(
     if (in1_is_dram_sharded || in1_is_dram_interleaved) {
         in1_CB_tiles = 2 * in0_shard_width_in_tiles * per_core_N;  // Double buffered
     } else {
-        in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_tile_shape()[0];
+        in1_shard_height_in_tiles = in1_buffer->shard_spec()->shape()[0] / in1_tile.get_tile_shape()[0];
         in1_shard_width_in_tiles =
-            in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1] / num_global_cb_receivers;
+            in1_buffer->shard_spec()->shape()[1] / in1_tile.get_tile_shape()[1] / num_global_cb_receivers;
         in1_CB_tiles = in1_shard_height_in_tiles * in1_shard_width_in_tiles;
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
@@ -1722,7 +1722,7 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t in1_block_width_num_pages = (per_core_N_size_bytes + in1_block_page_size - 1) / in1_block_page_size;
     uint32_t in1_shard_width_in_dram = 0;
     if (in1_is_dram_sharded) {
-        in1_shard_width_in_dram = in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1];
+        in1_shard_width_in_dram = in1_buffer->shard_spec()->shape()[1] / in1_tile.get_tile_shape()[1];
     }
 
     /* in2 */

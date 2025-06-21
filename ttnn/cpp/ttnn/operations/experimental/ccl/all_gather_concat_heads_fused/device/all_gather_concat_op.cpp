@@ -18,7 +18,7 @@ void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& layout = input_tensors[0].layout();
     const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
-    const auto input_core_ranges = input_tensor.buffer()->shard_spec().grid().ranges();
+    const auto input_core_ranges = input_tensor.buffer()->shard_spec()->grid().ranges();
     const auto padded_input_shape = input_tensor.padded_shape();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
 

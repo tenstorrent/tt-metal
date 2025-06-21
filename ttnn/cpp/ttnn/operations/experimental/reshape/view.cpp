@@ -66,7 +66,7 @@ Tensor tensor_reshape(
                         return Tensor(std::move(device_storage), new_spec, tensor.distributed_tensor_config());
                     } else {
                         auto device_buffer = device_storage.get_buffer();
-                        tt::tt_metal::ShardSpecBuffer shard_spec_buffer = device_buffer->shard_spec();
+                        tt::tt_metal::ShardSpecBuffer shard_spec_buffer = *device_buffer->shard_spec();
 
                         auto shard_spec = shard_spec_buffer.tensor_shard_spec;
                         auto shard_shape = shard_spec.shape;
