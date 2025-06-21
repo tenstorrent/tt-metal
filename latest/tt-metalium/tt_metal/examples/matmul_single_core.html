@@ -74,7 +74,7 @@
 <li class="toctree-l4"><a class="reference internal" href="#the-writer-kernel">The writer kernel</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#kernel-exexution-and-result-verification">Kernel exexution and result verification</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#kernel-execution-and-result-verification">Kernel execution and result verification</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#conclusion">Conclusion</a></li>
 </ul>
 </li>
@@ -129,7 +129,7 @@
 </pre></div>
 </div>
 <section id="device-initialization-program-setup">
-<h2>Device Initialization &amp; Program Setup<a class="headerlink" href="#device-initialization-program-setup" title="Permalink to this heading"></a>
+<span id="mm-single-core-device-initialization"></span><h2>Device Initialization &amp; Program Setup<a class="headerlink" href="#device-initialization-program-setup" title="Permalink to this heading"></a>
 </h2>
 <p>After standard device and command queue initialization, the matrix dimensions M, K, and N are translated into tile-based dimensions <code class="docutils literal notranslate"><span class="pre">Mt</span></code>, <code class="docutils literal notranslate"><span class="pre">Kt</span></code>, and <code class="docutils literal notranslate"><span class="pre">Nt</span></code>. This is essential as the hardware operates on 32×32 tiles. For this example, all operations are mapped to a single Tensix core at physical coordinates <code class="docutils literal notranslate"><span class="pre">{0,</span> <span class="pre">0}</span></code>.</p>
 <div class="highlight-cpp notranslate">
@@ -455,8 +455,8 @@ Key operations include:</p>
 </div>
 </section>
 </section>
-<section id="kernel-exexution-and-result-verification">
-<h2>Kernel exexution and result verification<a class="headerlink" href="#kernel-exexution-and-result-verification" title="Permalink to this heading"></a>
+<section id="kernel-execution-and-result-verification">
+<span id="mm-single-core-kernel-execution"></span><h2>Kernel execution and result verification<a class="headerlink" href="#kernel-execution-and-result-verification" title="Permalink to this heading"></a>
 </h2>
 <p>On the host side, runtime arguments are configured for each kernel. These typically include DRAM buffer addresses (for A, B, and C) and tile counts (<code class="docutils literal notranslate"><span class="pre">Mt</span></code>, <code class="docutils literal notranslate"><span class="pre">Kt</span></code>, <code class="docutils literal notranslate"><span class="pre">Nt</span></code>) that define the scope of the operation for the current invocation.
 The overall execution flow is managed by enqueuing commands:</p>
@@ -512,6 +512,7 @@ The overall execution flow is managed by enqueuing commands:</p>
 <li><p><strong>Tiled operations</strong>: The hardware is optimized for tiled operations, making tile-based algorithms essential for achieving peak performance. All matrices are processed in tile units, matching the natural granularity of the underlying hardware accelerators.</p></li>
 <li><p><strong>Pipelined data movement</strong>: The circular buffer architecture with double buffering enables overlapped execution - while the compute kernel processes current tiles, the data movement kernels can simultaneously fetch the next set of tiles. This pipelining ensures efficient utilization of compute resources by minimizing idle time.</p></li>
 </ul>
+<p>Next we will explore the <a class="reference internal" href="matmul_multi_core.html#matmul-multi-core-example"><span class="std std-ref">MatMul_Multi_Core example</span></a>, which extends these concepts to a multi-core setup, demonstrating how to scale matrix multiplication across multiple Tensix cores for even greater performance.</p>
 </section>
 </section>
 

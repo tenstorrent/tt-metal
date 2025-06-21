@@ -150,10 +150,12 @@
 <h2>Create buffers in DRAM and L1 (SRAM)<a class="headerlink" href="#create-buffers-in-dram-and-l1-sram" title="Permalink to this heading"></a>
 </h2>
 <p>Next, we need to declare buffers that will hold the actual data and an intermediate buffer on chip,</p>
-<p>There’s in total 3 buffers to be created:
-* An L1 (SRAM) buffer within the core itself that will act as temporary storage
-* A DRAM buffer that will house input data
-* A DRAM buffer that will be written to with output data</p>
+<p>There’s in total 3 buffers to be created:</p>
+<ul class="simple">
+<li><p>An L1 (SRAM) buffer within the core itself that will act as temporary storage</p></li>
+<li><p>A DRAM buffer that will house input data</p></li>
+<li><p>A DRAM buffer that will be written to with output data</p></li>
+</ul>
 <p>Note that almost all operations on the Tensix are aligned with tiles. And a tile is a 32x32 grid of values. The data type used in this example is bfloat16 as it is what the math engine uses internally (though we won’t touch the math engine in this example). Making each tile 32 x 32 x 2 bytes = 2048 bytes. And we wish to allocate 50 tiles in each buffer.</p>
 <p>There are two types of buffers in the Tensix: L1 and DRAM. L1 is a misnomer as it can be mistaken as similar to L1 cache in a CPU. In fact, the L1 is a SRAM scratchpad on the Tensix. Each generation of Tenstorrent processors has a different amount of L1 memory per Tensix. Grayskull had 1MB and Wormhole/Blackhole has 1.5MB.</p>
 <p>Note the <code class="docutils literal notranslate"><span class="pre">page_size</span></code> argument in the buffer config and the <code class="docutils literal notranslate"><span class="pre">Interleaved</span></code> in the buffer type. Both L1 and DRAM are split into banks. Each bank is a physical memory unit that can be accessed independently. However, managing banks separately is tricky and not scalable. Interleaved buffers simply round-robin the data across all banks every <code class="docutils literal notranslate"><span class="pre">page_size</span></code> bytes. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for higher bandwidth. Setting page size equal to the buffer size means that the entire buffer will live on a single bank. This is not recommended for performance and in most cases, page size is set to the size of a tile. However, this configuration allows easy illustration of NoC operations. However, these are implementation details and the programmer should not be overly concerned with them.</p>
@@ -222,6 +224,16 @@
 <span class="w">    </span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_0</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_0_default</span><span class="p">}</span>
 <span class="p">);</span>
 </pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The path to the kernel source file can either be</p>
+<ul class="simple">
+<li><p>Relative to the <code class="docutils literal notranslate"><span class="pre">TT_METAL_KERNEL_PATH</span></code> environment variable (or <code class="docutils literal notranslate"><span class="pre">TT_METAL_HOME</span></code> if the former is not set), or</p></li>
+<li><p>Absolute path to the file, or</p></li>
+<li><p>Relative to the current working directory</p></li>
+</ul>
+<p>Metalium will search for the kernel source file in order of the above. In this case the kernel will be found relative to <code class="docutils literal notranslate"><span class="pre">TT_METAL_HOME</span></code>. If the file is not found, an error will be thrown.</p>
 </div>
 <p>The kernel itself is simple. It takes the address and bank indices we just created. Copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using <code class="docutils literal notranslate"><span class="pre">uint32_t</span></code> instead of pointers for addresses. This is intended design as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V core directly access the L1 is not the most efficient way to move data around. Thus the L1 address is also an integer.</p>
 <div class="highlight-cpp notranslate">
