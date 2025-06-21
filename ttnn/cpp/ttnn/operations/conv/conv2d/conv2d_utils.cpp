@@ -67,7 +67,7 @@ uint32_t find_closest_largest_divisor_with_num_padding_and_mult(uint32_t num, ui
     uint32_t divisor = start_divisor;
     uint32_t big_divisor = divisor * mult;
     uint32_t padded_num = round_up(num, big_divisor);
-    while ((padded_num - num) >= (int)(padded_num / big_divisor)) {
+    while ((padded_num - num) >= (int)(padded_num / big_divisor) and divisor > 1) {
         divisor = divisor - 1;
         big_divisor = divisor * mult;
         padded_num = round_up(num, big_divisor);
@@ -702,8 +702,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
             if (is_mm_conv && input_tensor.layout() == Layout::ROW_MAJOR &&
                 parallel_config.shard_scheme != TensorMemoryLayout::HEIGHT_SHARDED) {
                 // Workaround #13979 ttnn::tilize doesn't support BLOCK_SHARDED layout
-                input_tensor =
-                    ttnn::to_layout(input_tensor, Layout::TILE, std::nullopt, std::nullopt, input_tensor.device());
+                input_tensor = ttnn::to_layout(input_tensor, Layout::TILE);
             }
             if (!auto_shard_mm) {
                 ttnn::MemoryConfig input_tensor_sharded_memory_config_to_layout = input_tensor_sharded_memory_config;
@@ -1238,7 +1237,8 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         uint32_t weight_block_h_ntiles = act_block_w_ntiles;
 
         uint32_t tilized_act_block_cb_size = act_block_h_ntiles * act_block_w_ntiles * output_tile_size;
-        uint32_t row_major_act_cb_size = act_block_h_ntiles * act_block_w_ntiles * input_tile_size;
+        const uint32_t row_major_act_cb_size =
+            conv_input_dtype != conv_config.dtype ? act_block_h_ntiles * act_block_w_ntiles * input_tile_size : 0;
 
         uint32_t output_block_ntiles = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles;
 

@@ -32,9 +32,9 @@ tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ::ttnn::ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
@@ -50,8 +50,8 @@ tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     uint32_t block_wt,
     DeviceComputeKernelConfig compute_kernel_config,
     const GlobalSemaphore& semaphore,
-    const uint32_t ring_size,
-    const uint32_t num_links);
+    uint32_t ring_size,
+    uint32_t num_links);
 
 struct RMSAllGather {
     float eps;
@@ -127,15 +127,15 @@ struct RMSAllGather {
 
 RMSAllGather create_rms_struct(
     const Tensor& input_tensor,
-    const uint32_t num_links,
+    uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<IDevice*>& devices,
-    const ttnn::ccl::Topology topology,
+    ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     float epsilon,
-    const ttnn::operations::normalization::LayerNormProgramConfig program_config,
-    const DeviceComputeKernelConfig compute_kernel_config,
+    ttnn::operations::normalization::LayerNormProgramConfig program_config,
+    DeviceComputeKernelConfig compute_kernel_config,
     std::optional<DataType> dtype);
 
 }  // namespace ttnn::operations::fused::normalization

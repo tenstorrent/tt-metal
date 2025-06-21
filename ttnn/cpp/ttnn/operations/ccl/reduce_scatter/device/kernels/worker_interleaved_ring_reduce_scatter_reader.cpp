@@ -9,12 +9,12 @@
 #include "dataflow_api.h"
 #include "debug/assert.h"
 #include <tt-metalium/buffer_types.hpp>
-#include "cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
-#include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
-#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
+#include "ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
+#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
+#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 
 using tt::tt_metal::TensorMemoryLayout;
 using ttnn::ccl::coord_t;

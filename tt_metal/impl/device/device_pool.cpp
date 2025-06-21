@@ -256,7 +256,8 @@ void DevicePool::initialize(
     std::vector<chip_id_t> target_mmio_ids;
     for (const auto& device_id : device_ids) {
         TT_FATAL(
-            device_id < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(),
+            tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().find(device_id) !=
+                tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().end(),
             "Device index {} out of range. There are {} devices available.",
             device_id,
             tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices());
@@ -384,7 +385,8 @@ void DevicePool::initialize_active_devices() const {
 
 void DevicePool::activate_device(chip_id_t id) {
     TT_FATAL(
-        id < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(),
+        tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().find(id) !=
+            tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().end(),
         "Device index {} out of range. There are {} devices available.",
         id,
         tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices());
@@ -612,8 +614,8 @@ DevicePool::DevicePool() {
     log_debug(tt::LogMetal, "DevicePool constructor");
     bool use_numa_node_based_thread_binding = parse_env("TT_METAL_NUMA_BASED_AFFINITY", false);
     std::vector<chip_id_t> all_device_ids;
-    for (int i = 0; i < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); i++) {
-        all_device_ids.emplace_back((chip_id_t)i);
+    for (chip_id_t device_id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
+        all_device_ids.emplace_back(device_id);
     }
     std::unordered_set<uint32_t> free_cores = {};
     this->worker_thread_to_cpu_core_map = device_cpu_allocator::get_device_id_to_core_map(
@@ -684,10 +686,11 @@ bool DevicePool::close_device(chip_id_t device_id) {
 }
 
 bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize) {
+    ZoneScoped;
+
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
     std::vector<chip_id_t> devices_to_close;
 
-    ZoneScoped;
     // Loop over all devices and add remote devices to devices_to_close
     // For Galaxy if an mmio device's tunnels are being closed, close the mmio device as well
     std::unordered_set<chip_id_t> mmio_devices_to_close;
@@ -730,6 +733,11 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         }
     }
 
+    for (const chip_id_t device_id : devices_to_close) {
+        IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
+        detail::DumpDeviceProfileResults(device);
+    }
+
     dispatch_firmware_active_ = false;
     teardown_fd(std::unordered_set<chip_id_t>(devices_to_close.begin(), devices_to_close.end()));
     // Terminate sent to each device. Wait for dispatch to finish. MMIO only to prevent clogging SD path.
@@ -742,6 +750,11 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
 
         auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(dev_id);
         tt::llrt::internal_::wait_until_cores_done(dev_id, RUN_MSG_GO, dispatch_cores, 0);
+    }
+
+    for (const chip_id_t device_id : devices_to_close) {
+        IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
+        detail::DumpDeviceProfileResults(device, ProfilerDumpState::ONLY_DISPATCH_CORES);
     }
 
     // Process registered termination signals from topology
@@ -790,7 +803,6 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
 }
 
 DevicePool::~DevicePool() {
-    log_debug(tt::LogMetal, "DevicePool destructor");
     for (const auto& dev : this->devices) {
         if (dev != nullptr and dev->is_initialized()) {
             // TODO: #13876, Was encountering issues with the DispatchMemMap being destroyed before the DevicePool

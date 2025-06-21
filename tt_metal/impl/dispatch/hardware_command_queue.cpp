@@ -247,7 +247,7 @@ void HWCommandQueue::enqueue_read_buffer(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_read_buffer");
     TT_FATAL(!this->manager_.get_bypass_mode(), "Enqueue Read Buffer cannot be used with tracing");
-    Buffer& buffer_obj = get_buffer_object(buffer);
+    auto buffer_obj = get_buffer_object(buffer).view(region);
 
     // Reading from device would clobber prefetcher cache, so reset it now
     this->reset_prefetcher_cache_manager();
@@ -256,25 +256,27 @@ void HWCommandQueue::enqueue_read_buffer(
     // TODO: enqueue_read_from_core will call select_sub_device_ids every loop which will have minor overhead
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
-    if (is_sharded(buffer_obj.buffer_layout())) {
+    if (is_sharded(buffer_obj->buffer_layout())) {
         // Forward data from each core to the completion queue.
         // Then have the completion queue reader thread copy this data to user space.
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
-            buffer_obj, this->id_, this->expected_num_workers_completed_, region);
-        auto cores = buffer_dispatch::get_cores_for_sharded_buffer(
-            dispatch_params.width_split, dispatch_params.buffer_page_mapping, buffer_obj);
-        for (uint32_t core_id = 0; core_id < buffer_obj.num_cores(); ++core_id) {
-            buffer_dispatch::copy_sharded_buffer_from_core_to_completion_queue(
-                core_id,
-                buffer_obj,
-                dispatch_params,
-                sub_device_ids,
-                cores[core_id],
-                MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type());
-            if (dispatch_params.pages_per_txn > 0) {
-                this->issued_completion_q_reads_.push(
-                    buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, buffer_obj));
-                this->increment_num_entries_in_completion_q();
+            *buffer_obj, this->id_, this->expected_num_workers_completed_);
+        const auto& cores = dispatch_params.buffer_page_mapping->all_cores;
+        for (uint32_t core_id = 0; core_id < buffer_obj->num_cores(); ++core_id) {
+            for (const auto& core_page_mapping : dispatch_params.buffer_page_mapping->core_page_mappings[core_id]) {
+                buffer_dispatch::copy_sharded_buffer_from_core_to_completion_queue(
+                    core_id,
+                    core_page_mapping,
+                    *buffer_obj,
+                    dispatch_params,
+                    sub_device_ids,
+                    cores[core_id],
+                    MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type());
+                if (dispatch_params.pages_per_txn > 0) {
+                    this->issued_completion_q_reads_.push(
+                        buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, *buffer_obj));
+                    this->increment_num_entries_in_completion_q();
+                }
             }
         }
     } else {
@@ -282,7 +284,7 @@ void HWCommandQueue::enqueue_read_buffer(
         // Then have the completion queue reader thread copy this data to user space.
         buffer_dispatch::BufferReadDispatchParamsVariant dispatch_params_variant =
             buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
-                buffer_obj, this->id_, this->expected_num_workers_completed_, region);
+                *buffer_obj, this->id_, this->expected_num_workers_completed_);
 
         buffer_dispatch::BufferReadDispatchParams* dispatch_params = std::visit(
             [](auto& val) { return static_cast<buffer_dispatch::BufferReadDispatchParams*>(&val); },
@@ -290,12 +292,12 @@ void HWCommandQueue::enqueue_read_buffer(
 
         buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
             *dispatch_params,
-            buffer_obj,
+            *buffer_obj,
             sub_device_ids,
             MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type());
         if (dispatch_params->pages_per_txn > 0) {
             this->issued_completion_q_reads_.push(
-                buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, buffer_obj));
+                buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, *buffer_obj));
             this->increment_num_entries_in_completion_q();
         }
     }
@@ -319,7 +321,7 @@ void HWCommandQueue::enqueue_write_buffer(
             [](const void* raw_data) -> const void* { return raw_data; },
             [](const auto& data) -> const void* { return data->data(); }},
         src);
-    Buffer& buffer_obj = get_buffer_object(buffer);
+    auto buffer_obj = get_buffer_object(buffer).view(region);
 
     // This is to make sure we block on the same sub_device_ids at the end
     // TODO: enqueue_write_to_core will call select_sub_device_ids every loop which will have minor overhead
@@ -327,7 +329,7 @@ void HWCommandQueue::enqueue_write_buffer(
 
     auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     buffer_dispatch::write_to_device_buffer(
-        data, buffer_obj, region, this->id_, this->expected_num_workers_completed_, dispatch_core_type, sub_device_ids);
+        data, *buffer_obj, this->id_, this->expected_num_workers_completed_, dispatch_core_type, sub_device_ids);
 
     if (blocking) {
         this->finish(sub_device_ids);

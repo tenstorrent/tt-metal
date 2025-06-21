@@ -9,7 +9,7 @@
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
-#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/global_semaphore.hpp"
 
 namespace ttnn {
@@ -23,20 +23,20 @@ struct ExecuteAllReduceCreateQkvHeads {
         const ttnn::Tensor& input_tensor,
         ttnn::Tensor& buffer_tensor,
         const ttnn::Tensor& batch_offset,
-        const uint32_t cluster_axis,
+        uint32_t cluster_axis,
         const MeshDevice& mesh_device,
         const GlobalSemaphore& multi_device_global_semaphore,
         // create qkv heads non-optional parameters
-        const uint32_t num_heads,
+        uint32_t num_heads,
         const std::optional<ttnn::MemoryConfig>& all_reduce_memory_config,
         ttnn::ccl::Topology topology,
-        const std::optional<size_t> num_preferred_links,
+        std::optional<size_t> num_preferred_links,
         std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
         // create qkv heads optional parameters
         std::optional<const uint32_t> num_kv_heads,
-        const std::optional<const uint32_t> slice_size = std::nullopt,
+        std::optional<const uint32_t> slice_size = std::nullopt,
         const std::optional<MemoryConfig>& final_memory_config = std::nullopt,
-        const std::optional<const DataType> dtype = std::nullopt);
+        std::optional<const DataType> dtype = std::nullopt);
 };
 
 }  // namespace transformer
