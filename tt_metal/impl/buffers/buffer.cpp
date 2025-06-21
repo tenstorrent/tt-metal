@@ -57,25 +57,14 @@ void validate_buffer_parameters(
     const TensorMemoryLayout& buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters,
     const std::optional<BufferDistributionSpec>& buffer_distribution_spec) {
-    // Validate shard parameters are correct; only one of shard_parameters or buffer_distribution_spec can be set
     if (is_sharded(buffer_layout)) {
-        if (buffer_distribution_spec.has_value()) {
-            TT_FATAL(
-                buffer_layout == TensorMemoryLayout::BLOCK_SHARDED,
-                "Buffer with BufferDistributionSpec must be BLOCK_SHARDED layout!");
-            TT_FATAL(
-                shard_parameters == std::nullopt,
-                "Buffer must only have either BufferDistributionSpec or ShardSpecBuffer!");
-        } else {
-            TT_FATAL(
-                shard_parameters != std::nullopt,
-                "Buffer was specified as sharded but does not have shard_parameters specified");
-        }
+        TT_FATAL(
+            shard_parameters.has_value() || buffer_distribution_spec.has_value(),
+            "Buffer was specified as sharded but does not have shard_parameters or buffer_distribution_spec specified");
     } else {
         TT_FATAL(
-            shard_parameters == std::nullopt, "Buffer was specified as not sharded but has shard_parameters specified");
-        TT_FATAL(
-            shard_parameters == std::nullopt, "Buffer was specified as not sharded but has shard_parameters specified");
+            shard_parameters == std::nullopt && buffer_distribution_spec == std::nullopt,
+            "Buffer was specified as not sharded but has shard_parameters or buffer_distribution_spec specified");
     }
 
     if (size == 0) {
