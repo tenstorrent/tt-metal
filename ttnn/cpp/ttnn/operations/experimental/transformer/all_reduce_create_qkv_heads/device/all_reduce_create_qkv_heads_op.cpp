@@ -292,7 +292,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
         this->sub_device_id,
         this->num_heads,
         this->num_kv_heads,
-        this->head_dim);
+        this->head_dim,
+        this->use_noc1_only);
 }
 
 tt::tt_metal::operation::Hash AllReduceCreateQkvHeads::compute_program_hash(
@@ -330,6 +331,7 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     uint32_t head_dim,
+    bool use_noc1_only,
     uint32_t num_heads,
     uint32_t num_kv_heads,
     bool input_on_subcoregrids,
@@ -350,6 +352,7 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
             multi_device_global_semaphore,
             subdevice_id,
             head_dim,
+            use_noc1_only,
             num_heads,
             num_kv_heads,
             input_on_subcoregrids,

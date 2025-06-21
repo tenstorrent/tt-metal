@@ -73,6 +73,7 @@ def run_reduce_scatter_test(
     dtype=ttnn.bfloat8_b,
     profiler=BenchmarkProfiler(),
     topology=ttnn.Topology.Linear,
+    use_noc1_only=False,
 ):
     mesh_device.enable_program_cache()
     num_pages_per_packet = 4
@@ -228,6 +229,7 @@ def run_reduce_scatter_test(
                 num_links=num_links,
                 memory_config=output_mem_config,
                 topology=topology,
+                use_noc1_only=use_noc1_only,
             )
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
@@ -325,6 +327,7 @@ def run_reduce_scatter_test(
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("use_noc1_only", [False])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -332,7 +335,7 @@ def run_reduce_scatter_test(
     ],
     indirect=True,
 )
-def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
+def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode, use_noc1_only):
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
@@ -359,6 +362,7 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
         num_iters,
         warmup_iters,
         trace_mode,
+        use_noc1_only=use_noc1_only,
         num_links=3,
         scheme="random",
     )
@@ -370,6 +374,7 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [False])
+@pytest.mark.parametrize("use_noc1_only", [False, True])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -377,7 +382,7 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
     ],
     indirect=True,
 )
-def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
+def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode, use_noc1_only):
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
@@ -407,6 +412,7 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
         num_links=3,
         scheme="random",
         topology=ttnn.Topology.Linear,
+        use_noc1_only=use_noc1_only,
     )
 
 

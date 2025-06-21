@@ -24,7 +24,8 @@ struct ExecuteLlamaReduceScatter {
         const MeshDevice& mesh_device,
         uint32_t num_links,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear);
+        tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear,
+        bool use_noc1_only = false);
 };
 
 }  // namespace operations::experimental::ccl
