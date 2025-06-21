@@ -860,7 +860,7 @@ void pytensor_module(py::module& m_tensor) {
 
                     py_tensor = torch.randn((1, 1, 32, 32))
                     tt_device = ttnn.CreateDevice(0)
-                    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.SINGLE_BANK)
+                    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED)
                     // ...
                     ttnn.Tensor(
                         py_tensor.reshape(-1).tolist(),

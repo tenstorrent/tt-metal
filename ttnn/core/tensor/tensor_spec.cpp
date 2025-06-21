@@ -180,16 +180,6 @@ std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() con
         .orientation = shard_spec.orientation,
     };
 
-    if (mem_layout == TensorMemoryLayout::SINGLE_BANK) {
-        nd_shard_spec.shard_shape = padded_shape();
-        return MemoryConfig::create_with_prepopulated_shard_specs(
-            mem_config.memory_layout(),
-            mem_config.buffer_type(),
-            mem_config.shard_spec(),
-            std::move(nd_shard_spec),
-            mem_config.created_with_nd_shard_spec());
-    }
-
     if (mem_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         nd_shard_spec.shard_shape = padded_shape();
         nd_shard_spec.shard_shape[-1] = shard_spec.shape[1];

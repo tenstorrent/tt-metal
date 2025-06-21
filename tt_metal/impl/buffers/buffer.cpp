@@ -82,16 +82,12 @@ void validate_buffer_parameters(
         return;
     }
 
-    if (buffer_layout == TensorMemoryLayout::SINGLE_BANK) {
-        TT_FATAL(page_size == size, "Contiguous buffer must be one contiguous page");
-    } else {
-        TT_FATAL(
-            size % page_size == 0,
-            "For valid non-interleaved buffers page size {} must equal buffer size {}. For interleaved-buffers, "
-            "buffer size should be divisble by the page size",
-            page_size,
-            size);
-    }
+    TT_FATAL(
+        size % page_size == 0,
+        "For valid non-interleaved buffers page size {} must equal buffer size {}. For interleaved-buffers, "
+        "buffer size should be divisble by the page size",
+        page_size,
+        size);
 }
 
 std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 2>>> core_to_host_pages(
@@ -264,8 +260,7 @@ Buffer::Buffer(
     DeviceAddr size,
     DeviceAddr page_size,
     const BufferType buffer_type,
-    const TensorMemoryLayout buffer_layout,
-    const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameters,
+    const BufferShardingArgs& sharding_args,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id,
     const bool owns_data,
@@ -274,19 +269,12 @@ Buffer::Buffer(
     size_(size),
     page_size_(page_size),
     buffer_type_(buffer_type),
-    buffer_layout_(buffer_layout),
+    buffer_layout_(sharding_args.buffer_layout_),
     bottom_up_(bottom_up.value_or(this->is_dram())),
     sub_device_id_(sub_device_id),
-    owns_data_(owns_data) {
-    if (shard_parameters) {
-        std::visit(
-            tt::stl::overloaded{
-                [this](const ShardSpecBuffer& shard_spec_buffer) { this->shard_parameters_ = shard_spec_buffer; },
-                [this](const BufferDistributionSpec& buffer_distribution_spec) {
-                    this->buffer_distribution_spec_ = buffer_distribution_spec;
-                }},
-            shard_parameters.value());
-    }
+    owns_data_(owns_data),
+    shard_parameters_(sharding_args.shard_parameters_),
+    buffer_distribution_spec_(sharding_args.buffer_distribution_spec_) {
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
     if (this->sub_device_id_.has_value()) {
         validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_parameters_);
@@ -296,7 +284,7 @@ Buffer::Buffer(
         this->allocator_ = device->allocator().get();
     }
     validate_buffer_parameters(
-        size, page_size, buffer_type, buffer_layout, shard_parameters_, buffer_distribution_spec_);
+        size, page_size, buffer_type, buffer_layout_, shard_parameters_, buffer_distribution_spec_);
     unique_id_ = next_unique_id.fetch_add(1);
 }
 
@@ -305,23 +293,13 @@ std::shared_ptr<Buffer> Buffer::create(
     DeviceAddr size,
     DeviceAddr page_size,
     const BufferType buffer_type,
-    const TensorMemoryLayout buffer_layout,
-    const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameters,
+    const BufferShardingArgs& sharding_args,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
 
     auto buffer = std::make_shared<Buffer>(
-        device,
-        size,
-        page_size,
-        buffer_type,
-        buffer_layout,
-        shard_parameters,
-        bottom_up,
-        sub_device_id,
-        true /* owns data */,
-        Private());
+        device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, true /* owns data */, Private());
 
     if (buffer->size_ == 0) {
         buffer->allocation_status_ = AllocationStatus::ALLOCATED;
@@ -338,8 +316,7 @@ std::shared_ptr<Buffer> Buffer::create(
         size,
         page_size,
         buffer_type,
-        buffer_layout,
-        shard_parameters,
+        sharding_args,
         bottom_up,
         sub_device_id);
 
@@ -352,8 +329,7 @@ std::shared_ptr<Buffer> Buffer::create(
     DeviceAddr size,
     DeviceAddr page_size,
     const BufferType buffer_type,
-    const TensorMemoryLayout buffer_layout,
-    const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameters,
+    const BufferShardingArgs& sharding_args,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
@@ -362,8 +338,7 @@ std::shared_ptr<Buffer> Buffer::create(
         size,
         page_size,
         buffer_type,
-        buffer_layout,
-        shard_parameters,
+        sharding_args,
         bottom_up,
         sub_device_id,
         false /* owns data */,
@@ -380,8 +355,7 @@ std::shared_ptr<Buffer> Buffer::create(
         size,
         page_size,
         buffer_type,
-        buffer_layout,
-        shard_parameters,
+        sharding_args,
         bottom_up,
         sub_device_id);
 
@@ -397,21 +371,13 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
         return shared_from_this();
     }
 
-    std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>> shard_parameters;
-    if (shard_parameters_.has_value()) {
-        shard_parameters = shard_parameters_.value();
-    } else if (buffer_distribution_spec_.has_value()) {
-        shard_parameters = buffer_distribution_spec_.value();
-    }
-
     auto buffer = Buffer::create(
         device_,
         address_,
         region.size,
         page_size_,
         buffer_type_,
-        buffer_layout_,
-        shard_parameters,
+        BufferShardingArgs(buffer_distribution_spec_, shard_parameters_, buffer_layout_),
         bottom_up_,
         sub_device_id_);
 

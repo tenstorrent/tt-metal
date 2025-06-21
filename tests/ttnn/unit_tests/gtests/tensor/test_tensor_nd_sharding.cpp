@@ -590,20 +590,6 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_2d = std::nullopt,
             .layout = Layout::ROW_MAJOR,
             .shard_shape_nd = std::nullopt,
-        },
-        LegacyToNdShardingParams{
-            .shape = Shape({2, 32 * 2, 32 * 2}),
-            .memory_layout = TensorMemoryLayout::SINGLE_BANK,
-            .shard_shape_2d = Shape2D{32 * 4, 32 * 2},
-            .layout = Layout::TILE,
-            .shard_shape_nd = Shape({2, 32 * 2, 32 * 2}),
-        },
-        LegacyToNdShardingParams{
-            .shape = Shape({2, 3, 4}),
-            .memory_layout = TensorMemoryLayout::SINGLE_BANK,
-            .shard_shape_2d = Shape2D{6, 4},
-            .layout = Layout::ROW_MAJOR,
-            .shard_shape_nd = Shape({2, 3, 4}),
         }));
 
 INSTANTIATE_TEST_SUITE_P(
