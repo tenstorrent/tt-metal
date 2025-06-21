@@ -14,6 +14,7 @@
 
 namespace distribution_spec_tests {
 using tt::tt_metal::BufferDistributionSpec;
+constexpr uint32_t PADDING = tt::tt_metal::UncompressedBufferPageMapping::PADDING;
 
 struct BufferDistributionSpecInputs {
     tt::tt_metal::Shape physical_tensor_shape;
@@ -299,7 +300,9 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         }
         for (size_t empty_core_idx = expected_page_mapping.size(); empty_core_idx < page_mapping.size();
              empty_core_idx++) {
-            EXPECT_EQ(page_mapping[empty_core_idx], std::vector<uint32_t>(page_mapping[empty_core_idx].size()));
+            EXPECT_EQ(
+                page_mapping[empty_core_idx],
+                std::vector<uint32_t>(page_mapping[empty_core_idx].size(), UncompressedBufferPageMapping::PADDING));
         }
 
         for (size_t i = 0; i < cores.size(); i++) {
@@ -313,7 +316,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
 
             const auto* result_per_core_ptr = reinterpret_cast<const uint8_t*>(result_per_core.data());
             for (size_t core_page = 0; core_page < page_mapping[i].size(); core_page++) {
-                if (!page_mapping[i][core_page]) {
+                if (page_mapping[i][core_page] == UncompressedBufferPageMapping::PADDING) {
                     continue;
                 }
                 const auto host_page = page_mapping[i][core_page];
@@ -370,13 +373,13 @@ INSTANTIATE_TEST_SUITE_P(
                 MeshBufferReadWriteExpected{
                     .explicit_core_page_mapping = {
                         {0, 1},
-                        {2, 0},
+                        {2, PADDING},
                         {3, 4},
-                        {5, 0},
+                        {5, PADDING},
                         {6, 7},
-                        {8, 0},
+                        {8, PADDING},
                         {9, 10},
-                        {11, 0},
+                        {11, PADDING},
                     },
                 },
             },
@@ -395,10 +398,10 @@ INSTANTIATE_TEST_SUITE_P(
                 },
                 MeshBufferReadWriteExpected{
                     .explicit_core_page_mapping = {
-                        {0, 1, 0, 2, 3, 0},
-                        {4, 5, 0, 6, 7, 0},
-                        {8, 9, 0, 10, 11, 0},
-                        {12, 13, 0, 14, 15, 0},
+                        {0, 1, PADDING, 2, 3, PADDING},
+                        {4, 5, PADDING, 6, 7, PADDING},
+                        {8, 9, PADDING, 10, 11, PADDING},
+                        {12, 13, PADDING, 14, 15, PADDING},
                     },
                 },
             },
@@ -416,8 +419,8 @@ INSTANTIATE_TEST_SUITE_P(
                 },
                 MeshBufferReadWriteExpected{
                     .explicit_core_page_mapping = {
-                        {0, 2, 4, 0, 6, 8, 10, 0},
-                        {1, 3, 5, 0, 7, 9, 11, 0},
+                        {0, 2, 4, PADDING, 6, 8, 10, PADDING},
+                        {1, 3, 5, PADDING, 7, 9, 11, PADDING},
                     },
                 },
             },
@@ -437,15 +440,15 @@ INSTANTIATE_TEST_SUITE_P(
                 MeshBufferReadWriteExpected{
                     .explicit_core_page_mapping = {
                         {0, 1, 3, 4, 30, 31, 33, 34},
-                        {2, 0, 5, 0, 32, 0, 35, 0},
-                        {6, 7, 9, 10, 0, 0, 0, 0},
-                        {8, 0, 11, 0, 0, 0, 0, 0},
-                        {12, 13, 15, 16, 0, 0, 0, 0},
-                        {14, 0, 17, 0, 0, 0, 0, 0},
-                        {18, 19, 21, 22, 0, 0, 0, 0},
-                        {20, 0, 23, 0, 0, 0, 0, 0},
-                        {24, 25, 27, 28, 0, 0, 0, 0},
-                        {26, 0, 29, 0, 0, 0, 0, 0}
+                        {2, PADDING, 5, PADDING, 32, PADDING, 35, PADDING},
+                        {6, 7, 9, 10, PADDING, PADDING, PADDING, PADDING},
+                        {8, PADDING, 11, PADDING, PADDING, PADDING, PADDING, PADDING},
+                        {12, 13, 15, 16, PADDING, PADDING, PADDING, PADDING},
+                        {14, PADDING, 17, PADDING, PADDING, PADDING, PADDING, PADDING},
+                        {18, 19, 21, 22, PADDING, PADDING, PADDING, PADDING},
+                        {20, PADDING, 23, PADDING, PADDING, PADDING, PADDING, PADDING},
+                        {24, 25, 27, 28, PADDING, PADDING, PADDING, PADDING},
+                        {26, PADDING, 29, PADDING, PADDING, PADDING, PADDING, PADDING}
                     },
                 },
             },
@@ -464,11 +467,11 @@ INSTANTIATE_TEST_SUITE_P(
                 },
                 MeshBufferReadWriteExpected{
                     .explicit_core_page_mapping = {
-                        {0, 1, 3, 4, 12, 13, 15, 16, 26, 0, 29, 0, 38, 0, 41, 0, 54, 55, 57, 58, 0, 0, 0, 0},
-                        {2, 0, 5, 0, 14, 0, 17, 0, 30, 31, 33, 34, 42, 43, 45, 46, 56, 0, 59, 0, 0, 0, 0, 0},
-                        {6, 7, 9, 10, 18, 19, 21, 22, 32, 0, 35, 0, 44, 0, 47, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-                        {8, 0, 11, 0, 20, 0, 23, 0, 48, 49, 51, 52, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-                        {24, 25, 27, 28, 36, 37, 39, 40, 50, 0, 53, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+                        {0, 1, 3, 4, 12, 13, 15, 16, 26, PADDING, 29, PADDING, 38, PADDING, 41, PADDING, 54, 55, 57, 58, PADDING, PADDING, PADDING, PADDING},
+                        {2, PADDING, 5, PADDING, 14, PADDING, 17, PADDING, 30, 31, 33, 34, 42, 43, 45, 46, 56, PADDING, 59, PADDING, PADDING, PADDING, PADDING, PADDING},
+                        {6, 7, 9, 10, 18, 19, 21, 22, 32, PADDING, 35, PADDING, 44, PADDING, 47, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING},
+                        {8, PADDING, 11, PADDING, 20, PADDING, 23, PADDING, 48, 49, 51, 52, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING},
+                        {24, 25, 27, 28, 36, 37, 39, 40, 50, PADDING, 53, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING, PADDING}
                     },
                 },
             })  // Values

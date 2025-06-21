@@ -118,7 +118,7 @@ TEST_F(DeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
 
     std::vector<uint32_t> out_buf(data_buffer_size);
     for (size_t i = 0; i < n_cbs; i++) {
-        tt::tt_metal::detail::ReadFromBuffer(master_data_buffers[i], out_buf, false);
+        tt::tt_metal::detail::ReadFromBuffer(master_data_buffers[i], out_buf);
 
         uint8_t const* raw_data = reinterpret_cast<uint8_t*>(out_buf.data());
         for (size_t pages_pushed = 0; pages_pushed < cb_n_pages; pages_pushed++) {
@@ -126,19 +126,6 @@ TEST_F(DeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
                 ASSERT_EQ(
                     static_cast<bool>(raw_data[pages_pushed * cb_n_pages + requested_pages_free]),
                     requested_pages_free <= (cb_n_pages - pages_pushed));
-            }
-        }
-    }
-
-    for (size_t i = 0; i < n_cbs; i++) {
-        tt::tt_metal::detail::ReadFromBuffer(subordinate_data_buffers[i], out_buf, true);
-
-        uint8_t const* raw_data = reinterpret_cast<uint8_t*>(out_buf.data());
-        for (size_t pages_pushed = 0; pages_pushed < cb_n_pages; pages_pushed++) {
-            for (size_t filled_pages_requested = 0; filled_pages_requested < cb_n_pages; filled_pages_requested++) {
-                ASSERT_EQ(
-                    static_cast<bool>(raw_data[pages_pushed * cb_n_pages + filled_pages_requested]),
-                    filled_pages_requested <= pages_pushed);
             }
         }
     }

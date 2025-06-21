@@ -30,35 +30,29 @@ namespace tt::tt_metal {
 
 // Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
 struct ReadBufferDescriptor {
-    TensorMemoryLayout buffer_layout;
     uint32_t page_size;
     uint32_t padded_page_size;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping;
+    const BufferCorePageMapping* core_page_mapping;
     void* dst;
     uint32_t dst_offset;
     uint32_t num_pages_read;
-    uint32_t cur_dev_page_id;
-    uint32_t starting_host_page_id;
 
     ReadBufferDescriptor(
-        TensorMemoryLayout buffer_layout,
         uint32_t page_size,
         uint32_t padded_page_size,
         void* dst,
         uint32_t dst_offset,
         uint32_t num_pages_read,
-        uint32_t cur_dev_page_id,
-        uint32_t starting_host_page_id = 0,
-        const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping = nullptr) :
-        buffer_layout(buffer_layout),
+        const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping = nullptr,
+        const BufferCorePageMapping* core_page_mapping = nullptr) :
         page_size(page_size),
         padded_page_size(padded_page_size),
         buffer_page_mapping(buffer_page_mapping),
+        core_page_mapping(core_page_mapping),
         dst(dst),
         dst_offset(dst_offset),
-        num_pages_read(num_pages_read),
-        cur_dev_page_id(cur_dev_page_id),
-        starting_host_page_id(starting_host_page_id) {}
+        num_pages_read(num_pages_read) {}
 };
 
 using CompletionReaderVariant =
@@ -109,38 +103,29 @@ struct BufferReadLargePageDispatchParams : BufferReadDispatchParams {
 using BufferReadDispatchParamsVariant = std::variant<BufferReadDispatchParams, BufferReadLargePageDispatchParams>;
 
 struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
-    bool width_split = false;
-    uint32_t initial_pages_skipped = 0;
-    uint32_t starting_src_host_page_index = 0;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping = nullptr;
+    const BufferCorePageMapping* core_page_mapping = nullptr;
     uint32_t total_pages_read = 0;
-    uint32_t max_pages_per_shard = 0;
     CoreCoord core;
 };
 
 void write_to_device_buffer(
     const void* src,
     Buffer& buffer,
-    const BufferRegion& region,
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids);
 
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
-    Buffer& buffer,
-    uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    const BufferRegion& region);
+    Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed);
 
 BufferReadDispatchParamsVariant initialize_interleaved_buf_read_dispatch_params(
-    Buffer& buffer,
-    uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    const BufferRegion& region);
+    Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed);
 
 void copy_sharded_buffer_from_core_to_completion_queue(
     uint32_t core_id,
+    const BufferCorePageMapping& core_page_mapping,
     Buffer& buffer,
     ShardedBufferReadDispatchParams& dispatch_params,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
@@ -160,9 +145,6 @@ void copy_completion_queue_data_into_user_space(
     uint32_t cq_id,
     SystemMemoryManager& sysmem_manager,
     std::atomic<bool>& exit_condition);
-
-std::vector<CoreCoord> get_cores_for_sharded_buffer(
-    bool width_split, const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping, Buffer& buffer);
 
 // Selects all sub-devices in the sub device stall group if none are specified
 tt::stl::Span<const SubDeviceId> select_sub_device_ids(
