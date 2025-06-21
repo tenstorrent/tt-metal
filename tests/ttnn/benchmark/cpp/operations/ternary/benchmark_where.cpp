@@ -14,9 +14,9 @@
 
 namespace {
 
-// much faster than ttnn::random::random which uses uniform_real_distribution for floats
+// Will be replaced with ttnn::rand
 template <typename ElemType>
-static tt::tt_metal::Tensor genRandomTensor(const ttnn::Shape& shape, const tt::tt_metal::Layout layout) {
+tt::tt_metal::Tensor genRandomTensor(const ttnn::Shape& shape, const tt::tt_metal::Layout layout) {
     constexpr ttnn::DataType data_type = tt::tt_metal::convert_to_data_type<ElemType>();
     ttnn::TensorSpec spec(shape, ttnn::TensorLayout(data_type, ttnn::PageConfig(layout), tt::tt_metal::MemoryConfig{}));
     auto output_buffer = std::vector<ElemType>(spec.padded_shape().volume());
