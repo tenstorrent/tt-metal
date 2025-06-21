@@ -432,7 +432,7 @@ def test_binary_sharded(a_shape, b_shape, sharded_config, dtype_pt, dtype_tt, de
         )
 
         out_pt = torch.add(a_pt, b_pt)
-        out_tt_interleaved = ttnn.add(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=False)
+        out_tt_interleaved = ttnn.add(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         out_tt_interleaved = ttnn.to_torch(out_tt_interleaved)
         assert ttnn.pearson_correlation_coefficient(out_tt_interleaved, out_pt) >= 0.99988
 
@@ -1221,7 +1221,7 @@ def test_binary_sharded_small_tile(a_shape, b_shape, shard_type, shard_size, cor
     )
 
     out_pt = torch.add(a_pt, b_pt)
-    out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=shard_config, use_legacy=False)
+    out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=shard_config)
     out_tt_sharded = ttnn.to_torch(out_tt_sharded)
     assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
@@ -1348,7 +1348,7 @@ def test_binary_sharded_col_major(a_shape, b_shape, shard_type, shard_size, core
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
         assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
-        out_tt_interleaved = ttnn_fn(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=False)
+        out_tt_interleaved = ttnn_fn(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         out_tt_interleaved = ttnn.to_torch(out_tt_interleaved)
         assert ttnn.pearson_correlation_coefficient(out_tt_interleaved, out_pt) >= 0.99988
 
@@ -1393,7 +1393,7 @@ def test_binary_sharded_auto(a_shape, b_shape, shard_type, core_coord, device):
     )
 
     out_pt = torch.add(a_pt, b_pt)
-    out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=shard_config, use_legacy=False)
+    out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=shard_config)
     out_tt_sharded = ttnn.to_torch(out_tt_sharded)
     assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
@@ -1810,7 +1810,7 @@ def test_binary_sharded_invalid_row_major_layout(
             memory_config=b_sharded_config,
         )
 
-        _ = ttnn.add(a_tt, b_tt, memory_config=a_sharded_config, use_legacy=False)
+        _ = ttnn.add(a_tt, b_tt, memory_config=a_sharded_config)
 
 
 @pytest.mark.parametrize(
