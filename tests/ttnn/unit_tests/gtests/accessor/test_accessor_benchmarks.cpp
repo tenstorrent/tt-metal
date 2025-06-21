@@ -51,8 +51,7 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_input_m
     const tt::tt_metal::distributed::DeviceLocalBufferConfig input_device_local_config{
         .page_size = page_size,
         .buffer_type = inputs.input_shard_spec.buffer_type,
-        .buffer_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
-        .shard_parameters = input_buffer_distribution_spec,
+        .sharding_args = input_buffer_distribution_spec,
     };
     const auto input_mesh_buffer =
         tt::tt_metal::distributed::MeshBuffer::create(mesh_buffer_config, input_device_local_config, mesh_device);
@@ -99,7 +98,7 @@ TEST_P(AccessorBenchmarks, Generic) {
 
         // Set up sharded accessor compile-time args for reader kernel
         const auto& input_buffer_distribution_spec =
-            std::get<BufferDistributionSpec>(input_mesh_buffer->device_local_config().shard_parameters.value());
+            *input_mesh_buffer->device_local_config().sharding_args.buffer_distribution_spec_;
         const auto input_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
             *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type());
         std::vector<uint32_t> input_compile_time_args = {

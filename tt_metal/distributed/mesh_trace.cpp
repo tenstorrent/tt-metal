@@ -170,7 +170,6 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
     DeviceLocalBufferConfig device_local_trace_buf_config = {
         .page_size = page_size,
         .buffer_type = BufferType::TRACE,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
     };
 
     ReplicatedBufferConfig global_trace_buf_config = {

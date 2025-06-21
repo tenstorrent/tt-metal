@@ -66,8 +66,7 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_mesh_bu
     const tt::tt_metal::distributed::DeviceLocalBufferConfig device_local_config{
         .page_size = page_size,
         .buffer_type = inputs.buffer_type,
-        .buffer_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
-        .shard_parameters = buffer_distribution_spec,
+        .sharding_args = buffer_distribution_spec,
     };
 
     // Mirrors allocate_mesh_buffer_on_device in ttnn

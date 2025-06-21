@@ -106,8 +106,7 @@ void test_single_connection_single_device_socket(
     const DeviceLocalBufferConfig sender_device_local_config{
         .page_size = data_size,
         .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = sender_data_shard_params,
+        .sharding_args = BufferShardingArgs(sender_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = false};
 
     auto recv_data_shard_params =
@@ -116,8 +115,7 @@ void test_single_connection_single_device_socket(
     const DeviceLocalBufferConfig recv_device_local_config{
         .page_size = data_size,
         .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = recv_data_shard_params,
+        .sharding_args = BufferShardingArgs(recv_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = false};
 
     const ReplicatedBufferConfig buffer_config{.size = data_size};
@@ -307,8 +305,7 @@ void test_single_device_socket_with_workers(
     const DeviceLocalBufferConfig sender_device_local_config{
         .page_size = data_size * num_data_cores,
         .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = sender_data_shard_params,
+        .sharding_args = BufferShardingArgs(sender_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = false};
 
     const ReplicatedBufferConfig sender_buffer_config{.size = data_size * num_data_cores};
@@ -319,8 +316,7 @@ void test_single_device_socket_with_workers(
     const DeviceLocalBufferConfig output_device_local_config{
         .page_size = data_size,
         .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = output_shard_params,
+        .sharding_args = BufferShardingArgs(output_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = false};
 
     const ReplicatedBufferConfig output_buffer_config{.size = data_size * num_output_cores};
@@ -525,8 +521,7 @@ void test_single_device_socket_with_workers(
         const DeviceLocalBufferConfig local_output_device_local_config{
             .page_size = page_size,
             .buffer_type = BufferType::L1,
-            .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-            .shard_parameters = local_output_shard_params,
+            .sharding_args = BufferShardingArgs(local_output_shard_params, TensorMemoryLayout::WIDTH_SHARDED),
             .bottom_up = false};
 
         const ReplicatedBufferConfig local_buffer_config{.size = data_size * num_local_output_cores};
@@ -586,8 +581,7 @@ void test_single_connection_multi_device_socket(
     const DeviceLocalBufferConfig sender_device_local_config{
         .page_size = data_size,
         .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = sender_data_shard_params,
+        .sharding_args = BufferShardingArgs(sender_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = false};
 
     auto recv_data_shard_params =
@@ -596,8 +590,7 @@ void test_single_connection_multi_device_socket(
     const DeviceLocalBufferConfig recv_device_local_config{
         .page_size = data_size,
         .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = recv_data_shard_params,
+        .sharding_args = BufferShardingArgs(recv_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = false};
 
     const ReplicatedBufferConfig buffer_config{.size = data_size};
@@ -787,8 +780,7 @@ void test_single_connection_multi_device_socket_with_workers(
     const DeviceLocalBufferConfig sender_device_local_config{
         .page_size = data_size,
         .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = sender_data_shard_params,
+        .sharding_args = BufferShardingArgs(sender_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = false};
 
     auto output_shard_params =
@@ -797,8 +789,7 @@ void test_single_connection_multi_device_socket_with_workers(
     const DeviceLocalBufferConfig output_device_local_config{
         .page_size = data_size,
         .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = output_shard_params,
+        .sharding_args = BufferShardingArgs(output_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = false};
 
     const ReplicatedBufferConfig buffer_config{.size = data_size};
@@ -1380,8 +1371,7 @@ void test_multi_sender_single_recv(
     const DeviceLocalBufferConfig sender_device_local_config{
         .page_size = data_size,
         .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = sender_data_shard_params,
+        .sharding_args = BufferShardingArgs(sender_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = false};
 
     auto output_data_shard_params =
@@ -1390,8 +1380,7 @@ void test_multi_sender_single_recv(
     const DeviceLocalBufferConfig output_device_local_config{
         .page_size = data_size,
         .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = output_data_shard_params,
+        .sharding_args = BufferShardingArgs(output_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = false};
 
     const ReplicatedBufferConfig sender_buffer_config{.size = data_size};
@@ -1409,8 +1398,7 @@ void test_multi_sender_single_recv(
         const DeviceLocalBufferConfig reduce_device_local_config{
             .page_size = data_size,
             .buffer_type = BufferType::L1,
-            .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-            .shard_parameters = reduce_data_shard_params,
+            .sharding_args = BufferShardingArgs(reduce_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
             .bottom_up = false};
         const ReplicatedBufferConfig reduce_buffer_config{.size = data_size};
         reduce_data_buffer = MeshBuffer::create(reduce_buffer_config, reduce_device_local_config, reducer.get());
@@ -1579,15 +1567,13 @@ void test_multi_connection_multi_device_data_copy(
     const DeviceLocalBufferConfig sender_device_local_config{
         .page_size = data_size,
         .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = sender_data_shard_params,
+        .sharding_args = BufferShardingArgs(sender_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = false};
 
     const DeviceLocalBufferConfig recv_device_local_config{
         .page_size = data_size,
         .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = recv_data_shard_params,
+        .sharding_args = BufferShardingArgs(recv_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = false};
 
     const ReplicatedBufferConfig global_buffer_config{.size = data_size};
