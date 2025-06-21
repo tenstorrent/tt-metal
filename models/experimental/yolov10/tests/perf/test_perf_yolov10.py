@@ -21,7 +21,7 @@ from models.experimental.yolov10.tt.model_preprocessing import (
 
 
 def get_expected_times(name):
-    base = {"yolov10x": (159.66, 10.38)}
+    base = {"yolov10x": (106.10, 0.92)}
     return base[name]
 
 
