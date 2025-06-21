@@ -121,7 +121,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     bfloat16 bfloat_scaler_value = bfloat16(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
 
-    uint32_t chunk_size = (out_sharded) ? 1 : ttnn::get_dest_reg_count(compute_kernel_config);
+    uint32_t chunk_size = (out_sharded && !use_nd_sharding) ? 1 : ttnn::get_dest_reg_count(compute_kernel_config);
 
     if (in_sharded && !use_nd_sharding) {
         std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index};
