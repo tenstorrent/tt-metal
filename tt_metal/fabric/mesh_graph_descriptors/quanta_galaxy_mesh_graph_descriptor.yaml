@@ -19,7 +19,7 @@ Mesh: [
 {
   id: 0,
   board: Galaxy,
-  topology: [1, 1],
+  topology: [8, 4],
   host_ranks: [[0]]}
 ]
 
