@@ -20,6 +20,7 @@
 #include "dataflow_api_addrgen.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_relay.hpp"
 #include "debug/dprint.h"
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
 
@@ -95,10 +96,18 @@ constexpr size_t fabric_worker_flow_control_sem = get_compile_time_arg_val(42);
 constexpr size_t fabric_worker_teardown_sem = get_compile_time_arg_val(43);
 constexpr size_t fabric_worker_buffer_index_sem = get_compile_time_arg_val(44);
 
-constexpr uint32_t num_hops = get_compile_time_arg_val(45);
+constexpr uint8_t num_hops = static_cast<uint8_t>(get_compile_time_arg_val(45));
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(46);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(47);
+constexpr uint32_t my_dev_id = get_compile_time_arg_val(46);
+constexpr uint32_t ew_dim = get_compile_time_arg_val(47);
+constexpr uint32_t to_mesh_id = get_compile_time_arg_val(48);
+constexpr uint32_t to_dev_id = get_compile_time_arg_val(49);
+constexpr uint32_t router_direction = get_compile_time_arg_val(50);
+
+constexpr bool is_2d_fabric = FABRIC_2D;
+
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(51);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(52);
 
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
@@ -210,6 +219,9 @@ static uint32_t upstream_total_acquired_page_count = 0;
 static uint32_t ringbuffer_wp = scratch_db_base;
 static uint32_t ringbuffer_offset = 0;
 
+CQRelayClient<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes, fabric_header_rb_base>
+    relay_client;
+
 // Feature to stall the prefetcher, mainly for ExecBuf impl which reuses CmdDataQ
 static enum StallState { STALL_NEXT = 2, STALLED = 1, NOT_STALLED = 0 } stall_state = NOT_STALLED;
 
@@ -233,16 +245,25 @@ FORCE_INLINE void write_downstream(
     uint32_t remaining = downstream_end - local_downstream_data_ptr;
     if (length > remaining) {
         if (remaining > 0) {
+#if defined(FABRIC_RELAY)
+            noc_async_write(
+                data_ptr, get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr), remaining);
+#else
             cq_noc_async_write_with_state_any_len<true, true, CQNocWait::CQ_NOC_WAIT, downstream_cmd_buf>(
                 data_ptr, get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr), remaining);
+#endif
             data_ptr += remaining;
             length -= remaining;
         }
         local_downstream_data_ptr = downstream_cb_base_addr;
     }
 
+#if defined(FABRIC_RELAY)
+    noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr), length);
+#else
     cq_noc_async_write_with_state_any_len<true, true, CQNocWait::CQ_NOC_WAIT, downstream_cmd_buf>(
         data_ptr, get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr), length);
+#endif
     local_downstream_data_ptr += length;
 }
 
@@ -510,13 +531,22 @@ static uint32_t write_pages_to_dispatcher(
     } else if (downstream_data_ptr + amt_to_write > downstream_cb_end) {  // wrap
         uint32_t last_chunk_size = downstream_cb_end - downstream_data_ptr;
         noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
+#if defined(FABRIC_RELAY)
+        noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
+#else
         cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, last_chunk_size);
+#endif
         downstream_data_ptr = downstream_cb_base;
         scratch_write_addr += last_chunk_size;
         amt_to_write -= last_chunk_size;
     }
     noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
+
+#if defined(FABRIC_RELAY)
+    noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
+#else
     cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, amt_to_write);
+#endif
     downstream_data_ptr += amt_to_write;
 
     return npages;
@@ -1074,8 +1104,12 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
     uint32_t remaining = exec_buf_state.length - sizeof(CQPrefetchCmd);
     while (length > remaining) {
         // wrap cmddat
+#if defined(FABRIC_RELAY)
+        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
+#else
         cq_noc_async_write_with_state_any_len<true, true>(
             data_ptr, get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
+#endif
         dispatch_data_ptr += remaining;
         length -= remaining;
         stride -= remaining_stride;
@@ -1090,8 +1124,13 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
         remaining = exec_buf_state.length;
         remaining_stride = exec_buf_state.length;
     }
+
+#if defined(FABRIC_RELAY)
+    noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
+#else
     cq_noc_async_write_with_state_any_len<true, true>(
         data_ptr, get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
+#endif
     dispatch_data_ptr += length;
 
     return stride;
@@ -1477,7 +1516,6 @@ bool process_cmd(
 // It expects the NoC async write state to be initialized to point to the downstream
 static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool is_exec_buf) {
     uint32_t length = fence - data_ptr;
-
     // Downstream doesn't have FetchQ to tell it how much data to process
     // This packet header just contains the length
     volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* dptr = (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)data_ptr;
@@ -1504,14 +1542,15 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
     if (downstream_pages_left >= npages) {
         // WAIT is not needed here because previous writes have already been flushed. Prefetch H only uses this
         // function and this function always flushes before returning
-        cq_noc_async_write_with_state_any_len<true, true, CQ_NOC_wait>(
-            data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length);
+        relay_client
+            .write_atomic_inc_any_len<my_noc_index, downstream_noc_xy, downstream_cb_sem_id, false, NCRISC_WR_CMD_BUF>(
+                data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length, npages);
         downstream_data_ptr += npages * downstream_cb_page_size;
     } else {
         uint32_t tail_pages = npages - downstream_pages_left;
         uint32_t available = downstream_pages_left * downstream_cb_page_size;
         if (available > 0) {
-            cq_noc_async_write_with_state_any_len<true, true, CQ_NOC_wait>(
+            relay_client.write_any_len<my_noc_index, false, NCRISC_WR_CMD_BUF, true>(
                 data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), available);
             data_ptr += available;
             length -= available;
@@ -1520,13 +1559,14 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
         // Remainder
         // WAIT is needed here because previously "if (available > 0)" then it used the write buf which may still be
         // busy at this point
-        cq_noc_async_write_with_state_any_len<true, true, CQ_NOC_WAIT>(
-            data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), length);
+        relay_client
+            .write_atomic_inc_any_len<my_noc_index, downstream_noc_xy, downstream_cb_sem_id, true, NCRISC_WR_CMD_BUF>(
+                data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), length, npages);
+
         downstream_data_ptr = downstream_cb_base + tail_pages * downstream_cb_page_size;
     }
 
     noc_async_writes_flushed();
-    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
 
     return fence;
 }
@@ -1574,7 +1614,29 @@ void kernel_main_h() {
     uint32_t heartbeat = 0;
 
     // Fetch q uses read buf. Write buf for process_relay_inline_all can be setup once
-    cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0);
+    relay_client.init<
+        my_noc_index,
+        fabric_mux_x,
+        fabric_mux_y,
+        worker_credits_stream_id,
+        fabric_mux_channel_base_address,
+        fabric_mux_flow_control_address,
+        fabric_mux_connection_handshake_address,
+        fabric_mux_connection_info_address,
+        fabric_mux_buffer_index_address,
+        fabric_worker_flow_control_sem,
+        fabric_worker_teardown_sem,
+        fabric_worker_buffer_index_sem,
+        fabric_mux_status_address,
+        my_fabric_sync_status_addr,
+        my_dev_id,
+        to_dev_id,
+        to_mesh_id,
+        ew_dim,
+        router_direction,
+        fabric_header_rb_base,
+        num_hops,
+        NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0));
 
     while (!done) {
         fetch_q_get_cmds<sizeof(CQPrefetchHToPrefetchDHeader)>(fence, cmd_ptr, pcie_read_ptr);
@@ -1613,10 +1675,37 @@ void kernel_main_d() {
     uint32_t heartbeat = 0;
     uint32_t l1_cache[l1_cache_elements_rounded];
 
+    // Cmdbuf allocation is not defined yet for fabric so we can't use stateful APIs on Dispatch D
+#if defined(FABRIC_RELAY)
+    relay_client.init<
+        my_noc_index,
+        fabric_mux_x,
+        fabric_mux_y,
+        worker_credits_stream_id,
+        fabric_mux_channel_base_address,
+        fabric_mux_flow_control_address,
+        fabric_mux_connection_handshake_address,
+        fabric_mux_connection_info_address,
+        fabric_mux_buffer_index_address,
+        fabric_worker_flow_control_sem,
+        fabric_worker_teardown_sem,
+        fabric_worker_buffer_index_sem,
+        fabric_mux_status_address,
+        my_fabric_sync_status_addr,
+        my_dev_id,
+        to_dev_id,
+        to_mesh_id,
+        ew_dim,
+        router_direction,
+        fabric_header_rb_base,
+        num_hops,
+        NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0));
+#else
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0, my_noc_index);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0, my_noc_index);
+#endif
 
     while (!done) {
         // cmds come in packed batches based on HostQ reads in prefetch_h
@@ -1648,7 +1737,7 @@ void kernel_main_d() {
         // TODO: evaluate less costly free pattern (blocks?)
         uint32_t total_length = length + sizeof(CQPrefetchHToPrefetchDHeader);
         uint32_t pages_to_free = (total_length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
-        cb_release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
+        relay_client.release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
 
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, cmddat_q_page_size);
@@ -1656,11 +1745,7 @@ void kernel_main_d() {
 
     // Set upstream semaphore MSB to signal completion and path teardown
     // in case prefetch_d is connected to a depacketizing stage.
-    // TODO: This should be replaced with a signal similar to what packetized
-    // components use.
-    // DPRINT << "prefetch_d done" << ENDL();
-    noc_semaphore_inc(
-        get_noc_addr_helper(upstream_noc_xy, get_semaphore<fd_core_type>(upstream_cb_sem_id)), 0x80000000);
+    relay_client.teardown<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>();
 }
 
 void kernel_main_hd() {
@@ -1692,7 +1777,12 @@ void kernel_main_hd() {
 }
 
 void kernel_main() {
+#if defined(FABRIC_RELAY)
+    DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start (fabric relay. 2d = " << (uint32_t)is_2d_fabric
+           << ")" << ENDL();
+#else
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
+#endif
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();

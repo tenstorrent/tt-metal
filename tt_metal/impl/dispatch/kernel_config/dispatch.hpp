@@ -51,6 +51,7 @@ struct dispatch_static_config_t {
     std::optional<uint32_t> fabric_header_rb_base;
     std::optional<uint32_t> fabric_header_rb_entries;
     std::optional<uint32_t> my_fabric_sync_status_addr;
+    std::optional<bool> is_2d_fabric;
 
     std::optional<bool> is_d_variant;
     std::optional<bool> is_h_variant;
@@ -76,6 +77,12 @@ struct dispatch_dependent_config_t {
     std::optional<uint32_t> num_hops;
 
     tt::tt_metal::relay_mux_client_config fabric_mux_client_config;
+
+    std::optional<uint32_t> my_dev_id;
+    std::optional<uint32_t> ew_dim;
+    std::optional<uint32_t> to_mesh_id;
+    std::optional<uint32_t> to_dev_id;
+    std::optional<uint32_t> router_direction;
 };
 
 class DispatchKernel : public FDKernel {
@@ -129,6 +136,8 @@ private:
     dispatch_static_config_t static_config_;
     dispatch_dependent_config_t dependent_config_;
     FDKernelEdmConnectionAttributes edm_connection_attributes_;
+
+    bool is_hd() const { return static_config_.is_h_variant.value() && static_config_.is_d_variant.value(); }
 };
 
 }  // namespace tt_metal
