@@ -22,6 +22,7 @@
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
 #include "eth_router.hpp"
+#include "fabric_edm_types.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
@@ -217,9 +218,13 @@ void PrefetchKernel::GenerateStaticConfigs() {
         ringbuffer_size,
         l1_size);
 
-    if ((static_config_.is_h_variant.value() ^ static_config_.is_d_variant.value()) &&
-        tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
+    if (!is_hd() && tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
         create_edm_connection_sems(edm_connection_attributes_);
+        static_config_.is_2d_fabric =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_topology() ==
+            tt_fabric::Topology::Mesh;
+    } else {
+        static_config_.is_2d_fabric = false;
     }
 }
 
@@ -317,6 +322,8 @@ void PrefetchKernel::GenerateDependentConfigs() {
                 dependent_config_.downstream_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
                 dependent_config_.downstream_cb_pages = prefetch_d->GetStaticConfig().cmddat_q_pages.value();
                 dependent_config_.num_hops = tt::tt_metal::get_num_hops(device_id_, prefetch_d->GetDeviceId());
+                assemble_2d_fabric_packet_header_args(
+                    this->dependent_config_, GetDeviceId(), prefetch_d->GetDeviceId());
             } else if (auto fabric_mux = dynamic_cast<tt::tt_metal::RelayMux*>(ds_kernel)) {
                 constexpr tt::tt_fabric::FabricMuxChannelType ch_type =
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
@@ -341,6 +348,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
             dependent_config_.upstream_logical_core = prefetch_h->GetLogicalCore();
             dependent_config_.upstream_cb_sem_id = prefetch_h->GetStaticConfig().my_downstream_cb_sem_id.value();
             dependent_config_.num_hops = tt::tt_metal::get_num_hops(prefetch_h->GetDeviceId(), device_id_);
+            assemble_2d_fabric_packet_header_args(this->dependent_config_, GetDeviceId(), prefetch_h->GetDeviceId());
         } else {
             TT_FATAL(false, "Path not implemented");
         }
@@ -452,6 +460,12 @@ void PrefetchKernel::CreateKernel() {
 
         dependent_config_.num_hops.value(),
 
+        dependent_config_.my_dev_id.value_or(0),
+        dependent_config_.ew_dim.value_or(0),
+        dependent_config_.to_mesh_id.value_or(0),
+        dependent_config_.to_dev_id.value_or(0),
+        dependent_config_.router_direction.value_or(0),
+
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
     };
@@ -482,6 +496,13 @@ void PrefetchKernel::CreateKernel() {
         {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},
         {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},
     };
+
+    if (!is_hd() && tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
+        defines["FABRIC_RELAY"] = "1";
+        if (static_config_.is_2d_fabric.value_or(false)) {
+            defines["FABRIC_2D"] = "1";
+        }
+    }
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
     configure_kernel_variant(
