@@ -163,17 +163,22 @@ void kernel_main() {
                 output_tile_id_start = actual_sender_chip_id * input_tensor_Ht * input_tensor_Wt;
             }
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
+                // TODO: (GR) Un hard-code
+                uint32_t max_tiles_per_packet = 2;
+
                 while (tiles_read < tiles_to_read) {
-                    uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);  // 2
-                    cb_reserve_back(cb_output_id, packet_size_in_pages);
+                    uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+                    uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, max_tiles_per_packet);
+
+                    cb_reserve_back(cb_output_id, num_tiles_to_read);
                     size_t l1_write_addr = get_write_ptr(cb_output_id);
-                    for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {  // done only once ?
-                        noc_async_read_tile(
-                            output_tile_id_start + row_offset + pages_read_in_row,
-                            output_tensor_addrgen,
-                            l1_write_addr);
+
+                    for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
+                        uint32_t tile_id = output_tile_id_start + row_offset + pages_read_in_row;
+                        noc_async_read_tile(tile_id, output_tensor_addrgen, l1_write_addr);
+
                         l1_write_addr += payload_size_bytes;
-                        tiles_read += contig_pages_advanced;
+                        tiles_read++;
 
                         pages_read_in_row++;
                         if (pages_read_in_row >= slice_Wt) {
@@ -183,7 +188,7 @@ void kernel_main() {
                     }
 
                     noc_async_read_barrier();
-                    cb_push_back(cb_output_id, packet_size_in_pages);
+                    cb_push_back(cb_output_id, num_tiles_to_read);
                 }
                 pages_read_in_row = start_pages_read_in_row;
                 row_offset = start_row_offset;
