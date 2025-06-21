@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#pragma once
 
 #include "ttnn/operations/experimental/where/device/program_factory/element_wise_multi_core_where_program.hpp"
 #include "ttnn/operations/experimental/where/device/program_factory/elemwise_factory_common.hpp"
