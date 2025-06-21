@@ -1,5 +1,0 @@
-{
-    "editor.formatOnSave": true,
-    "files.autoSave": "afterDelay",
-    "C_Cpp.clang_format_style": ".clang-format"
-}
