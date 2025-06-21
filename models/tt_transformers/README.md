@@ -1,19 +1,21 @@
 # TT-Transformers
 
-This code can run large language models that are similar to the Llama3 family and other similar models such as Qwen2.5, Mistral and DeepSeek-R1-Distill variants. Tensor-parallelism is automatically used to parallelize workloads across all available chips.
+This code can run large language models such as the Llama3 family, Qwen2.5, Mistral, DeepSeek-R1-Distill variants and similar. Tensor-parallelism automatically distributes workloads across all available chips.
 
 The current version is verified to work with the following models:
-- Llama3.2-1B
-- Llama3.2-3B
-- Llama3.1-8B
-- Llama3.2-11B
-- Llama3.1-70B (LoudBox / QuietBox and Galaxy)
-- Llama3.2-90B (LoudBox / QuietBox)
-- Qwen2.5-7B (N300)
-- Qwen2.5-72B (LoudBox / QuietBox)
-- Qwen3-32B (LoudBox / QuietBox)
-- DeepSeek R1 Distill Llama 3.3 70B (LoudBox / QuietBox and Galaxy)
-- [Mistral-7B-Instruct-v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)
+| Model                                                                                            | Hardware                    | <org/name>                                      |
+|--------------------------------------------------------------------------------------------------|-----------------------------|-------------------------------------------------|
+| [DeepSeek R1 Distill Llama 70B](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-70B)| LoudBox / QuietBox / Galaxy | ```deepseek-ai/DeepSeek-R1-Distill-Llama-70B``` |
+| [Llama 3.1 8B](https://huggingface.co/meta-llama/Llama-3.1-8B)                                   | n150 / p100 / p150          | ```meta-llama/Llama-3.1-8B```                   |
+| [Llama 3.1 70B](https://huggingface.co/meta-llama/Llama-3.1-70B)                                 | LoudBox / QuietBox / Galaxy | ```meta-llama/Llama-3.1-70B```                  |
+| [Llama 3.2 1B](https://huggingface.co/meta-llama/Llama-3.2-1B)                                   | n150                        | ```meta-llama/Llama-3.2-1B```                   |
+| [Llama 3.2 3B](https://huggingface.co/meta-llama/Llama-3.2-3B)                                   | n150                        | ```meta-llama/Llama-3.2-3B```                   |
+| [Llama 3.2 11B Vision](https://huggingface.co/meta-llama/Llama-3.2-11B-Vision)                   | n300                        | ```meta-llama/Llama-3.2-11B-Vision```           |
+| [Llama 3.2 90B Vision](https://huggingface.co/meta-llama/Llama-3.2-90B-Vision)                   | LoudBox / QuietBox          | ```meta-llama/Llama-3.2-90B-Vision```           |
+| [Mistral 7B Instruct v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)            | n150                        | ```mistralai/Mistral-7B-Instruct-v0.3```        |
+| [Qwen 2.5 7B](https://huggingface.co/Qwen/Qwen2.5-7B)                                            | n300                        | ```Qwen/Qwen2.5-7B```                           |
+| [Qwen 2.5 72B](https://huggingface.co/Qwen/Qwen2.5-72B)                                          | LoudBox / QuietBox          | ```Qwen/Qwen2.5-72B```                          |
+| [Qwen 3 32B](https://huggingface.co/Qwen/Qwen3-32B)                                              | LoudBox / QuietBox          | ```Qwen/Qwen3-32B```                            |
 
 ## Dependencies
 
@@ -26,15 +28,20 @@ pip install -r models/tt_transformers/requirements.txt
 
 ## Run a demo
 
-### 1. Specify which model you want to run
+To run a demo, choose one of the methods below for downloading the model weights:
 
-The easiest way to do this is to set the `HF_MODEL` environment variable to the Huggingface org/name of the model you want to run:
+### 1. Automatic download
 
+Set the `HF_MODEL` environment variable to the Huggingface org/name of the model you want to run, This will automatically download the weights into your HuggingFace cache directory and run the model directly.
+
+Check the models chart on the top of the page and substitue the <org/name> on the following command:
 ```
-export HF_MODEL=deepseek-ai/DeepSeek-R1-Distill-Llama-70B
+export HF_MODEL=deepseek-ai/<org/name>
 ```
 
-This will automatically download the weights into your HuggingFace cache directory and run the model directly. If you wish, you can manually download the weights either from Huggingface or from Meta as described by the two following sections:
+### 2. Manual download
+
+If you wish, you can manually download the weights either from Huggingface or from Meta as described by the two following sections:
 
 #### Option 1: download Llama weights from Meta
 
