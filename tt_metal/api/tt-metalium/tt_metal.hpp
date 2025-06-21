@@ -111,8 +111,7 @@ void WriteToBuffer(std::shared_ptr<Buffer> buffer, const std::vector<DType>& hos
     WriteToBuffer(*buffer, host_buffer);
 }
 
-// TODO: Remove shard_order from this function
-void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer, bool shard_order = false);
+void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer);
 /**
  * Copies data from a buffer into a host buffer
  *
@@ -121,19 +120,18 @@ void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer, bool shard_order = fal
  * | Argument    | Description                                     | Data type               | Valid range | Required |
  * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
  * | buffer      | Buffer to read data from                        | Buffer &                | | Yes      | |
- * host_buffer | Buffer on host to copy data into                | std::vector<DType> &    | | Yes      | | shard_order
- * | For a sharded buffer we can read in shard order | bool                    | | No       |
+ * host_buffer | Buffer on host to copy data into                | std::vector<DType> &    | | Yes      | |
  */
 template <typename DType>
-void ReadFromBuffer(Buffer& buffer, std::vector<DType>& host_buffer, bool shard_order = false) {
+void ReadFromBuffer(Buffer& buffer, std::vector<DType>& host_buffer) {
     auto buffer_size = buffer.size();
     TT_FATAL(buffer_size % sizeof(DType) == 0, "Buffer size is not divisible by dtype size");
     host_buffer.resize(buffer.size() / sizeof(DType));
-    ReadFromBuffer(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()), shard_order);
+    ReadFromBuffer(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()));
 }
 template <typename DType>
-void ReadFromBuffer(std::shared_ptr<Buffer> buffer, std::vector<DType>& host_buffer, bool shard_order = false) {
-    ReadFromBuffer(*buffer, host_buffer, shard_order);
+void ReadFromBuffer(std::shared_ptr<Buffer> buffer, std::vector<DType>& host_buffer) {
+    ReadFromBuffer(*buffer, host_buffer);
 }
 
 void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id);

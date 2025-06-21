@@ -36,7 +36,7 @@ public:
     size_t num_cores() const { return cores_.size(); }
     const std::vector<CoreCoord>& get_cores() const { return cores_; }
 
-    BufferPageMapping compute_page_mapping() const;
+    UncompressedBufferPageMapping compute_page_mapping() const;
 
 private:
     tt::tt_metal::Shape tensor_shape_in_pages_;

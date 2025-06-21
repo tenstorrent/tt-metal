@@ -171,7 +171,7 @@ struct BufferRegion {
     BufferRegion(DeviceAddr offset, DeviceAddr size) : offset(offset), size(size) {}
 };
 
-class Buffer final {
+class Buffer final : public std::enable_shared_from_this<Buffer> {
     // Used in public Buffer constructors so they are only callable within Buffer
     // Buffer constructors are public so we can call std::make_shared on Buffer
     struct Private {
@@ -207,6 +207,11 @@ public:
         const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameter = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
+
+    // Creates a view of the region of the buffer.
+    // The view is a new buffer (unless the region is the entire buffer) that shares the same underlying device memory.
+    // The view keeps the underlying buffer alive as long as the view is alive.
+    std::shared_ptr<Buffer> view(const BufferRegion& region);
 
     Buffer(const Buffer& other) = delete;
     Buffer& operator=(const Buffer& other) = delete;
@@ -245,28 +250,22 @@ public:
 
     DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
 
-    DeviceAddr bank_local_page_address(uint32_t bank_id, uint32_t page_index) const;
     uint32_t alignment() const;
     DeviceAddr aligned_page_size() const;
     DeviceAddr aligned_size() const;
     DeviceAddr aligned_size_per_bank() const;
 
     // SHARDED API STARTS HERE
-    // If buffer contains BufferDistributionSpec, it is considered ND sharded
-    bool is_nd_sharded() const;
     const std::optional<BufferDistributionSpec>& buffer_distribution_spec() const;
-
-    // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
-
-    DeviceAddr sharded_page_address(uint32_t bank_id, uint32_t page_index) const;
-
     ShardSpecBuffer shard_spec() const;
     void set_shard_spec(const ShardSpecBuffer& shard_spec);
-
-    // TODO: Consolidate with interleaved and delete this (maybe get from BufferDistributionSpec)
     std::optional<uint32_t> num_cores() const;
-
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
+
+    // Returns the buffer that owns the underlying device memory.
+    // Typically returns itself unless the buffer was created with a view method.
+    std::shared_ptr<Buffer> root_buffer();
+    BufferRegion root_buffer_region() const { return BufferRegion(root_buffer_offset_, size_); }
 
     std::optional<SubDeviceId> sub_device_id() const { return sub_device_id_; }
 
@@ -325,11 +324,17 @@ private:
 
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
 
+    // The root buffer is the buffer that owns the underlying device memory.
+    // The root buffer is populated only when the buffer was created with a view method.
+    std::shared_ptr<Buffer> root_buffer_;
+    // Offset of the current view buffer in the root buffer
+    DeviceAddr root_buffer_offset_ = 0;
+
     size_t unique_id_ = 0;
     static std::atomic<size_t> next_unique_id;
 };
 
-BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer);
+UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer);
 
 using HostDataType = std::variant<
     const std::shared_ptr<std::vector<uint8_t>>,
