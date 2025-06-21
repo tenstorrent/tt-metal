@@ -140,7 +140,7 @@ void kernel_main() {
         size_t l1_read_addr = get_read_ptr(cb_forward_id);
 
         for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-            const uint32_t actual_num_pages = min(num_pages_to_read - j, contig_pages_advanced);
+            const uint32_t actual_num_pages = std::min(num_pages_to_read - j, contig_pages_advanced);
             for (uint32_t i = 0; i < actual_num_pages; i++) {
                 uint64_t noc0_dest_noc_addr =
                     get_noc_addr(tile_id_start + rows + pages_read_in_row, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
@@ -262,7 +262,7 @@ void kernel_main() {
                 size_t l1_read_addr = get_read_ptr(cb_forward_id);
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     const uint32_t payload_size_bytes =
-                        intermediate_page_size * min(num_pages_to_read - j, contig_pages_advanced);
+                        intermediate_page_size * std::min(num_pages_to_read - j, contig_pages_advanced);
 
                     uint32_t intermediate_packet_first_tile_id =
                         intermediate_packet_id_x + contig_pages_advanced * N_DRAM_BANKS * intermediate_packet_id_y;
@@ -276,7 +276,7 @@ void kernel_main() {
                         l1_read_addr,
                         payload_size_bytes);
 
-                    tiles_read += min(num_pages_to_read - j, contig_pages_advanced);
+                    tiles_read += std::min(num_pages_to_read - j, contig_pages_advanced);
 
                     intermediate_packet_id_x += ring_size;
                     if (intermediate_packet_id_x >= N_DRAM_BANKS) {
@@ -320,7 +320,7 @@ void kernel_main() {
                 size_t l1_read_addr = get_read_ptr(cb_backward_id);
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     const uint32_t payload_size_bytes =
-                        intermediate_page_size * min(num_pages_to_read - j, contig_pages_advanced);
+                        intermediate_page_size * std::min(num_pages_to_read - j, contig_pages_advanced);
                     uint32_t intermediate_packet_first_tile_id =
                         intermediate_packet_id_x + contig_pages_advanced * N_DRAM_BANKS * intermediate_packet_id_y;
                     uint64_t remote_noc0_dest_noc_addr = get_noc_addr(
@@ -333,7 +333,7 @@ void kernel_main() {
                         l1_read_addr,
                         payload_size_bytes);
 
-                    tiles_read += min(num_pages_to_read - j, contig_pages_advanced);
+                    tiles_read += std::min(num_pages_to_read - j, contig_pages_advanced);
 
                     intermediate_packet_id_x += ring_size;
                     if (intermediate_packet_id_x >= N_DRAM_BANKS) {
