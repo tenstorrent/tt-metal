@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <random>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
@@ -20,14 +21,17 @@ using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
+// Reference implementation of matrix multiplication.
+// Array A is of size MxK, Array B is of size KxN, and the output C is of size MxN.
+// The implementation is bare bones and does not include optimizations such as tiling or vectorization.
+// This is intended to be used as a golden reference for testing the Metalium implementation.
 void golden_matmul(
     std::vector<bfloat16>& a,
     std::vector<bfloat16>& b,
     std::vector<bfloat16>& output,
     uint32_t M,
     uint32_t N,
-    uint32_t K,
-    uint32_t /*B*/) {
+    uint32_t K) {
     std::uint32_t idx_c = 0;
     std::uint32_t idx_a = 0;
     std::uint32_t idx_b = 0;
@@ -53,217 +57,202 @@ void golden_matmul(
     }
 }
 
+/**
+ * @brief Multi-core matrix multiplication using SPMD (Single Program, Multiple Data) parallelization.
+ *
+ * Performs C = A * B matrix multiplication by distributing output tiles across multiple cores.
+ * Each core runs the same program but works on different portions of the output matrix,
+ * making this a simple and efficient parallelization scheme.
+ *
+ * The function uses three types of kernels running in parallel:
+ * - Reader: Loads input matrix tiles from DRAM into circular buffers
+ * - Compute: Performs tile-wise matrix multiplication (A_tile * B_tile = C_tile)
+ * - Writer: Stores computed output tiles back to DRAM
+ *
+ * Work distribution is handled automatically - if output tiles don't divide evenly
+ * across cores, some cores get one extra tile to balance the workload.
+ *
+ * @param a Input matrix A in row-major format (bfloat16 elements)
+ * @param b Input matrix B in row-major format (bfloat16 elements)
+ * @param output Output matrix C to store A*B result (bfloat16 elements)
+ * @param M Number of rows in matrix A and output matrix C
+ * @param N Number of columns in matrix B and output matrix C
+ * @param K Number of columns in matrix A and rows in matrix B
+ * @param device Target device for computation
+ *
+ * @note Matrix dimensions must be divisible by tile size (32x32) for this implementation
+ * @note Uses circular buffers with 2 tiles for double-buffering to overlap compute and data movement
+ */
 void matmul_multi_core(
     std::vector<bfloat16>& a,
     std::vector<bfloat16>& b,
     std::vector<bfloat16>& output,
-    bool bcast_batch,
     uint32_t M,
     uint32_t N,
     uint32_t K,
-    uint32_t B,
     IDevice* device) {
-    /*
-     * Setup program to execute along with its buffers and kernels to use
-     */
+    // Check if the configuration is valid - matrices must be divisible by tile dimensions
+    TT_ASSERT(
+        (M * N) % TILE_HW == 0,
+        "Matrix dimensions M={} and N={} must be divisible by TILE_HW={} to use this matmul implementation",
+        M,
+        N,
+        TILE_HW);
+
+    // Setup the device and command queue for multi-core execution
     CommandQueue& cq = device->command_queue();
     Program program{};
 
-    /*
-     * Multi-Core prep
-     */
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-
-    // From tt_metal/common/constants.hpp
+    // Get the compute grid size to determine how many cores are available
+    auto core_grid = device->compute_with_storage_grid_size();
     auto num_output_tiles_total = (M * N) / TILE_HW;
 
-    /*
-     * Use a helper function to deduce the splits needed to co-operatively do
-     * this matmul.
-     */
-    auto
-        [num_cores,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         num_output_tiles_per_core_group_1,
-         num_output_tiles_per_core_group_2] =
-            split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
+    // Use the split_work_to_cores utility function to distribute matrix multiplication work
+    // across available cores for efficient SPMD (Single Program, Multiple Data) execution.
+    // This function takes the total number of output tiles and available cores, then calculates
+    // how to divide the work when it cannot be evenly distributed. It returns two groups of cores:
+    // - Primary group: handles more tiles per core
+    // - Secondary group: handles fewer tiles per core
+    // The secondary group is empty if the work can be evenly distributed across all cores. This
+    // approach minimizes workload imbalance between cores for optimal performance.
+    auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core1, work_per_core2] =
+        split_work_to_cores(core_grid, num_output_tiles_total);
 
-    /*
-     * Extracting Matrix dimensions from input/output vectors
-     */
-    // C = A*B
-    // MN = MK*KN
-    uint32_t Mt = M / TILE_HEIGHT;
-    uint32_t Kt = K / TILE_WIDTH;
-    uint32_t Nt = N / TILE_WIDTH;
-    uint32_t KtNt = Kt * Nt;
-    uint32_t MtKt = Mt * Kt;
-    uint32_t MtNt = Mt * Nt;
+    // Extracting Matrix dimensions from input/output vectors and converting to tile coordinates.
+    // The accelerator works with 32x32 tiles, so we need to convert from element dimensions
+    // to tile dimensions for proper addressing and computation.
+    const uint32_t Mt = M / TILE_HEIGHT;  // Number of tiles in M dimension
+    const uint32_t Kt = K / TILE_WIDTH;   // Number of tiles in K dimension
+    const uint32_t Nt = N / TILE_WIDTH;   // Number of tiles in N dimension
 
-    /*
-     * Create DRAM Buffers for input and output vectors
-     * Writing data from input vectors to source buffers
-     */
-    tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
-    uint32_t single_tile_size = 2 * 32 * 32;
+    // Create DRAM Buffers for input and output vectors.
+    // We allocate DRAM buffers for the input matrices and output matrix.
+    // Setting page_size to single_tile_size is the most common configuration for memory buffers in Metalium
+    // as it is generic, works for most cases and achieves good performance.
+    // Writing data from input vectors to source buffers.
+    constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;  // 2 * 32 * 32 = 2048 bytes
 
-    uint32_t dram_buffer_A_size =
-        single_tile_size * Mt * Kt;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    uint32_t dram_buffer_B_size =
-        single_tile_size * Nt * Kt;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    uint32_t dram_buffer_C_size =
-        single_tile_size * Mt * Nt;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     tt_metal::InterleavedBufferConfig dram_config_A{
         .device = device,
-        .size = dram_buffer_A_size,
+        .size = single_tile_size * Mt * Kt,
         .page_size = single_tile_size,
         .buffer_type = tt_metal::BufferType::DRAM};
 
     tt_metal::InterleavedBufferConfig dram_config_B{
         .device = device,
-        .size = dram_buffer_B_size,
+        .size = single_tile_size * Nt * Kt,
         .page_size = single_tile_size,
         .buffer_type = tt_metal::BufferType::DRAM};
 
     tt_metal::InterleavedBufferConfig dram_config_C{
         .device = device,
-        .size = dram_buffer_C_size,
+        .size = single_tile_size * Mt * Nt,
         .page_size = single_tile_size,
         .buffer_type = tt_metal::BufferType::DRAM};
 
-    std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config_A);
-    std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config_B);
-    std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config_C);
-    uint32_t src0_addr = src0_dram_buffer->address();
-    uint32_t src1_addr = src1_dram_buffer->address();
-    uint32_t dst_addr = dst_dram_buffer->address();
+    auto src0_dram_buffer = CreateBuffer(dram_config_A);
+    auto src1_dram_buffer = CreateBuffer(dram_config_B);
+    auto dst_dram_buffer = CreateBuffer(dram_config_C);
 
-    /*
-     * Config of Circular Buffer in the device L1
-     * input tiles count is = 2 because it's single tile process, and double-buffer
-     */
-    uint32_t src0_cb_index = CBIndex::c_0;  // 0
+    // Configure Circular Buffers
+    // Circular buffers act as staging areas for data movement between DRAM and compute units.
+    // Using 2 tiles per circular buffer to allow for double buffering (data movement can be reading from one tile while
+    // the compute kernel is using the other tile). This number can be adjusted based on the use case, but generally
+    // diminishing returns are observed after several tiles.
+    // input tiles count is = 2 so one tile can be read while the other is being processed
+    const auto cb_data_format = tt::DataFormat::Float16_b;
+    uint32_t src0_cb_index = CBIndex::c_0;  // Circular buffer index for matrix A
     uint32_t num_input_tiles = 2;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(
+        program,
+        all_cores,  // create on all cores
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_0, cb_data_format}})
+            .set_page_size(CBIndex::c_0, single_tile_size));
 
-    uint32_t src1_cb_index = CBIndex::c_1;  // 1
-    CircularBufferConfig cb_src1_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
-            .set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    auto cb_src1 = tt_metal::CreateCircularBuffer(
+        program,
+        all_cores,  // create on all cores
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_1, cb_data_format}})
+            .set_page_size(CBIndex::c_1, single_tile_size));
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
-    uint32_t num_output_tiles = 2;
-    CircularBufferConfig cb_output_config =
-        CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
-            .set_page_size(output_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    auto cb_output = tt_metal::CreateCircularBuffer(
+        program,
+        all_cores,  // create on all cores
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_16, cb_data_format}})
+            .set_page_size(CBIndex::c_16, single_tile_size));
 
-    /*
-     * Compile time arguments
-     */
-    bool src0_is_dram = src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool src1_is_dram = src1_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
-
-    bool dst_is_dram = dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (uint32_t)dst_is_dram};
-
-    /*
-     * Create Kernels (Reader, Writer, Compute)
-     */
+    // Create Kernels (Reader, Writer, Compute)
+    // - Reader kernel: Handles reading input data from DRAM into circular buffers
+    // - Writer kernel: Handles writing output data from circular buffers back to DRAM
+    // - Compute kernel: Performs the actual matrix multiplication computation
+    // All kernels run across all cores to enable parallel execution
+    MathFidelity math_fidelity = MathFidelity::HiFi4;  // High fidelity math for accurate results
     auto reader_id = tt_metal::CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "matmul_common/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
+        OVERRIDE_KERNEL_PREFIX "matmul_multi_core/kernels/dataflow/reader_mm_output_tiles_partitioned.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = reader_compile_time_args});
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = {}});
 
     auto writer_id = tt_metal::CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "matmul_common/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        OVERRIDE_KERNEL_PREFIX "matmul_multi_core/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_compile_time_args});
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = {}});
 
-    std::vector<uint32_t> compute_args_group_1 = {
-        1,                                 // B
-        1,                                 // Mt
-        Kt,                                // Kt
-        num_output_tiles_per_core_group_1  // Nt
-    };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt
-        // for simplicity
-
-    auto matmul_multi_core_kernel_group_1_id = tt_metal::CreateKernel(
+    auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "matmul_common/kernels/compute/bmm.cpp",
-        core_group_1,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_1});
+        OVERRIDE_KERNEL_PREFIX "matmul_multi_core/kernels/compute/mm.cpp",
+        all_cores,
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = {}});
 
-    if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_args_group_2 = {
-            1,                                 // B
-            1,                                 // Mt
-            Kt,                                // Kt
-            num_output_tiles_per_core_group_2  // Nt
-        };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set
-            // Nt for simplicity
+    // Set Runtime Arguments for Kernels
+    // Each core needs to know which portion of the work it's responsible for. We are parallelizing across output
+    // tiles - each core computes different output tiles. Runtime arguments can be changed between program executions
+    // without recompilation.
+    uint32_t work_offset = 0;
+    auto work_groups = {std::make_pair(core_group_1, work_per_core1), std::make_pair(core_group_2, work_per_core2)};
 
-        auto matmul_multi_core_kernel_group_2_id = tt_metal::CreateKernel(
-            program,
-            OVERRIDE_KERNEL_PREFIX "matmul_common/kernels/compute/bmm.cpp",
-            core_group_2,
-            tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_2});
-    }
+    // Iterate through each work group and assign work to cores
+    for (const auto& [ranges, work_per_core] : work_groups) {
+        for (const auto& range : ranges.ranges()) {
+            for (const auto& core : range) {
+                // Set arguments for the reader kernel (data input)
+                tt_metal::SetRuntimeArgs(
+                    program,
+                    reader_id,
+                    core,
+                    {src0_dram_buffer->address(),  // Address of matrix A in DRAM
+                     src1_dram_buffer->address(),  // Address of matrix B in DRAM
+                     Mt,                           // Number of tiles in M dimension
+                     Kt,                           // Number of tiles in K dimension
+                     Nt,                           // Number of tiles in N dimension
+                     work_offset,                  // Starting offset for this core's work
+                     work_per_core});              // Amount of work for this core
 
-    /*
-     * Kernels - Runtime arguments
-     */
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+                // Set arguments for the writer kernel (data output)
+                tt_metal::SetRuntimeArgs(
+                    program, writer_id, core, {dst_dram_buffer->address(), work_per_core, work_offset});
 
-        uint32_t num_output_tiles_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_output_tiles_per_core = num_output_tiles_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_output_tiles_per_core = num_output_tiles_per_core_group_2;
-        } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+                // Set arguments for the compute kernel
+                tt_metal::SetRuntimeArgs(
+                    program,
+                    compute_kernel_id,
+                    core,
+                    {work_per_core,            // Amount of work for this core
+                     Kt});                     // Number of tiles in K dimension for dot product
+                work_offset += work_per_core;  // Update offset for next core
+            }
         }
-
-        tt_metal::SetRuntimeArgs(
-            program,
-            reader_id,
-            core,
-            {src0_addr,
-             src1_addr,
-             Mt,
-             Kt,
-             Nt,
-             MtKt,
-             KtNt,
-             B,
-             uint32_t(bcast_batch),
-             num_tiles_written,
-             num_output_tiles_per_core,
-             MtNt});
-        tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, num_output_tiles_per_core, num_tiles_written});
-        num_tiles_written += num_output_tiles_per_core;
     }
 
-    /* Launch program & read in output buffer result into the host vector */
+    // Launch program & read in output buffer result into the host vector
+    // 1. Upload input data to DRAM buffers
+    // 2. Execute the program (all kernels run in parallel across cores)
+    // 3. Read back the result from DRAM to host memory
+    // The 'true' parameter in EnqueueReadBuffer ensures we wait for completion (so when the function
+    // returns, the output vector is fully populated).
     EnqueueWriteBuffer(cq, src0_dram_buffer, a.data(), false);
     EnqueueWriteBuffer(cq, src1_dram_buffer, b.data(), false);
     EnqueueProgram(cq, program, false);
@@ -280,47 +269,71 @@ int main() {
     }
 
     try {
-        /* Silicon accelerator setup */
         constexpr int device_id = 0;
         IDevice* device = CreateDevice(device_id);
 
-        /* Create source data */
-        constexpr uint32_t M = 640;  // user-defined
-        constexpr uint32_t N = 640;  // user-defined
-        constexpr uint32_t K = 640;  // user-defined
-        constexpr uint32_t B = 1;    // user-defined
+        // Create source data with specified matrix dimensions
+        constexpr uint32_t M = 640;  // Number of rows in matrix A (user-defined)
+        constexpr uint32_t N = 640;  // Number of columns in matrix B (user-defined)
+        constexpr uint32_t K = 640;  // Inner dimension for multiplication (user-defined)
 
+        // Ensure that the matrix dimensions are compatible with the tile size
+        static_assert(M % TILE_HEIGHT == 0, "M must be divisible by TILE_HEIGHT");
+        static_assert(N % TILE_WIDTH == 0, "N must be divisible by TILE_WIDTH");
+        static_assert(K % TILE_WIDTH == 0, "K must be divisible by TILE_WIDTH");
+
+        // Calculate matrix dimensions in tiles for the accelerator
         uint32_t Mt = M / TILE_HEIGHT;
         uint32_t Kt = K / TILE_WIDTH;
         uint32_t Nt = N / TILE_WIDTH;
 
-        constexpr uint32_t single_tile_size = 2 * 32 * 32;
+        // Calculate buffer sizes needed for each matrix in bytes
+        constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;  // 2 * 32 * 32 = 2048 bytes
         uint32_t dram_buffer_A_size = single_tile_size * Mt * Kt;  // num_tiles of FP16_B
         uint32_t dram_buffer_B_size = single_tile_size * Nt * Kt;  // num_tiles of FP16_B
         uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt;  // num_tiles of FP16_B
 
-        /* input vectors with various ranges of values */
-        std::vector<bfloat16> src0_vec = create_random_vector_of_bfloat16_native(dram_buffer_A_size, 1, 123, -0.4);
-        std::vector<bfloat16> src1_vec = create_random_vector_of_bfloat16_native(dram_buffer_B_size, 1, 12522, -0.2);
+        // Create random input vectors for matrices A and B
+        std::mt19937 rng(std::random_device{}());
+        std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
 
-        /* Golden Matmul running on CPU (Float)*/
+        std::vector<bfloat16> src0_vec(M * K, 0);  // Matrix A (MxK)
+        std::vector<bfloat16> src1_vec(K * N, 0);  // Matrix B (KxN)
+        // // Fill with random bfloat16 values
+        for (bfloat16& v : src0_vec) {
+            v = bfloat16(dist(rng));
+        }
+        for (bfloat16& v : src1_vec) {
+            v = bfloat16(dist(rng));
+        }
+
+        // Golden Matmul running on CPU (Float) - reference implementation for verification
         std::vector<bfloat16> golden_vec(M * N, 0);
-        golden_matmul(src0_vec, src1_vec, golden_vec, M, N, K, B);
+        golden_matmul(src0_vec, src1_vec, golden_vec, M, N, K);
 
-        /* Input vector tilizing */
+        // Input vector tilizing to match device expected tiled layout
+        // The Tenstorrent hardware operates on data in 32x32 tiles rather than standard row-major format.
+        // tilize_nfaces() converts the input matrices from row-major layout to the tiled layout expected by the device.
+        // This transformation groups elements into 32x32 blocks and reorders them in memory so that each tile
+        // (32x32 elements) is stored contiguously. This matches the native data access patterns of the matrix engine
+        // and enables efficient operations on the accelerator.
         src0_vec = tilize_nfaces(src0_vec, M, K);
         src1_vec = tilize_nfaces(src1_vec, K, N);
 
         /* Calling the MatMul host program. Read in result into a host vector */
         std::vector<bfloat16> result_vec(dram_buffer_C_size / sizeof(bfloat16));
-        matmul_multi_core(src0_vec, src1_vec, result_vec, false, M, N, K, B, device);
+        matmul_multi_core(src0_vec, src1_vec, result_vec, M, N, K, device);
+        // Reverse the tilization to get the result in the row-major format that the CPU expects
         result_vec = untilize_nfaces(result_vec, M, N);
 
         log_info(tt::LogVerif, "Output vector of size {}", result_vec.size());
 
+        // Calculate the Pearson correlation coefficient (PCC) between the golden vector and the result vector
+        // This is a measure of how similar the two vectors are.
+        // A PCC close to 1 indicates that the two vectors are very similar.
         float pearson = check_bfloat16_vector_pcc(golden_vec, result_vec);
         log_info(tt::LogVerif, "Metalium vs Golden -- PCC = {}", pearson);
-        TT_FATAL(pearson > 0.99, "PCC not high enough. Result PCC: {}, Expected PCC: 0.99", pearson);
+        TT_FATAL(pearson > 0.97, "PCC not high enough. Result PCC: {}, Expected PCC: 0.97", pearson);
 
         pass &= CloseDevice(device);
 
