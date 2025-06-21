@@ -2079,6 +2079,11 @@ void configure_for_single_chip(
         0,
         0,
         0,
+        0,
+        0,
+        0,
+        0,
+        0,
     };
 
     constexpr NOC my_noc_index = NOC::NOC_0;
@@ -2368,6 +2373,11 @@ void configure_for_single_chip(
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
         0,  // unused for single device - used to "virtualize" the number of eth cores across devices
+        0,
+        0,
+        0,
+        0,
+        0,
         0,
         0,
         0,

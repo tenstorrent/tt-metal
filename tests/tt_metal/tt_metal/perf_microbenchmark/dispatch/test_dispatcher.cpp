@@ -622,6 +622,11 @@ int main(int argc, char** argv) {
             0,
             0,
             0,
+            0,
+            0,
+            0,
+            0,
+            0,
             true,  // is_dram_variant
             true,  // is_host_variant
         };

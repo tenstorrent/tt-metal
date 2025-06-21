@@ -209,9 +209,13 @@ void DispatchKernel::GenerateStaticConfigs() {
         TT_FATAL(false, "DispatchKernel must be one of (or both) H and D variants");
     }
 
-    if ((static_config_.is_h_variant.value() ^ static_config_.is_d_variant.value()) &&
-        tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
+    if (!is_hd() && tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
         create_edm_connection_sems(edm_connection_attributes_);
+        static_config_.is_2d_fabric =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_topology() ==
+            tt_fabric::Topology::Mesh;
+    } else {
+        static_config_.is_2d_fabric = false;
     }
 }
 
@@ -274,6 +278,7 @@ void DispatchKernel::GenerateDependentConfigs() {
                 dispatch_d->GetStaticConfig().my_downstream_cb_sem_id.value();
             dependent_config_.upstream_sync_sem = 0;  // Unused
             dependent_config_.num_hops = tt::tt_metal::get_num_hops(device_id_, dispatch_d->GetDeviceId());
+            assemble_2d_fabric_packet_header_args(this->dependent_config_, GetDeviceId(), dispatch_d->GetDeviceId());
         } else {
             TT_FATAL(false, "Unimplemented path");
         }
@@ -377,6 +382,8 @@ void DispatchKernel::GenerateDependentConfigs() {
                 dependent_config_.downstream_cb_sem_id =
                     dispatch_h_kernel->GetStaticConfig().my_dispatch_cb_sem_id.value();
                 dependent_config_.num_hops = tt::tt_metal::get_num_hops(dispatch_h_kernel->GetDeviceId(), device_id_);
+                assemble_2d_fabric_packet_header_args(
+                    this->dependent_config_, GetDeviceId(), dispatch_h_kernel->GetDeviceId());
                 found_dispatch_h = true;
             } else if (auto relay_mux = dynamic_cast<tt::tt_metal::RelayMux*>(ds_kernel)) {
                 TT_ASSERT(!found_relay_mux, "DISPATCH_D has multiple downstream RELAY_MUX kernels.");
@@ -487,6 +494,12 @@ void DispatchKernel::CreateKernel() {
 
         dependent_config_.num_hops.value(),
 
+        dependent_config_.my_dev_id.value_or(0),
+        dependent_config_.ew_dim.value_or(0),
+        dependent_config_.to_mesh_id.value_or(0),
+        dependent_config_.to_dev_id.value_or(0),
+        dependent_config_.router_direction.value_or(0),
+
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
     };
@@ -517,6 +530,12 @@ void DispatchKernel::CreateKernel() {
         {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},
         {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},
     };
+    if (!is_hd() && tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
+        defines["FABRIC_RELAY"] = "1";
+        if (static_config_.is_2d_fabric.value_or(false)) {
+            defines["FABRIC_2D"] = "1";
+        }
+    }
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
     configure_kernel_variant(
