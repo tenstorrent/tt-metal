@@ -29,6 +29,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include "buffer_types.hpp"
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -973,6 +974,36 @@ void test_my_coordinates(IDevice* device, tt::RISCV processor_class, size_t cq_i
     tt::tt_metal::verify_kernel_coordinates(processor_class, cr, device, tt::tt_metal::SubDeviceId{0}, cb_addr);
 }
 
+void test_basic_dispatch_functions(IDevice* device, int cq_id) {
+    CoreRange cr({0, 0}, {0, 0});
+    CoreRangeSet cr_set({cr});
+
+    constexpr uint32_t k_DataSize = 64 * 1024;
+    constexpr uint32_t k_PageSize = 4 * 1024;
+    constexpr uint32_t k_LoopPerDev = 100;
+
+    DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+
+    log_info(tt::LogTest, "Running On Device {}", device->id());
+
+    std::vector<uint32_t> src_data(k_DataSize / sizeof(uint32_t));
+    for (int i = 0; i < k_DataSize / sizeof(uint32_t); ++i) {
+        src_data[i] = (device->id() + 1) * 0xdeadbeef;
+    }
+    auto buffer = CreateBuffer(InterleavedBufferConfig{device, k_DataSize, k_PageSize, BufferType::L1});
+    auto& cq = device->command_queue(cq_id);
+    for (int i = 0; i < k_LoopPerDev; ++i) {
+        log_info(tt::LogTest, " Iteration {}", i);
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
+            device, cq, dummy_program_config, 24, 12, 15, k_LoopPerDev));
+        EnqueueWriteBuffer(cq, *buffer, src_data, false);
+
+        std::vector<uint32_t> dst_data;
+        EnqueueReadBuffer(cq, *buffer, dst_data, true);
+        EXPECT_EQ(src_data, dst_data);
+    }
+}
+
 }  // namespace local_test_functions
 
 namespace basic_tests {
@@ -1246,6 +1277,20 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestRuntimeArgsCorrectlySentS
     for (IDevice* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
             device, device->command_queue(), dummy_program_config, 9, 12, 15, 1));
+    }
+}
+
+TEST_F(CommandQueueOnFabricMultiDeviceFixture, TensixTestBasicDispatchFunctions) {
+    for (IDevice* device : devices_) {
+        local_test_functions::test_basic_dispatch_functions(device, 0);
+    }
+}
+
+TEST_F(MultiCommandQueueOnFabricMultiDeviceFixture, TensixTestBasicDispatchFunctions) {
+    for (IDevice* device : devices_) {
+        for (int cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+            local_test_functions::test_basic_dispatch_functions(device, cq_id);
+        }
     }
 }
 
