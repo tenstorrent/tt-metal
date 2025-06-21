@@ -6,6 +6,7 @@
 #include "tensor/storage.hpp"
 #include "tt-metalium/shape.hpp"
 #include "tt-metalium/mesh_coord.hpp"
+#include <algorithm>
 #include <tt_stl/small_vector.hpp>
 #include "tt-metalium/tilize_utils.hpp"
 #include "tt_stl/overloaded.hpp"
@@ -67,8 +68,8 @@ TensorSpec compute_tensor_spec_for_shards(
 std::ostream& operator<<(std::ostream& os, const MeshMapperConfig::Placement& placement) {
     std::visit(
         tt::stl::overloaded{
-            [&](const MeshMapperConfig::Replicate& replicate) { os << "Replicate()"; },
-            [&](const MeshMapperConfig::Shard& shard) { os << "Shard(" << shard.dim << ")"; },
+            [&](const MeshMapperConfig::Replicate& replicate) { os << "PlacementReplicate()"; },
+            [&](const MeshMapperConfig::Shard& shard) { os << "PlacementShard(" << shard.dim << ")"; },
         },
         placement);
     return os;
@@ -417,13 +418,18 @@ TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMappe
 
     // TODO: #22258 - `DistributedTensorConfig` will be replaced by distributed host buffer, which can be used directly
     // in Tensor storage.
-    tt::tt_metal::DistributedTensorConfig distributed_tensor_config;
-    if (distributed_shape.dims() == 2) {
-        distributed_tensor_config = tt::tt_metal::DistributedTensorConfig{
-            tt::tt_metal::ShardTensor2D{tt::tt_metal::ShardMesh{.y = distributed_shape[0], .x = distributed_shape[1]}}};
-    } else {
-        distributed_tensor_config = tt::tt_metal::DistributedTensorConfig{tt::tt_metal::AllGatherTensor{}};
-    }
+    const auto distributed_tensor_config = [&config, &distributed_shape]() -> tt::tt_metal::DistributedTensorConfig {
+        if (std::all_of(config.placements.begin(), config.placements.end(), [](const auto& p) {
+                return std::holds_alternative<MeshMapperConfig::Replicate>(p);
+            })) {
+            return tt::tt_metal::ReplicateTensor{};
+        } else if (distributed_shape.dims() == 2) {
+            return tt::tt_metal::ShardTensor2D{
+                tt::tt_metal::ShardMesh{.y = distributed_shape[0], .x = distributed_shape[1]}};
+        } else {
+            return tt::tt_metal::AllGatherTensor{};
+        }
+    }();
 
     return TensorToMesh(std::make_unique<TensorToMesh::Impl>(
         mesh_device, distribution_mode, distributed_shape, config, distributed_tensor_config));
@@ -500,12 +506,13 @@ Tensor distribute_tensor(
 template <typename T>
 Tensor create_distributed_tensor(
     tt::stl::Span<const T> buffer,
-    const TensorSpec& spec,
+    const ttnn::Shape& global_shape,
+    const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     ttnn::QueueId cq_id,
     T pad_value) {
-    Tensor output = mapper(buffer, spec.logical_shape(), spec.tensor_layout(), pad_value);
+    Tensor output = mapper(buffer, global_shape, shard_layout, pad_value);
     if (mesh_device.has_value()) {
         return output.to_device(&(mesh_device->get()), output.memory_config(), cq_id);
     }
@@ -513,50 +520,50 @@ Tensor create_distributed_tensor(
 }
 
 // Explicit instantiation of `create_distributed_tensor` for supported data types.
-template <>
-Tensor create_distributed_tensor<bfloat16>(
+template Tensor create_distributed_tensor<bfloat16>(
     tt::stl::Span<const bfloat16> buffer,
-    const TensorSpec& spec,
+    const ttnn::Shape& global_shape,
+    const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     ttnn::QueueId cq_id,
     bfloat16 pad_value);
-template <>
-Tensor create_distributed_tensor<float>(
+template Tensor create_distributed_tensor<float>(
     tt::stl::Span<const float> buffer,
-    const TensorSpec& spec,
+    const ttnn::Shape& global_shape,
+    const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     ttnn::QueueId cq_id,
     float pad_value);
-template <>
-Tensor create_distributed_tensor<int32_t>(
+template Tensor create_distributed_tensor<int32_t>(
     tt::stl::Span<const int32_t> buffer,
-    const TensorSpec& spec,
+    const ttnn::Shape& global_shape,
+    const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     ttnn::QueueId cq_id,
     int32_t pad_value);
-template <>
-Tensor create_distributed_tensor<uint8_t>(
+template Tensor create_distributed_tensor<uint8_t>(
     tt::stl::Span<const uint8_t> buffer,
-    const TensorSpec& spec,
+    const ttnn::Shape& global_shape,
+    const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     ttnn::QueueId cq_id,
     uint8_t pad_value);
-template <>
-Tensor create_distributed_tensor<uint16_t>(
+template Tensor create_distributed_tensor<uint16_t>(
     tt::stl::Span<const uint16_t> buffer,
-    const TensorSpec& spec,
+    const ttnn::Shape& global_shape,
+    const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     ttnn::QueueId cq_id,
     uint16_t pad_value);
-template <>
-Tensor create_distributed_tensor<uint32_t>(
+template Tensor create_distributed_tensor<uint32_t>(
     tt::stl::Span<const uint32_t> buffer,
-    const TensorSpec& spec,
+    const ttnn::Shape& global_shape,
+    const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device,
     ttnn::QueueId cq_id,
