@@ -161,7 +161,7 @@ void reduce_c() {
     // Precondition: scale_cb has 1 produced
     // Postcondition: out_cb has rows produced
     reconfig_data_format(in0_cb, scale_cb);
-    reduce_init_delta<false, pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
+    reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
 
     const uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
@@ -183,7 +183,7 @@ void reduce_c() {
         release_dst();
     }
 
-    reduce_revert_delta<reduce_dim>(out_cb);
+    reduce_uninit();
     UNPACK(tensix_sync());  // Workaround for issue #9370
 }
 

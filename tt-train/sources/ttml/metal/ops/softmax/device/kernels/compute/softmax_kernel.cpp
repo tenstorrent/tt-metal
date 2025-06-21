@@ -173,7 +173,7 @@ void reduce_max_value() {
     const uint32_t reduction_register = 0;
     tile_regs_acquire();
     reconfig_data_format(cb_max_value_before_reduction, cb_reduction_scaler);
-    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>(
+    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(
         cb_max_value_before_reduction, cb_reduction_scaler, cb_max_value_after_reduction);
     reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(
         cb_max_value_before_reduction,
@@ -181,7 +181,7 @@ void reduce_max_value() {
         /* tile_idx */ 0,
         /* tile_idx */ 0,
         reduction_register);
-    reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_max_value_after_reduction);
+    reduce_uninit();
     tile_regs_commit();
 
     tile_regs_wait();
@@ -341,7 +341,7 @@ void reduce_sum_exp_x() {
     const uint32_t reduction_register = 0;
 
     // reconfig_data_format(cb_exp_sum_before_reduction, cb_reduction_scaler);
-    // reduce_init_delta<false, PoolType::SUM, ReduceDim::REDUCE_ROW>(
+    // reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
     //     cb_exp_sum_before_reduction, cb_reduction_scaler, cb_exp_sum_after_reduction);
     // reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
     //     cb_exp_sum_before_reduction,
@@ -349,7 +349,7 @@ void reduce_sum_exp_x() {
     //     /* tile_idx */ 0,
     //     /* tile_idx */ 0,
     //     /* reduction_register */ reduction_register);
-    // reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_exp_sum_after_reduction);
+    // reduce_uninit();
 
     // We used matmul_tiles instead of reduce_tile, because reduce_tile causes a loss of precision. The same issue has
     // been observed in moreh’s ops.
