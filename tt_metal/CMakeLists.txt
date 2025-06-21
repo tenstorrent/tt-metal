@@ -151,6 +151,7 @@ target_sources(
             include/compute_kernel_api/cb_api.h
             include/compute_kernel_api/common.h
             include/compute_kernel_api/common_globals.h
+            include/compute_kernel_api/compute_kernel_hw_startup.h
             include/compute_kernel_api/eltwise_binary.h
             include/compute_kernel_api/eltwise_unary/eltwise_unary.h
             include/compute_kernel_api/eltwise_unary/exp.h

@@ -441,7 +441,7 @@ void reduce_cb(
 
     reconfig_data_format(cb_in, cb_scaler);
     pack_reconfig_data_format(cb_out);
-    reduce_init_delta<false, reduce_type, ReduceDim::REDUCE_ROW>(cb_in, cb_scaler, cb_out);
+    reduce_init<reduce_type, ReduceDim::REDUCE_ROW>(cb_in, cb_scaler, cb_out);
     tile_regs_acquire();
     cb_reserve_back(cb_out, 1);
     for (uint32_t cur_tile = 0; cur_tile < cb_length_t; cur_tile++) {
@@ -473,7 +473,7 @@ void reduce_cb(
     pack_tile(0, cb_out);
     cb_push_back(cb_out, 1);
     tile_regs_release();
-    reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_out);
+    reduce_uninit();
 }
 void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk) {
     reconfig_data_format(cb_in, cb_recip);
