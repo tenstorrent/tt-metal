@@ -20,6 +20,7 @@
 #include "metal_soc_descriptor.h"
 #include "tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/control_plane.hpp>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/arch.h>
 #include <umd/device/types/cluster_descriptor_types.h>
@@ -171,7 +172,7 @@ const core_descriptor_t& get_core_descriptor_config(
     CoreCoord grid_size =
         tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     auto logical_active_eth_cores =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
 
     for (const auto& core_node : desc_yaml[dispatch_cores_string]) {
         RelativeCoreCoord coord = {};
