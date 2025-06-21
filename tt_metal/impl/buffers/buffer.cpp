@@ -55,16 +55,16 @@ void validate_buffer_parameters(
     DeviceAddr page_size,
     const BufferType& /*buffer_type*/,
     const TensorMemoryLayout& buffer_layout,
-    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const std::optional<ShardSpecBuffer>& shard_spec,
     const std::optional<BufferDistributionSpec>& buffer_distribution_spec) {
     if (is_sharded(buffer_layout)) {
         TT_FATAL(
-            shard_parameters.has_value() || buffer_distribution_spec.has_value(),
-            "Buffer was specified as sharded but does not have shard_parameters or buffer_distribution_spec specified");
+            shard_spec.has_value() || buffer_distribution_spec.has_value(),
+            "Buffer was specified as sharded but does not have shard_spec or buffer_distribution_spec specified");
     } else {
         TT_FATAL(
-            shard_parameters == std::nullopt && buffer_distribution_spec == std::nullopt,
-            "Buffer was specified as not sharded but has shard_parameters or buffer_distribution_spec specified");
+            shard_spec == std::nullopt && buffer_distribution_spec == std::nullopt,
+            "Buffer was specified as not sharded but has shard_spec or buffer_distribution_spec specified");
     }
 
     if (size == 0) {
@@ -149,15 +149,15 @@ void validate_sub_device_id(
     std::optional<SubDeviceId> sub_device_id,
     IDevice* device,
     BufferType buffer_type,
-    const std::optional<ShardSpecBuffer>& shard_parameters) {
+    const std::optional<ShardSpecBuffer>& shard_spec) {
     // No need to validate if we're using the global allocator or not sharding
     if (!sub_device_id.has_value()) {
         return;
     }
-    TT_FATAL(shard_parameters.has_value(), "Specifying sub-device for buffer requires buffer to be sharded");
+    TT_FATAL(shard_spec.has_value(), "Specifying sub-device for buffer requires buffer to be sharded");
     TT_FATAL(is_l1_impl(buffer_type), "Specifying sub-device for buffer requires buffer to be L1");
     const auto& sub_device_cores = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id.value());
-    const auto& shard_cores = shard_parameters->grid();
+    const auto& shard_cores = shard_spec->grid();
     TT_FATAL(
         sub_device_cores.contains(shard_cores),
         "Shard cores specified {} do not match sub-device cores {}",
@@ -197,7 +197,7 @@ UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer)
         return buffer_page_mapping;
     }
 
-    if (buffer.buffer_distribution_spec().has_value()) {
+    if (!buffer.has_shard_spec()) {
         return buffer.buffer_distribution_spec()->compute_page_mapping();
     }
 
@@ -262,18 +262,17 @@ Buffer::Buffer(
     bottom_up_(bottom_up.value_or(this->is_dram())),
     sub_device_id_(sub_device_id),
     owns_data_(owns_data),
-    shard_parameters_(sharding_args.shard_parameters_),
+    shard_spec_(sharding_args.shard_spec_),
     buffer_distribution_spec_(sharding_args.buffer_distribution_spec_) {
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
     if (this->sub_device_id_.has_value()) {
-        validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_parameters_);
+        validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_spec_);
         this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
         this->allocator_ = device->allocator(*this->sub_device_id_).get();
     } else {
         this->allocator_ = device->allocator().get();
     }
-    validate_buffer_parameters(
-        size, page_size, buffer_type, buffer_layout_, shard_parameters_, buffer_distribution_spec_);
+    validate_buffer_parameters(size, page_size, buffer_type, buffer_layout_, shard_spec_, buffer_distribution_spec_);
     unique_id_ = next_unique_id.fetch_add(1);
 }
 
@@ -366,7 +365,7 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
         region.size,
         page_size_,
         buffer_type_,
-        BufferShardingArgs(buffer_distribution_spec_, shard_parameters_, buffer_layout_),
+        BufferShardingArgs(buffer_distribution_spec_, shard_spec_, buffer_layout_),
         bottom_up_,
         sub_device_id_);
 
@@ -466,10 +465,9 @@ uint32_t Buffer::address() const {
 DeviceAddr Buffer::page_size() const { return page_size_; }
 
 void Buffer::set_page_size(DeviceAddr page_size) {
-    TT_FATAL(
-        buffer_distribution_spec_ == std::nullopt, "Buffer::set_page_size is unsupported for BufferDistributionSpec!");
     TT_FATAL(page_size == 0 ? size_ == 0 : size_ % page_size == 0, "buffer size must be divisible by new page size");
     page_size_ = page_size;
+    this->buffer_distribution_spec_ = std::nullopt;
     this->buffer_page_mapping_ = nullptr;
 }
 
@@ -479,10 +477,10 @@ uint32_t Buffer::num_dev_pages() const {
     if (!is_sharded(this->buffer_layout_)) {
         return this->num_pages();
     }
-    if (buffer_distribution_spec_.has_value()) {
-        return buffer_distribution_spec_.value().num_dev_pages_per_core() * num_cores().value();
+    if (shard_spec_.has_value()) {
+        return shard_spec_->num_pages() * this->num_cores().value();
     }
-    return this->shard_spec().num_pages() * this->num_cores().value();
+    return buffer_distribution_spec_.value().num_dev_pages_per_core() * num_cores().value();
 }
 
 HalMemType Buffer::memory_type() const {
@@ -536,12 +534,13 @@ DeviceAddr Buffer::aligned_size_per_bank() const {
 
 ShardSpecBuffer Buffer::shard_spec() const {
     TT_FATAL(is_sharded(this->buffer_layout_), "Buffer not sharded");
-    TT_FATAL(shard_parameters_.has_value(), "Buffer is sharded, but no shard parameters specified");
-    return this->shard_parameters_.value();
+    TT_FATAL(shard_spec_.has_value(), "Buffer is sharded, but no shard parameters specified");
+    return this->shard_spec_.value();
 }
 
 void Buffer::set_shard_spec(const ShardSpecBuffer& shard_spec) {
-    this->shard_parameters_ = shard_spec;
+    this->shard_spec_ = shard_spec;
+    this->buffer_distribution_spec_ = std::nullopt;
     this->buffer_page_mapping_ = nullptr;
 }
 
@@ -549,10 +548,10 @@ std::optional<uint32_t> Buffer::num_cores() const {
     if (!is_sharded(this->buffer_layout_)) {
         return std::nullopt;
     }
-    if (buffer_distribution_spec_.has_value()) {
-        return buffer_distribution_spec_.value().num_cores();
+    if (shard_spec_.has_value()) {
+        return shard_spec_->tensor_shard_spec.grid.num_cores();
     }
-    return this->shard_spec().tensor_shard_spec.grid.num_cores();
+    return buffer_distribution_spec_.value().num_cores();
 }
 
 DeviceAddr Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) const {

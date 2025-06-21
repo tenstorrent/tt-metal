@@ -173,21 +173,21 @@ struct BufferShardingArgs {
             buffer_distribution_spec_.has_value() ? TensorMemoryLayout::BLOCK_SHARDED
                                                   : TensorMemoryLayout::INTERLEAVED) {}
 
-    BufferShardingArgs(ShardSpecBuffer shard_parameters, TensorMemoryLayout buffer_layout) :
-        shard_parameters_(std::move(shard_parameters)), buffer_layout_(buffer_layout) {}
-    BufferShardingArgs(std::optional<ShardSpecBuffer> shard_parameters, TensorMemoryLayout buffer_layout) :
-        shard_parameters_(std::move(shard_parameters)), buffer_layout_(buffer_layout) {}
+    BufferShardingArgs(ShardSpecBuffer shard_spec, TensorMemoryLayout buffer_layout) :
+        shard_spec_(std::move(shard_spec)), buffer_layout_(buffer_layout) {}
+    BufferShardingArgs(std::optional<ShardSpecBuffer> shard_spec, TensorMemoryLayout buffer_layout) :
+        shard_spec_(std::move(shard_spec)), buffer_layout_(buffer_layout) {}
 
     BufferShardingArgs(
         std::optional<BufferDistributionSpec> buffer_distribution_spec,
-        std::optional<ShardSpecBuffer> shard_parameters,
+        std::optional<ShardSpecBuffer> shard_spec,
         TensorMemoryLayout buffer_layout) :
         buffer_distribution_spec_(std::move(buffer_distribution_spec)),
-        shard_parameters_(std::move(shard_parameters)),
+        shard_spec_(std::move(shard_spec)),
         buffer_layout_(buffer_layout) {}
 
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
-    std::optional<ShardSpecBuffer> shard_parameters_;
+    std::optional<ShardSpecBuffer> shard_spec_;
     TensorMemoryLayout buffer_layout_ = TensorMemoryLayout::INTERLEAVED;
 };
 
@@ -276,6 +276,7 @@ public:
 
     // SHARDED API STARTS HERE
     const std::optional<BufferDistributionSpec>& buffer_distribution_spec() const;
+    bool has_shard_spec() const { return shard_spec_.has_value(); }
     ShardSpecBuffer shard_spec() const;
     void set_shard_spec(const ShardSpecBuffer& shard_spec);
     std::optional<uint32_t> num_cores() const;
@@ -337,7 +338,7 @@ private:
 
     // These members must be only accessed on the device worker thread
     DeviceAddr page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
-    std::optional<ShardSpecBuffer> shard_parameters_;
+    std::optional<ShardSpecBuffer> shard_spec_;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
 
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
