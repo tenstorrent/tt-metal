@@ -167,11 +167,9 @@ std::optional<MemoryConfig> TensorSpec::populate_nd_shard_spec_from_legacy() con
 
     const auto& shard_spec = mem_config.shard_spec().value();
 
-    // Can't convert logical sharding if physical shard shape is different from logical shard shape
+    // Can't convert logical sharding
     if (shard_spec.mode == ShardMode::LOGICAL) {
-        if (shard_spec.physical_shard_shape.has_value() && *shard_spec.physical_shard_shape != shard_spec.shape) {
-            return std::nullopt;
-        }
+        return std::nullopt;
     }
 
     NdShardSpec nd_shard_spec{
