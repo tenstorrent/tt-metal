@@ -13,7 +13,10 @@ namespace tt::tt_metal::inspector {
 Logger::Logger(const std::filesystem::path& logging_path)
     : initialized(false)
 {
-#define ADDITIONAL_ERROR_TEXT "\nYou can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment variables. Note that this will not throw an exception, but will log a warning instead. Running without Inspector logger will impact tt-triage functionality."
+    constexpr std::string_view additional_text =
+        "\nYou can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment "
+        "variables. Note that this will not throw an exception, but will log a warning instead. Running without "
+        "Inspector logger will impact tt-triage functionality.";
 
     try {
         // Recreate the logging directory if it doesn't exist or clear it if it does.
@@ -21,44 +24,54 @@ Logger::Logger(const std::filesystem::path& logging_path)
         std::filesystem::create_directories(logging_path);
     }
     catch (const std::exception& e) {
-        TT_INSPECTOR_THROW("Failed to create logging directory: {}. Error: {}" ADDITIONAL_ERROR_TEXT, logging_path.string(), e.what());
+        TT_INSPECTOR_THROW(
+            "Failed to create logging directory: {}. Error: {}\n{}", logging_path.string(), e.what(), additional_text);
     }
 
     // Write startup information to the inspector files.
     {
-        std::ofstream inspector_startup_ostream(logging_path / "startup.yaml", std::ios::trunc);
+        try {
+            std::ofstream inspector_startup_ostream(logging_path / "startup.yaml", std::ios::trunc);
 
-        if (!inspector_startup_ostream.is_open()) {
-            TT_INSPECTOR_THROW("Failed to create inspector file: {}", (logging_path / "startup.yaml").string());
-        }
-        else {
-            // Log current system time and high_resolution_clock time_point
-            auto now_system = std::chrono::system_clock::now();
-            auto now_highres = std::chrono::high_resolution_clock::now();
-            std::time_t now_c = std::chrono::system_clock::to_time_t(now_system);
-            auto now_system_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now_system.time_since_epoch()).count();
-            auto now_highres_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now_highres.time_since_epoch()).count();
+            if (!inspector_startup_ostream.is_open()) {
+                TT_INSPECTOR_THROW(
+                    "Failed to create inspector file: {}\n{}",
+                    (logging_path / "startup.yaml").string(),
+                    additional_text);
+            } else {
+                // Log current system time and high_resolution_clock time_point
+                auto now_system = std::chrono::system_clock::now();
+                auto now_highres = std::chrono::high_resolution_clock::now();
+                std::time_t now_c = std::chrono::system_clock::to_time_t(now_system);
+                auto now_system_ns =
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(now_system.time_since_epoch()).count();
+                auto now_highres_ns =
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(now_highres.time_since_epoch()).count();
 
-            start_time = now_highres;
-            inspector_startup_ostream << "startup_time:\n";
-            inspector_startup_ostream << "  system_clock_iso: '" << std::put_time(std::gmtime(&now_c), "%Y-%m-%dT%H:%M:%SZ") << "'\n";
-            inspector_startup_ostream << "  system_clock_ns: " << now_system_ns << "\n";
-            inspector_startup_ostream << "  high_resolution_clock_ns: " << now_highres_ns << "\n";
+                start_time = now_highres;
+                inspector_startup_ostream << "startup_time:\n";
+                inspector_startup_ostream << "  system_clock_iso: '"
+                                          << std::put_time(std::gmtime(&now_c), "%Y-%m-%dT%H:%M:%SZ") << "'\n";
+                inspector_startup_ostream << "  system_clock_ns: " << now_system_ns << "\n";
+                inspector_startup_ostream << "  high_resolution_clock_ns: " << now_highres_ns << "\n";
+            }
+        } catch (const std::exception& e) {
+            TT_INSPECTOR_THROW("Failed to create inspector startup log. Error: {}\n{}", e.what(), additional_text);
         }
     }
 
     programs_ostream.open(logging_path / "programs_log.yaml", std::ios::trunc);
     if (!programs_ostream.is_open()) {
-        TT_INSPECTOR_THROW("Failed to create inspector file: {}" ADDITIONAL_ERROR_TEXT, (logging_path / "programs_log.yaml").string());
+        TT_INSPECTOR_THROW(
+            "Failed to create inspector file: {}\n{}", (logging_path / "programs_log.yaml").string(), additional_text);
     }
     kernels_ostream.open(logging_path / "kernels.yaml", std::ios::trunc);
     if (!kernels_ostream.is_open()) {
-        TT_INSPECTOR_THROW("Failed to create inspector file: {}" ADDITIONAL_ERROR_TEXT, (logging_path / "kernels.yaml").string());
+        TT_INSPECTOR_THROW(
+            "Failed to create inspector file: {}\n{}", (logging_path / "kernels.yaml").string(), additional_text);
     }
 
     initialized = true;
-
-#undef ADDITIONAL_ERROR_TEXT
 }
 
 void Logger::log_program_created(const ProgramData& program_data) noexcept {
