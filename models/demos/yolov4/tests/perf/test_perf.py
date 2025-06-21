@@ -32,6 +32,10 @@ def test_yolov4(
     model_location_generator,
 ):
     disable_persistent_kernel_cache()
+
+    # https://github.com/tenstorrent/tt-metal/issues/23271
+    device.disable_and_clear_program_cache()
+
     profiler.clear()
 
     batch_size = input_shape[0]

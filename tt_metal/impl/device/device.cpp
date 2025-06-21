@@ -1047,6 +1047,8 @@ bool Device::initialize(
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal) {
     ZoneScoped;
+    // Every initialization call should enable program cache
+    this->program_cache_.enable();
     log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache_.is_enabled() ? "": "NOT ");
     log_debug(tt::LogMetal, "Running with {} cqs ", num_hw_cqs);
     TT_FATAL(num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS, "num_hw_cqs can be between 1 and {}", dispatch_core_manager::MAX_NUM_HW_CQS);
@@ -1438,6 +1440,11 @@ void Device::enable_program_cache() {
     log_info(tt::LogMetal, "Enabling program cache on device {}", this->id_);
     program_cache_.enable();
 }
+void Device::clear_program_cache() {
+    log_info(tt::LogMetal, "Clearing program cache on device {}", this->id_);
+    program_cache_.clear();
+}
+
 void Device::disable_and_clear_program_cache() {
     log_info(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
     if (this->program_cache_.is_enabled()) {

@@ -184,6 +184,7 @@ public:
     // Program cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     virtual void enable_program_cache() = 0;
+    virtual void clear_program_cache() = 0;
     virtual void disable_and_clear_program_cache() = 0;
     void set_program_cache_misses_allowed(bool allowed);
     virtual program_cache::detail::ProgramCache& get_program_cache() = 0;

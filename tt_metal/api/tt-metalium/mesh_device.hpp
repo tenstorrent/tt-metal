@@ -225,6 +225,7 @@ public:
     void init_fabric() override;
     bool close() override;
     void enable_program_cache() override;
+    void clear_program_cache() override;
     void disable_and_clear_program_cache() override;
     program_cache::detail::ProgramCache& get_program_cache() override;
     std::size_t num_program_cache_entries() override;
