@@ -148,7 +148,7 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id);
  */
 template <typename DType>
 void ReadShard(Buffer& buffer, std::vector<DType>& host_buffer, const uint32_t& core_id) {
-    host_buffer.resize(buffer.page_size() * buffer.shard_spec()->num_pages());
+    host_buffer.resize(buffer.page_size() * buffer.shard_spec().num_pages());
     ReadShard(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()), core_id);
 }
 

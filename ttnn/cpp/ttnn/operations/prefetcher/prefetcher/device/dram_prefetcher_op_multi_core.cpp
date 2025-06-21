@@ -83,8 +83,8 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     std::vector<std::vector<uint32_t>> tensor_shapes(num_tensors, std::vector<uint32_t>(2));
     std::vector<uint32_t> tensor_tile_sizes(num_tensors);
     for (uint32_t t = 0; t < num_tensors; t++) {
-        uint32_t height_in_tiles = tensor_buffers[t]->shard_spec()->shape()[0] / tensor_tiles[t].get_tile_shape()[0];
-        uint32_t width_in_tiles = tensor_buffers[t]->shard_spec()->shape()[1] / tensor_tiles[t].get_tile_shape()[1];
+        uint32_t height_in_tiles = tensor_buffers[t]->shard_spec().shape()[0] / tensor_tiles[t].get_tile_shape()[0];
+        uint32_t width_in_tiles = tensor_buffers[t]->shard_spec().shape()[1] / tensor_tiles[t].get_tile_shape()[1];
 
         height_in_tiles = tt::round_up(height_in_tiles, num_blocks);
         tensor_shapes[t][0] = height_in_tiles;
@@ -142,7 +142,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     /* tensor addresses cb setup */
     uint32_t tensor_addrs_single_tile_size = sizeof(uint32_t);
     uint32_t tensor_addrs_cb_num_tiles =
-        tensor_addrs_buffer->shard_spec()->shape()[0] * tensor_addrs_buffer->shard_spec()->shape()[1];
+        tensor_addrs_buffer->shard_spec().shape()[0] * tensor_addrs_buffer->shard_spec().shape()[1];
     uint32_t tensor_addrs_cb_size = num_layers * num_tensors * tensor_addrs_single_tile_size;
 
     uint32_t tensor_addrs_cb_index = tt::CBIndex::c_1;

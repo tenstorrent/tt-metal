@@ -197,13 +197,13 @@ UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer)
         return buffer_page_mapping;
     }
 
-    if (!buffer.shard_spec()) {
+    if (buffer.buffer_distribution_spec().has_value()) {
         return buffer.buffer_distribution_spec()->compute_page_mapping();
     }
 
     uint32_t num_cores = buffer.num_cores().value();
 
-    auto shard_spec = *buffer.shard_spec();
+    auto shard_spec = buffer.shard_spec();
     bool row_major = shard_spec.orientation() == ShardOrientation::ROW_MAJOR;
     buffer_page_mapping.all_cores = corerange_to_cores(shard_spec.grid(), num_cores, row_major);
     TT_FATAL(
@@ -262,17 +262,18 @@ Buffer::Buffer(
     bottom_up_(bottom_up.value_or(this->is_dram())),
     sub_device_id_(sub_device_id),
     owns_data_(owns_data),
-    shard_spec_(sharding_args.shard_spec_),
+    shard_parameters_(sharding_args.shard_parameters_),
     buffer_distribution_spec_(sharding_args.buffer_distribution_spec_) {
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
     if (this->sub_device_id_.has_value()) {
-        validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_spec_);
+        validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_parameters_);
         this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
         this->allocator_ = device->allocator(*this->sub_device_id_).get();
     } else {
         this->allocator_ = device->allocator().get();
     }
-    validate_buffer_parameters(size, page_size, buffer_type, buffer_layout_, shard_spec_, buffer_distribution_spec_);
+    validate_buffer_parameters(
+        size, page_size, buffer_type, buffer_layout_, shard_parameters_, buffer_distribution_spec_);
     unique_id_ = next_unique_id.fetch_add(1);
 }
 
@@ -365,7 +366,7 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
         region.size,
         page_size_,
         buffer_type_,
-        BufferShardingArgs(buffer_distribution_spec_, shard_spec_, buffer_layout_),
+        BufferShardingArgs(buffer_distribution_spec_, shard_parameters_, buffer_layout_),
         bottom_up_,
         sub_device_id_);
 
@@ -478,10 +479,10 @@ uint32_t Buffer::num_dev_pages() const {
     if (!is_sharded(this->buffer_layout_)) {
         return this->num_pages();
     }
-    if (shard_spec_.has_value()) {
-        return shard_spec_->num_pages() * this->num_cores().value();
+    if (buffer_distribution_spec_.has_value()) {
+        return buffer_distribution_spec_.value().num_dev_pages_per_core() * num_cores().value();
     }
-    return buffer_distribution_spec_.value().num_dev_pages_per_core() * num_cores().value();
+    return this->shard_spec().num_pages() * this->num_cores().value();
 }
 
 HalMemType Buffer::memory_type() const {
@@ -533,11 +534,14 @@ DeviceAddr Buffer::aligned_size_per_bank() const {
         this->aligned_size(), this->aligned_page_size(), num_banks, this->alignment());
 }
 
-const std::optional<ShardSpecBuffer>& Buffer::shard_spec() const { return this->shard_spec_; }
+ShardSpecBuffer Buffer::shard_spec() const {
+    TT_FATAL(is_sharded(this->buffer_layout_), "Buffer not sharded");
+    TT_FATAL(shard_parameters_.has_value(), "Buffer is sharded, but no shard parameters specified");
+    return this->shard_parameters_.value();
+}
 
 void Buffer::set_shard_spec(const ShardSpecBuffer& shard_spec) {
-    this->shard_spec_ = shard_spec;
-    this->buffer_distribution_spec_ = std::nullopt;
+    this->shard_parameters_ = shard_spec;
     this->buffer_page_mapping_ = nullptr;
 }
 
@@ -545,10 +549,10 @@ std::optional<uint32_t> Buffer::num_cores() const {
     if (!is_sharded(this->buffer_layout_)) {
         return std::nullopt;
     }
-    if (shard_spec_.has_value()) {
-        return shard_spec_->tensor_shard_spec.grid.num_cores();
+    if (buffer_distribution_spec_.has_value()) {
+        return buffer_distribution_spec_.value().num_cores();
     }
-    return buffer_distribution_spec_.value().num_cores();
+    return this->shard_spec().tensor_shard_spec.grid.num_cores();
 }
 
 DeviceAddr Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) const {

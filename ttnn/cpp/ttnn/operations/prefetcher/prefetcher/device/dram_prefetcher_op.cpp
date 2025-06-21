@@ -46,10 +46,10 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
 
         // Check that all tensors' N (per shard) is divisible by number of cores in global CB receiver
         TT_FATAL(
-            tensor.buffer()->shard_spec()->shape()[1] % num_receivers_per_sender == 0,
+            tensor.buffer()->shard_spec().shape()[1] % num_receivers_per_sender == 0,
             "All tensors' padded shard size (in last dim) {} must be divisible by the number of receiver cores per "
             "sender {}.",
-            tensor.buffer()->shard_spec()->shape()[1],
+            tensor.buffer()->shard_spec().shape()[1],
             num_receivers_per_sender);
 
         tt::DataFormat tensor_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
