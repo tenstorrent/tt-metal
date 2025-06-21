@@ -9,6 +9,7 @@
 
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
 #include "ttnn/operations/sharding_utilities.hpp"
