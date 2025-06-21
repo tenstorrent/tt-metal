@@ -212,8 +212,7 @@ BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const ttnn::Shape&
             default: TT_THROW("Unsupported shard mode {} in compute_distribution_spec!", shard_spec->mode);
         }
 
-        auto shard_spec_buffer =
-            ShardSpecBuffer(*shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape_in_pages);
+        shard_spec_buffer = ShardSpecBuffer(*shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape_in_pages);
     }
 
     if (const auto& nd_shard_spec = memory_config_.nd_shard_spec()) {
