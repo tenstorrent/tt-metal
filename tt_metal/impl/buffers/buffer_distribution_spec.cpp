@@ -20,8 +20,8 @@ struct PageMappingIntermData {
     const uint32_t* shard_shape = nullptr;
     const uint64_t shard_volume = 0;
     const uint32_t* shard_grid = nullptr;
-    const uint32_t* tensor_strides = nullptr;
-    const uint32_t* shard_strides = nullptr;
+    const uint64_t* tensor_strides = nullptr;
+    const uint64_t* shard_strides = nullptr;
 
     uint32_t* actual_shard_size = nullptr;
     size_t shard_id = 0;
@@ -175,8 +175,8 @@ UncompressedBufferPageMapping BufferDistributionSpec::compute_page_mapping() con
         shard_grid[i] = (tensor_shape_in_pages_[i] + shard_shape_in_pages_[i] - 1) / shard_shape_in_pages_[i];
     }
 
-    tt::stl::SmallVector<uint32_t> tensor_strides = tt::tt_metal::compute_strides(tensor_shape_in_pages_);
-    tt::stl::SmallVector<uint32_t> shard_strides = tt::tt_metal::compute_strides(shard_shape_in_pages_);
+    tt::stl::SmallVector<uint64_t> tensor_strides = tt::tt_metal::compute_strides(tensor_shape_in_pages_);
+    tt::stl::SmallVector<uint64_t> shard_strides = tt::tt_metal::compute_strides(shard_shape_in_pages_);
     tt::stl::SmallVector<uint32_t> actual_shard_size(tensor_shape_in_pages_.rank());
 
     CMAKE_UNIQUE_NAMESPACE::PageMappingIntermData params{

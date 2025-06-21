@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -164,8 +164,8 @@ struct ShardedBufferConfig {
 bool is_sharded(const TensorMemoryLayout& layout);
 
 struct BufferRegion {
-    DeviceAddr offset = 0;
-    DeviceAddr size = 0;
+    DeviceAddr offset = DeviceAddr(0);
+    DeviceAddr size = DeviceAddr(0);
 
     BufferRegion() = delete;
     BufferRegion(DeviceAddr offset, DeviceAddr size) : offset(offset), size(size) {}
@@ -226,11 +226,13 @@ public:
 
     // Returns address of buffer in the first bank
     uint32_t address() const;
+    DeviceAddr address_u64() const;
 
     DeviceAddr page_size() const;
     void set_page_size(DeviceAddr page_size);
 
     uint32_t num_pages() const;
+    DeviceAddr num_pages_u64() const;
     uint32_t num_dev_pages() const;
 
     BufferType buffer_type() const { return buffer_type_; }
@@ -248,7 +250,7 @@ public:
 
     bool bottom_up() const { return bottom_up_; }
 
-    DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
+    DeviceAddr page_address(DeviceAddr bank_id, DeviceAddr page_index) const;
 
     uint32_t alignment() const;
     DeviceAddr aligned_page_size() const;
@@ -300,7 +302,7 @@ private:
     void deallocate_impl();
     friend void DeallocateBuffer(Buffer& buffer);
 
-    DeviceAddr translate_page_address(uint64_t offset, uint32_t bank_id) const;
+    DeviceAddr translate_page_address(DeviceAddr offset, uint32_t bank_id) const;
 
     IDevice* const device_;
     const DeviceAddr size_;  // Size in bytes
