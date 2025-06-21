@@ -37,9 +37,9 @@ FORCE_INLINE void reduce(uint32_t cb_in, uint32_t cb_scalar, uint32_t cb_out) {
     tile_regs_acquire();
     tile_regs_wait();
 
-    reduce_init_delta<false, REDUCE_OP, REDUCE_DIM>(cb_in, cb_scalar, cb_out);
+    reduce_init<REDUCE_OP, REDUCE_DIM>(cb_in, cb_scalar, cb_out);
     reduce_tile(cb_in, cb_scalar, 0, 0, 0);
-    reduce_revert_delta<REDUCE_DIM>(cb_out);
+    reduce_uninit();
 
     cb_reserve_back(cb_out, ONE_TILE);
     pack_tile(0, cb_out);
@@ -63,8 +63,9 @@ void MAIN {
     constexpr uint32_t intermed_cb_id2 = get_compile_time_arg_val(4);
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(5);
 
-    reduce_init<true>(input_cb_id, scalar_cb_id, intermed_cb_id1);
-    reduce_revert_delta<REDUCE_DIM>(intermed_cb_id1);  // Required or else the first tile is wrong
+    compute_kernel_hw_startup(input_cb_id, scalar_cb_id, intermed_cb_id1);
+    reduce_init(input_cb_id, scalar_cb_id, intermed_cb_id1);
+    reduce_uninit();  // Required or else the first tile is wrong
 
     for (uint32_t block_h_id = 0; block_h_id < input_num_blocks_h; block_h_id++) {
         cb_wait_front(scalar_cb_id, ONE_TILE);
