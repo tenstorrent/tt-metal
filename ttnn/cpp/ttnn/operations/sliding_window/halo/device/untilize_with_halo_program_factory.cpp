@@ -508,7 +508,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     }
     const auto delta = output_tensor.buffer()->aligned_size_per_bank() - input_tensor.buffer()->aligned_size_per_bank();
     TT_ASSERT(
-        src_buffer->sharded_page_address(0, 0) == dst_buffer->sharded_page_address(0, 0) + delta,
+        src_buffer->address() == dst_buffer->address() + delta,
         "In-place halo requires input and output buffers to be sharded at the same address");
     TT_ASSERT(!remote_read, "remote_read is not supported for in place operation");
 
