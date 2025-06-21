@@ -16,13 +16,16 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 @pytest.mark.parametrize(
     "shapes",
     [
-        ([1, 1, 512, 4096], [1, 1, 512, 256]),
+        ([1, 1, 512, 4096], [1, 1, 512, 256], 2, 4),
+        ([1, 1, 512, 4096], [1, 1, 512, 256], 4, 2),
+        ([1, 1, 32, 64], [1, 1, 32, 32], 0, 0),
+        ([1, 1, 64, 128], [1, 1, 64, 32], 0, 0),
     ],
 )
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_nd_shard(device, shapes, keepdim):
     dim = -2
-    input_shape, shard_shape = shapes
+    input_shape, shard_shape, end_x, end_y = shapes
     torch_input_tensor = torch.rand(input_shape)
     torch_output_tensor = torch.sum(torch_input_tensor, dim, keepdim)
 
@@ -30,7 +33,7 @@ def test_nd_shard(device, shapes, keepdim):
         buffer_type=ttnn.BufferType.L1,
         nd_shard_spec=ttnn.NdShardSpec(
             shard_shape,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 4))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(end_x, end_y))}),
         ),
     )
     input_tensor = ttnn.from_torch(
