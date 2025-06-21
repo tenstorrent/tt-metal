@@ -48,6 +48,18 @@ jobs:
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
+          {
+            name: "[TG] Llama-8B DP=16",
+            model: "meta-llama/Llama-3.1-8B-Instruct",
+            server-timeout: 10,
+            benchmark-timeout: 5,
+            runner-label: config-tg,
+            mesh-device: TG,
+            override-tt-config: "{\"data_parallel\": 16}",
+            tt-llama-text-ver: tt_transformers,
+            co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
+            co-owner-2-id: U08BH66EXAL, # Radoica Draskic
+          },
         ]
     runs-on:
       - ${{ matrix.test-group.runner-label }}
