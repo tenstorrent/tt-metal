@@ -229,6 +229,9 @@ Result conv2d_DRAM(
 
     uint32_t slice_index = 0;
     uint32_t output_slice_dim_start = 0;
+    ttnn::Tensor sliced_output_tensor;
+
+    uint32_t additional_padded_width = 0;
 
     while ((output_slice_dim_start < output_sliced_dim) && (slice_index < dram_slice_config.num_slices)) {
         const uint32_t output_slice_size =
@@ -268,6 +271,7 @@ Result conv2d_DRAM(
             output_slice_height_end = output_height;
             output_slice_width_start = output_slice_dim_start;
             output_slice_width_end = output_slice_dim_end;
+
             input_slice_height_start = 0;
             input_slice_height_end = input_height;
             input_slice_width_start = (output_slice_width_start * stride[1]) - padding_n4[2];
@@ -278,6 +282,16 @@ Result conv2d_DRAM(
             pad_bottom = padding_n4[1];
             pad_left = std::max<int>(0, -input_slice_width_start);
             pad_right = std::max<int>(0, input_slice_width_end - input_width);
+            if (this_output_slice_dim % slice_rounding_value != 0) {
+                additional_padded_width = slice_rounding_value - (this_output_slice_dim % slice_rounding_value);
+                pad_right += additional_padded_width * stride[1];
+
+                log_info(
+                    LogOp,
+                    "Conv2d DRAM Slicing: Slice {}: Additional padding of {} added to the right side.",
+                    slice_index,
+                    additional_padded_width);
+            }
             input_slice_width_start = std::max<int>(0, input_slice_width_start);
             input_slice_width_end = std::min<int>(input_width, input_slice_width_end);
 
@@ -319,7 +333,7 @@ Result conv2d_DRAM(
                 in_channels,
                 out_channels,
                 output_slice_height,
-                output_slice_width,
+                output_slice_width + additional_padded_width,
                 weight_tensor.logical_shape()[3],
                 input_slice_height,
                 input_slice_width,
@@ -353,7 +367,8 @@ Result conv2d_DRAM(
                 conv_config,
                 batch_size,
                 ttnn::Shape({batch_size, input_slice_height, input_slice_width, in_channels}),
-                ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
+                ttnn::Shape(
+                    {batch_size, output_slice_height, output_slice_width + additional_padded_width, out_channels}),
                 mm_conv,
                 device,
                 // Setting layout to TILE forces input_channels_alignment to 32.
@@ -372,7 +387,6 @@ Result conv2d_DRAM(
         conv_config_l1.deallocate_activation = true;
         conv_config_l1.reallocate_halo_output = true;
 
-        ttnn::Tensor sliced_output_tensor;
         std::tie(sliced_output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) =
             conv2d_L1(
                 queue_id,
@@ -406,6 +420,11 @@ Result conv2d_DRAM(
         }
         if (sliced_output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
             // slice_write expects the output tensor to be correctly shaped when its in interleaved memory layout.
+            TT_FATAL(
+                additional_padded_width == 0,
+                "Conv2D DRAM Slicing: Additional padding should not be applied when the output tensor is in "
+                "interleaved "
+                "memory layout.");
             sliced_output_tensor = ttnn::reshape(
                 sliced_output_tensor,
                 ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
@@ -419,6 +438,7 @@ Result conv2d_DRAM(
             std::array<uint32_t, 4>{0, output_slice_height_start, output_slice_width_start, 0},
             std::array<uint32_t, 4>{batch_size, output_slice_height_end, output_slice_width_end, out_channels},
             std::array<uint32_t, 4>{1, 1, 1, 1});
+
         first_run = false;
         output_slice_dim_start += output_slice_size;
         slice_index++;
@@ -427,12 +447,12 @@ Result conv2d_DRAM(
     if (conv_config.deallocate_activation) {
         input_tensor_on_device.deallocate(true);
     }
-    const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.logical_shape());
-    const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.padded_shape());
+    // const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.logical_shape());
+    // const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.padded_shape());
 
-    dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
+    // dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
 
-    return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+    return {dram_output_tensor, output_height, output_width, sliced_output_tensor, bias_tensor_on_device};
 }
 
 template <typename T>
