@@ -101,6 +101,8 @@ void kernel_main() {
         // TODO: (GR) Un hard-code
         uint32_t max_tiles_per_packet = 2;
 
+        // TODO: (GR) Proper tiles_to_put_in_current_packet should be min(size_of_packet_in_pages, max_tiles_per_packet,
+        // num_pages_remaining)
         while (tiles_read < tiles_to_read) {
             uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
             uint32_t tiles_to_put_in_current_packet = std::min(tiles_remaining_to_read, max_tiles_per_packet);
