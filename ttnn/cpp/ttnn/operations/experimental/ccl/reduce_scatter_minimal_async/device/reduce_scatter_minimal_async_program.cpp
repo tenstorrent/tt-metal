@@ -205,6 +205,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     // Reader
     std::vector<KernelHandle> reader_kernel_ids;
     std::vector<KernelHandle> writer_kernel_ids;
+    std::vector<KernelHandle> reduce_kernel_ids;
     for (uint32_t core_idx = 0; core_idx < num_senders_per_link; core_idx++) {
         auto sender_reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
         sender_reader_kernel_config.compile_args = {
@@ -258,26 +259,28 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             core_idx % num_senders_per_link ? sender_forward_core_ranges : sender_backward_core_ranges,
             sender_writer_kernel_config);
         writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
+
+        // Reduce kernel
+        auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{};
+        sender_reduce_kernel_config.compile_args = {
+            input_cb_index,
+            intermediate_cb_index,
+            compute_output_cb_index,
+            batch_slice_num_pages,
+            (8 < tile_granularity ? 8 : tile_granularity),
+            ring_size,
+            num_batches,
+            num_links,
+            core_idx % num_senders_per_link};
+
+        auto sender_reduce_kernel_id = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
+            "reduction.cpp",
+            core_idx % num_senders_per_link ? sender_forward_core_ranges : sender_backward_core_ranges,
+            sender_reduce_kernel_config);
+        reduce_kernel_ids.push_back(sender_reduce_kernel_id);
     }
-
-    // Reduce kernel
-    auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{};
-    sender_reduce_kernel_config.compile_args = {
-        input_cb_index,
-        intermediate_cb_index,
-        compute_output_cb_index,
-        batch_slice_num_pages,
-        (8 < tile_granularity ? 8 : tile_granularity),
-        ring_size,
-        num_batches,
-        num_links};
-
-    auto sender_reduce_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
-        "reduction.cpp",
-        sender_worker_core_range,
-        sender_reduce_kernel_config);
 
     if (fuse_op) {
         fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range);
@@ -327,6 +330,9 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
                 }
             }
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel_ids[core_idx], {core}, writer_rt_args);
+
+            std::vector<uint32_t> reduce_rt_args = {link};
+            tt::tt_metal::SetRuntimeArgs(program, reduce_kernel_ids[core_idx], {core}, reduce_rt_args);
         }
     }
 

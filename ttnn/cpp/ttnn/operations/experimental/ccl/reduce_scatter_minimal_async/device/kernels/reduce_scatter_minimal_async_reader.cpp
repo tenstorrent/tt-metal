@@ -95,11 +95,12 @@ void kernel_main() {
             uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
             uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
             if (!direction) {
-                uint32_t backwards_offset = std::min(tiles_to_read - tiles_read, tile_granularity);
+                uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
                 tiles_read += backwards_offset;
                 pages_read_in_row += backwards_offset;
                 intermediate_pages_read_in_row = pages_read_in_row;
             }
+
             // DPRINT << "READER: for link " << link << ", tiles_read: " << tiles_read
             //        << ", tiles_to_read: " << tiles_to_read << ", "
             //        << "pages_read_in_row: " << pages_read_in_row << ", row_offset: " << row_offset
@@ -116,7 +117,12 @@ void kernel_main() {
                 while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem) <= i - 1);
             }
             while (tiles_read < tiles_to_read) {
-                uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
+                uint32_t num_pages_to_read = 0;
+                if (direction) {
+                    num_pages_to_read = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
+                } else {
+                    num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
+                }
 
                 cb_reserve_back(cb_in0, tile_granularity);
                 const uint32_t l1_write_addr_base = get_write_ptr(cb_in0);
@@ -162,7 +168,12 @@ void kernel_main() {
 
                 // Skip the tiles going the other direction
                 if (tiles_read < tiles_to_read) {
-                    num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
+                    num_pages_to_read = 0;
+                    if (!direction) {
+                        num_pages_to_read = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
+                    } else {
+                        num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
+                    }
                     tiles_read += num_pages_to_read;
                     pages_read_in_row += num_pages_to_read;
                     if (pages_read_in_row >= slice_Wt) {
@@ -182,5 +193,4 @@ void kernel_main() {
             }
         }
     }
-    DPRINT << "Done Reader\n";
 }

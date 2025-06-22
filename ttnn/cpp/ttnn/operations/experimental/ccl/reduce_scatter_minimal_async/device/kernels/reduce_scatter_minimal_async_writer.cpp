@@ -116,13 +116,18 @@ void kernel_main() {
                 //        << "\n";
                 uint32_t input_tile_id_start = actual_slice_idx * slice_Wt;
                 if (!direction) {
-                    uint32_t backwards_offset = std::min(tiles_to_read - tiles_read, tile_granularity);
+                    uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
                     tiles_read += backwards_offset;
                     pages_read_in_row += backwards_offset;
                 }
 
                 while (tiles_read < tiles_to_read) {
-                    uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
+                    uint32_t num_pages_to_read = 0;
+                    if (direction) {
+                        num_pages_to_read = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
+                    } else {
+                        num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
+                    }
                     cb_wait_front(cb_output_id, tile_granularity);
                     size_t l1_read_addr = get_read_ptr(cb_output_id);
 
@@ -174,7 +179,12 @@ void kernel_main() {
 
                     // Skip the tiles going the other direction
                     if (tiles_read < tiles_to_read) {
-                        num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
+                        num_pages_to_read = 0;
+                        if (!direction) {
+                            num_pages_to_read = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
+                        } else {
+                            num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
+                        }
                         tiles_read += num_pages_to_read;
                         pages_read_in_row += num_pages_to_read;
                         if (pages_read_in_row >= slice_Wt) {
@@ -210,10 +220,15 @@ void kernel_main() {
                 uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
                 uint32_t tile_id_start = batch_slice_offset;
                 if (!direction) {
-                    tiles_read += std::min(tiles_to_read - tiles_read, tile_granularity);
+                    tiles_read += std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
                 }
                 while (tiles_read < tiles_to_read) {
-                    uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
+                    uint32_t num_pages_to_read = 0;
+                    if (direction) {
+                        num_pages_to_read = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
+                    } else {
+                        num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
+                    }
                     cb_wait_front(cb_output_id, tile_granularity);
                     size_t l1_read_addr = get_read_ptr(cb_output_id);
 
@@ -228,7 +243,12 @@ void kernel_main() {
 
                     // Skip the tiles going the other direction
                     if (tiles_read < tiles_to_read) {
-                        num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
+                        num_pages_to_read = 0;
+                        if (!direction) {
+                            num_pages_to_read = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
+                        } else {
+                            num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
+                        }
                         tiles_read += num_pages_to_read;
                     }
                 }
@@ -279,5 +299,4 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
-    DPRINT << "Done Writer\n";
 }
