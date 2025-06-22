@@ -362,10 +362,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const auto [sender_worker_core_range, sender_worker_cores] =
         choose_worker_cores(num_links, num_senders_per_link, mesh_device, sub_device_id, core_grid_offset);
     std::set<CoreRange> sender_forward_core_ranges;
-    sender_forward_core_ranges.insert(CoreRange(sender_worker_cores[1]));
-    CoreRangeSet sender_forward_core_range_set = CoreRangeSet(sender_forward_core_ranges);
     std::set<CoreRange> sender_backward_core_ranges;
-    sender_backward_core_ranges.insert(CoreRange(sender_worker_cores[0]));
+    for (int i = 0; i < num_links; i++) {
+        sender_forward_core_ranges.insert(CoreRange(sender_worker_cores[1 + 2 * i]));
+        sender_backward_core_ranges.insert(CoreRange(sender_worker_cores[0 + 2 * i]));
+    }
+    CoreRangeSet sender_forward_core_range_set = CoreRangeSet(sender_forward_core_ranges);
     CoreRangeSet sender_backward_core_range_set = CoreRangeSet(sender_backward_core_ranges);
 
     // L1 Scratch CB Creation
@@ -535,8 +537,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         uint32_t remainder = single_batch_head_num_pages % num_links;
         uint32_t input_tile_id_start = link * base_pages_per_worker + std::min(link, remainder);
         uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + std::min(link + 1, remainder);
-        uint32_t packet_id = ((input_tile_id_end - input_tile_id_start) + tiles_to_write_per_packet - 1) /
-                             tiles_to_write_per_packet * link;
         TT_FATAL(!(input_tensor_shape[3] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
         TT_FATAL(!(output_tensor_shape[3] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
         uint32_t TILE_WIDTH = 32;
@@ -563,7 +563,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             fused_op_signaler_forward->push_all_gather_fused_op_rt_args(reader_forward_rt_args, 1, 0, 1);
         }
         tt::tt_metal::SetRuntimeArgs(
-            program, worker_sender_reader_forward_kernel_id, {sender_worker_cores[1]}, reader_forward_rt_args);
+            program,
+            worker_sender_reader_forward_kernel_id,
+            {sender_worker_cores[1 + 2 * link]},
+            reader_forward_rt_args);
 
         std::vector<uint32_t> reader_backward_rt_args = {
             input_tensor.buffer()->address(),   // input_tensor_address
@@ -583,10 +586,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             fused_op_signaler_backward->push_all_gather_fused_op_rt_args(reader_backward_rt_args, 1, 0, 0);
         }
         tt::tt_metal::SetRuntimeArgs(
-            program, worker_sender_reader_backward_kernel_id, {sender_worker_cores[0]}, reader_backward_rt_args);
+            program,
+            worker_sender_reader_backward_kernel_id,
+            {sender_worker_cores[0 + 2 * link]},
+            reader_backward_rt_args);
 
-        CoreCoord sender_forward_worker_core = mesh_device->worker_core_from_logical_core(sender_worker_cores[1]);
-        CoreCoord sender_backward_worker_core = mesh_device->worker_core_from_logical_core(sender_worker_cores[0]);
+        CoreCoord sender_forward_worker_core =
+            mesh_device->worker_core_from_logical_core(sender_worker_cores[1 + 2 * link]);
+        CoreCoord sender_backward_worker_core =
+            mesh_device->worker_core_from_logical_core(sender_worker_cores[0 + 2 * link]);
 
         std::vector<uint32_t> writer_forward_rt_args = {
             output_tensor.buffer()->address(),  // output_tensor_address
@@ -611,14 +619,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
                 backward_device.value()->id(),
                 link,
                 program,
-                sender_worker_cores[1],
+                sender_worker_cores[1 + 2 * link],
                 writer_forward_rt_args);
         }
         if (fuse_op) {
             fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_forward_rt_args, 1, 0, 1);
         }
         tt::tt_metal::SetRuntimeArgs(
-            program, worker_sender_writer_forward_kernel_id, sender_worker_cores[1], writer_forward_rt_args);
+            program, worker_sender_writer_forward_kernel_id, sender_worker_cores[1 + 2 * link], writer_forward_rt_args);
 
         std::vector<uint32_t> writer_backward_rt_args = {
             output_tensor.buffer()->address(),  // output_tensor_address
@@ -642,7 +650,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
                 forward_device.value()->id(),
                 link,
                 program,
-                sender_worker_cores[0],
+                sender_worker_cores[0 + 2 * link],
                 writer_backward_rt_args);
         }
         writer_backward_rt_args.push_back(false);
@@ -650,7 +658,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_backward_rt_args, 1, 0, 0);
         }
         tt::tt_metal::SetRuntimeArgs(
-            program, worker_sender_writer_backward_kernel_id, sender_worker_cores[0], writer_backward_rt_args);
+            program,
+            worker_sender_writer_backward_kernel_id,
+            sender_worker_cores[0 + 2 * link],
+            writer_backward_rt_args);
     }
 
     auto override_runtime_arguments_callback =
@@ -678,6 +689,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
                 GetRuntimeArgs(program, worker_sender_reader_backward_kernel_id);
             auto& worker_writer_sender_backward_runtime_args_by_core =
                 GetRuntimeArgs(program, worker_sender_writer_backward_kernel_id);
+            auto out_ready_semaphore_forward = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore.at(0);
+            auto out_ready_semaphore_backward = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore.at(1);
             for (int link = 0; link < num_links; link++) {
                 // sender reader
                 auto& worker_reader_sender_forward_runtime_args =
@@ -685,22 +698,26 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
                                                                      [sender_worker_cores[1 + link * 2].y];
                 worker_reader_sender_forward_runtime_args[0] = input.buffer()->address();
                 worker_reader_sender_forward_runtime_args[1] = output.buffer()->address();
+                worker_reader_sender_forward_runtime_args[11] = out_ready_semaphore_forward.address();
                 // sender writer
                 auto& worker_writer_sender_forward_runtime_args =
                     worker_writer_sender_forward_runtime_args_by_core[sender_worker_cores[1 + link * 2].x]
                                                                      [sender_worker_cores[1 + link * 2].y];
                 worker_writer_sender_forward_runtime_args[0] = output.buffer()->address();
+                worker_writer_sender_forward_runtime_args[12] = out_ready_semaphore_forward.address();
                 // sender reader
                 auto& worker_reader_sender_backward_runtime_args =
                     worker_reader_sender_backward_runtime_args_by_core[sender_worker_cores[0 + link * 2].x]
                                                                       [sender_worker_cores[0 + link * 2].y];
                 worker_reader_sender_backward_runtime_args[0] = input.buffer()->address();
                 worker_reader_sender_backward_runtime_args[1] = output.buffer()->address();
+                worker_reader_sender_backward_runtime_args[11] = out_ready_semaphore_backward.address();
                 // sender writer
                 auto& worker_writer_sender_backward_runtime_args =
                     worker_writer_sender_backward_runtime_args_by_core[sender_worker_cores[0 + link * 2].x]
                                                                       [sender_worker_cores[0 + link * 2].y];
                 worker_writer_sender_backward_runtime_args[0] = output.buffer()->address();
+                worker_writer_sender_backward_runtime_args[12] = out_ready_semaphore_backward.address();
             }
         };
 
