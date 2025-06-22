@@ -201,16 +201,13 @@ def run_demo_inference(
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            ttnn_add_time_id2 = (
-                ttnn.from_torch(
-                    add_time_ids.squeeze(0),
-                    dtype=ttnn.bfloat16,
-                    device=ttnn_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                ),
+            ttnn_add_time_id2 = ttnn.from_torch(
+                add_time_ids.squeeze(0),
+                dtype=ttnn.bfloat16,
+                device=ttnn_device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        ttnn_add_time_id2 = ttnn_add_time_id2[0]  # weird behaviour, to investigate further
         ttnn_time_ids = [ttnn_add_time_id1, ttnn_add_time_id2]
         ttnn_text_embeds = [
             [
@@ -303,10 +300,12 @@ def run_demo_inference(
     images = []
     logger.info("Starting ttnn inference...")
     for iter in range(len(prompts) // batch_size):
-        logger.info(f"Running inference for prompt {iter + 1}/{len(prompts)}: {prompts[iter]}")
+        logger.info(
+            f"Running inference for prompts {iter * batch_size + 1}-{iter * batch_size + batch_size}/{len(prompts)}"
+        )
         for i, t in tqdm(enumerate(ttnn_timesteps), total=len(ttnn_timesteps)):
             unet_outputs = []
-            for unet_slice in range(2):
+            for unet_slice in range(len(ttnn_time_ids)):
                 latent_model_input = latents
                 noise_pred, noise_shape = run_tt_iteration(
                     ttnn_device,
@@ -348,7 +347,6 @@ def run_demo_inference(
 
             logger.info("Running TT VAE")
             imgs = tt_vae.forward(latents, [B, C, H, W])
-            ttnn_device.enable_program_cache()
         else:
             latents = ttnn.to_torch(latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))
             latents = latents.reshape(batch_size * B, H, W, C)
