@@ -94,6 +94,7 @@ int main() {
         WAYPOINT("GW");
 
         uint8_t go_message_signal = RUN_MSG_DONE;
+        DPRINT << "Waiting for go signal..." << ENDL();
         while ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
@@ -147,9 +148,8 @@ int main() {
                 auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                 record_stack_usage(stack_free);
                 WAYPOINT("D");
+                mailboxes->go_message.signal = RUN_MSG_DONE;
             }
-
-            mailboxes->go_message.signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
