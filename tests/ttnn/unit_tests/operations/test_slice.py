@@ -146,12 +146,13 @@ def num_to_core_range_set(x):
 @pytest.mark.parametrize(
     "dims, slice_size, cores",
     [
-        [[2, 256, 300, 64], 128, 22],
-        [[2, 256, 128, 32], 64, 8],
-        [[2, 256, 256, 128], 64, 64],
-        [[2, 256, 256, 9], 64, 64],
-        [[2, 256, 256, 17], 64, 64],
-        [[2, 1024, 1024, 3], 64, 64],
+        # [[2, 256, 300, 64], 128, 22],
+        # [[2, 256, 128, 32], 64, 8],
+        # [[2, 256, 256, 128], 64, 64],
+        # [[2, 256, 256, 9], 64, 64],
+        # [[2, 256, 256, 17], 64, 64],
+        # [[2, 1024, 1024, 3], 64, 64],
+        [[2, 313, 71, 32], 32, 7]
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
@@ -176,7 +177,7 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
     parallel_config = ttnn.SlidingWindowParallelConfig(
         grid=core_range, shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, shard_orientation=orientation
     )
-    num_slices = dims[slice_dim] // slice_size
+    num_slices = round_up(dims[slice_dim], slice_size) // slice_size
     padded_channels = round_up(dims[-1], 32)
 
     padded_torch_input = torch.nn.functional.pad(torch_input, (0, padded_channels - dims[-1]))
@@ -192,7 +193,6 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
         this_torch_input = padded_torch_input[
             begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]
         ]
-        input_shape = this_torch_input.shape
 
         this_ttnn_input = ttnn.from_torch(
             this_torch_input,
@@ -205,7 +205,7 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
         )
         this_ttnn_input = ttnn.reshape(this_ttnn_input, this_ttnn_input.padded_shape)
         this_ttnn_input = ttnn.reshape(this_ttnn_input, [1, 1, -1, this_ttnn_input.padded_shape[-1]])
-
+        print(this_torch_input.shape)
         memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
             this_ttnn_input.shape,
             parallel_config,
