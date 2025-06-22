@@ -21,8 +21,14 @@ namespace ckernel {
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for transpose op to be executed
  * correctly.
  */
+/**
+ * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for transpose_wh to be executed
+ * correctly.
+ */
 ALWI void transpose_init(uint32_t icb) {
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(true, true, icb)));
+#if defined(TRISC_MATH) || defined(TRISC_UNPACK)
+    const std::uint32_t src_format = get_operand_src_format(icb);
+    const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
 
     if (is_int32) {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -56,8 +62,21 @@ ALWI void transpose_init(uint32_t icb) {
  */
 // clang-format on
 ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
-    UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile, false)));
-    MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(idst)));
+#if defined(TRISC_MATH) || defined(TRISC_UNPACK)
+    const std::uint32_t src_format = get_operand_src_format(icb);
+    const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
+
+    if (is_int32) {
+        UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+            icb, itile, true)));
+        UNPACK((llk_unpack_set_srcb_dummy_valid()));
+        MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(idst)));
+        MATH((llk_math_transpose_dest<false, true>(idst)));
+    } else {
+        UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile, true)));
+        MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(idst)));
+    }
+#endif
 }
 
 }  // namespace ckernel
