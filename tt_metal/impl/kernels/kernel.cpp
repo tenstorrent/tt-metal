@@ -641,6 +641,7 @@ bool EthernetKernel::configure(IDevice* device, const CoreCoord &logical_core, u
             MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
         uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
         int erisc_id = magic_enum::enum_integer(this->config_.processor);
+        std::cout << "Writing active eth kernel" << std::endl;
         tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, ethernet_core, erisc_core_type, dm_class_idx, erisc_id);
     }
 

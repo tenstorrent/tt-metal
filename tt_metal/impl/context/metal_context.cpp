@@ -967,6 +967,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
         uint32_t virtual_non_worker_cores_idx = 0;
         for (tt::umd::CoreCoord core : eth_cores) {
             auto virtual_core = cluster_->get_virtual_coordinate_from_physical_coordinates(device_id, {core.x, core.y});
+            std::cout << "Physical eth " << core.str() << " virtual " << virtual_core.str() << std::endl;
             core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
                 virtual_core.x, virtual_core.y, AddressableCoreType::ETH};
         }
