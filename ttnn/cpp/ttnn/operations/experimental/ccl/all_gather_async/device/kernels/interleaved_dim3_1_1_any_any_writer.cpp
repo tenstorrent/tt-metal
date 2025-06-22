@@ -78,18 +78,10 @@ void kernel_main() {
     fabric_connection.open();
 
     uint32_t slice_writes = 0;
+
     // Write out the local slice to both DRAM and forward and backward
-    // TODO: send as rt args
-
-    // end of rt args
-
-    uint32_t intermediate_packet_id_x = my_chip_id_x + intermediate_packet_offset_x;
-    uint32_t intermediate_packet_id_y = my_chip_id_y + intermediate_packet_offset_y;
-    if (intermediate_packet_id_x >= N_DRAM_BANKS) {
-        intermediate_packet_id_x -= N_DRAM_BANKS;
-        intermediate_packet_id_y++;
-    }
-
+    uint32_t pages_read_in_row = input_tile_id_start % input_tensor_Wt;
+    uint32_t row_offset = (input_tile_id_start / input_tensor_Wt) * output_tensor_Wt;
     uint32_t tiles_read = input_tile_id_start;
     uint32_t tiles_to_read = input_tile_id_end;
     uint32_t tile_id_start = my_chip_id * input_tensor_Wt;
