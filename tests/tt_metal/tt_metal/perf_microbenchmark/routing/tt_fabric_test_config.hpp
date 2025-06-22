@@ -414,10 +414,11 @@ inline void CmdlineParser::apply_overrides(std::vector<TestConfig>& test_configs
             test_args::has_command_option(input_args_, "--chip-ids") ||
             test_args::has_command_option(input_args_, "--iterations") ||
             test_args::has_command_option(input_args_, "--src-device") ||
-            test_args::has_command_option(input_args_, "--dst-device")) {
+            test_args::has_command_option(input_args_, "--dst-device") ||
+            test_args::has_command_option(input_args_, "--topology")) {
             log_warning(
                 LogTest,
-                "Ignoring structural command-line arguments (--pattern, --chip-ids, etc.) as a YAML "
+                "Ignoring structural command-line arguments (--pattern, --chip-ids, --topology, etc.) as a YAML "
                 "configuration is being used. Only value overrides (--num-packets, --payload-size, etc.) are applied.");
         }
     }
@@ -449,6 +450,14 @@ inline std::vector<TestConfig> CmdlineParser::generate_default_configs() {
     log_info(LogTest, "No YAML config provided. Generating a default test configuration from command-line args.");
 
     TestFabricSetup fabric_setup;
+    if (test_args::has_command_option(input_args_, "--topology")) {
+        std::string topology_str = test_args::get_command_option(input_args_, "--topology", "Linear");
+        fabric_setup.topology = detail::topology_mapper.from_string(topology_str, "Topology");
+    } else {
+        fabric_setup.topology = Topology::Linear;
+        log_info(LogTest, "No topology specified via --topology, defaulting to Linear.");
+    }
+
     TestConfig default_test;
 
     if (test_args::has_command_option(input_args_, "--pattern")) {
@@ -664,6 +673,9 @@ private:
 
             // After patterns are expanded, resolve any missing params based on policy
             resolve_missing_params(iteration_test);
+
+            // After expansion and resolution, apply universal transformations like mcast splitting.
+            split_all_multicast_patterns(iteration_test);
 
             validate_test(iteration_test);
             expanded_tests.push_back(iteration_test);
@@ -908,6 +920,55 @@ private:
         }
     }
 
+    void split_all_multicast_patterns(TestConfig& test) {
+        // This function iterates through all sender patterns and splits any multi-direction
+        // multicast hops. It uses a copy-on-write approach for efficiency: it only
+        // rebuilds a sender's pattern list if a split is actually performed.
+        for (auto& sender : test.senders) {
+            std::vector<TrafficPatternConfig> new_patterns;
+            bool sender_was_modified = false;
+
+            for (size_t i = 0; i < sender.patterns.size(); ++i) {
+                const auto& pattern = sender.patterns[i];
+
+                // Determine if this specific pattern needs to be split.
+                bool needs_split = false;
+                std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_hops_vec;
+                if (pattern.ftype.has_value() && pattern.ftype.value() == ChipSendType::CHIP_MULTICAST &&
+                    pattern.destination.has_value() && pattern.destination.value().hops.has_value()) {
+                    const auto& hops = pattern.destination.value().hops.value();
+                    split_hops_vec = this->route_manager_.split_multicast_hops(hops);
+                    if (split_hops_vec.size() > 1) {
+                        needs_split = true;
+                    }
+                }
+
+                if (needs_split) {
+                    if (!sender_was_modified) {
+                        sender_was_modified = true;
+                        // This is the first split for this sender.
+                        // Lazily allocate and copy the patterns processed so far.
+                        new_patterns.reserve(sender.patterns.size());
+                        new_patterns.insert(new_patterns.end(), sender.patterns.begin(), sender.patterns.begin() + i);
+                    }
+                    // Add the newly split patterns.
+                    for (const auto& split_hop : split_hops_vec) {
+                        TrafficPatternConfig new_pattern = pattern;
+                        new_pattern.destination->hops = split_hop;
+                        new_patterns.push_back(new_pattern);
+                    }
+                } else if (sender_was_modified) {
+                    // We are in copy-mode because a previous pattern was split.
+                    new_patterns.push_back(pattern);
+                }
+            }
+
+            if (sender_was_modified) {
+                sender.patterns = std::move(new_patterns);
+            }
+        }
+    }
+
     void resolve_missing_params(TestConfig& test) {
         if (!test.on_missing_param_policy.has_value() || test.on_missing_param_policy.value() != "randomize") {
             return;  // No policy or not 'randomize', do nothing.
@@ -916,7 +977,8 @@ private:
         for (auto& sender : test.senders) {
             for (auto& pattern : sender.patterns) {
                 if (!pattern.ftype.has_value()) {
-                    pattern.ftype = get_random_choice<ChipSendType>({ChipSendType::CHIP_UNICAST});
+                    pattern.ftype =
+                        get_random_choice<ChipSendType>({ChipSendType::CHIP_UNICAST, ChipSendType::CHIP_MULTICAST});
                 }
                 if (!pattern.ntype.has_value()) {
                     pattern.ntype = get_random_choice<NocSendType>(
@@ -927,6 +989,18 @@ private:
                 }
                 if (!pattern.num_packets.has_value()) {
                     pattern.num_packets = get_random_in_range(10, 1000);
+                }
+
+                if (!pattern.destination.has_value()) {
+                    if (pattern.ftype.value() == ChipSendType::CHIP_UNICAST) {
+                        FabricNodeId dst_node =
+                            this->route_manager_.get_random_unicast_destination(sender.device, this->gen_);
+                        pattern.destination = DestinationConfig{.device = dst_node};
+                    } else if (pattern.ftype.value() == ChipSendType::CHIP_MULTICAST) {
+                        // For multicast, the random default is an mcast to all devices.
+                        auto hops = this->route_manager_.get_full_mcast_hops(sender.device);
+                        pattern.destination = DestinationConfig{.hops = hops};
+                    }
                 }
             }
         }

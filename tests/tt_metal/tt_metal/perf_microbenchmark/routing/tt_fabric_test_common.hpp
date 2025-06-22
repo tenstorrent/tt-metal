@@ -302,7 +302,102 @@ public:
         return hops;
     }
 
+    std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_multicast_hops(
+        const std::unordered_map<RoutingDirection, uint32_t>& hops) const override {
+        std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_hops;
+        if (this->topology_ == Topology::Linear) {
+            for (const auto& [dir, hop_count] : hops) {
+                if (hop_count > 0) {
+                    split_hops.push_back({{dir, hop_count}});
+                }
+            }
+        } else {
+            TT_THROW("Unsupported topology: {} for split_multicast_hops", this->topology_);
+        }
+        return split_hops;
+    }
+
+    FabricNodeId get_random_unicast_destination(FabricNodeId src_node_id, std::mt19937& gen) const override {
+        auto all_devices = this->get_all_node_ids();
+        std::vector<FabricNodeId> possible_dsts;
+        for (const auto& dev : all_devices) {
+            if (dev == src_node_id) {
+                continue;
+            }
+            if (this->topology_ == Topology::Linear && !this->are_devices_linear({src_node_id, dev})) {
+                continue;
+            }
+            possible_dsts.push_back(dev);
+        }
+
+        if (possible_dsts.empty()) {
+            TT_THROW(
+                "Cannot pick a random unicast destination for sender on device {}: no valid partner devices available.",
+                src_node_id);
+        }
+
+        std::shuffle(possible_dsts.begin(), possible_dsts.end(), gen);
+        return possible_dsts[0];
+    }
+
     MeshShape get_mesh_shape() const { return mesh_shape_; }
+
+    RoutingDirection get_forwarding_direction(
+        const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const override {
+        auto forwarding_direction = control_plane_ptr_->get_forwarding_direction(src_node_id, dst_node_id);
+        TT_FATAL(
+            forwarding_direction.has_value(), "No forwarding direction found for {} -> {}", src_node_id, dst_node_id);
+        return forwarding_direction.value();
+    }
+
+    RoutingDirection get_forwarding_direction(
+        const std::unordered_map<RoutingDirection, uint32_t>& hops) const override {
+        if (topology_ == Topology::Linear) {
+            // for 1d, we expect hops only in one direction to be non-zero
+            for (const auto& [direction, hop] : hops) {
+                if (hop != 0) {
+                    return direction;
+                }
+            }
+        } else if (topology_ == Topology::Mesh) {
+            // TODO: update this logic once 2D mcast is supported
+            // for now we return the first direction that is non-zero
+            for (const auto& [direction, hop] : hops) {
+                if (hop != 0) {
+                    return direction;
+                }
+            }
+        } else {
+            TT_THROW("Unsupported topology: {} for get_forwarding_direction", topology_);
+        }
+
+        TT_THROW("Failed to find a forwarding direction for hops: {}", hops);
+    }
+
+    std::vector<uint32_t> get_forwarding_link_indices_in_direction(
+        const FabricNodeId& src_node_id,
+        const FabricNodeId& dst_node_id,
+        const RoutingDirection& direction) const override {
+        return tt::tt_fabric::get_forwarding_link_indices_in_direction(src_node_id, dst_node_id, direction);
+    }
+
+    FabricNodeId get_neighbor_node_id(
+        const FabricNodeId& src_node_id, const RoutingDirection& direction) const override {
+        const auto& neighbors = control_plane_ptr_->get_chip_neighbors(src_node_id, direction);
+        TT_FATAL(neighbors.size() == 1, "Expected only neighbor mesh for {} in direction: {}", src_node_id, direction);
+        TT_FATAL(
+            neighbors.begin()->second.size() >= 1,
+            "Expected at least 1 neighbor chip for {} in direction: {}",
+            src_node_id,
+            direction);
+        return FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
+    }
+
+    std::vector<uint32_t> get_forwarding_link_indices_in_direction(
+        const FabricNodeId& src_node_id, const RoutingDirection& direction) const override {
+        const auto& neighbor_node_id = get_neighbor_node_id(src_node_id, direction);
+        return this->get_forwarding_link_indices_in_direction(src_node_id, neighbor_node_id, direction);
+    }
 
 private:
     ControlPlane* control_plane_ptr_;

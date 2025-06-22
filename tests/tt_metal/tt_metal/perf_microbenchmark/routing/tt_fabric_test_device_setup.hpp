@@ -140,7 +140,7 @@ public:
     void validate_results();
     void dump_results();
 
-private:
+protected:
     CoreCoord logical_core_;
     uint32_t worker_id_;
     std::string_view kernel_src_;
@@ -150,12 +150,17 @@ private:
 struct TestSender : TestWorker {
 public:
     TestSender(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
-    void add_config(TestTrafficSenderConfig config);
+    void add_config(const TestTrafficSenderConfig& config);
     void connect_to_fabric_router();
 
     TestWorkerMemoryMap memory_map_;
-    // for now assume that a worker can handle multiple test configs in the same direction
-    std::vector<TestTrafficSenderConfig> configs_;
+
+    // stores traffic config and the correspoding fabric_connection idx to use
+    std::vector<std::pair<TestTrafficSenderConfig, uint32_t>> configs_;
+
+    // book-keeping for all the fabric connections needed for this sender
+    // [RoutingDirection][link_idx]
+    std::vector<std::pair<RoutingDirection, uint32_t>> fabric_connections_;
 };
 
 struct TestReceiver : TestWorker {
@@ -181,12 +186,16 @@ public:
         std::shared_ptr<IRouteManager> route_manager);
     tt::tt_metal::Program& get_program_handle();
     const FabricNodeId& get_node_id();
-    void add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config);
-    void add_receiver_traffic_config(CoreCoord logical_core, TestTrafficReceiverConfig config);
+    uint32_t add_fabric_connection(RoutingDirection direction, const std::vector<uint32_t>& link_indices);
+    void add_sender_traffic_config(CoreCoord logical_core, const TestTrafficSenderConfig& config);
+    void add_receiver_traffic_config(CoreCoord logical_core, const TestTrafficReceiverConfig& config);
     void create_kernels();
+    RoutingDirection get_forwarding_direction(const std::unordered_map<RoutingDirection, uint32_t>& hops) const;
+    std::vector<uint32_t> get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const;
 
 private:
     void add_worker(TestWorkerType worker_type, CoreCoord logical_core);
+    std::vector<uint32_t> get_fabric_connection_args(CoreCoord core, RoutingDirection direction, uint32_t link_idx);
     void create_sender_kernels();
     void create_receiver_kernels();
 
@@ -200,6 +209,8 @@ private:
 
     std::unordered_map<CoreCoord, TestSender> senders_;
     std::unordered_map<CoreCoord, TestReceiver> receivers_;
+
+    std::unordered_map<RoutingDirection, std::set<uint32_t>> used_fabric_connections_{};
 
     // controller?
 
@@ -462,7 +473,53 @@ inline TestSender::TestSender(
     // TODO: init mem map?
 }
 
-inline void TestSender::add_config(TestTrafficSenderConfig config) { this->configs_.push_back(config); }
+inline void TestSender::add_config(const TestTrafficSenderConfig& config) {
+    std::optional<RoutingDirection> outgoing_direction;
+    std::vector<uint32_t> outgoing_link_indices;
+
+    // either we will have hops specified or the dest node id
+    if (true /* config.hops.has_value() */) {
+        outgoing_direction = this->test_device_ptr_->get_forwarding_direction(config.hops);
+        outgoing_link_indices =
+            this->test_device_ptr_->get_forwarding_link_indices_in_direction(outgoing_direction.value());
+    } else {
+        // TODO: figure out if we need this
+        /*
+        const auto dst_node_id = config.dst_node_ids[0];
+        outgoing_direction =
+            this->test_device_ptr_->route_manager_->get_forwarding_direction(my_node_id, dst_node_id);
+        TT_FATAL(outgoing_direction.has_value(), "No forwarding direction found for {} from {}", dst_node_id,
+        my_node_id); outgoing_link_indices =
+            this->test_device_ptr_->route_manager_->get_forwarding_link_indices_in_direction(
+                my_node_id, dst_node_id, outgoing_direction.value());
+        TT_FATAL(!outgoing_link_indices.empty(), "No forwarding link indices found for {} from {}", dst_node_id,
+        my_node_id);
+        */
+    }
+
+    std::optional<uint32_t> fabric_connection_idx;
+    // first try to re-use an existing fabric connection as much as possible
+    for (const auto& idx : outgoing_link_indices) {
+        auto it = std::find(
+            this->fabric_connections_.begin(),
+            this->fabric_connections_.end(),
+            std::make_pair(outgoing_direction.value(), idx));
+        if (it != this->fabric_connections_.end()) {
+            fabric_connection_idx = std::distance(this->fabric_connections_.begin(), it);
+            break;
+        }
+    }
+
+    if (!fabric_connection_idx.has_value()) {
+        // insert a new fabric connection by first checking the device for unused links
+        auto new_link_idx =
+            this->test_device_ptr_->add_fabric_connection(outgoing_direction.value(), outgoing_link_indices);
+        this->fabric_connections_.push_back({outgoing_direction.value(), new_link_idx});
+        fabric_connection_idx = this->fabric_connections_.size() - 1;
+    }
+
+    this->configs_.push_back(std::make_pair(std::move(config), fabric_connection_idx.value()));
+}
 
 inline void TestSender::connect_to_fabric_router() {}
 
@@ -497,6 +554,34 @@ inline tt::tt_metal::Program& TestDevice::get_program_handle() { return this->pr
 
 inline const FabricNodeId& TestDevice::get_node_id() { return this->fabric_node_id_; }
 
+inline uint32_t TestDevice::add_fabric_connection(
+    RoutingDirection direction, const std::vector<uint32_t>& link_indices) {
+    // if all the connections have already been used by another worker, then its an error
+    // else try to add whichever is not used
+    if (this->used_fabric_connections_.count(direction) == 0) {
+        this->used_fabric_connections_[direction] = {};
+    }
+
+    const auto& used_link_indices = this->used_fabric_connections_.at(direction);
+    std::optional<uint32_t> unused_link_idx;
+    for (const auto& link_idx : link_indices) {
+        if (used_link_indices.count(link_idx)) {
+            continue;
+        }
+        unused_link_idx = link_idx;
+        break;
+    }
+    TT_FATAL(
+        unused_link_idx.has_value(),
+        "On node: {}, in direction: {}, all the link indices are already used. Either update the allocation policy to "
+        "use more sender configs per worker or add mux",
+        this->fabric_node_id_,
+        direction);
+
+    this->used_fabric_connections_[direction].insert(unused_link_idx.value());
+    return unused_link_idx.value();
+}
+
 inline void TestDevice::add_worker(TestWorkerType worker_type, CoreCoord logical_core) {
     if (worker_type == TestWorkerType::SENDER) {
         if (this->senders_.count(logical_core)) {
@@ -526,6 +611,15 @@ inline void TestDevice::add_worker(TestWorkerType worker_type, CoreCoord logical
     }
 }
 
+inline std::vector<uint32_t> TestDevice::get_fabric_connection_args(
+    CoreCoord core, RoutingDirection direction, uint32_t link_idx) {
+    std::vector<uint32_t> fabric_connection_args;
+    const auto neighbor_node_id = this->route_manager_->get_neighbor_node_id(this->fabric_node_id_, direction);
+    append_fabric_connection_rt_args(
+        this->fabric_node_id_, neighbor_node_id, link_idx, this->program_handle_, core, fabric_connection_args);
+    return fabric_connection_args;
+}
+
 inline void TestDevice::create_sender_kernels() {
     // TODO: fetch these dynamically
     const bool is_2d_fabric = false;
@@ -549,23 +643,21 @@ inline void TestDevice::create_sender_kernels() {
         std::vector<uint32_t> memory_allocator_args = {
             packet_header_region_base, payload_buffer_region_base, highest_usable_address};
 
-        // get fabric connection args
-        // for now just assume that there is only 1 recv per sender
-        // TODO: move this elsewhere and fix the logic
-        const auto& temp_config = sender.configs_[0];
-        const auto dst_node_id = temp_config.dst_node_ids[0];
-
-        const auto available_links = get_forwarding_link_indices(fabric_node_id_, dst_node_id);
-        const auto link_idx = available_links[0];
         std::vector<uint32_t> fabric_connection_args;
-        append_fabric_connection_rt_args(
-            fabric_node_id_, dst_node_id, link_idx, this->program_handle_, core, fabric_connection_args);
+        for (const auto& [direction, link_idx] : sender.fabric_connections_) {
+            const auto& args = get_fabric_connection_args(core, direction, link_idx);
+            fabric_connection_args.insert(fabric_connection_args.end(), args.begin(), args.end());
+        }
 
         // TODO: handle this properly when adding configs for the sender
-        std::vector<uint32_t> traffic_config_to_fabric_connection_args(sender.configs_.size(), 0);
+        std::vector<uint32_t> traffic_config_to_fabric_connection_args;
+        traffic_config_to_fabric_connection_args.reserve(sender.configs_.size());
+        for (const auto& [_, fabric_connection_idx] : sender.configs_) {
+            traffic_config_to_fabric_connection_args.push_back(fabric_connection_idx);
+        }
 
         std::vector<uint32_t> traffic_config_args;
-        for (const auto& config : sender.configs_) {
+        for (const auto& [config, _] : sender.configs_) {
             const auto traffic_args = config.get_args();
             traffic_config_args.insert(traffic_config_args.end(), traffic_args.begin(), traffic_args.end());
         }
@@ -614,18 +706,35 @@ inline void TestDevice::create_kernels() {
     this->create_receiver_kernels();
 }
 
-inline void TestDevice::add_receiver_traffic_config(CoreCoord logical_core, TestTrafficReceiverConfig config) {
+inline void TestDevice::add_receiver_traffic_config(CoreCoord logical_core, const TestTrafficReceiverConfig& config) {
     if (this->receivers_.find(logical_core) == this->receivers_.end()) {
         this->add_worker(TestWorkerType::RECEIVER, logical_core);
     }
     this->receivers_.at(logical_core).add_config(config);
 }
 
-inline void TestDevice::add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config) {
+inline void TestDevice::add_sender_traffic_config(CoreCoord logical_core, const TestTrafficSenderConfig& config) {
     if (this->senders_.find(logical_core) == this->senders_.end()) {
         this->add_worker(TestWorkerType::SENDER, logical_core);
     }
     this->senders_.at(logical_core).add_config(config);
+}
+
+inline RoutingDirection TestDevice::get_forwarding_direction(
+    const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
+    return this->route_manager_->get_forwarding_direction(hops);
+}
+
+inline std::vector<uint32_t> TestDevice::get_forwarding_link_indices_in_direction(
+    const RoutingDirection& direction) const {
+    const auto link_indices =
+        this->route_manager_->get_forwarding_link_indices_in_direction(this->fabric_node_id_, direction);
+    TT_FATAL(
+        !link_indices.empty(),
+        "No forwarding link indices found in direction: {} from {}",
+        direction,
+        this->fabric_node_id_);
+    return link_indices;
 }
 
 }  // namespace fabric_tests

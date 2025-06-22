@@ -53,6 +53,19 @@ public:
         std::mt19937& gen) const = 0;
     virtual std::unordered_map<RoutingDirection, uint32_t> get_full_mcast_hops(
         const FabricNodeId& src_node_id) const = 0;
+    virtual std::vector<std::unordered_map<RoutingDirection, uint32_t>> split_multicast_hops(
+        const std::unordered_map<RoutingDirection, uint32_t>& hops) const = 0;
+    virtual FabricNodeId get_random_unicast_destination(FabricNodeId src_node_id, std::mt19937& gen) const = 0;
+    virtual RoutingDirection get_forwarding_direction(
+        const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const = 0;
+    virtual RoutingDirection get_forwarding_direction(
+        const std::unordered_map<RoutingDirection, uint32_t>& hops) const = 0;
+    virtual std::vector<uint32_t> get_forwarding_link_indices_in_direction(
+        const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
+    virtual std::vector<uint32_t> get_forwarding_link_indices_in_direction(
+        const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id, const RoutingDirection& direction) const = 0;
+    virtual FabricNodeId get_neighbor_node_id(
+        const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
 };
 
 }  // namespace fabric_tests
