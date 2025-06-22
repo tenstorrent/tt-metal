@@ -299,7 +299,7 @@ void RunTestUnicastRaw(
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
-    auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     FabricNodeId src_fabric_node_id(MeshId{0}, 0);
     FabricNodeId dst_fabric_node_id(MeshId{0}, 0);
@@ -316,12 +316,12 @@ void RunTestUnicastRaw(
     tt::tt_metal::distributed::MeshShape mesh_shape;
     std::vector<chan_id_t> eth_chans;
     chan_id_t edm_port;
-
+    std::cout << "Get configs" << std::endl;
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
     const auto& edm_config = fabric_context.get_fabric_router_config();
     uint32_t is_2d_fabric = topology == Topology::Mesh;
-
+    std::cout << "have configs" << std::endl;
     if (!is_2d_fabric) {
         // Find a device with enough neighbours in the specified directions
         if (!find_device_with_neighbor_in_multi_direction(
@@ -352,10 +352,12 @@ void RunTestUnicastRaw(
         // pick the first two in the list to be src and dst devices for the test.
         src_physical_device_id = devices[random_dev_list[0]]->id();
         dst_physical_device_id = devices[random_dev_list[1]]->id();
+        std::cout << "Get src and dst" << std::endl;
         src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
         dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
+        std::cout << "Have src and dst" << std::endl;
         mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-
+        std::cout << "Get forwarding channels" << std::endl;
         eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id);
         if (eth_chans.size() == 0) {
             log_info(
@@ -369,7 +371,7 @@ void RunTestUnicastRaw(
             GTEST_SKIP() << "Skipping Test";
         }
     }
-
+    std::cout << "Have forwarding channels " << eth_chans.size() << std::endl;
     // Pick any port, for now pick the 1st one in the set
     edm_port = *eth_chans.begin();
 

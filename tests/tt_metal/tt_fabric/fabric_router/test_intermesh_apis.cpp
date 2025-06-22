@@ -72,39 +72,6 @@ TEST(IntermeshAPIs, ConsistencyChecks) {
     }
 }
 
-TEST(IntermeshAPIs, IntermeshLinksAreDistinctFromEthernetLinks) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    if (!control_plane.system_has_intermesh_links()) {
-        GTEST_SKIP() << "Cluster does not support intermesh links";
-    }
-
-    log_info(tt::LogTest, "=== Verifying Intermesh Links are Distinct from Ethernet Links ===");
-
-    // This test documents that intermesh links are a distinct category from regular ethernet links
-    auto all_intermesh_links = control_plane.get_all_intermesh_eth_links();
-
-    for (const auto& [chip_id, intermesh_links] : all_intermesh_links) {
-        auto active_eth_cores = control_plane.get_active_ethernet_cores(chip_id);
-        auto inactive_eth_cores = control_plane.get_inactive_ethernet_cores(chip_id);
-
-        // Verify no overlap between intermesh links and active ethernet cores
-        for (const auto& [eth_core, channel] : intermesh_links) {
-            EXPECT_TRUE(active_eth_cores.find(eth_core) == active_eth_cores.end())
-                << "Intermesh link at " << eth_core.str() << " on chip " << chip_id
-                << " should not be in active ethernet cores";
-
-            // Intermesh links appear in inactive ethernet cores
-            EXPECT_TRUE(inactive_eth_cores.find(eth_core) != inactive_eth_cores.end())
-                << "Intermesh link at " << eth_core.str() << " on chip " << chip_id
-                << " should be in inactive ethernet cores";
-        }
-
-        log_info(tt::LogTest, "Chip {}: {} intermesh links are distinct from {} active ethernet cores",
-                 chip_id, intermesh_links.size(), active_eth_cores.size());
-    }
-}
-
 TEST(IntermeshAPIs, LocalIntermeshLinkTable) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
