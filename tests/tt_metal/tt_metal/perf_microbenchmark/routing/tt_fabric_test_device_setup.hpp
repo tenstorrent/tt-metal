@@ -150,7 +150,7 @@ protected:
 struct TestSender : TestWorker {
 public:
     TestSender(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
-    void add_config(const TestTrafficSenderConfig& config);
+    void add_config(TestTrafficSenderConfig config);
     void connect_to_fabric_router();
 
     TestWorkerMemoryMap memory_map_;
@@ -187,7 +187,7 @@ public:
     tt::tt_metal::Program& get_program_handle();
     const FabricNodeId& get_node_id();
     uint32_t add_fabric_connection(RoutingDirection direction, const std::vector<uint32_t>& link_indices);
-    void add_sender_traffic_config(CoreCoord logical_core, const TestTrafficSenderConfig& config);
+    void add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config);
     void add_receiver_traffic_config(CoreCoord logical_core, const TestTrafficReceiverConfig& config);
     void create_kernels();
     RoutingDirection get_forwarding_direction(const std::unordered_map<RoutingDirection, uint32_t>& hops) const;
@@ -473,7 +473,7 @@ inline TestSender::TestSender(
     // TODO: init mem map?
 }
 
-inline void TestSender::add_config(const TestTrafficSenderConfig& config) {
+inline void TestSender::add_config(TestTrafficSenderConfig config) {
     std::optional<RoutingDirection> outgoing_direction;
     std::vector<uint32_t> outgoing_link_indices;
 
@@ -514,11 +514,11 @@ inline void TestSender::add_config(const TestTrafficSenderConfig& config) {
         // insert a new fabric connection by first checking the device for unused links
         auto new_link_idx =
             this->test_device_ptr_->add_fabric_connection(outgoing_direction.value(), outgoing_link_indices);
-        this->fabric_connections_.push_back({outgoing_direction.value(), new_link_idx});
+        this->fabric_connections_.emplace_back(outgoing_direction.value(), new_link_idx);
         fabric_connection_idx = this->fabric_connections_.size() - 1;
     }
 
-    this->configs_.push_back(std::make_pair(std::move(config), fabric_connection_idx.value()));
+    this->configs_.emplace_back(std::move(config), fabric_connection_idx.value());
 }
 
 inline void TestSender::connect_to_fabric_router() {}
@@ -592,7 +592,7 @@ inline void TestDevice::add_worker(TestWorkerType worker_type, CoreCoord logical
                 logical_core);
             throw std::runtime_error("Core already has a sender worker");
         }
-        this->senders_.insert(std::make_pair(logical_core, TestSender(logical_core, this, default_sender_kernel_src)));
+        this->senders_.emplace(logical_core, TestSender(logical_core, this, default_sender_kernel_src));
     } else if (worker_type == TestWorkerType::RECEIVER) {
         if (this->receivers_.count(logical_core)) {
             log_fatal(
@@ -603,8 +603,8 @@ inline void TestDevice::add_worker(TestWorkerType worker_type, CoreCoord logical
             throw std::runtime_error("Core already has a receiver worker");
         }
         bool is_shared_receiver = false;
-        this->receivers_.insert(std::make_pair(
-            logical_core, TestReceiver(logical_core, this, is_shared_receiver, default_receiver_kernel_src)));
+        this->receivers_.emplace(
+            logical_core, TestReceiver(logical_core, this, is_shared_receiver, default_receiver_kernel_src));
     } else {
         log_fatal(tt::LogTest, "Unknown worker type for core reservation: {}", worker_type);
         throw std::runtime_error("Unknown worker type");
@@ -644,9 +644,17 @@ inline void TestDevice::create_sender_kernels() {
             packet_header_region_base, payload_buffer_region_base, highest_usable_address};
 
         std::vector<uint32_t> fabric_connection_args;
-        for (const auto& [direction, link_idx] : sender.fabric_connections_) {
-            const auto& args = get_fabric_connection_args(core, direction, link_idx);
-            fabric_connection_args.insert(fabric_connection_args.end(), args.begin(), args.end());
+        if (!sender.fabric_connections_.empty()) {
+            const auto& first_args = get_fabric_connection_args(
+                core, sender.fabric_connections_[0].first, sender.fabric_connections_[0].second);
+            fabric_connection_args.reserve(sender.fabric_connections_.size() * first_args.size());
+            fabric_connection_args.insert(fabric_connection_args.end(), first_args.begin(), first_args.end());
+
+            for (size_t i = 1; i < sender.fabric_connections_.size(); ++i) {
+                const auto& args = get_fabric_connection_args(
+                    core, sender.fabric_connections_[i].first, sender.fabric_connections_[i].second);
+                fabric_connection_args.insert(fabric_connection_args.end(), args.begin(), args.end());
+            }
         }
 
         // TODO: handle this properly when adding configs for the sender
@@ -657,12 +665,21 @@ inline void TestDevice::create_sender_kernels() {
         }
 
         std::vector<uint32_t> traffic_config_args;
-        for (const auto& [config, _] : sender.configs_) {
-            const auto traffic_args = config.get_args();
-            traffic_config_args.insert(traffic_config_args.end(), traffic_args.begin(), traffic_args.end());
+        if (!sender.configs_.empty()) {
+            const auto& first_traffic_args = sender.configs_[0].first.get_args();
+            traffic_config_args.reserve(sender.configs_.size() * first_traffic_args.size());
+            traffic_config_args.insert(traffic_config_args.end(), first_traffic_args.begin(), first_traffic_args.end());
+
+            for (size_t i = 1; i < sender.configs_.size(); ++i) {
+                const auto& traffic_args = sender.configs_[i].first.get_args();
+                traffic_config_args.insert(traffic_config_args.end(), traffic_args.begin(), traffic_args.end());
+            }
         }
 
         std::vector<uint32_t> rt_args;
+        rt_args.reserve(
+            memory_allocator_args.size() + fabric_connection_args.size() +
+            traffic_config_to_fabric_connection_args.size() + traffic_config_args.size());
         rt_args.insert(rt_args.end(), memory_allocator_args.begin(), memory_allocator_args.end());
         rt_args.insert(rt_args.end(), fabric_connection_args.begin(), fabric_connection_args.end());
         rt_args.insert(
@@ -684,12 +701,19 @@ inline void TestDevice::create_receiver_kernels() {
         std::vector<uint32_t> ct_args = {receiver.configs_.size(), 0 /* benchmark mode */};
 
         std::vector<uint32_t> traffic_config_args;
-        for (const auto& config : receiver.configs_) {
-            const auto traffic_args = config.get_args();
-            traffic_config_args.insert(traffic_config_args.end(), traffic_args.begin(), traffic_args.end());
+        if (!receiver.configs_.empty()) {
+            const auto& first_traffic_args = receiver.configs_[0].get_args();
+            traffic_config_args.reserve(receiver.configs_.size() * first_traffic_args.size());
+            traffic_config_args.insert(traffic_config_args.end(), first_traffic_args.begin(), first_traffic_args.end());
+
+            for (size_t i = 1; i < receiver.configs_.size(); ++i) {
+                const auto& traffic_args = receiver.configs_[i].get_args();
+                traffic_config_args.insert(traffic_config_args.end(), traffic_args.begin(), traffic_args.end());
+            }
         }
 
         std::vector<uint32_t> rt_args;
+        rt_args.reserve(traffic_config_args.size());
         rt_args.insert(rt_args.end(), traffic_config_args.begin(), traffic_config_args.end());
 
         receiver.create_kernel(coord_, ct_args, rt_args, {});
@@ -713,11 +737,11 @@ inline void TestDevice::add_receiver_traffic_config(CoreCoord logical_core, cons
     this->receivers_.at(logical_core).add_config(config);
 }
 
-inline void TestDevice::add_sender_traffic_config(CoreCoord logical_core, const TestTrafficSenderConfig& config) {
+inline void TestDevice::add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config) {
     if (this->senders_.find(logical_core) == this->senders_.end()) {
         this->add_worker(TestWorkerType::SENDER, logical_core);
     }
-    this->senders_.at(logical_core).add_config(config);
+    this->senders_.at(logical_core).add_config(std::move(config));
 }
 
 inline RoutingDirection TestDevice::get_forwarding_direction(

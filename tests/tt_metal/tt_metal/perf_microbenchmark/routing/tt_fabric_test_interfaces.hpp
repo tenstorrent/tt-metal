@@ -43,7 +43,7 @@ public:
     virtual ~IRouteManager() = default;
     virtual std::vector<FabricNodeId> get_dst_node_ids_from_hops(
         FabricNodeId src_node_id,
-        std::unordered_map<RoutingDirection, uint32_t>& hops,
+        const std::unordered_map<RoutingDirection, uint32_t>& hops,
         ChipSendType chip_send_type) const = 0;
     virtual std::unordered_map<RoutingDirection, uint32_t> get_hops_to_chip(
         FabricNodeId src_node_id, FabricNodeId dst_node_id) const = 0;

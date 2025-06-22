@@ -87,6 +87,7 @@ public:
 
     std::vector<uint32_t> get_available_atomic_counters() const {
         std::vector<uint32_t> counters;
+        counters.reserve((memory_map_.atomic_counter_end - next_atomic_addr_) / memory_map_.l1_alignment);
         for (uint32_t addr = next_atomic_addr_; addr + memory_map_.l1_alignment <= memory_map_.atomic_counter_end;
              addr += memory_map_.l1_alignment) {
             counters.push_back(addr);
@@ -126,6 +127,7 @@ struct CorePool {
 
     std::vector<CoreCoord> get_available_cores(const std::unordered_map<CoreCoord, uint32_t>& core_workload) const {
         std::vector<CoreCoord> available;
+        available.reserve(active_pool.size());
         for (const auto& core : active_pool) {
             auto it = core_workload.find(core);
             if (it == core_workload.end() || it->second < policy.max_workers_per_core) {

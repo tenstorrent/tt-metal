@@ -203,9 +203,10 @@ inline ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_con
         result.allocation_policies = parse_allocator_policies(yaml["allocation_policies"]);
     }
 
-    TT_FATAL(yaml["Tests"].IsSequence(), "Expected 'Tests' to be a sequence at the root of the YAML file.");
-
-    for (const auto& test_yaml : yaml["Tests"]) {
+    const auto& tests_yaml = yaml["Tests"];
+    TT_FATAL(tests_yaml.IsSequence(), "Expected 'Tests' to be a sequence at the root of the YAML file.");
+    result.test_configs.reserve(tests_yaml.size());
+    for (const auto& test_yaml : tests_yaml) {
         TT_FATAL(test_yaml.IsMap(), "Expected each test in Tests to be a map");
 
         result.test_configs.emplace_back(parse_test_config(test_yaml));
@@ -292,8 +293,10 @@ inline SenderConfig YamlConfigParser::parse_sender_config(
         config.core = parse_core_coord(sender_yaml["core"]);
     }
 
-    TT_FATAL(sender_yaml["patterns"].IsSequence(), "Expected patterns to be a sequence");
-    for (const auto& pattern_node : sender_yaml["patterns"]) {
+    const auto& patterns_yaml = sender_yaml["patterns"];
+    TT_FATAL(patterns_yaml.IsSequence(), "Expected patterns to be a sequence");
+    config.patterns.reserve(patterns_yaml.size());
+    for (const auto& pattern_node : patterns_yaml) {
         TrafficPatternConfig specific_pattern = parse_traffic_pattern_config(pattern_node);
         config.patterns.push_back(merge_patterns(defaults, specific_pattern));
     }
@@ -331,17 +334,21 @@ inline TestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yam
     }
 
     if (test_yaml["patterns"]) {
-        TT_FATAL(test_yaml["patterns"].IsSequence(), "Expected 'patterns' to be a sequence.");
+        const auto& patterns_yaml = test_yaml["patterns"];
+        TT_FATAL(patterns_yaml.IsSequence(), "Expected 'patterns' to be a sequence.");
         std::vector<HighLevelPatternConfig> high_level_patterns;
-        for (const auto& pattern_node : test_yaml["patterns"]) {
+        high_level_patterns.reserve(patterns_yaml.size());
+        for (const auto& pattern_node : patterns_yaml) {
             high_level_patterns.push_back(parse_high_level_pattern_config(pattern_node));
         }
         test_config.patterns = high_level_patterns;
     }
 
     if (test_yaml["senders"]) {
-        TT_FATAL(test_yaml["senders"].IsSequence(), "Expected senders to be a sequence");
-        for (const auto& sender_node : test_yaml["senders"]) {
+        const auto& senders_yaml = test_yaml["senders"];
+        TT_FATAL(senders_yaml.IsSequence(), "Expected senders to be a sequence");
+        test_config.senders.reserve(senders_yaml.size());
+        for (const auto& sender_node : senders_yaml) {
             test_config.senders.push_back(
                 parse_sender_config(sender_node, test_config.defaults.value_or(TrafficPatternConfig{})));
         }
@@ -539,6 +546,7 @@ inline T YamlConfigParser::parse_scalar(const YAML::Node& yaml_node) {
 template <typename T>
 inline std::vector<T> YamlConfigParser::parse_scalar_sequence(const YAML::Node& yaml_node) {
     std::vector<T> sequence;
+    sequence.reserve(yaml_node.size());
     for (const auto& entry : yaml_node) {
         sequence.push_back(parse_scalar<T>(entry));
     }
@@ -555,6 +563,7 @@ inline std::pair<T1, T2> YamlConfigParser::parse_pair(const YAML::Node& yaml_seq
 template <typename T1, typename T2>
 inline std::vector<std::pair<T1, T2>> YamlConfigParser::parse_pair_sequence(const YAML::Node& yaml_node) {
     std::vector<std::pair<T1, T2>> pair_sequence;
+    pair_sequence.reserve(yaml_node.size());
     for (const auto& entry : yaml_node) {
         TT_FATAL(entry.IsSequence(), "Expected each entry to be sequence");
         pair_sequence.push_back(parse_pair<T1, T2>(entry));
@@ -622,7 +631,10 @@ public:
             // For each newly generated parametrized config, expand its high-level patterns
             for (auto& p_config : parametrized_configs) {
                 auto expanded_tests = this->expand_high_level_patterns(p_config);
-                built_tests.insert(built_tests.end(), expanded_tests.begin(), expanded_tests.end());
+                built_tests.insert(
+                    built_tests.end(),
+                    std::make_move_iterator(expanded_tests.begin()),
+                    std::make_move_iterator(expanded_tests.end()));
             }
         }
         return built_tests;
@@ -650,6 +662,7 @@ private:
                 p_config.name);
         }
 
+        expanded_tests.reserve(max_iterations);
         for (uint32_t i = 0; i < max_iterations; ++i) {
             TestConfig iteration_test = p_config;
             iteration_test.patterns.reset();  // Will be expanded into concrete senders.
@@ -695,6 +708,7 @@ private:
                     // Handle string-based parameters
                     if (std::holds_alternative<std::vector<std::string>>(values_variant)) {
                         const auto& values = std::get<std::vector<std::string>>(values_variant);
+                        next_level_configs.reserve(next_level_configs.size() + values.size());
                         for (const auto& value : values) {
                             TestConfig next_config = current_config;
                             next_config.name += "_" + param_name + "_" + value;
@@ -713,6 +727,7 @@ private:
                     // Handle integer-based parameters
                     else if (std::holds_alternative<std::vector<uint32_t>>(values_variant)) {
                         const auto& values = std::get<std::vector<uint32_t>>(values_variant);
+                        next_level_configs.reserve(next_level_configs.size() + values.size());
                         for (const auto& value : values) {
                             TestConfig next_config = current_config;
                             next_config.name += "_" + param_name + "_" + std::to_string(value);
@@ -915,6 +930,7 @@ private:
             generated_senders[src_node].push_back(merge_patterns(base_pattern, specific_pattern));
         }
 
+        test.senders.reserve(test.senders.size() + generated_senders.size());
         for (const auto& [src_node, patterns] : generated_senders) {
             test.senders.push_back(SenderConfig{.device = src_node, .patterns = patterns});
         }
@@ -948,7 +964,7 @@ private:
                         sender_was_modified = true;
                         // This is the first split for this sender.
                         // Lazily allocate and copy the patterns processed so far.
-                        new_patterns.reserve(sender.patterns.size());
+                        new_patterns.reserve(sender.patterns.size() + split_hops_vec.size() - 1);
                         new_patterns.insert(new_patterns.end(), sender.patterns.begin(), sender.patterns.begin() + i);
                     }
                     // Add the newly split patterns.
@@ -1039,6 +1055,7 @@ public:
     static void dump(
         const std::vector<TestConfig>& test_configs, const AllocatorPolicies& policies, const std::string& dump_path) {
         YAML::Emitter out;
+        out.SetIndent(4);
         out << YAML::BeginMap;
 
         out << YAML::Key << "allocation_policies";
@@ -1190,8 +1207,11 @@ private:
         out << YAML::BeginMap;
         out << YAML::Key << "name";
         out << YAML::Value << config.name;
-        out << YAML::Key << "seed";
-        out << YAML::Value << config.seed;
+
+        if (config.seed != 0) {
+            out << YAML::Key << "seed";
+            out << YAML::Value << config.seed;
+        }
 
         out << YAML::Key << "fabric_setup";
         out << YAML::Value;

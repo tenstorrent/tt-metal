@@ -236,6 +236,7 @@ struct TestTrafficReceiverConfig {
 
 inline std::vector<uint32_t> TestTrafficSenderConfig::get_args() const {
     std::vector<uint32_t> args;
+    args.reserve(20);  // Reserve a reasonable upper bound to avoid reallocations
 
     // TODO: get the payload buffer size from the config
     uint32_t payload_buffer_size = 0x10000;
@@ -338,6 +339,7 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args() const {
 
 inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
     std::vector<uint32_t> args;
+    args.reserve(10);  // Reserve a reasonable upper bound to avoid reallocations
 
     // TODO: get the payload buffer size from the config
     uint32_t payload_buffer_size = 0x10000;
@@ -355,19 +357,34 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
                 NocUnicastWriteFields(this->parameters.payload_size_bytes, this->target_address);
             const auto unicast_write_args = unicast_write_fields.get_args<false>();
             args.insert(args.end(), unicast_write_args.begin(), unicast_write_args.end());
-        } break;
+            break;
+        }
         case NocSendType::NOC_UNICAST_ATOMIC_INC: {
-            const auto atomic_inc_fields = NocUnicastAtomicIncFields(this->target_address);
+            auto atomic_inc_fields = NocUnicastAtomicIncFields(this->target_address);
+            if (this->parameters.atomic_inc_val.has_value()) {
+                atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+            }
+            if (this->parameters.atomic_inc_wrap.has_value()) {
+                atomic_inc_fields.set_atomic_inc_wrap(this->parameters.atomic_inc_wrap.value());
+            }
             const auto atomic_inc_args = atomic_inc_fields.get_args<false>();
             args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
-        } break;
+            break;
+        }
         case NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
             const auto write_fields = NocUnicastWriteFields(this->parameters.payload_size_bytes, this->target_address);
-            const auto atomic_inc_fields = NocUnicastAtomicIncFields(this->target_address);
+            auto atomic_inc_fields = NocUnicastAtomicIncFields(this->target_address);
+            if (this->parameters.atomic_inc_val.has_value()) {
+                atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+            }
+            if (this->parameters.atomic_inc_wrap.has_value()) {
+                atomic_inc_fields.set_atomic_inc_wrap(this->parameters.atomic_inc_wrap.value());
+            }
             const auto fused_fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
             const auto fused_args = fused_fields.get_args<false>();
             args.insert(args.end(), fused_args.begin(), fused_args.end());
-        } break;
+            break;
+        }
         default: TT_FATAL(false, "Unsupported noc send type");
     }
 

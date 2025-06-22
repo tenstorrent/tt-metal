@@ -107,7 +107,7 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
     TestTrafficReceiverConfig receiver_config = {
         .parameters = traffic_config.parameters, .sender_id = sender_id, .target_address = target_address};
 
-    src_test_device.add_sender_traffic_config(src_logical_core, sender_config);
+    src_test_device.add_sender_traffic_config(src_logical_core, std::move(sender_config));
     for (const auto& dst_node_id : dst_node_ids) {
         const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
         this->test_devices_.at(dst_coord).add_receiver_traffic_config(dst_logical_core, receiver_config);
@@ -138,7 +138,7 @@ void TestContext::compile_programs() {
         test_device.create_kernels();
         auto& program_handle = test_device.get_program_handle();
         if (program_handle.num_kernels()) {
-            fixture_->enqueue_program(coord, program_handle);
+            fixture_->enqueue_program(coord, std::move(program_handle));
         }
     }
 }
@@ -206,7 +206,7 @@ int main(int argc, char** argv) {
     if (auto yaml_path = cmdline_parser.get_yaml_config_path()) {
         YamlConfigParser yaml_parser(*fixture);
         auto parsed_yaml = yaml_parser.parse_file(yaml_path.value());
-        raw_test_configs = parsed_yaml.test_configs;
+        raw_test_configs = std::move(parsed_yaml.test_configs);
         if (parsed_yaml.allocation_policies.has_value()) {
             allocation_policies = parsed_yaml.allocation_policies.value();
         }
