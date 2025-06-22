@@ -27,6 +27,7 @@
 #include "core_coord.hpp"
 #include "fabric_host_interface.h"
 #include "hal_types.hpp"
+#include "intermesh_constants.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
@@ -40,17 +41,6 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 
 namespace tt::tt_fabric {
-
-namespace intermesh_constants {
-
-// Constants used to derive the intermesh ethernet links config
-constexpr uint32_t MULTI_MESH_ENABLED_VALUE = 0x2;
-constexpr uint32_t LINK_CONNECTED_MASK = 0x1;
-constexpr uint32_t MULTI_MESH_MODE_MASK = 0xFF;
-constexpr uint32_t INTERMESH_ETH_LINK_BITS_SHIFT = 8;
-constexpr uint32_t INTERMESH_ETH_LINK_BITS_MASK = 0xFFFF;
-
-}  // namespace intermesh_constants
 
 namespace {
 
@@ -279,6 +269,7 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping);
     // Query and generate intermesh ethernet links per physical chip
     this->initialize_intermesh_eth_links();
+    this->generate_local_intermesh_link_table();
 }
 
 ControlPlane::ControlPlane(
@@ -294,6 +285,7 @@ ControlPlane::ControlPlane(
     this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping);
     // Query and generate intermesh ethernet links per physical chip
     this->initialize_intermesh_eth_links();
+    this->generate_local_intermesh_link_table();
 }
 
 void ControlPlane::load_physical_chip_mapping(
@@ -1625,6 +1617,63 @@ const std::vector<std::pair<CoreCoord, chan_id_t>>& ControlPlane::get_intermesh_
 const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>>&
 ControlPlane::get_all_intermesh_eth_links() const {
     return intermesh_eth_links_;
+}
+
+void ControlPlane::generate_local_intermesh_link_table() {
+    // Populate the local to remote mapping for all intermesh links
+    // This cannot be done by UMD, since it has no knowledge of links marked
+    // for intermesh routing (these links are hidden from UMD).
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    // TODO: (AS) Populate this with the correct local mesh id once we have rank bindings
+    intermesh_link_table_.local_mesh_id = MeshId{0};
+    const uint32_t remote_config_base_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_LINK_REMOTE_INFO);
+    for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
+        if (this->has_intermesh_links(chip_id)) {
+            for (const auto& [eth_core, chan_id] : this->get_intermesh_eth_links(chip_id)) {
+                if (not this->is_intermesh_eth_link_trained(chip_id, eth_core)) {
+                    // Link is untrained/unusuable
+                    continue;
+                }
+                tt_cxy_pair virtual_eth_core(
+                    chip_id, cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
+                uint64_t local_board_id = 0;
+                uint64_t remote_board_id = 0;
+                uint32_t remote_chan_id = 0;
+                cluster.read_core(
+                    &local_board_id,
+                    sizeof(uint64_t),
+                    virtual_eth_core,
+                    remote_config_base_addr + intermesh_constants::LOCAL_BOARD_ID_OFFSET);
+                cluster.read_core(
+                    &remote_board_id,
+                    sizeof(uint64_t),
+                    virtual_eth_core,
+                    remote_config_base_addr + intermesh_constants::REMOTE_BOARD_ID_OFFSET);
+                cluster.read_core(
+                    &remote_chan_id,
+                    sizeof(uint32_t),
+                    virtual_eth_core,
+                    remote_config_base_addr + intermesh_constants::REMOTE_ETH_CHAN_ID_OFFSET);
+                auto local_eth_chan_desc = EthChanDescriptor{
+                    .board_id = local_board_id,
+                    .chan_id = chan_id,
+                };
+                auto remote_eth_chan_desc = EthChanDescriptor{
+                    .board_id = remote_board_id,
+                    .chan_id = remote_chan_id,
+                };
+                intermesh_link_table_.intermesh_links[local_eth_chan_desc] = remote_eth_chan_desc;
+                chip_id_to_asic_id_[chip_id] = local_board_id;
+            }
+        }
+    }
+}
+
+const IntermeshLinkTable& ControlPlane::get_local_intermesh_link_table() const { return intermesh_link_table_; }
+
+uint64_t ControlPlane::get_asic_id(chip_id_t chip_id) const {
+    return chip_id_to_asic_id_.at(chip_id);
 }
 
 ControlPlane::~ControlPlane() = default;

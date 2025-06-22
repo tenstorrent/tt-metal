@@ -10,6 +10,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/multi_mesh_types.hpp>
 
 #include <map>
 #include <unordered_map>
@@ -123,6 +124,12 @@ public:
     // If the ethernet core is an intermesh link, probe to see if it is trained
     bool is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord eth_core) const;
 
+    // Query the local intermesh link table containing the local to remote link mapping
+    const IntermeshLinkTable& get_local_intermesh_link_table() const;
+    // Get the ASIC ID for a chip (the ASIC ID is unique per chip, even in multi-host systems and is programmed
+    // by SPI-ROM firmware)
+    uint64_t get_asic_id(chip_id_t chip_id) const;
+
 private:
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane
@@ -142,7 +149,9 @@ private:
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
     // map[phys_chip_id] has a vector of (eth_core, channel) pairs used for intermesh routing
     std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>> intermesh_eth_links_;
-
+    // Stores a table of all local intermesh links (board_id, chan_id) and the corresponding remote intermesh links
+    IntermeshLinkTable intermesh_link_table_;
+    std::unordered_map<chip_id_t, uint64_t> chip_id_to_asic_id_;
     // custom logic to order eth channels
     void order_ethernet_channels();
 
@@ -182,6 +191,9 @@ private:
 
     void write_routing_tables_to_eth_cores(MeshId mesh_id, chip_id_t chip_id) const;
     void write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
+
+    // Populate the local intermesh link to remote intermesh link table
+    void generate_local_intermesh_link_table();
 
     // Initialize internal map of physical chip_id to intermesh ethernet links
     void initialize_intermesh_eth_links();
