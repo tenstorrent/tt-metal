@@ -126,20 +126,20 @@ def run_demo_inference(
     # Prepare timesteps
     timesteps, num_inference_steps = retrieve_timesteps(pipeline.scheduler, num_inference_steps, cpu_device, None, None)
 
-    with ttnn.distribute(ttnn.ReplicateTensorToMesh(ttnn_device)):
-        # Convert timesteps to ttnn
-        ttnn_timesteps = []
-        for t in timesteps:
-            scalar_tensor = torch.tensor(t).unsqueeze(0)
-            ttnn_timesteps.append(
-                ttnn.from_torch(
-                    scalar_tensor,
-                    dtype=ttnn.bfloat16,
-                    device=ttnn_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
+    # Convert timesteps to ttnn
+    ttnn_timesteps = []
+    for t in timesteps:
+        scalar_tensor = torch.tensor(t).unsqueeze(0)
+        ttnn_timesteps.append(
+            ttnn.from_torch(
+                scalar_tensor,
+                dtype=ttnn.bfloat16,
+                device=ttnn_device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
             )
+        )
 
     num_channels_latents = pipeline.unet.config.in_channels
     assert num_channels_latents == 4, f"num_channels_latents is {num_channels_latents}, but it should be 4"
@@ -177,37 +177,39 @@ def run_demo_inference(
     if classifier_free_guidance:
         torch_prompt_embeds = torch.stack([negative_prompt_embeds_torch, prompt_embeds_torch], dim=1)
         torch_add_text_embeds = torch.stack([negative_pooled_prompt_embeds_torch, pooled_prompt_embeds_torch], dim=1)
-        with ttnn.distribute(ttnn.ShardTensorToMesh(ttnn_device, dim=0)):
-            ttnn_prompt_embeds = ttnn.from_torch(
-                torch_prompt_embeds,
-                dtype=ttnn.bfloat16,
-                device=ttnn_device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            ttnn_add_text_embeds = ttnn.from_torch(
-                torch_add_text_embeds,
-                dtype=ttnn.bfloat16,
-                device=ttnn_device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+        ttnn_prompt_embeds = ttnn.from_torch(
+            torch_prompt_embeds,
+            dtype=ttnn.bfloat16,
+            device=ttnn_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
+        )
+        ttnn_add_text_embeds = ttnn.from_torch(
+            torch_add_text_embeds,
+            dtype=ttnn.bfloat16,
+            device=ttnn_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
+        )
 
-        with ttnn.distribute(ttnn.ReplicateTensorToMesh(ttnn_device)):
-            ttnn_add_time_id1 = ttnn.from_torch(
-                negative_add_time_ids.squeeze(0),
-                dtype=ttnn.bfloat16,
-                device=ttnn_device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            ttnn_add_time_id2 = ttnn.from_torch(
-                add_time_ids.squeeze(0),
-                dtype=ttnn.bfloat16,
-                device=ttnn_device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+        ttnn_add_time_id1 = ttnn.from_torch(
+            negative_add_time_ids.squeeze(0),
+            dtype=ttnn.bfloat16,
+            device=ttnn_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
+        )
+        ttnn_add_time_id2 = ttnn.from_torch(
+            add_time_ids.squeeze(0),
+            dtype=ttnn.bfloat16,
+            device=ttnn_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
+        )
         ttnn_time_ids = [ttnn_add_time_id1, ttnn_add_time_id2]
         ttnn_text_embeds = [
             [
@@ -251,14 +253,14 @@ def run_demo_inference(
             }
         ]
 
-    with ttnn.distribute(ttnn.ReplicateTensorToMesh(ttnn_device)):
-        scaling_factor = ttnn.from_torch(
-            torch.Tensor([pipeline.vae.config.scaling_factor]),
-            dtype=ttnn.bfloat16,
-            device=ttnn_device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+    scaling_factor = ttnn.from_torch(
+        torch.Tensor([pipeline.vae.config.scaling_factor]),
+        dtype=ttnn.bfloat16,
+        device=ttnn_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
+    )
 
     logger.info("Performing warmup run, to make use of program caching in actual inference...")
     B, C, H, W = latents.shape
@@ -269,14 +271,14 @@ def run_demo_inference(
 
     latents_clone = latents.clone()
 
-    with ttnn.distribute(ttnn.ReplicateTensorToMesh(ttnn_device)):
-        latents = ttnn.from_torch(
-            latents,
-            dtype=ttnn.bfloat16,
-            device=ttnn_device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+    latents = ttnn.from_torch(
+        latents,
+        dtype=ttnn.bfloat16,
+        device=ttnn_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
+    )
 
     # UNet will deallocate the input tensor
     latent_model_input = ttnn.clone(latents)
@@ -376,14 +378,14 @@ def run_demo_inference(
             gc.collect()
 
         latents = latents_clone.clone()
-        with ttnn.distribute(ttnn.ReplicateTensorToMesh(ttnn_device)):
-            latents = ttnn.from_torch(
-                latents,
-                dtype=ttnn.bfloat16,
-                device=ttnn_device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+        latents = ttnn.from_torch(
+            latents,
+            dtype=ttnn.bfloat16,
+            device=ttnn_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
+        )
 
     return images
 
