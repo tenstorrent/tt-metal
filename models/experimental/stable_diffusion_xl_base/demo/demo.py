@@ -391,7 +391,7 @@ def run_demo_inference(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "prompt",
-    (["A beautiful landscape with mountains and a river flowing through it.", "An astronaut riding a green horse"],),
+    (("An astronaut riding a green horse"),),
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
