@@ -358,7 +358,7 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
         return
 
     # Get brisc.elf which we will use to get to the important offsets.
-    a_kernel_path = inspector_data.kernels[0].path
+    a_kernel_path = next(iter(inspector_data.kernels.values())).path
     brisc_elf_path = a_kernel_path + "../../../firmware/brisc/brisc.elf"
     brisc_elf_path = os.path.realpath(brisc_elf_path)
 
@@ -443,7 +443,7 @@ def dump_running_ops(dev: Device, inspector_data: InspectorData | None):
                 )[0][0]
                 & 0xFFFF
             )  # enum dispatch_core_processor_classes
-            kernel = next((k for k in inspector_data.kernels if k.watcher_kernel_id == watcher_kernel_id), None)
+            kernel = inspector_data.kernels.get(watcher_kernel_id)
             kernel_name = kernel.name if kernel else ""
 
             cs = []

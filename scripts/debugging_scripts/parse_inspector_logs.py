@@ -17,7 +17,7 @@ Description:
 """
 
 from dataclasses import dataclass
-from functools import cache
+from functools import cache, cached_property
 import os
 import sys
 import yaml
@@ -83,22 +83,21 @@ class ProgramData:
         return self.binary_status_per_device.get(device_id, "NotSet")
 
 
-def get_kernels(log_directory: str) -> list[KernelData]:
+def get_kernels(log_directory: str) -> dict[int, KernelData]:
     yaml_path = os.path.join(log_directory, "kernels.yaml")
     data = read_yaml(yaml_path)
 
-    kernels = []
+    kernels: dict[int, KernelData] = {}
     for entry in data:
         kernel_info = entry.get("kernel", {})
-        kernels.append(
-            KernelData(
-                watcher_kernel_id=int(kernel_info.get("watcher_kernel_id")),
-                name=kernel_info.get("name"),
-                path=kernel_info.get("path"),
-                source=kernel_info.get("source"),
-                program_id=int(kernel_info.get("program_id")),
-            )
+        kernel_data = KernelData(
+            watcher_kernel_id=int(kernel_info.get("watcher_kernel_id")),
+            name=kernel_info.get("name"),
+            path=kernel_info.get("path"),
+            source=kernel_info.get("source"),
+            program_id=int(kernel_info.get("program_id")),
         )
+        kernels[kernel_data.watcher_kernel_id] = kernel_data
     return kernels
 
 
@@ -200,23 +199,26 @@ class InspectorData:
     def __init__(self, log_directory: str):
         self.log_directory = log_directory
 
-    @cache
-    def kernels(self) -> list[KernelData]:
+    @cached_property
+    def kernels(self) -> dict[int, KernelData]:
         return get_kernels(self.log_directory)
 
+    @cached_property
     def programs(self) -> dict[int, ProgramData]:
         return get_programs(self.log_directory)
 
+    @cached_property
     def devices_in_use(self) -> set[int]:
-        return get_devices_in_use(self.programs())
+        return get_devices_in_use(self.programs)
 
 
 @cache
-def get_data() -> InspectorData:
-    log_directory = os.environ.get("TT_METAL_HOME", "")
-    if not log_directory:
-        raise ValueError("TT_METAL_HOME environment variable is not set")
-    log_directory = os.path.join(log_directory, "generated", "inspector")
+def get_data(log_directory: str | None = None) -> InspectorData:
+    if log_directory is None:
+        log_directory = os.environ.get("TT_METAL_HOME", "")
+        if not log_directory:
+            raise ValueError("TT_METAL_HOME environment variable is not set")
+        log_directory = os.path.join(log_directory, "generated", "inspector")
     return InspectorData(log_directory)
 
 
@@ -240,7 +242,7 @@ def main():
 
     kernels = get_kernels(log_directory)
     print("Kernels:")
-    for kernel in kernels:
+    for kernel in kernels.values():
         print(f"  {kernel.watcher_kernel_id}, pid {kernel.program_id}: {kernel.name} ({kernel.path})")
     print()
 
