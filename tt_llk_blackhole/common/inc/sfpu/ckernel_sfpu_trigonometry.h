@@ -170,8 +170,29 @@ inline void _calculate_acosh_()
     }
 }
 
+// asinh(x) = log(x + sqrt(x^2 + 1))
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_asinh_()
+{
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        sfpi::vFloat inp = sfpi::dst_reg[0];
+        sfpi::vFloat tmp = inp * inp + sfpi::vConst1;
+        tmp              = _calculate_sqrt_body_(tmp);
+        sfpi::dst_reg[0] = tmp + sfpi::abs(inp);
+        _calculate_log_body_<APPROXIMATION_MODE>(0);
+        v_if (inp < sfpi::vConst0)
+        {
+            sfpi::dst_reg[0] = -sfpi::dst_reg[0];
+        }
+        v_endif;
+        sfpi::dst_reg++;
+    }
+}
+
 template <bool APPROXIMATION_MODE>
-void _init_acosh_()
+void _init_inverse_hyperbolic_()
 {
     _init_log_<APPROXIMATION_MODE>();
 }
