@@ -765,7 +765,7 @@ uint32_t ShardedAccessorArgs::get_num_banks() const {
     return num_banks_is_crta() ? runtime_args[offset] : compile_time_args[offset + 1];
 }
 
-uint32_t ShardedAccessorArgs::get_physical_num_banks() const { return (get_num_banks() - 1) / 2 + 1; }
+uint32_t ShardedAccessorArgs::get_physical_num_banks() const { return (get_num_banks() + 1) / 2; }
 
 tt::stl::Span<const uint32_t> ShardedAccessorArgs::get_tensor_shape() const {
     const size_t offset_rt = rank_is_crta() + num_banks_is_crta();
