@@ -125,8 +125,11 @@ class TtMoeLayer(LightweightModule):
 
         # MLP and masking
         weights = expert_i_HH(input_i_1SBH, mode=mode)
-        weights_1SB1 = ttnn.unsqueeze(weights_1SB1, dim=3)
-        results_11BH = ttnn.mul(weights, weights_1SB1)
+        if mode == "prefill":
+            weights_1SB1 = ttnn.unsqueeze(weights_1SB1, dim=3)
+            results_11BH = ttnn.mul(weights, weights_1SB1)
+        else:
+            results_11BH = ttnn.mul(weights, weights_1SB1)
 
         weights.deallocate(True)
         weights_1SB1.deallocate(True)
@@ -141,6 +144,7 @@ class TtMoeLayer(LightweightModule):
             )
             output_11BH_gathered.deallocate(True)
         else:  # Decode mode
+            breakpoint()
             output_11BH_gathered = ttnn.all_gather(results_11BH, dim=2, num_links=1)
             results_11BH.deallocate(True)
             # Reduction
@@ -149,17 +153,8 @@ class TtMoeLayer(LightweightModule):
             )
 
         def replicate_to_shard(tensor):
-            # dt = ttnn.get_device_tensors(tensor)
-            # dt = [tensor.cpu() for tensor in dt]
-            # num_devices = len(dt)
-            # size_per_device = dt[0].shape[-1] // num_devices
-            # for i in range(num_devices):
-            #     dt[i] = dt[i][:, :, :, i * size_per_device : (i + 1) * size_per_device]
-            # dt3 = ttnn.aggregate_as_tensor(dt)
-            # return dt3
             return ttnn.aggregate_as_tensor(ttnn.get_device_tensors(tensor))
 
         output_11BH_sharded = replicate_to_shard(output_11BH_reduced)
-        # output_11BH_sharded = ttnn.ReplicateTensorToMesh(output_11BH_reduced)
 
         return output_11BH_sharded
