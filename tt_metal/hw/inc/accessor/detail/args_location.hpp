@@ -14,39 +14,6 @@ namespace nd_sharding {
 namespace detail {
 using std::size_t;
 
-/**
- * @brief Keeps which DSpec arguments are compile-time and which are common runtime.
- *
- */
-template <
-    bool RankCRTA_ = false,
-    bool NumBanksCRTA_ = false,
-    bool TensorShapeCRTA_ = false,
-    bool ShardShapeCRTA_ = false,
-    bool BankCoordsCRTA_ = false>
-struct ArgsLocation {
-    // Fetch locations of the arguments
-    static constexpr bool RankCRTA = RankCRTA_;
-    static constexpr bool NumBanksCRTA = NumBanksCRTA_;
-    static constexpr bool TensorShapeCRTA = TensorShapeCRTA_;
-    static constexpr bool ShardShapeCRTA = ShardShapeCRTA_;
-    static constexpr bool BankCoordsCRTA = BankCoordsCRTA_;
-
-    static constexpr bool RankStatic = !RankCRTA;
-    static constexpr bool NumBanksStatic = !NumBanksCRTA;
-    static constexpr bool TensorShapeStatic = !TensorShapeCRTA;
-    static constexpr bool ShardShapeStatic = !ShardShapeCRTA;
-    static constexpr bool BankCoordsStatic = !BankCoordsCRTA;
-};
-
-/**
- * @brief Holds offsets for compile-time and common runtime arguments used for creation of DistributionSpec.
- * The order of arguments in the args array is: [rank, num_banks, tensor_shape, shard_shape, bank_coords].
- *
- * @tparam CTA_OFFSET_  base index of compile-time arguments in the args array
- * @tparam CRTA_OFFSET_ base index of common runtime arguments in the args array, if set to UNKNOWN, it will be set in
- * constructor
- */
 template <size_t CTA_OFFSET_, size_t CRTA_OFFSET_ = UNKNOWN>
 struct ArgsOffsets {
     static constexpr size_t CTA_OFFSET = CTA_OFFSET_;
@@ -55,45 +22,41 @@ struct ArgsOffsets {
     static constexpr auto args_config =
         ArgsConfig(static_cast<ArgsConfig::Underlying>(get_compile_time_arg_val(CTA_OFFSET)));
 
-    using ArgsLoc = ArgsLocation<
-        args_config.test(ArgConfig::RankCRTA),
-        args_config.test(ArgConfig::NumBanksCRTA),
-        args_config.test(ArgConfig::TensorShapeCRTA),
-        args_config.test(ArgConfig::ShardShapeCRTA),
-        args_config.test(ArgConfig::BankCoordsCRTA)>;
+    static constexpr bool rank_is_crta = args_config.test(ArgConfig::RankCRTA);
+    static constexpr bool num_banks_is_crta = args_config.test(ArgConfig::NumBanksCRTA);
+    static constexpr bool tensor_shape_is_crta = args_config.test(ArgConfig::TensorShapeCRTA);
+    static constexpr bool shard_shape_is_crta = args_config.test(ArgConfig::ShardShapeCRTA);
+    static constexpr bool bank_coords_is_crta = args_config.test(ArgConfig::BankCoordsCRTA);
 
     // Impossible to have runtime rank without runtime tensor and shard shapes since then impossible to calculate CTA
     // offsets in compile time
     static_assert(
-        !ArgsLoc::RankCRTA or (ArgsLoc::RankCRTA and ArgsLoc::TensorShapeCRTA and ArgsLoc::ShardShapeCRTA),
+        !rank_is_crta || (rank_is_crta and tensor_shape_is_crta and shard_shape_is_crta),
         "If rank is runtime, tensor_shape and shard_shape must also be runtime");
     static_assert(
-        !ArgsLoc::NumBanksCRTA or (ArgsLoc::NumBanksCRTA and ArgsLoc::BankCoordsCRTA),
+        !num_banks_is_crta || (num_banks_is_crta and bank_coords_is_crta),
         "If num_banks is runtime, bank_coords must also be runtime");
 
     // Calculate offsets for compile-time arguments
     static constexpr uint32_t ArgsConfigCTAOFfset = CTA_OFFSET;
     static constexpr uint32_t RankCTAOffset = ArgsConfigCTAOFfset + 1;
-    static constexpr uint32_t NumBanksCTAOffset = RankCTAOffset + (ArgsLoc::RankCRTA ? 0 : 1);
+    static constexpr uint32_t NumBanksCTAOffset = RankCTAOffset + (rank_is_crta ? 0 : 1);
 
     static constexpr uint32_t RankCT =
-        ArgsLoc::RankCRTA ? 0 : get_compile_time_arg_val(ArgsLoc::RankCRTA ? CTA_OFFSET : RankCTAOffset);
+        rank_is_crta ? 0 : get_compile_time_arg_val(rank_is_crta ? CTA_OFFSET : RankCTAOffset);
     static constexpr uint32_t NumBanksCT =
-        ArgsLoc::NumBanksCRTA ? 0 : get_compile_time_arg_val(ArgsLoc::NumBanksCRTA ? CTA_OFFSET : NumBanksCTAOffset);
-    static constexpr uint32_t PhysicalNumBanksCT = (NumBanksCT - 1) / 2 + 1;  // Size of bank copordinates array (2
-                                                                              // coordinates packed in one uint32_t)
+        num_banks_is_crta ? 0 : get_compile_time_arg_val(num_banks_is_crta ? CTA_OFFSET : NumBanksCTAOffset);
+    static constexpr uint32_t PhysicalNumBanksCT = (NumBanksCT - 1) / 2 + 1;
 
-    static_assert(!ArgsLoc::RankStatic or RankCT > 0, "Rank must be greater than 0!");
-    static_assert(
-        !ArgsLoc::NumBanksStatic or NumBanksCT > 0,
-        "Number of banks must be greater than 0!");  // Number of banks must be > 0
+    static_assert(rank_is_crta || RankCT > 0, "Rank must be greater than 0!");
+    static_assert(num_banks_is_crta || NumBanksCT > 0, "Number of banks must be greater than 0!");
 
-    static constexpr uint32_t TensorShapeCTAOffset = NumBanksCTAOffset + (ArgsLoc::NumBanksCRTA ? 0 : 1);
-    static constexpr uint32_t ShardShapeCTAOffset = TensorShapeCTAOffset + (ArgsLoc::TensorShapeCRTA ? 0 : RankCT);
-    static constexpr uint32_t BankCoordsCTAOffset = ShardShapeCTAOffset + (ArgsLoc::ShardShapeCRTA ? 0 : RankCT);
+    static constexpr uint32_t TensorShapeCTAOffset = NumBanksCTAOffset + (num_banks_is_crta ? 0 : 1);
+    static constexpr uint32_t ShardShapeCTAOffset = TensorShapeCTAOffset + (tensor_shape_is_crta ? 0 : RankCT);
+    static constexpr uint32_t BankCoordsCTAOffset = ShardShapeCTAOffset + (shard_shape_is_crta ? 0 : RankCT);
 
-    static constexpr uint32_t NumArgsCT = BankCoordsCTAOffset + (ArgsLoc::BankCoordsCRTA ? 0 : PhysicalNumBanksCT) -
-                                          CTA_OFFSET;  // Number of compile-time arguments
+    static constexpr uint32_t NumArgsCT =
+        BankCoordsCTAOffset + (bank_coords_is_crta ? 0 : PhysicalNumBanksCT) - CTA_OFFSET;
 
     uint32_t crta_offset_rt = CRTA_OFFSET;  // Default CRTA offset
 
@@ -113,10 +76,10 @@ struct ArgsOffsets {
     }
 
     constexpr uint32_t rank_crta_offset() const { return crta_offset(); }
-    constexpr uint32_t num_banks_crta_offset() const { return crta_offset() + ArgsLoc::RankCRTA; }
+    constexpr uint32_t num_banks_crta_offset() const { return crta_offset() + rank_is_crta; }
 
     constexpr uint32_t get_rank() const {
-        if constexpr (ArgsLoc::RankStatic) {
+        if constexpr (!rank_is_crta) {
             return RankCT;
         } else {
             return get_common_arg_val<uint32_t>(rank_crta_offset());
@@ -124,7 +87,7 @@ struct ArgsOffsets {
     }
 
     constexpr uint32_t get_num_banks() const {
-        if constexpr (ArgsLoc::NumBanksStatic) {
+        if constexpr (!num_banks_is_crta) {
             return NumBanksCT;
         } else {
             return get_common_arg_val<uint32_t>(num_banks_crta_offset());
@@ -136,14 +99,14 @@ struct ArgsOffsets {
         return (get_num_banks() - 1) / 2 + 1;
     }
 
-    constexpr uint32_t tensor_shape_crta_offset() const { return num_banks_crta_offset() + ArgsLoc::NumBanksCRTA; }
+    constexpr uint32_t tensor_shape_crta_offset() const { return num_banks_crta_offset() + num_banks_is_crta; }
 
     constexpr uint32_t shard_shape_crta_offset() const {
-        return tensor_shape_crta_offset() + (ArgsLoc::TensorShapeCRTA ? get_rank() : 0);
+        return tensor_shape_crta_offset() + (tensor_shape_is_crta ? get_rank() : 0);
     }
 
     constexpr uint32_t bank_coords_crta_offset() const {
-        return shard_shape_crta_offset() + (ArgsLoc::ShardShapeCRTA ? get_rank() : 0);
+        return shard_shape_crta_offset() + (shard_shape_is_crta ? get_rank() : 0);
     }
 
     /**
@@ -161,7 +124,7 @@ struct ArgsOffsets {
      * @return constexpr uint32_t Number of common runtime arguments used by the DistributionSpec.
      */
     constexpr uint32_t runtime_args_skip() const {
-        return bank_coords_crta_offset() + (ArgsLoc::BankCoordsCRTA ? get_physical_num_banks() : 0) - crta_offset();
+        return bank_coords_crta_offset() + (bank_coords_is_crta ? get_physical_num_banks() : 0) - crta_offset();
     }
 };
 

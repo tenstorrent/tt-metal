@@ -338,19 +338,17 @@ auto make_dspec(
  */
 template <typename ArgsOffsets>
 auto make_dspec_from_args(const ArgsOffsets& args_offsets) {
-    using Loc = typename ArgsOffsets::ArgsLoc;
-
     // Dispatch to the appropriate ShapeWrapper and BankCoordsWrapper types based on the "staticness"
     using TensorShapeType = typename ArrayWrapperTypeSelectorU32<
-        Loc::TensorShapeStatic,
+        !ArgsOffsets::tensor_shape_is_crta,
         ArgsOffsets::TensorShapeCTAOffset,
         ArgsOffsets::RankCT>::type;
     using ShardShapeType = typename ArrayWrapperTypeSelectorU32<
-        Loc::ShardShapeStatic,
+        !ArgsOffsets::shard_shape_is_crta,
         ArgsOffsets::ShardShapeCTAOffset,
         ArgsOffsets::RankCT>::type;
     using BankCoordsType = typename ArrayWrapperTypeSelectorPackedU16<
-        Loc::BankCoordsStatic,
+        !ArgsOffsets::bank_coords_is_crta,
         ArgsOffsets::BankCoordsCTAOffset,
         ArgsOffsets::NumBanksCT>::type;
 
@@ -361,19 +359,24 @@ auto make_dspec_from_args(const ArgsOffsets& args_offsets) {
     ASSERT(num_banks > 0);
 
     static_assert(
-        Loc::RankStatic or !Loc::TensorShapeStatic, "Tensor shape must be CRTA if rank is not known at compile time!");
+        !ArgsOffsets::rank_is_crta or ArgsOffsets::tensor_shape_is_crta,
+        "Tensor shape must be CRTA if rank is not known at compile time!");
     static_assert(
-        Loc::RankStatic or !Loc::ShardShapeStatic, "Shard shape must be CRTA if rank is not known at compile time!");
+        !ArgsOffsets::rank_is_crta or ArgsOffsets::shard_shape_is_crta,
+        "Shard shape must be CRTA if rank is not known at compile time!");
     static_assert(
-        Loc::NumBanksStatic or !Loc::BankCoordsStatic,
+        !ArgsOffsets::num_banks_is_crta or ArgsOffsets::bank_coords_is_crta,
         "Bank coords must be CRTA if num_banks is not known at compile time!");
 
     return make_dspec<ArgsOffsets::RankCT, ArgsOffsets::NumBanksCT, TensorShapeType, ShardShapeType, BankCoordsType>(
         rank,
         num_banks,
-        Loc::TensorShapeCRTA ? (uint32_t*)get_common_arg_addr(args_offsets.tensor_shape_crta_offset()) : nullptr,
-        Loc::ShardShapeCRTA ? (uint32_t*)get_common_arg_addr(args_offsets.shard_shape_crta_offset()) : nullptr,
-        Loc::BankCoordsCRTA ? (uint16_t*)get_common_arg_addr(args_offsets.bank_coords_crta_offset()) : nullptr);
+        ArgsOffsets::tensor_shape_is_crta ? (uint32_t*)get_common_arg_addr(args_offsets.tensor_shape_crta_offset())
+                                          : nullptr,
+        ArgsOffsets::shard_shape_is_crta ? (uint32_t*)get_common_arg_addr(args_offsets.shard_shape_crta_offset())
+                                         : nullptr,
+        ArgsOffsets::bank_coords_is_crta ? (uint16_t*)get_common_arg_addr(args_offsets.bank_coords_crta_offset())
+                                         : nullptr);
 }
 
 }  // namespace detail
