@@ -414,11 +414,11 @@ void watcher_init(chip_id_t device_id) {
             is_active_eth_core ? GET_WATCHER_ERISC_DEV_ADDR() : GET_WATCHER_IERISC_DEV_ADDR());
     };
     for (const CoreCoord& active_eth_core :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+         tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
         init_eth_debug_values(active_eth_core, true);
     }
     for (const CoreCoord& inactive_eth_core :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(device_id)) {
+         tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(device_id)) {
         init_eth_debug_values(inactive_eth_core, false);
     }
 
