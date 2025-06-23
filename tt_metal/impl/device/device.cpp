@@ -75,6 +75,7 @@
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
+#include <tt-metalium/control_plane.hpp>
 #include <umd/device/coordinate_manager.h>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_silicon_driver_common.hpp>
@@ -156,7 +157,7 @@ Device::Device(
 }
 
 std::unordered_set<CoreCoord> Device::get_active_ethernet_cores(bool skip_reserved_tunnel_cores) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(
+    return tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(
         this->id_, skip_reserved_tunnel_cores);
 }
 
@@ -166,12 +167,12 @@ bool Device::is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_
 }
 
 std::unordered_set<CoreCoord> Device::get_inactive_ethernet_cores() const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(this->id_);
+    return tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(this->id_);
 }
 
 bool Device::is_inactive_ethernet_core(CoreCoord logical_core) const {
     auto inactive_ethernet_cores =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(this->id_);
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(this->id_);
     return inactive_ethernet_cores.find(logical_core) != inactive_ethernet_cores.end();
 }
 

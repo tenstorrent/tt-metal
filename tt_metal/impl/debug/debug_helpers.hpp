@@ -7,6 +7,7 @@
 #include <set>
 
 #include "dev_msgs.h"
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include "hostdevcommon/dprint_common.h"
 #include "impl/context/metal_context.hpp"
@@ -37,11 +38,11 @@ static CoreDescriptorSet GetAllCores(chip_id_t device_id) {
         }
     }
     for (const auto& logical_core :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+         tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
         all_cores.insert({logical_core, CoreType::ETH});
     }
     for (const auto& logical_core :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(device_id)) {
+         tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(device_id)) {
         all_cores.insert({logical_core, CoreType::ETH});
     }
 
@@ -74,7 +75,7 @@ static tt::tt_metal::HalProgrammableCoreType get_programmable_core_type(CoreCoor
         tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
             device_id, virtual_core);
     auto active_ethernet_cores =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
     if (active_ethernet_cores.find(logical_core) != active_ethernet_cores.end()) {
         return tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     }
@@ -97,7 +98,7 @@ inline int GetNumRiscs(chip_id_t device_id, const CoreDescriptor& core) {
         if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
             // TODO: Update this to be `DPRINT_NRISCVS_ETH + 1` when active erisc0 is running Metal FW
             auto logical_active_eths =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
             CoreCoord logical_eth(core.coord.x, core.coord.y);
             return (logical_active_eths.find(logical_eth) != logical_active_eths.end()) ? DPRINT_NRISCVS_ETH
                                                                                         : DPRINT_NRISCVS_ETH + 1;
