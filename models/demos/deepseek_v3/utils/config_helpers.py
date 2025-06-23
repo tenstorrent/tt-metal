@@ -442,7 +442,56 @@ def matmul_config(
     )
 
 
+def dram_shard_core_grid_for_k_and_n(k: int, n: int) -> Tuple[int, int]:
+    rows, cols = find_grid_k_n(k // TILE_SIZE, n // TILE_SIZE)
+    return ttnn.CoreGrid(x=cols, y=rows)
+
+
+def find_grid_k_n(K, N):
+    """
+    Find the number of rows and columns for a grid of cores such that
+    the total number of tiles N can be evenly divided among the cores.
+    Each core will have the same integer number of tiles.
+
+    Parameters:
+        N (int): Total number of tiles to be distributed.
+
+    Returns:
+        tuple: A tuple (rows, cols) representing the grid dimensions.
+
+    Raises:
+        AssertionError: If it's not possible to find such a grid configuration.
+    """
+    max_rows = 8
+    max_cols = 8  # Maximum number of rows or columns
+    max_cores = max_rows * max_cols  # Maximum number of cores
+
+    # Find all possible numbers of cores that divide N and are less than or equal to max_cores
+    possible_cores = [c for c in range(1, max_cores + 1) if K % c == 0 and N % c == 0]
+    possible_cores.sort(reverse=True)  # Start checking from the largest number of cores
+
+    for cores in possible_cores:
+        # Try to find a grid configuration with the current number of cores
+        for rows in range(1, max_rows + 1):
+            if cores % rows == 0:
+                cols = cores // rows
+                if cols <= max_cols:
+                    return rows, cols
+
+    # If no configuration is found, assert an error
+    raise AssertionError(
+        f"Cannot find a grid configuration such that both {K} and {N} tiles evenly divide into cores of max size {max_rows}x{max_cols}."
+    )
+
+
 def base_model_name(hf_config):
     """Get the base model name from the HuggingFace config."""
     model_name = hf_config.name_or_path.split("/")[-1]
     return model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
+
+
+def save_and_get_path(path, tensor):
+    """Save a tensor to a file and return the path."""
+    ttnn.dump_tensor(path, tensor)
+    ttnn.deallocate(tensor)
+    return str(path)

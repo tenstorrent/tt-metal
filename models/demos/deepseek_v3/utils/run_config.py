@@ -15,7 +15,7 @@ def create_run_config(
     """Create a runtime configuration by combining model config with loaded TTNN weights.
 
     This function:
-    - Expands range patterns for specific layers (e.g., "model.layers.0-31.mlp" -> "model.layers.5.mlp")
+    - Expands range patterns for specific layers (e.g., ["model"]["layers"]["0-31"]["mlp"] gets expanded to 32 layers)
     - Recursively traverses both weight_config and model_config together
     - Loads TTNN tensors where weight_config has entries and adds them to the model config
     - Returns a clean nested dict structure for easy access
