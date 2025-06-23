@@ -158,7 +158,7 @@ struct ArgsOffsets {
      * @brief Calculates the number of common runtime arguments used when building a DistributionSpec.
      * Evaluated at compile time if rank and num_banks are compile-time.
      *
-     * @return constexpr size_t     Number of common runtime arguments used by the DistributionSpec.
+     * @return constexpr uint32_t Number of common runtime arguments used by the DistributionSpec.
      */
     constexpr uint32_t runtime_args_skip() const {
         return bank_coords_crta_offset() + (ArgsLoc::BankCoordsCRTA ? get_physical_num_banks() : 0) - crta_offset();
