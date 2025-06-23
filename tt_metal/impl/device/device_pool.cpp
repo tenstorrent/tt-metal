@@ -333,7 +333,7 @@ void DevicePool::init_fabric(const std::vector<tt_metal::IDevice*>& active_devic
     }
 
     // Sequentially execute fabric configuration on all devices
-    // Empirically TG hanged when this is alsow parallelized
+    // Empirically TG hung when this is also parallelized
     for (const auto& event : events) {
         auto dev = event.get();
         if (dev) {
