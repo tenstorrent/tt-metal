@@ -398,8 +398,9 @@ public:
         } else if (topology_ == Topology::Mesh) {
             // TODO: update this logic once 2D mcast is supported
             // for now we return the first direction that is non-zero
-            for (const auto& [direction, hop] : hops) {
-                if (hop != 0) {
+            // for 2D, since we use dimension order routing, lookup the directions in the order of N, E, S, W
+            for (const auto& direction : FabricContext::routing_directions) {
+                if (hops.count(direction) > 0 && hops.at(direction) != 0) {
                     return direction;
                 }
             }

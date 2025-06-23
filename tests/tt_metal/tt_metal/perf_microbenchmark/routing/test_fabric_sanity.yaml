@@ -39,4 +39,4 @@ Tests:
             size: 1024
             num_packets: 10
             destination:
-              device: [0, 3]
+              device: [0, 7]
