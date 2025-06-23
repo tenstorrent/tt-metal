@@ -22,6 +22,10 @@ Llama 3 is a state-of-the-art large language model (LLM) developed for high-perf
 - **Stress Testing**: Long-context and high-throughput stress test modes.
 - **Sampling Controls**: Supports temperature, top-p, and top-k sampling.
 
+## Prerequisites
+
+This guide requires the installation / build of `tt-metal`. Please refer to the [installation instructions](/INSTALLING.md) for the release corresponding to [README](/README.md#llms).
+
 ## Weights
 
 ### Download Llama weights directly from Meta
