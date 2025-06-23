@@ -13,18 +13,18 @@ The following table indicates driver and firmware versions for Galaxy Wormhole 4
 
 ## Install System-level Dependencies
 - To install system-level dependencies run the following command:
-  
+
   `wget https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/{install_dependencies.sh,tt_metal/sfpi-version.sh}
   chmod a+x install_dependencies.sh
   sudo ./install_dependencies.sh`
 
 ## Install the Driver (TT-KMD)
 1. To install DKMS on Ubuntu run the following command:
-   
+
    `apt install dkms`
 
 2. To install the latest TT-KMD version run the following command:
-   
+
    `git clone https://github.com/tenstorrent/tt-kmd.git
    cd tt-kmd
    sudo dkms add .
@@ -36,21 +36,21 @@ For more information regarding TT-KMD see the [TT-KMD GitHub repository](https:/
 
 ## Update Device TT-Firmware with TT-Flash
 1. To install TT-Flash run the following command:
-   
+
    `pip install git+https://github.com/tenstorrent/tt-flash.git`
 
 2. To run a sanity check on the system run the following command:
-   
+
    `tt-flash --version`
-   
+
    If installed properly it will return the TT-Flash version.
 
 3. To install TT-Firmware, first set the TT-Firmware to the following version:
-   
+
    `fw_tag=v80.17.0.0 fw_pack=fw_pack-80.17.0.0.fwbundle`
 
 4. To download and install TT-Firmware run the following command:
-   
+
    `wget https://github.com/tenstorrent/tt-firmware/raw/refs/tags/$fw_tag/$fw_pack
    tt-flash flash --fw-tar $fw_pack`
 
@@ -62,11 +62,11 @@ For more information regarding TT-Firmware and TT-Flash see their respective Git
 
 ## Install System Mangement Interface (TT-SMI)
 1. To install System Management Interface run the following command:
-   
+
    `pip install git+https://github.com/tenstorrent/tt-smi@v3.0.15`
 
 2. Once hardware and system software are installed verify that they system has been configured correctly by running the following TT-SMI utility.
-   
+
    `tt-smi`
 
 TT-SMI will run without error if your system has been configured correctly. The following display with device information, telemetry, and firmware will appear:
@@ -78,16 +78,16 @@ TT-SMI will run without error if your system has been configured correctly. The 
 1. Clone the Repository - Run the following command to clone the repository:
 
    `git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules`
-   
+
 2. Invoke Metalium Build Scripts - Run the following command to invoke Metalium build scripts:
 
    `./build_metal.sh`
-   
+
 3. We recommend for an out-of-the-box virtual environment, that you run the following command:
 
    `./create_venv.sh
    source python_env/bin/activate`
-   
+
 4. Environment Variables - To set environment variables run the following command:
 
    `export TT_METAL_HOME=$(pwd)
@@ -121,7 +121,7 @@ The following tests are short in runtime and loop over all chips to test for bas
   The following expected output will appear upon completion of a successful Command Queue API test:
 
 ![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/CQ_API_Test.png)
-  
+
 - `TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardProgramFixture.*"` - This test ensures that Metal Program APIs function correctly.
   The following expected output will appear upon completion of a successful Program API test:
 
