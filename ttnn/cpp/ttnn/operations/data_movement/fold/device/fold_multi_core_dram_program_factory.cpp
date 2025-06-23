@@ -260,7 +260,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
 
     log_debug(
         tt::LogOp,
-        "total_input_work: {}, num_cores_total: {}, work_per_core: {}",
+        "total_work: {}, num_cores_total: {}, work_per_core: {}",
         total_input_work,
         num_cores_total,
         work_per_core);
