@@ -430,8 +430,10 @@ class TtMaxSigmoidAttnBlock:
 
         x = ttnn.permute(x, (0, 2, 3, 1))  # nchw->nhwc
         x, _, _ = self.proj_conv(x)
-        x = ttnn.reshape(x, (bs, h, w, self.nh, -1))
-        x = ttnn.permute(x, (0, 3, 4, 1, 2))  # nhwc->nchw
+
+        x = ttnn.permute(x, (0, 1, 3, 2))  # nhwc->nchw
+        x = ttnn.reshape(x, (bs, self.nh, -1, h, w))
+
         aw = ttnn.to_memory_config(
             aw, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # added as we are facing OOM issue in next line.
