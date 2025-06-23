@@ -24,7 +24,8 @@ Tensor from_flatbuffer(
     tt::tt_metal::MemoryPin memory_pin);
 
 // Converts Tensor object to FlatBuffer representation, writing the serialized flatbuffer object to `builder` and
-// recording tensor buffers that need to be serialized in-order to `buffers` vector.
+// recording tensor buffers that need to be serialized in-order to `buffers` vector. Replicated buffers are
+// deduplicated, so that the number of copies that need to be written out from `buffers` is minimized.
 //
 // Only inline file storage (data stored in the same file) is currently supported.
 flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(

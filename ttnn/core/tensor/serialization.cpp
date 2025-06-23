@@ -60,6 +60,14 @@ struct FileCloser {
     }
 };
 
+struct FileDescriptorCloser {
+    void operator()(int* fd) const {
+        if (*fd != -1) {
+            close(*fd);
+        }
+    }
+};
+
 constexpr uint64_t SENTINEL_VALUE = std::numeric_limits<uint64_t>::max();
 
 void safe_fread(void* buffer, size_t size, size_t count, FILE* file) {
@@ -397,6 +405,7 @@ void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) 
 Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) {
     int fd = open(file_name.c_str(), O_RDONLY | O_CLOEXEC);
     TT_FATAL(fd != -1, "Cannot open \"{}\"", file_name);
+    std::unique_ptr<int, FileDescriptorCloser> fd_guard(&fd);
 
     struct stat file_stat;
     TT_FATAL(fstat(fd, &file_stat) == 0, "Failed to get file stats for \"{}\"", file_name);
@@ -406,9 +415,7 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) 
     void* mmap_addr = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
     TT_FATAL(mmap_addr != MAP_FAILED, "Failed to mmap file \"{}\": {}", file_name, strerror(errno));
 
-    close(fd);
-
-    std::shared_ptr<void> mmap_ptr(mmap_addr, [file_size, file_name](void* addr) { munmap(addr, file_size); });
+    std::shared_ptr<void> mmap_ptr(mmap_addr, [file_size](void* addr) { munmap(addr, file_size); });
     MemoryPin memory_pin(mmap_ptr);
 
     auto* file_data = static_cast<std::byte*>(mmap_addr);
