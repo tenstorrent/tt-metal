@@ -378,6 +378,28 @@ create_CBs_for_depthwise_sharded_input(
     return {cb_sharded_act, cb_output, cb_matmul_partials};
 }
 
+struct PageInfo {
+    std::uint32_t page_size;
+    std::uint32_t num_pages;
+};
+
+// Computes the optimal `page_size` and the corresponding `num_pages` required to hold `num_tiles * tile_size` bytes.
+template <uint32_t MaxPageSizeBytes = 8192u>
+[[nodiscard]] constexpr PageInfo determine_optimal_page_size(uint32_t num_tiles, uint32_t tile_size) {
+    TT_FATAL(tile_size > 0, "Tile size expected to be > 0 (was {})", tile_size);
+
+    const uint64_t total_size = static_cast<uint64_t>(num_tiles) * tile_size;
+    uint32_t page_size = (MaxPageSizeBytes / tile_size) * tile_size;
+
+    while (page_size >= tile_size && total_size % page_size != 0) {
+        page_size -= tile_size;
+    }
+
+    TT_FATAL(page_size >= tile_size, "Unable to find a valid page size");
+
+    return {page_size, static_cast<std::uint32_t>(total_size / page_size)};
+}
+
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     tt_metal::Program& program,
     const Tensor& a,
@@ -767,11 +789,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         "output_height_num_tiles {} should be less than or equal to act_matrix_height_ntiles {}",
         output_height_num_tiles,
         act_matrix_height_ntiles);
-
+    const uint32_t weight_tile_size_bytes = tt::tt_metal::detail::TileSize(weight_df);
     uint32_t dst_l1_act_buffer_size_bytes =
         out_block_h_ntiles * act_block_w_ntiles * tt::tt_metal::detail::TileSize(act_df);
-    uint32_t dst_l1_weight_buffer_size_bytes =
-        weight_block_h_ntiles * weight_block_w_ntiles * tt::tt_metal::detail::TileSize(weight_df);
+    uint32_t dst_l1_weight_buffer_size_bytes = weight_block_h_ntiles * weight_block_w_ntiles * weight_tile_size_bytes;
 
     // log info for debugging opts
     {
@@ -1074,6 +1095,23 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             weights_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
             weights_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
         }
+    }
+
+    const bool use_dram_sharded_weights = b.is_sharded();
+
+    uint32_t dram_num_banks = 0;
+    uint32_t dram_page_size = 0;
+    uint32_t dram_num_pages_per_bank = 0;
+    if (use_dram_sharded_weights) {
+        TT_FATAL(height_sharded, "DRAM sharded weights are only supported when using height-sharding");
+        dram_num_banks = b.memory_config().shard_spec()->num_cores();
+        TT_FATAL(
+            weight_block_num_tiles % dram_num_banks == 0,
+            "Weight blocks must be split evenly between DRAM banks when using DRAM sharded weights");
+        const auto [page_size, num_pages] =
+            determine_optimal_page_size(weight_block_num_tiles / dram_num_banks, weight_tile_size_bytes);
+        dram_page_size = page_size;
+        dram_num_pages_per_bank = num_pages;
     }
 
     bool read_window_in_inner_loop = false;
@@ -1424,7 +1462,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         bias_ntiles_per_core,
 
         num_blocks_act_h_per_core,
-        num_blocks_weight_w_per_core};
+        num_blocks_weight_w_per_core,
+
+        use_dram_sharded_weights,
+        dram_num_banks,
+        dram_page_size,
+        dram_num_pages_per_bank};
 
     if (enable_split_reader) {
         std::vector<uint32_t> split_reader_args = {

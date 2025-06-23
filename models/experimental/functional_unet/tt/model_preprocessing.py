@@ -65,9 +65,11 @@ def create_unet_model_parameters(
     parameters.c1["conv_blocking_and_parallelization_config_override"] = None
     parameters.c1["use_split_reader"] = True
     parameters.c1["use_activation_double_buffer"] = True
+    parameters.c1["enable_sharded_weights"] = False
     parameters.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 12 * 32}
     parameters.c1_2["use_split_reader"] = True
     parameters.c1_2["use_activation_double_buffer"] = True
+    parameters.c1_2["enable_sharded_weights"] = False
 
     parameters.c2["conv_blocking_and_parallelization_config_override"] = None
     parameters.c2["use_split_reader"] = True
@@ -95,10 +97,13 @@ def create_unet_model_parameters(
 
     parameters.c5["conv_blocking_and_parallelization_config_override"] = None
     parameters.c5["use_activation_double_buffer"] = False
+    parameters.c5["enable_sharded_weights"] = False
     parameters.c5_2["conv_blocking_and_parallelization_config_override"] = None
     parameters.c5_2["use_activation_double_buffer"] = False
+    parameters.c5_2["enable_sharded_weights"] = False
     parameters.c5_3["conv_blocking_and_parallelization_config_override"] = None
     parameters.c5_3["use_activation_double_buffer"] = False
+    parameters.c5_3["enable_sharded_weights"] = False
 
     parameters.c6["conv_blocking_and_parallelization_config_override"] = None
     parameters.c6["use_split_reader"] = True
@@ -126,13 +131,15 @@ def create_unet_model_parameters(
     parameters.c8_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 12 * 32}
     parameters.c8_2["use_activation_double_buffer"] = True
     parameters.c8_2["use_split_reader"] = True
+    parameters.c8_2["enable_sharded_weights"] = False
     parameters.c8_3["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 12 * 32}
-
     parameters.c8_3["use_activation_double_buffer"] = True
     parameters.c8_3["use_split_reader"] = True
+    parameters.c8_3["enable_sharded_weights"] = False
 
     parameters.output_layer["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 42 * 32}
     parameters.output_layer["use_activation_double_buffer"] = True
     parameters.output_layer["use_split_reader"] = True
+    parameters.output_layer["enable_sharded_weights"] = False
 
     return parameters
