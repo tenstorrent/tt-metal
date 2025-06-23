@@ -285,14 +285,12 @@ def run_ring_joint_sdpa(
 @pytest.mark.parametrize(
     "b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size",
     [
-        (1, 40, 4096, 333, 64, 64, 128),  # SD3.5
+        (1, 40, 4096, 333, 64, 128, 512),  # SD3.5
         (1, 24, 44 * 1024, 118, 128, 256, 256),  # Mochi
-        (1, 10, 4096, 333, 64, 128, 512),  # SD3.5 on TG with 4x4 SPxTP
+        (1, 10, 4096, 333, 64, 128, 512),  # SD3.5 shape as it is on TG with 4x4 SPxTP
     ],
-    ids=["sd35", "mochi", "sd35_tg"],
+    ids=["sd35_full", "mochi", "sd35_tg"],
 )
-# @pytest.mark.parametrize("q_chunk_size", [32, 64, 128, 256, 512])
-# @pytest.mark.parametrize("k_chunk_size", [32, 64, 128, 256, 512, 1024])
 @pytest.mark.parametrize("n_iters, trace_enabled", [(1, False), (10, True)], ids=["no_trace", "yes_trace"])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
