@@ -330,3 +330,74 @@ def gen_pytest_parametrize_args(parameters: dict, invalidate_function: Callable 
             )
             test_id2values[id_str] = arg_vals
     return {"argnames": test_argnames, "argvalues": test_id2values.values(), "ids": test_id2values.keys()}
+
+
+def return_dtype(dtype):
+    if dtype == "ttnn.bfloat16":
+        return ttnn.bfloat16
+    elif dtype == "ttnn.float32":
+        return ttnn.float32
+    elif dtype == "ttnn.bfloat8_b":
+        return ttnn.bfloat8_b
+    elif dtype == "ttnn.bfloat4_b":
+        return ttnn.bfloat4_b
+    elif dtype == "ttnn.int32":
+        return ttnn.int32
+    elif dtype == "none":
+        return None
+
+
+def return_mem_config(mem_config_string, H=512, W=512, ncores=8, y=2, x=4):
+    if mem_config_string == "l1_interleaved":
+        return ttnn.L1_MEMORY_CONFIG
+    elif mem_config_string == "dram_interleaved":
+        return ttnn.DRAM_MEMORY_CONFIG
+    elif mem_config_string == "l1_height_sharded_rm":
+        return ttnn.create_sharded_memory_config(
+            shape=(H // ncores, W),
+            core_grid=ttnn.CoreGrid(y=y, x=x),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+    elif mem_config_string == "l1_height_sharded_cm":
+        return ttnn.create_sharded_memory_config(
+            shape=(H, W // ncores),
+            core_grid=ttnn.CoreGrid(y=y, x=x),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.COL_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+    elif mem_config_string == "l1_width_sharded_rm":
+        return ttnn.create_sharded_memory_config(
+            shape=(H, W // ncores),
+            core_grid=ttnn.CoreGrid(y=y, x=x),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+    elif mem_config_string == "l1_width_sharded_cm":
+        return ttnn.create_sharded_memory_config(
+            shape=(H // ncores, W),
+            core_grid=ttnn.CoreGrid(y=y, x=x),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.COL_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+    elif mem_config_string == "l1_block_sharded_rm":
+        return ttnn.create_sharded_memory_config(
+            shape=(H // y, W // x),
+            core_grid=ttnn.CoreGrid(y=y, x=x),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+    elif mem_config_string == "l1_block_sharded_cm":
+        return ttnn.create_sharded_memory_config(
+            shape=(H // y, W // x),
+            core_grid=ttnn.CoreGrid(y=y, x=x),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.COL_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+    raise ("Input mem_config_string is not valid!")
