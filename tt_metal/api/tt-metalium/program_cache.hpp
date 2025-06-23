@@ -128,7 +128,7 @@ struct ProgramCache {
     std::size_t num_entries() const { return this->cache_.size(); }
 
 private:
-    bool is_enabled_ = false;
+    bool is_enabled_ = true;
     bool allow_cache_misses_ = true;
     std::unordered_map<uint64_t, CachedProgramFactory> cache_{};
 };
