@@ -156,7 +156,7 @@ TEST_P(AccessorBenchmarks, Constructor) {
     benchmark_all_args_combinations_single_core(
         GetParam(),
         mesh_device_,
-        "accessor_consructor_benchmarks",
+        "accessor_constructor_benchmarks",
         "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_constructor_benchmark.cpp");
 }
 

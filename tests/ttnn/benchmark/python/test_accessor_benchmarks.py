@@ -91,4 +91,4 @@ def test_get_noc_addr_page_id():
 
 
 def test_constructor():
-    impl_test("AccessorTests/AccessorBenchmarks.Constructor/*", res_dir="accessor_consructor_benchmarks")
+    impl_test("AccessorTests/AccessorBenchmarks.Constructor/*", res_dir="accessor_constructor_benchmarks")

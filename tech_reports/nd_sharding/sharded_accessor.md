@@ -45,7 +45,7 @@ You can configure which parts of the accessor arguments are passed through CRTA 
 - ArgConfig::TensorShapeCRTA
 - ArgConfig::ShardShapeCRTA
 - ArgConfig::BankCoordsCRTA
-- ArgConcig::CRTA: All arguments passed through crta
+- ArgConfig::CRTA: All arguments passed through crta
 
 These flags can be combined with bitwise OR (|) to specify multiple runtime parameters.
 
@@ -136,7 +136,7 @@ const auto& tensor_strides = dspec.tensor_strides();
 
 auto shard_volume = dspec.shard_volume();
 const auto& shard_shape = dspec.shard_shape();
-const auto& shard_strides = dspec.hard_strides();
+const auto& shard_strides = dspec.shard_strides();
 
 // Note: x=(packed >> 8) & 0xFF, y=packed & 0xFF
 const auto& packed_xy_coords = dspec.packed_xy_coords();
