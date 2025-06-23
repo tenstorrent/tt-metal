@@ -93,6 +93,12 @@ ShardingConfig get_specs_for_sharding_partition(
 namespace sharded_accessor_utils {
 
 struct ShardedAccessorArgs {
+    bool rank_is_crta() const;
+    bool num_banks_is_crta() const;
+    bool tensor_shape_is_crta() const;
+    bool shard_shape_is_crta() const;
+    bool bank_coords_is_crta() const;
+
     uint32_t get_rank() const;
     uint32_t get_num_banks() const;
     uint32_t get_physical_num_banks() const;
