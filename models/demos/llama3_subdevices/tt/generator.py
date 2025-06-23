@@ -67,6 +67,7 @@ class Generator:
         self.trace_output_prefill = defaultdict(lambda: None)
         self.empty_slots = list(range(32))
         self.seq_groups_to_batch_slot = {}
+        self.prev_page_table = None
 
     def prefill_forward_text(
         self,
@@ -328,9 +329,9 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
-        reset_inputs=True,
+        reset_inputs=False,
         seq_groups=None,
-        finished_requests_ids=None,
+        finished_requests_ids=[],
     ):
         assert (
             sampling_params is None or sampling_params.temperature == 0
@@ -363,8 +364,19 @@ class Generator:
             tokens = tokens[inverse_perm_indices, :]
             page_table = page_table[inverse_perm_indices, :]
 
+        # Check if we need to reset inputs
+        has_finished_requests = len(finished_requests_ids) > 0
+        page_table_changed = self.prev_page_table is not None and torch.any(self.prev_page_table != page_table).item()
+
+        if has_finished_requests or page_table_changed:
+            reset_inputs = True
+
+        self.prev_page_table = page_table
+
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
+            reset_inputs = True
+
         kv_cache = kv_cache[0]
         decode_kwargs = {
             "current_pos": start_pos,
