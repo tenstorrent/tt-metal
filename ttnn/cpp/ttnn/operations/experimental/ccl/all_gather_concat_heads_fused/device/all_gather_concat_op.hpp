@@ -34,7 +34,7 @@ struct AllGatherConcat {
     const GlobalSemaphore semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     const uint32_t num_heads;
-    const bool use_noc1_only;
+    bool use_noc1_only;
     const uint32_t cluster_axis;
 
     AllGatherConcat(
@@ -46,7 +46,7 @@ struct AllGatherConcat {
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         uint32_t num_heads,
-        const bool use_noc1_only,
+        bool use_noc1_only,
         uint32_t cluster_axis) :
         dim(dim),
         num_links(num_links),
@@ -111,7 +111,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t num_heads,
-    const bool use_noc1_only);
+    bool use_noc1_only);
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded_subgrids(
     const Tensor& input_tensor,
@@ -127,7 +127,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded_su
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t num_heads,
-    const bool use_noc1_only);
+    bool use_noc1_only);
 
 namespace operations {
 namespace experimental {
@@ -141,7 +141,7 @@ Tensor all_gather_concat(
     const MeshDevice& mesh_device,
     const GlobalSemaphore& global_semaphore,
     uint32_t num_heads,
-    const bool use_noc1_only,
+    bool use_noc1_only,
     const MemoryConfig& memory_config,
     std::optional<uint32_t> num_links = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,

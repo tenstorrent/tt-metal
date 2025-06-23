@@ -35,7 +35,7 @@ struct AllReduceCreateQkvHeads {
 
     // create qkv heads parameters
     const uint32_t head_dim;
-    const bool use_noc1_only;
+    bool use_noc1_only;
     const uint32_t num_heads;
     const uint32_t num_kv_heads;
     const bool input_on_subcoregrids;

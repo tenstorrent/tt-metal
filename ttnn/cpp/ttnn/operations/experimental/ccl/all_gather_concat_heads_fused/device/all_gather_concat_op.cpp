@@ -165,7 +165,7 @@ Tensor all_gather_concat(
     const MeshDevice& mesh_device,
     const GlobalSemaphore& global_semaphore,
     const uint32_t num_heads,
-    const bool use_noc1_only,
+    bool use_noc1_only,
     const MemoryConfig& memory_config,
     const std::optional<uint32_t> num_links,
     const ttnn::ccl::Topology topology,

@@ -144,7 +144,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::invoke(
     const uint32_t slice_size,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::MemoryConfig>& qkv_memory_config,
-    const bool use_noc1_only) {
+    bool use_noc1_only) {
     return {
         operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),

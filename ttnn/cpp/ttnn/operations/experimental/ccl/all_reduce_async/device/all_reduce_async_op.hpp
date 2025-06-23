@@ -98,7 +98,7 @@ AllReduceAsync create_all_reduce_async_struct(
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    const bool use_noc1_only);
+    bool use_noc1_only);
 
 }  // namespace all_reduce_async_detail
 }  // namespace ccl
@@ -120,7 +120,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const bool use_noc1_only);
+    bool use_noc1_only);
 
 namespace operations {
 namespace experimental {
@@ -137,7 +137,7 @@ Tensor all_reduce_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    const bool use_noc1_only = false);
+    bool use_noc1_only = false);
 
 std::vector<Tensor> all_reduce_async(
     const std::vector<Tensor>& input_tensors,
@@ -150,7 +150,7 @@ std::vector<Tensor> all_reduce_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    const bool use_noc1_only = false);
+    bool use_noc1_only = false);
 
 }  // namespace ccl
 }  // namespace experimental

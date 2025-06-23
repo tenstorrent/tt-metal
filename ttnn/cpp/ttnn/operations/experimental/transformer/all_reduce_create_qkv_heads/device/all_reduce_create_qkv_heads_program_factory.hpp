@@ -48,6 +48,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     uint32_t num_q_heads,
     uint32_t num_kv_heads,
     uint32_t head_dim,
-    const bool use_noc1_only);
+    bool use_noc1_only);
 
 }  // namespace ttnn

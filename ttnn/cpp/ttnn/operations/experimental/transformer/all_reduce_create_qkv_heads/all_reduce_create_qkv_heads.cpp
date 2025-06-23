@@ -29,7 +29,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllRed
     const std::optional<const uint32_t> slice_size,
     const std::optional<MemoryConfig>& final_memory_config,
     const std::optional<const DataType> dtype,
-    const bool use_noc1_only) {
+    bool use_noc1_only) {
     MemoryConfig out_memory_config = all_reduce_memory_config.value_or(input_tensor.memory_config());
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_heads);
     TT_FATAL(
