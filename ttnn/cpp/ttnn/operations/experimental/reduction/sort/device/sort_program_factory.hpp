@@ -29,6 +29,21 @@ struct SortProgramFactorySingleRowSingleCore {
     static void override_runtime_arguments(
         cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
+// Hybrid approach - single row, multi core with processing multiple tiles on one core
+struct SortProgramFactoryHybrid {
+    struct shared_variables_t {
+        // KernelHandle reader_kernel_id;
+        // KernelHandle compute_kernel_id;
+        // KernelHandle writer_kernel_id;
+        // CoreCoord storage_grid_size;
+    };
+
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static void override_runtime_arguments(
+        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static uint32_t get_number_of_tiles_per_core(const DataType& input_dtype, const DataType& index_dtype);
+};
 
 // Single row - multi core
 struct SortProgramFactorySingleRowMultiCore {

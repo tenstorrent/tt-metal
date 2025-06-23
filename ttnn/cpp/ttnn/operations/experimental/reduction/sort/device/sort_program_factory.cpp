@@ -292,6 +292,77 @@ void SortProgramFactorySingleRowSingleCore::override_runtime_arguments(
     }
 }
 
+// Hybrid approach - single row, multi core with processing multiple tiles on one core
+SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
+    // Program config
+    tt::tt_metal::Program program{};
+
+    const tt::DataFormat input_tensor_cb_data_format =
+        tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
+    const tt::DataFormat value_tensor_cb_data_format =
+        tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(0).dtype());
+    const tt::DataFormat index_tensor_cb_data_format =
+        tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(1).dtype());
+
+    const uint32_t input_tensor_tile_size = tile_size(input_tensor_cb_data_format);
+    const uint32_t value_tensor_tile_size = tile_size(value_tensor_cb_data_format);
+    const uint32_t index_tensor_tile_size = tile_size(index_tensor_cb_data_format);
+
+    auto input_buffer = tensor_args.input_tensor.buffer();
+    auto value_buffer = output_tensors.at(0).buffer();
+    auto index_buffer = output_tensors.at(1).buffer();
+
+    const bool input_tensor_is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const bool value_tensor_is_dram = value_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const bool index_tensor_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+
+    const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
+    const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
+    const auto tile_hw = tile_width * tile_height;
+
+    const uint32_t num_input_tiles = tensor_args.input_tensor.physical_volume() / tile_hw;
+    const uint32_t num_value_tiles = output_tensors.at(0).physical_volume() / tile_hw;
+
+    const auto input_shape = tensor_args.input_tensor.padded_shape();
+    const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
+    const uint32_t Wt = input_shape[3] / tile_width;
+
+    // Calculate the number of cores available for computation
+    const auto device = tensor_args.input_tensor.device();
+    const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const uint32_t total_number_of_cores = compute_with_storage_grid_size.y * compute_with_storage_grid_size.x;
+    const uint32_t number_of_tiles_per_core =
+        get_number_of_tiles_per_core(tensor_args.input_tensor.dtype(), output_tensors.at(1).dtype());
+
+    // Calculate the number of cores utilized based on the input tensor shape
+    const uint32_t all_core_utilization_count = Wt / number_of_tiles_per_core;
+
+    std::cout << "Total number of cores: " << total_number_of_cores
+              << ", Number of tiles per core: " << number_of_tiles_per_core
+              << ", All core utilization count: " << all_core_utilization_count << std::endl;
+
+    return {std::move(program), {}};
+}
+
+void SortProgramFactoryHybrid::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensors) {
+    // TODO: Fill
+    log_error(tt::LogMetal, "override_runtime_arguments is not implemented for SortProgramFactoryHybrid");
+}
+
+uint32_t SortProgramFactoryHybrid::get_number_of_tiles_per_core(
+    const DataType& input_dtype, const DataType& index_dtype) {
+    if (input_dtype == DataType::FLOAT32 || input_dtype == DataType::UINT32 || input_dtype == DataType::INT32 ||
+        index_dtype == DataType::INT32 || index_dtype == DataType::UINT32) {
+        return 64;
+    }
+    return 128;
+}
+
 // Single row - multi core
 SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleRowMultiCore::create(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors) {
