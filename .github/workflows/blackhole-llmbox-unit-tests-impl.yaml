@@ -39,6 +39,7 @@ jobs:
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on:
       - in-service
+      - arch-blackhole
       - ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved' }}
