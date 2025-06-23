@@ -69,20 +69,20 @@ pytest -n auto models/demos/llama3_subdevices/demo/demo_decode.py -k "full"
 ```
 
 #### Demo Decode Arguments
-- **--weights (str)**: Model weights to use (instruct, random, etc.)
-- **--layers (int)**: Number of transformer layers (e.g., 1, 10, 80)
-- **--input_prompts (str)**: Path to JSON file with input prompts
-- **--instruct (bool)**: Use instruct-tuned weights
-- **--repeat_batches (int)**: Number of consecutive batches to run
-- **--max_seq_len (int)**: Maximum context length (up to 128k)
-- **--batch_size (int)**: Number of users per batch (1, 2, 4, 8, 16, 32)
-- **--max_generated_tokens (int)**: Max tokens to generate per user
-- **--paged_attention (bool)**: Enable paged attention
-- **--page_params (dict)**: Paged attention parameters (page_block_size, page_max_num_blocks)
-- **--sampling_params (dict)**: Sampling parameters (temperature, top_p, top_k, seed)
-- **--stress_test (bool)**: Enable stress test mode
-- **--start_pos (int)**: Start position for decoding
-- **--optimizations (str)**: Optimization level (performance, accuracy)
+- **weights (str)**: Model weights to use (instruct, random, etc.)
+- **layers (int)**: Number of transformer layers (e.g., 1, 10, 80)
+- **input_prompts (str)**: Path to JSON file with input prompts
+- **instruct (bool)**: Use instruct-tuned weights
+- **repeat_batches (int)**: Number of consecutive batches to run
+- **max_seq_len (int)**: Maximum context length (up to 128k)
+- **batch_size (int)**: Number of users per batch (1, 2, 4, 8, 16, 32)
+- **max_generated_tokens (int)**: Max tokens to generate per user
+- **paged_attention (bool)**: Enable paged attention
+- **page_params (dict)**: Paged attention parameters (page_block_size, page_max_num_blocks)
+- **sampling_params (dict)**: Sampling parameters (temperature, top_p, top_k, seed)
+- **stress_test (bool)**: Enable stress test mode
+- **start_pos (int)**: Start position for decoding
+- **optimizations (str)**: Optimization level (performance, accuracy)
 
 ### To run the text demo:
 
@@ -92,16 +92,16 @@ pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "repeat"
 
 #### Text Demo Arguments
 
-- **--input_prompts (str)**: Input JSON file with prompts to process.
-- **--instruct (bool)**: Whether to use instruct-tuned weights or general weights.
-- **--repeat_batches (int)**: Number of consecutive batches of users to run (default: 1).
-- **--max_seq_len (int)**: Maximum context length supported by the model (up to 128k for Llama3.1/3.2).
-- **--batch_size (int)**: Number of users per batch (supports: 1, 2, 4, 8, 16, 32).
-- **--max_generated_tokens (int)**: Maximum number of tokens to generate per user (stops earlier if EoS token is reached).
-- **--paged_attention (bool)**: Whether to use paged attention (required for long contexts and vLLM compatibility).
-- **--page_params (dict)**: Parameters for paged attention `{block_size, max_num_blocks}`. Use smaller values (e.g., 32/1024) for short contexts; larger (64/2048) for long contexts.
-- **--sampling_params (dict)**: Sampling parameters for decoding `{temperature, top_p}`. If `temperature = 0`, uses greedy decoding.
-- **--stop_at_eos (bool)**: Whether to stop decoding when the model generates an end-of-sequence (EoS) token.
+- **input_prompts (str)**: Input JSON file with prompts to process.
+- **instruct (bool)**: Whether to use instruct-tuned weights or general weights.
+- **repeat_batches (int)**: Number of consecutive batches of users to run (default: 1).
+- **max_seq_len (int)**: Maximum context length supported by the model (up to 128k for Llama3.1/3.2).
+- **batch_size (int)**: Number of users per batch (supports: 1, 2, 4, 8, 16, 32).
+- **max_generated_tokens (int)**: Maximum number of tokens to generate per user (stops earlier if EoS token is reached).
+- **paged_attention (bool)**: Whether to use paged attention (required for long contexts and vLLM compatibility).
+- **page_params (dict)**: Parameters for paged attention `{block_size, max_num_blocks}`. Use smaller values (e.g., 32/1024) for short contexts; larger (64/2048) for long contexts.
+- **sampling_params (dict)**: Sampling parameters for decoding `{temperature, top_p}`. If `temperature = 0`, uses greedy decoding.
+- **stop_at_eos (bool)**: Whether to stop decoding when the model generates an end-of-sequence (EoS) token.
 
 ## Input Prompts
 
@@ -120,10 +120,41 @@ Input prompts should be provided as a JSON file, with each entry containing a pr
 ]
 ```
 
-## Performance Benchmarking
+## Serving the model from vLLM
 
-The demo includes built-in profiling and throughput analysis:
+1. Ensure weights are downloaded and repacked as described above, and that the environment variables are set.
 
-- **Tokens/sec/user**: Measured at each iteration and summarized at the end.
-- **TSU Thresholds**: Configurable per model/layer count; demo will assert if throughput falls below target.
-- **Stress Testing**: Run with long context and high token generation to validate stability.
+2. **Install vLLM**
+
+    ```bash
+    # Installing from within `tt-metal`
+    export VLLM_TARGET_DEVICE="tt"
+    git clone https://github.com/tenstorrent/vllm.git
+    cd vllm
+    VLLM_USE_PRECOMPILED=1 pip install -e .
+    cd ..
+    ```
+
+3. **Running the server**
+
+    ```bash
+    python vllm/examples/server_example_tt.py
+    ```
+
+4. **Interact with server**
+
+    In a separate terminal window, run:
+
+    ```bash
+    curl http://localhost:8000/v1/completions \
+        -H "Content-Type: application/json" \
+        -d '{
+            "model": "meta-llama/Meta-Llama-3.1-70B",
+            "prompt": "Write a poem about RISC-V",
+            "max_tokens": 128,
+            "temperature": 1,
+            "top_p": 0.9,
+            "top_k": 10,
+            "stream": false
+        }'
+    ```
