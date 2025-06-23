@@ -47,9 +47,8 @@ class TTSampling(LightweightModule):
         )
 
     def forward(self, x: ttnn.Tensor, tt_out_tok: ttnn.Tensor = None):
-        x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.args.sub_core_grids)
         # Local top k
-        topk_values, topk_indices = ttnn.topk(x_bf16, k=32, dim=-1, sub_core_grids=self.args.sub_core_grid_topk)
+        topk_values, topk_indices = ttnn.topk(x, k=32, dim=-1, sub_core_grids=self.args.sub_core_grid_topk)
 
         # Gather values
         # Note: Persistent output buffer used, do not deallocate output!
