@@ -62,8 +62,8 @@ struct MorehClipGradNormStep1Operation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const std::vector<Tensor>& inputs,
-        const float norm_type,
-        const uint32_t tile_offset_of_tmp_pow_sum,
+        float norm_type,
+        uint32_t tile_offset_of_tmp_pow_sum,
         const Tensor& tmp_pow_sum,
         const std::optional<MemoryConfig>& memory_config,
         const DeviceComputeKernelConfig& compute_kernel_config);

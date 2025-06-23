@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "chunk.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "cpp/ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::data_movement {

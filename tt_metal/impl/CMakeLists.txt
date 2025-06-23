@@ -8,6 +8,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/device/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_distribution_spec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_page_mapping.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer_config.cpp
@@ -114,7 +115,6 @@ target_link_libraries(
         FlatBuffers::FlatBuffers
         range-v3::range-v3
         TT::Metalium::Common
-        Taskflow::Taskflow
         TT::Metalium::HostDevCommon
         Metalium::Metal::Hardware
         Metalium::Metal::LLRT

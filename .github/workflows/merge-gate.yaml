@@ -118,6 +118,7 @@ jobs:
         platform: [
           "N300",
           "N300-llmbox",
+          "P150b-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -140,6 +141,7 @@ jobs:
         platform: [
           "N300",
           "N300-llmbox",
+          "P150b-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -166,7 +168,8 @@ jobs:
       publish-artifact: false
 
   basic-tests:
-    if: ${{ true ||
+    if: ${{
+        github.ref_name == 'main' ||
         needs.find-changes.outputs.cmake-changed == 'true' ||
         needs.find-changes.outputs.tt-metalium-changed == 'true' ||
         needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
@@ -177,6 +180,7 @@ jobs:
       matrix:
         platform: [
           "N150",
+          "P150b-viommu",
         ]
     uses: ./.github/workflows/basic.yaml
     with:

@@ -45,13 +45,12 @@ struct ScatterDeviceOperation {
         const Tensor& source_tensor,
         const MemoryConfig& output_memory_config,
         const std::optional<ScatterReductionType>& opt_reduction,
-        std::optional<Tensor>& opt_output,
         const QueueId& queue_id = DefaultQueueId);
 };
 
 }  // namespace ttnn::operations::experimental::scatter
 
 namespace ttnn::prim {
-constexpr auto scatter_ =
-    ttnn::register_operation<"ttnn::prim::scatter_", ttnn::operations::experimental::scatter::ScatterDeviceOperation>();
+constexpr auto scatter =
+    ttnn::register_operation<"ttnn::prim::scatter", ttnn::operations::experimental::scatter::ScatterDeviceOperation>();
 }

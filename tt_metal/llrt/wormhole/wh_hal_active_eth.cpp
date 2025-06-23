@@ -11,6 +11,7 @@
 
 #include "core_config.h"
 #include "eth_l1_address_map.h"
+#include "llrt_common/mailbox.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include <umd/device/tt_core_coordinates.h>
@@ -83,7 +84,10 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE;
-
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::INTERMESH_ETH_LINK_CONFIG)] =
+        eth_l1_mem::address_map::INTERMESH_ETH_LINK_CONFIG_ADDR;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::INTERMESH_ETH_LINK_STATUS)] =
+        eth_l1_mem::address_map::INTERMESH_ETH_LINK_STATUS_ADDR;
     // Base FW api not supported on WH
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
 
@@ -99,10 +103,9 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
         };
         processor_classes[processor_class_idx] = processor_types;
     }
-    constexpr uint32_t mailbox_size =
-        sizeof(mailboxes_t) - sizeof(profiler_msg_t::buffer) +
-        sizeof(profiler_msg_t::buffer) / PROFILER_RISC_COUNT * static_cast<uint8_t>(EthProcessorTypes::COUNT);
-    static_assert(mailbox_size <= eth_l1_mem::address_map::ERISC_MEM_MAILBOX_SIZE);
+    static_assert(
+        llrt_common::k_SingleProcessorMailboxSize<EthProcessorTypes> <=
+        eth_l1_mem::address_map::ERISC_MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,

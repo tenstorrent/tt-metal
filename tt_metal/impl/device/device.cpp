@@ -8,6 +8,7 @@
 #include "dev_msgs.h"
 #include <device_pool.hpp>
 #include <host_api.hpp>
+#include <limits>
 #include <magic_enum/magic_enum.hpp>
 #include <persistent_kernel_cache.hpp>
 #include <sub_device.hpp>
@@ -80,6 +81,43 @@
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>
 
+namespace {
+
+uint32_t get_active_erisc_launch_flag_addr() {
+    auto core_type_idx = tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    std::uint32_t launch_erisc_addr =
+        tt::tt_metal::MetalContext::instance().hal().get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
+    return launch_erisc_addr;
+};
+
+// Send exit_erisc_kernel to the launch message
+void erisc_send_exit_signal(tt::tt_metal::IDevice* device, CoreCoord virtual_core, bool is_idle_eth) {
+    go_msg_t go_msg;
+    std::memset(&go_msg, 0, sizeof(go_msg_t));
+
+    const auto launch_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        is_idle_eth ? tt::tt_metal::HalProgrammableCoreType::IDLE_ETH
+                    : tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH,
+        tt::tt_metal::HalL1MemAddrType::LAUNCH);
+
+    std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
+    data = tt::llrt::read_hex_vec_from_core(device->id(), virtual_core, launch_addr, sizeof(launch_msg_t));
+
+    launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
+    launch_msg->kernel_config.exit_erisc_kernel = std::numeric_limits<uint8_t>::max();
+    tt::llrt::write_launch_msg_to_core(device->id(), virtual_core, launch_msg, &go_msg, launch_addr, false);
+
+    if (!is_idle_eth) {
+        // Active
+        std::vector<uint32_t> clear_flag_data = {0};
+        tt::llrt::write_hex_vec_to_core(
+            device->id(), virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
+    }
+};
+
+}  // namespace
+
 namespace tt {
 enum class ARCH;
 
@@ -147,8 +185,7 @@ std::tuple<chip_id_t, CoreCoord> Device::get_connected_ethernet_core(CoreCoord e
 }
 
 std::vector<CoreCoord> Device::get_ethernet_sockets(chip_id_t connected_chip_id) const {
-    if (tt::tt_metal::MetalContext::instance().get_fabric_config() !=
-        tt::tt_metal::FabricConfig::DISABLED) {
+    if (tt::tt_metal::MetalContext::instance().get_fabric_config() != tt::tt_metal::FabricConfig::DISABLED) {
         return tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_routers_between_src_and_dest(
             this->id_, connected_chip_id);
     } else {
@@ -473,15 +510,6 @@ void Device::clear_launch_messages_on_eth_cores() {
 void Device::reset_cores() {
     ZoneScoped;
 
-    const auto& hal = MetalContext::instance().hal();
-    auto get_active_erisc_launch_flag_addr = [&]() {
-        auto core_type_idx =
-            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-        std::uint32_t launch_erisc_addr =
-            tt::tt_metal::MetalContext::instance().hal().get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
-        return launch_erisc_addr;
-    };
-
     auto erisc_app_still_running = [&](CoreCoord virtual_core) {
         // Check if the kernel/erisc_app is still running on a ethernet core with context switching enabled
         // The LAUNCH_ERISC_APP_FLAG is reset to 0 after reset/reboot, and set to 1 when Metal runtime launches erisc
@@ -500,47 +528,22 @@ void Device::reset_cores() {
         return (data[0] != 0);
     };
 
-    // Send exit_erisc_kernel to the launch message
-    auto erisc_send_exit_signal = [&](CoreCoord virtual_core, bool is_idle_eth) {
-        go_msg_t go_msg;
-        std::memset(&go_msg, 0, sizeof(go_msg_t));
-        log_info(
-            tt::LogMetal,
-            "While initializing device {}, {} ethernet dispatch core {} detected as still "
-            "running, issuing exit signal.",
-            this->id(),
-            is_idle_eth ? "idle" : "active",
-            virtual_core.str());
-
-        DeviceAddr launch_addr = hal.get_dev_addr(
-            is_idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH,
-            HalL1MemAddrType::LAUNCH);
-
-        std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
-        data = tt::llrt::read_hex_vec_from_core(this->id(), virtual_core, launch_addr, sizeof(launch_msg_t));
-
-        launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
-        launch_msg->kernel_config.exit_erisc_kernel = 1;
-        llrt::write_launch_msg_to_core(this->id(), virtual_core, launch_msg, &go_msg, launch_addr, false);
-
-        if (!is_idle_eth) {
-            // Active
-            std::vector<uint32_t> clear_flag_data = {0};
-            tt::llrt::write_hex_vec_to_core(
-                this->id(), virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
-        }
-    };
-
     auto mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->id_);
     // Assert worker cores + dispatch cores, in case they were in a bad state from before.
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> device_to_early_exit_cores;
 
-    if (hal.get_eth_fw_is_cooperative()) {
+    if (tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative()) {
         // Active ethernet
         for (const auto& eth_core : this->get_active_ethernet_cores()) {
             CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
             if (erisc_app_still_running(virtual_core)) {
-                erisc_send_exit_signal(virtual_core, false /* is_idle_eth */);
+                log_info(
+                    tt::LogMetal,
+                    "While initializing device {}, active ethernet dispatch core {} detected as still "
+                    "running, issuing exit signal.",
+                    this->id(),
+                    virtual_core.str());
+                erisc_send_exit_signal(this, virtual_core, false /* is_idle_eth */);
                 device_to_early_exit_cores[this->id()].insert(virtual_core);
             }
         }
@@ -866,30 +869,8 @@ void Device::clear_dram_state() {
 
 void Device::compile_command_queue_programs() {
     ZoneScoped;
-    if (this->is_mmio_capable() && !tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
-        auto command_queue_program_ptr = create_and_compile_cq_program(this);
-        this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
-        // Since devices could be set up in any order, on mmio device do a pass and populate cores for tunnelers.
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_mmio_device_tunnel_count(this->id_) > 0) {
-            tunnels_from_mmio_ =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(this->id_);
-            for (auto& tunnel : tunnels_from_mmio_) {
-                for (uint32_t tunnel_stop = 0; tunnel_stop < tunnel.size() - 1; tunnel_stop++) {
-                    chip_id_t device_id = tunnel[tunnel_stop];
-                    chip_id_t ds_device_id = tunnel[tunnel_stop + 1];
-                    uint16_t channel =
-                        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
-                            ds_device_id);
-                    // Only one tunneler per connection, use CQ ID 0
-                    MetalContext::instance().get_dispatch_core_manager().tunneler_core(
-                        device_id, ds_device_id, channel, 0);
-                }
-            }
-        }
-    } else {
-        auto command_queue_program_ptr = create_and_compile_cq_program(this);
-        this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
-    }
+    auto command_queue_program_ptr = create_and_compile_cq_program(this);
+    this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
 }
 
 // Writes issue and completion queue pointers to device and in sysmem and loads fast dispatch program onto dispatch cores
@@ -999,8 +980,12 @@ void Device::init_command_queue_device() {
     }
 }
 
-void Device::init_fabric() {
+bool Device::compile_fabric() {
     fabric_program_ = create_and_compile_fabric_program(this);
+    return fabric_program_ != nullptr;
+}
+
+void Device::configure_fabric() {
     if (fabric_program_ == nullptr) {
         return;
     }
@@ -1033,6 +1018,12 @@ void Device::init_fabric() {
         }
     }
     log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
+}
+
+// backward compatibility
+void Device::init_fabric() {
+    this->compile_fabric();
+    this->configure_fabric();
 }
 
 bool Device::initialize(
@@ -1094,8 +1085,6 @@ bool Device::close() {
     if (not this->initialized_) {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
-
-    tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
     this->disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);

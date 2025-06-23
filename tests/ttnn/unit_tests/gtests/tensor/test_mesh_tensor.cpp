@@ -317,8 +317,9 @@ auto get_mesh_tensor_write_test_params() {
                                 {
                                     MeshMapperConfig::Replicate(),
                                     MeshMapperConfig::Shard(1),
-                                }},
-                        MeshShape(2, 3));
+                                },
+                            .mesh_shape_override = MeshShape(2, 3),
+                        });
                 },
         },
     };
