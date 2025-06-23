@@ -569,7 +569,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     num_input_tiles_per_dim[0] = actual_input_shape[-1] / (TILE_WIDTH * num_cores_channels);
     num_input_tiles_per_dim[1] = tt::div_up(actual_input_shape[-2], TILE_HEIGHT);
 
-    num_output_tiles_per_dim[0] = 0;
+    num_output_tiles_per_dim[0] = tt::div_up(output_shape[-1], TILE_WIDTH) - num_input_tiles_per_dim[0];
     num_output_tiles_per_dim[1] = tt::div_up(output_shape[-2], TILE_HEIGHT) - num_input_tiles_per_dim[1];
     num_output_tiles_per_dim[1] *= tt::div_up(output_shape[-1], TILE_WIDTH);
 
@@ -618,7 +618,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
 
     log_debug(tt::LogOp, "Output Buffer adddress: {}", output_buffer->address());
     std::vector<uint32_t> common_writer_kernel_args = {
-        output_buffer->address() + output_tensor_start[-1] * output_tensor.element_size(),
+        output_buffer->address(),
         input_single_tile_size,
         input_single_tile_size,
         input_single_tile_size,
@@ -658,7 +658,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
 
         id_per_dim[0] = 0;
         uint32_t unpadded_written = num_sticks_read;
-        uint32_t start_id = id_per_dim[0] + start_offset;
+        uint32_t start_id = id_per_dim[0] + start_offset + width_offset;
         uint32_t max_num_sticks_this_core = 0;
 
         for (uint32_t j = 1; j < num_dims; j++) {
@@ -674,7 +674,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
             }
         }
         std::vector<uint32_t> writer_kernel_args = common_writer_kernel_args;
-        writer_kernel_args[0] += width_offset;
 
         uint32_t num_tiles_this_core =
             std::min(num_tiles_nhw_per_core * num_tiles_per_channel, max_num_sticks_this_core);
@@ -775,7 +774,7 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
 
     uint32_t num_tiles_height_per_core = shard_spec.shape[0] / TILE_HEIGHT;
-    uint32_t num_tiles_per_channel = shard_spec.shape[1] / TILE_HEIGHT;
+    uint32_t num_tiles_channel_per_core = shard_spec.shape[1] / TILE_HEIGHT;
     uint32_t num_cores_channels = 1;
     if (is_block_sharded) {
         if (rm_orientation) {
@@ -783,20 +782,13 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
         } else {
             num_cores_channels = input_cores.bounding_box().grid_size().y;
         }
-        TT_FATAL(
-            num_tiles_per_channel % num_cores_channels == 0,
-            "Number of tiles in channel dimension {} must be divisible by num_cores_channels {} for padded_slice "
-            "operation with tiled inputs",
-            num_tiles_per_channel,
-            num_cores_channels);
-        num_tiles_per_channel = num_tiles_per_channel / num_cores_channels;
     }
 
     TT_FATAL(
-        num_tiles_per_channel * TILE_WIDTH * num_cores_channels == output_padded_shape[-1],
+        num_tiles_channel_per_core * TILE_WIDTH * num_cores_channels == output_padded_shape[-1],
         "Number of tiles per channel {} * tile width {} * num_cores_channels {} should be equal to output shape "
         "last dimension {}",
-        num_tiles_per_channel,
+        num_tiles_channel_per_core,
         TILE_WIDTH,
         num_cores_channels,
         output_shape[-1]);
@@ -812,7 +804,7 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
         program,
         input_cores,
         input_single_tile_size,
-        num_tiles_height_per_core * num_tiles_per_channel,
+        num_tiles_height_per_core * num_tiles_channel_per_core,
         input_cb_data_format,
         input.buffer());
 

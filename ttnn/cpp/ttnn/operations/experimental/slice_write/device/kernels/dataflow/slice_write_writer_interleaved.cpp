@@ -49,6 +49,8 @@ void kernel_main() {
             sticks_read++;
             uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s0);
             noc_async_write(src_buffer_l1_addr, dst_noc_addr, noc_write_size);
+            noc_async_write_barrier();
+
 #ifdef DEBUG
             DPRINT << "SRC L1 : " << src_buffer_l1_addr - base_src_l1_addr << " Dst Stick ID " << dst_stick_id
                    << " Coord " << id_per_dim[0] << ", " << id_per_dim[1] << ", " << id_per_dim[2] << ", "
