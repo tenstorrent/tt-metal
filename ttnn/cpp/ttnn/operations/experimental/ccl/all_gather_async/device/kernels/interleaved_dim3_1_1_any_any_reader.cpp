@@ -21,14 +21,13 @@ constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr BufferType input_buffer_type = static_cast<BufferType>(get_compile_time_arg_val(1));
 constexpr BufferType output_buffer_type = static_cast<BufferType>(get_compile_time_arg_val(2));
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(3);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(4);  // 2
+constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(4);
 constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(8));
-constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(9);  // 2
-constexpr bool direction = get_compile_time_arg_val(10);                 // 1 is forward, 0 is backward
-constexpr bool fuse_op = get_compile_time_arg_val(11);
+constexpr bool direction = get_compile_time_arg_val(9);  // 1 is forward, 0 is backward
+constexpr bool fuse_op = get_compile_time_arg_val(10);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -68,18 +67,21 @@ void kernel_main() {
     uint32_t output_tile_id_start = 0;
     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
         while (tiles_read < tiles_to_read) {
-            uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-            cb_reserve_back(cb_output_id, packet_size_in_pages);
-            const uint32_t l1_write_addr_base = get_write_ptr(cb_output_id);
-            uint32_t l1_write_addr = l1_write_addr_base;
-            for (uint32_t j = 0; j < num_pages_to_read; j++) {
-                noc_async_read_tile(output_tile_id_start + tiles_read, input_tensor_addrgen, l1_write_addr);
+            uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+            uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
+
+            cb_reserve_back(cb_output_id, num_tiles_to_read);
+            size_t l1_write_addr = get_write_ptr(cb_output_id);
+            for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
+                uint32_t tile_id = output_tile_id_start + tiles_read;
+                noc_async_read_tile(tile_id, input_tensor_addrgen, l1_write_addr);
+
                 l1_write_addr += input_tensor_page_size;
                 tiles_read++;
             }
 
             noc_async_read_barrier();
-            cb_push_back(cb_output_id, packet_size_in_pages);
+            cb_push_back(cb_output_id, num_tiles_to_read);
         }
         tiles_read = input_tile_id_start;
         tiles_to_read = input_tile_id_end;
@@ -110,8 +112,6 @@ void kernel_main() {
             writes_expected = num_targets_forward_direction - 1;
         }
     }
-
-    const uint32_t payload_size_bytes = input_tensor_page_size * contig_pages_advanced;
 
     while (slices_received < slices_expected) {
         // Do i expect more from the backward direction?
@@ -163,22 +163,17 @@ void kernel_main() {
                 output_tile_id_start = actual_sender_chip_id * input_tensor_Ht * input_tensor_Wt;
             }
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
-                // TODO: (GR) Un hard-code
-                // TODO: (GR) Min on pages per packet
-                uint32_t max_tiles_per_packet = 2;
-
                 while (tiles_read < tiles_to_read) {
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                    uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, max_tiles_per_packet);
+                    uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
                     cb_reserve_back(cb_output_id, num_tiles_to_read);
                     size_t l1_write_addr = get_write_ptr(cb_output_id);
-
                     for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
                         uint32_t tile_id = output_tile_id_start + row_offset + pages_read_in_row;
                         noc_async_read_tile(tile_id, output_tensor_addrgen, l1_write_addr);
 
-                        l1_write_addr += payload_size_bytes;
+                        l1_write_addr += input_tensor_page_size;
                         tiles_read++;
 
                         pages_read_in_row++;

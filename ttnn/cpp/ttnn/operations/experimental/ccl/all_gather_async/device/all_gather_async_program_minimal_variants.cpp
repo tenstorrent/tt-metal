@@ -380,9 +380,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
 
     // for bfloat8_b, tile_num_per_link=6, we would need to send 2 packages, but they can be of size 3 instead of 4
-    uint32_t tiles_to_write_per_packet = 1;
+    // scatter-write currently only supports 2 distinct noc addresses
+    uint32_t max_target_noc_addresses_per_packet = 2;
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
-    uint32_t cb_num_pages = 3 * num_pages_per_packet;  // triple buffering
+    uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
+    uint32_t cb_num_pages = 3 * num_tiles_to_write_per_packet;  // triple buffering
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     // CBs for transferring data between sender_reader and sender_writer
@@ -430,12 +432,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         static_cast<uint32_t>(input_tensor_buffer_type),   // input_buffer_type
         static_cast<uint32_t>(output_tensor_buffer_type),  // output_buffer_type
         sender_forward_cb_index,                           // cb_forward_id
-        num_pages_per_packet,                              // packet_size_in_pages
+        num_tiles_to_write_per_packet,                     // num_tiles_to_write_per_packet
         op_config.get_page_size(),                         // tensor0_page_size
         num_targets_forward,                               // num_slices_forward_direction
         num_targets_backward,                              // num_slices_backward_direction
         static_cast<uint32_t>(topology),                   // topology
-        tiles_to_write_per_packet,                         // contig_pages_advanced
         1,                                                 // direction
         fuse_op,                                           // fused op
     };
@@ -454,14 +455,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         num_packet_headers_storable,                       // num_packet_headers_storable
         static_cast<uint32_t>(output_tensor_buffer_type),  // output_buffer_type
         sender_forward_cb_index,                           // cb_forward_id
-        num_pages_per_packet,                              // packet_size_in_pages
+        num_tiles_to_write_per_packet,                     // num_tiles_to_write_per_packet
         op_config.get_page_size(),                         // tensor0_page_size
         num_targets_forward,                               // num_targets_forward_direction
         num_targets_backward,                              // num_targets_backward_direction
         dynamic_alternate,                                 // alternate
         fuse_op,                                           // fused op
         static_cast<uint32_t>(topology),                   // topology
-        tiles_to_write_per_packet,                         // contig_pages_advanced
         1,                                                 // direction
     };
     auto worker_sender_writer_forward_kernel_id = tt::tt_metal::CreateKernel(
@@ -479,12 +479,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         static_cast<uint32_t>(input_tensor_buffer_type),   // input_buffer_type
         static_cast<uint32_t>(output_tensor_buffer_type),  // output_buffer_type
         sender_backward_cb_index,                          // cb_forward_id
-        num_pages_per_packet,                              // packet_size_in_pages
+        num_tiles_to_write_per_packet,                     // num_tiles_to_write_per_packet
         op_config.get_page_size(),                         // tensor0_page_size
         num_targets_forward,                               // num_slices_forward_direction
         num_targets_backward,                              // num_slices_backward_direction
         static_cast<uint32_t>(topology),                   // topology
-        tiles_to_write_per_packet,                         // contig_pages_advanced
         0,                                                 // direction
         fuse_op,                                           // fused op
     };
@@ -503,14 +502,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         num_packet_headers_storable,                       // num_packet_headers_storable
         static_cast<uint32_t>(output_tensor_buffer_type),  // output_buffer_type
         sender_backward_cb_index,                          // cb_forward_id
-        num_pages_per_packet,                              // packet_size_in_pages
+        num_tiles_to_write_per_packet,                     // num_tiles_to_write_per_packet
         op_config.get_page_size(),                         // tensor0_page_size
         num_targets_forward,                               // num_targets_forward_direction
         num_targets_backward,                              // num_targets_backward_direction
         dynamic_alternate,                                 // alternate
         fuse_op,                                           // fused op
         static_cast<uint32_t>(topology),                   // topology
-        tiles_to_write_per_packet,                         // contig_pages_advanced
         0,                                                 // direction
     };
     auto worker_sender_writer_backward_kernel_id = tt::tt_metal::CreateKernel(

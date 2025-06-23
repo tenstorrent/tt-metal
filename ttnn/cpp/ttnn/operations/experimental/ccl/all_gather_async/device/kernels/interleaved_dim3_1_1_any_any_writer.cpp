@@ -25,15 +25,14 @@ constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(1);
 constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(2);
 constexpr BufferType output_type = static_cast<BufferType>(get_compile_time_arg_val(3));
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(4);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(5);
+constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(5);
 constexpr uint32_t output_page_size = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
 constexpr bool dynamic_alternate = get_compile_time_arg_val(9);
 constexpr bool fuse_op = get_compile_time_arg_val(10);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(11));
-constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(12);
-constexpr bool direction = get_compile_time_arg_val(13);  // 1 is forward, 0 is backward
+constexpr bool direction = get_compile_time_arg_val(12);  // 1 is forward, 0 is backward
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -98,20 +97,15 @@ void kernel_main() {
         tile_id_start = my_chip_id * input_tensor_Ht * input_tensor_Wt;
     }
     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
-        // TODO: (GR) Un hard-code
-        uint32_t max_tiles_per_packet = 2;
-
-        // TODO: (GR) Proper tiles_to_put_in_current_packet should be min(size_of_packet_in_pages, max_tiles_per_packet,
-        // num_pages_remaining)
         while (tiles_read < tiles_to_read) {
             uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-            uint32_t tiles_to_put_in_current_packet = std::min(tiles_remaining_to_read, max_tiles_per_packet);
+            uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-            cb_wait_front(cb_output_id, tiles_to_put_in_current_packet);
+            cb_wait_front(cb_output_id, num_tiles_to_read);
             size_t l1_read_addr = get_read_ptr(cb_output_id);
 
             // Will have more cases once scatter-write supports other non-bfloat16 dtypes
-            switch (tiles_to_put_in_current_packet) {
+            switch (num_tiles_to_read) {
                 case 2: {
                     uint32_t tile_one_id = tile_id_start + row_offset + pages_read_in_row;
                     tiles_read++;
@@ -192,7 +186,7 @@ void kernel_main() {
                     break;
                 }
             }
-            cb_pop_front(cb_output_id, tiles_to_put_in_current_packet);
+            cb_pop_front(cb_output_id, num_tiles_to_read);
         }
 
         tile_id_start += output_tensor_Wt * output_tensor_Ht;
@@ -282,17 +276,15 @@ void kernel_main() {
             tile_id_start = actual_slice_chip_id * input_tensor_Ht * input_tensor_Wt;
         }
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
-            // TODO: (GR) Un hard-code
-            uint32_t max_tiles_per_packet = 2;
             while (tiles_read < tiles_to_read) {
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                uint32_t tiles_to_put_in_current_packet = std::min(tiles_remaining_to_read, max_tiles_per_packet);
+                uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-                cb_wait_front(cb_output_id, tiles_to_put_in_current_packet);
+                cb_wait_front(cb_output_id, num_tiles_to_read);
                 size_t l1_read_addr = get_read_ptr(cb_output_id);
 
                 // Will have more cases once scatter-write supports other non-bfloat16 dtypes
-                switch (tiles_to_put_in_current_packet) {
+                switch (num_tiles_to_read) {
                     case 2: {
                         uint32_t tile_one_id = tile_id_start + row_offset + pages_read_in_row;
                         tiles_read++;
@@ -358,7 +350,7 @@ void kernel_main() {
                         break;
                     }
                 }
-                cb_pop_front(cb_output_id, tiles_to_put_in_current_packet);
+                cb_pop_front(cb_output_id, num_tiles_to_read);
             }
 
             tile_id_start += output_tensor_Wt * output_tensor_Ht;
