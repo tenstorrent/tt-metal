@@ -199,7 +199,7 @@ def ttnn_decode_bboxes(device, distance, anchor_points, xywh=True, dim=1):
         c_xy = x1y1 + x2y2
         c_xy = ttnn.div(c_xy, 2)
         wh = x2y2 - x1y1
-        return ttnn.concat([c_xy, wh], 1)
+        return ttnn.concat([c_xy, wh], 1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
 
 def make_anchors(device, feats, strides, grid_cell_offset=0.5):
@@ -217,8 +217,12 @@ def make_anchors(device, feats, strides, grid_cell_offset=0.5):
     b = torch.cat(stride_tensor).transpose(0, 1)
 
     return (
-        ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
-        ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.from_torch(
+            a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        ),
+        ttnn.from_torch(
+            b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        ),
     )
 
 
