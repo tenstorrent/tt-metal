@@ -76,19 +76,7 @@ uint32_t get_num_pages(const ttnn::Tensor& tensor) {
     return num_pages;
 }
 
-uint32_t get_page_size(const ttnn::Tensor& tensor) {
-    auto memory_config = tensor.memory_config();
-    auto tensor_spec = tensor.tensor_spec();
-    auto page_config = tensor_spec.page_config();
-    auto physical_size = get_physical_size(tensor);
-    bool sharded = memory_config.shard_spec().has_value();
-
-    std::optional<tt::tt_metal::Shape2D> physical_shard_size =
-        sharded ? std::optional<tt::tt_metal::Shape2D>(memory_config.shard_spec().value().shape) : std::nullopt;
-    auto page_shape = page_config.get_page_shape(physical_size, tensor.dtype(), memory_config, physical_shard_size);
-    auto page_size = page_config.get_page_size_bytes(page_shape, tensor.dtype());
-    return (uint32_t)page_size;
-}
+uint32_t get_page_size(const ttnn::Tensor& tensor) { return tensor.tensor_spec().compute_page_size_bytes(); }
 
 uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) {
     auto BUFFER_ALIGNMENT = tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
@@ -226,21 +214,6 @@ uint32_t select_link(
         }
         return (src[0] + (south ? 0 : 1)) % num_links;  // link id
     }
-}
-
-std::vector<tt::tt_metal::IDevice*> get_token_parallel_devices(
-    const MeshDeviceView& mesh_view, const MeshCoordinate& mesh_coordinate, const std::optional<uint32_t> axis) {
-    std::vector<tt::tt_metal::IDevice*> devices;
-    if (axis.has_value()) {
-        if (axis.value() == 0) {
-            devices = mesh_view.get_devices_on_row(mesh_coordinate[0]);
-        } else {
-            devices = mesh_view.get_devices_on_column(mesh_coordinate[1]);
-        }
-    } else {
-        devices = mesh_view.get_devices();
-    }
-    return devices;
 }
 
 }  // namespace detail

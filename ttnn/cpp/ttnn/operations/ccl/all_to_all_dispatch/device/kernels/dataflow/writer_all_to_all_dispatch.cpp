@@ -134,7 +134,7 @@ inline void dispatch_input_remote_device(
     uint32_t mesh_rows,
     uint32_t input_token_read_addr,
     uint64_t output_token_write_addr,
-    uint32_t size,
+    int size,
     uint32_t fabric_max_packet_size,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* token_unicast_packet_header) {
@@ -150,7 +150,7 @@ inline void dispatch_input_remote_device(
         dest_mesh_id,
         mesh_cols);
     while (size > 0) {
-        uint32_t curr_packet_size = std::min(fabric_max_packet_size, size);
+        uint32_t curr_packet_size = std::min(fabric_max_packet_size, (uint32_t)size);
         token_unicast_packet_header->to_noc_unicast_write(
             NocUnicastCommandHeader{output_token_write_addr}, curr_packet_size);
 
@@ -295,7 +295,7 @@ void kernel_main() {
                             mesh_rows,
                             input_token_read_addr,
                             output_token_write_addr,
-                            output_page_size,
+                            (int)output_page_size,
                             fabric_max_packet_size,
                             fabric_connections,
                             unicast_packet_header);

@@ -9,49 +9,27 @@ void kernel_main() {
     constexpr bool input_is_dram = (bool)get_compile_time_arg_val(0);
     constexpr bool indices_is_dram = (bool)get_compile_time_arg_val(1);
     constexpr bool mapping_is_dram = (bool)get_compile_time_arg_val(2);
-    constexpr bool output_is_dram = (bool)get_compile_time_arg_val(3);
-    constexpr bool metadata_is_dram = (bool)get_compile_time_arg_val(4);
 
     constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(5);
     constexpr uint32_t indices_tensor_cb_id = get_compile_time_arg_val(6);
     constexpr uint32_t mapping_tensor_cb_id = get_compile_time_arg_val(7);
-    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(8);
-    constexpr uint32_t send_preparation_buffer_cb_id = get_compile_time_arg_val(9);
 
     constexpr uint32_t input_pages = get_compile_time_arg_val(10);
     constexpr uint32_t indices_pages = get_compile_time_arg_val(11);
     constexpr uint32_t mapping_pages = get_compile_time_arg_val(12);
-    constexpr uint32_t output_pages = get_compile_time_arg_val(13);
-    constexpr uint32_t metadata_pages = get_compile_time_arg_val(14);
 
     constexpr uint32_t input_page_size = get_compile_time_arg_val(15);
     constexpr uint32_t indices_page_size = get_compile_time_arg_val(16);
     constexpr uint32_t mapping_page_size = get_compile_time_arg_val(17);
-    constexpr uint32_t output_page_size = get_compile_time_arg_val(18);
-    constexpr uint32_t metadata_page_size = get_compile_time_arg_val(19);
 
     constexpr uint32_t num_devices = get_compile_time_arg_val(20);
-    constexpr uint32_t hidden_size = get_compile_time_arg_val(21);
-    constexpr uint32_t batch_size = get_compile_time_arg_val(22);
-    constexpr uint32_t selected_experts_k = get_compile_time_arg_val(23);
-    constexpr uint32_t experts = get_compile_time_arg_val(24);
     constexpr uint32_t tokens_per_device = get_compile_time_arg_val(25);
-
-    constexpr uint32_t num_links = get_compile_time_arg_val(26);
-    constexpr bool is_ring_topology = (bool)get_compile_time_arg_val(27);
 
     constexpr uint32_t src_mesh_id = get_compile_time_arg_val(28);
     constexpr uint32_t src_chip_id = get_compile_time_arg_val(29);
 
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(30);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(31);  // ew_dim
-    constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(32);
-    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(33);
-    constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(34);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(35);
-    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(36);
-
-    constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(37);
 
 #ifdef AXIS
     constexpr int axis = AXIS;
