@@ -4,6 +4,7 @@
 
 import torch
 from loguru import logger
+from typing_extensions import override
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -328,7 +329,7 @@ class DropInVisionTransformer(torch.nn.Module):
         return torch.cat(final_outputs, dim=0)
 
 
-class Transformer(LightweightModule):
+class Transformer(TTTransformer):
     def __init__(
         self,
         args,
@@ -339,8 +340,8 @@ class Transformer(LightweightModule):
         paged_attention_config=None,
         use_paged_kv_cache=False,
     ):
-        # favor composition over inheritance: __ is convention for private variables
-        self.__tt_transformer = TTTransformer(
+        # Call parent constructor with vision-specific classes
+        super().__init__(
             args=args,
             dtype=dtype,
             mesh_device=mesh_device,
@@ -352,23 +353,7 @@ class Transformer(LightweightModule):
             rope_setup_class=RotarySetup,
         )
 
-    @property
-    def rope_setup(self):
-        return self.__tt_transformer.rope_setup
-
-    @property
-    def layers(self):
-        return self.__tt_transformer.layers
-
-    @property
-    def mesh_device(self):
-        return self.__tt_transformer.mesh_device
-
-    @property
-    def cluster_shape(self):
-        return self.__tt_transformer.args.cluster_shape
-
-    # override prepare_inputs_prefill
+    @override
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         # tokens is actually embeddings
         assert tokens.dim() == 3, "tokens should be a 3D tensor"
@@ -379,7 +364,7 @@ class Transformer(LightweightModule):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device=self.mesh_device, dims=(None, 3), mesh_shape=self.cluster_shape
+                mesh_device=self.mesh_device, dims=(None, 3), mesh_shape=self.args.cluster_shape
             ),
         )
 
@@ -415,38 +400,3 @@ class Transformer(LightweightModule):
             tt_chunk_page_table = None
 
         return tokens_embd, tt_rot_mats_prefill, tt_page_table, tt_chunk_page_table
-
-    def ttnn_prefill_forward(
-        self,
-        x,
-        rot_mats,
-        user_id,
-        page_table=None,
-        chunk_page_table=None,
-        chunk_start_idx=None,
-        get_last_token=-1,
-        kv_cache=None,
-    ):
-        return self.__tt_transformer.ttnn_prefill_forward(
-            x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx, get_last_token, kv_cache
-        )
-
-    def process_output_prefill(self, tt_out, last_token_idx):
-        return self.__tt_transformer.process_output_prefill(tt_out, last_token_idx)
-
-    def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
-        return self.__tt_transformer.prepare_decode_inputs_host(tokens, current_pos, page_table)
-
-    def transform_decode_inputs_device(self, tokens, current_pos, rope_idxs, page_table=None):
-        return self.__tt_transformer.transform_decode_inputs_device(tokens, current_pos, rope_idxs, page_table)
-
-    def ttnn_decode_forward(self, x, current_pos, rot_mats, page_table=None, kv_cache=None, argmax_on_device=False):
-        return self.__tt_transformer.ttnn_decode_forward(
-            x, current_pos, rot_mats, page_table, kv_cache, argmax_on_device
-        )
-
-    def prepare_inputs_decode(self, *inputs):
-        return self.__tt_transformer.prepare_inputs_decode(*inputs)
-
-    def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
-        return self.__tt_transformer.process_output_decode(tt_out, B, S, is_tokens=is_tokens)

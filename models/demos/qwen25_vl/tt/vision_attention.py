@@ -10,9 +10,6 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen25_vl.tt.vision_rmsnorm import RMSNorm
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
-# Potential warning that we don't want to show for every layer and token
-global_padded_head_warning_shown = False
-
 
 class VisionAttention(LightweightModule):
     def __init__(self, *args, **kwargs):

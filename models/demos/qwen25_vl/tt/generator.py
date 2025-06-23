@@ -58,18 +58,8 @@ class Generator:
             seq_len = prompt_lens[user_id]
             last_token_idx = seq_len - 1
 
-            # # FIXME? does this agree with the prefill_lens from demo.py?
-            # prefill_seq_len = get_padded_prefill_len(seq_len)
-            # # it doesn't matter which value we pad with, we don't use these parts of the kv-cache or their outputs
-            # # For 3D tokens (embeddings) as Qwen2_5_Vision uses 3D token embeddings
-            # embed_dim = tokens.shape[-1]
-            # prefill_ids = torch.cat(
-            #     [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len, embed_dim)],
-            #     dim=1,
-            # )
-
             if page_table is not None:
-                page_table_user = self.__get_prefill_user_page_table(page_table, kv_cache, seq_len)
+                page_table_user = self._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, seq_len)
 
             logits = self.__prefill_forward_single_user_text(
                 # prefill_ids,
@@ -102,16 +92,10 @@ class Generator:
             tokens=tokens,
             start_pos=start_pos,
             page_table=page_table,
-            kv_cache=[
-                kv_cache
-            ],  # [INFO] surrounding arguments with [] is the work-around to the built-in data parallel code of tt_transformer
+            kv_cache=[kv_cache],
             enable_trace=enable_trace,
             read_from_device=read_from_device,
         )
-
-    def __get_prefill_user_page_table(self, page_table, kv_cache, prefill_len):
-        # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
-        return self._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, prefill_len)
 
     def __prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, kv_cache=None):
         seq_len = tokens.shape[1]

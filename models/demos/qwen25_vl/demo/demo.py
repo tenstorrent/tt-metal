@@ -153,7 +153,7 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
-        (  # Batch-2 run with single decoder layer (CI only) - two users repeated batch
+        (  # Batch-2 run with single decoder layer (CI only) - single user repeated batch
             "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts.json",  # real multi-user prompts
             True,  # instruct mode
             4,  # repeat_batches to simulate multiple users with the same prompt
