@@ -327,7 +327,8 @@ def run_conv(
     else:
         passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
         logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
-        assert passing and pcc_msg != 1, pcc_msg
+        assert passing, pcc_msg
+        assert pcc_msg != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"
 
     if memory_config:
         output_memory_config = ttnn.get_memory_config(tt_output_tensor_on_device)
@@ -952,11 +953,10 @@ def test_conv_ws(
     pcc = 0.99
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     logger.info(f"{pcc_msg} Threshold : {pcc}")
-    print(torch_output_tensor)
     if not passing:
         logger.error("Fails with PCC ", pcc_msg)
     assert passing
-    assert pcc_msg != 1.0
+    assert pcc_msg != 1.0, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)

@@ -37,8 +37,8 @@ def test_ttnn_pytorch_sweep(device, input_spec):
         device,
     )[0]
     print(pcc)
-    assert pcc != 1
     assert passed, pcc
+    assert pcc != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"
 
 
 @skip_for_grayskull()
@@ -57,5 +57,5 @@ def test_tt_forge_sweep(device, input_spec):
         device,
     )[0]
     print(pcc)
-    assert pcc != 1
     assert passed, pcc
+    assert pcc != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"

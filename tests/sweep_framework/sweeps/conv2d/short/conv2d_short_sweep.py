@@ -1613,8 +1613,8 @@ def test_conv2d_localrun(device, input_spec):
         device,
     )[0]
     print(pcc)
-    assert pcc != 1
     assert passed, pcc
+    assert pcc != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"
 
 
 failing_parameters = [
@@ -1633,8 +1633,8 @@ def test_conv2d_localrun_fail_only(device, input_spec):
         device,
     )[0]
     print(pcc)
-    assert pcc != 1
     assert passed, pcc
+    assert pcc != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"
 
 
 @pytest.mark.parametrize("input_spec", parameters["short_sweep_suite_conv1d"]["input_specs"])
@@ -1645,8 +1645,8 @@ def test_conv2d_localrun_conv1d(device, input_spec):
         device,
     )[0]
     print(pcc)
-    assert pcc != 1
     assert passed, pcc
+    assert pcc != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"
 
 
 failing_parameters_conv1d = [
