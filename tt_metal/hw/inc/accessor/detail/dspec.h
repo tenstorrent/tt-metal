@@ -34,10 +34,6 @@ template <
     typename ShardShapeWrapper = ArrayDynamicWrapper,
     typename BankCoordsWrapper = ArrayDynamicWrapper>
 struct DistributionSpec {
-    // using TensorShapeWrapper = TensorShapeWrapper_;
-    // using ShardShapeWrapper = ShardShapeWrapper_;
-    // using BankCoordsWrapper = BankCoordsWrapper_;
-
     static constexpr bool has_static_rank = RankCT != 0;
     static constexpr bool has_static_num_banks = NumBanksCT != 0;
     static constexpr bool tensor_shape_static = has_static_rank && TensorShapeWrapper::is_static;
@@ -216,8 +212,9 @@ private:
     std::conditional_t<shapes_static, std::monostate, Shape> shard_grid_strides_rt{};
 
     // Buffers to wrap around span in case of dynamic rank
-    mutable detail::ConditionalField<!has_static_rank, uint32_t[MAX_RANK]> shard_grid_rt_buf;
-    mutable detail::ConditionalField<!has_static_rank, uint32_t[MAX_RANK]> shard_grid_strides_rt_buf;
+    [[no_unique_address]] mutable detail::ConditionalField<!has_static_rank, uint32_t[MAX_RANK]> shard_grid_rt_buf;
+    [[no_unique_address]] mutable detail::ConditionalField<!has_static_rank, uint32_t[MAX_RANK]>
+        shard_grid_strides_rt_buf;
 
     static constexpr ShapeStatic shard_grid_ct =
         precompute_shard_grid_ct(TensorShapeWrapper::elements, ShardShapeWrapper::elements);
@@ -225,8 +222,8 @@ private:
         precompute_shard_grid_strides_ct(TensorShapeWrapper::elements, ShardShapeWrapper::elements);
 
     // Buffers to wrap around span in case of dynamic rank
-    mutable detail::ConditionalField<!has_static_rank, uint32_t[MAX_RANK]> tensor_strides_rt_buf;
-    mutable detail::ConditionalField<!has_static_rank, uint32_t[MAX_RANK]> shard_strides_rt_buf;
+    [[no_unique_address]] mutable detail::ConditionalField<!has_static_rank, uint32_t[MAX_RANK]> tensor_strides_rt_buf;
+    [[no_unique_address]] mutable detail::ConditionalField<!has_static_rank, uint32_t[MAX_RANK]> shard_strides_rt_buf;
     Shape tensor_strides_rt = {};
     Shape shard_strides_rt = {};
     static constexpr ShapeStatic tensor_strides_ct = precompute_strides_ct(TensorShapeWrapper::elements);

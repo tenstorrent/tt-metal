@@ -38,9 +38,10 @@ struct ShardedAccessor {
 private:
     // DSpec can be static or dynamic, so we use a conditional instance
     using StaticDspec = detail::ConditionalStaticInstance<DSpec, DSpec::is_static>;
-    detail::ConditionalField<!DSpec::is_static, DSpec> dspec_instance;
+    [[no_unique_address]] detail::ConditionalField<!DSpec::is_static, DSpec> dspec_instance;
 
-    mutable detail::ConditionalField<!DSpec::has_static_rank, uint32_t[detail::MAX_RANK]> _page_coord;
+    [[no_unique_address]] mutable detail::ConditionalField<!DSpec::has_static_rank, uint32_t[detail::MAX_RANK]>
+        _page_coord;
     const size_t bank_base_address;
 
     // Page size is either compile-time constant or runtime value
