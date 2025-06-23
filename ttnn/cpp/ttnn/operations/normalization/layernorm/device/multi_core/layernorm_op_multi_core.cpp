@@ -64,6 +64,7 @@ bool CB_can_fit_in_L1(
     uint32_t in2_size,
     uint32_t in3_size,
     uint32_t im2_size,
+    uint32_t im_reduce_size,
     uint32_t l1_size) {
     uint32_t sum = 0;
     sum += in0_size;
@@ -80,6 +81,7 @@ bool CB_can_fit_in_L1(
     sum += in2_size;
     sum += in3_size;
     sum += im2_size;
+    sum += im_reduce_size;
     return sum < l1_size * 0.95;
 }
 operation::ProgramWithCallbacks layernorm_multi_core(
@@ -197,10 +199,11 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     }
     uint32_t im5_t = 2 * block_size;  // for buffering to/from *gamma/+beta
     uint32_t im4_t = 8;               // 8 just in case, 4 would prob suffice
-    uint32_t im1_t = WtB;
+    uint32_t im1_t = 1;
     uint32_t in2_t = 2;  // scaler for reduce coming from reader
     uint32_t in3_t = 2;  // epsilon coming from reader
-    uint32_t im2_t = WtB;  //
+    uint32_t im2_t = 1;  //
+    uint32_t im_reduce_t = WtB;
     bool cb_fits_in_L1 = CB_can_fit_in_L1(
         in0_t * in_single_tile_size,
         in1_t * inb_single_tile_size,
@@ -216,6 +219,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         in2_t * bfloat16_tile_size,
         in3_t * bfloat16_tile_size,
         im2_t * single_tile_size,
+        im_reduce_t * single_tile_size,
         a.device()->l1_size_per_core());
     if (!rms_norm and !use_row_major_kernel) {
         if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
@@ -233,6 +237,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         im3_t = WtB;  // buffer for xmm^2
         in5_t = WtB;  // buffer for gamma
         in6_t = WtB;  // buffer for beta
+        im_reduce_t = WtB;  // buffer for beta
         if (b) {
             im6_t = WtB;
             in0_t = 2 * block_size;
@@ -396,6 +401,10 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         CircularBufferConfig(im2_t * single_tile_size, {{tt::CBIndex::c_19, cb_data_format}})
             .set_page_size(tt::CBIndex::c_19, single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_intermed2_config);
+    CircularBufferConfig cb_intermed_reduce_config =
+        CircularBufferConfig(im_reduce_t * single_tile_size, {{tt::CBIndex::c_25, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_25, single_tile_size);
+    CreateCircularBuffer(program, all_cores, cb_intermed_reduce_config);
     if (!(rms_norm && !b.has_value())) {
         CircularBufferConfig cb_intermed0_config =
             CircularBufferConfig(im0_t * single_tile_size, {{tt::CBIndex::c_24, cb_data_format}})
