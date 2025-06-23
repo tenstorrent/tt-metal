@@ -35,8 +35,7 @@ struct ArgsOffsets {
         "If num_banks is runtime, bank_coords must also be runtime");
 
     // Calculate offsets for compile-time arguments
-    static constexpr uint32_t ArgsConfigCTAOFfset = CTA_OFFSET;
-    static constexpr uint32_t RankCTAOffset = ArgsConfigCTAOFfset + 1;
+    static constexpr uint32_t RankCTAOffset = CTA_OFFSET + 1;
     static constexpr uint32_t NumBanksCTAOffset = RankCTAOffset + (rank_is_crta ? 0 : 1);
 
     static constexpr uint32_t RankCT =
