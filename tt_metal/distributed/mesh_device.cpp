@@ -228,10 +228,6 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     return mesh_device;
 }
 
-void MeshDevice::enqueue_to_thread_pool(std::function<void()>&& f) { dispatch_thread_pool_->enqueue(std::move(f)); }
-
-void MeshDevice::wait_for_thread_pool() { dispatch_thread_pool_->wait(); }
-
 std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     const std::vector<int>& device_ids,
     size_t l1_small_size,

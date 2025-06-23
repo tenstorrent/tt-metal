@@ -44,7 +44,6 @@ private:
     void set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status);
     ProgramConfig& get_program_config(uint32_t index);
     ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program, uint64_t command_hash);
-    void compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device);
     void finalize_offsets(MeshDevice* mesh_device);
 
     std::unordered_map<std::size_t, ProgramBinaryStatus> program_binary_status_;
