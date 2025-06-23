@@ -9,8 +9,10 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2_FP16,
+    COMPUTE_KERNEL_CONFIG_LOFI,
     TILE_SIZE,
     dram_sharded_matmul_config,
+    dram_sharded_weight_config,
     find_prefill_grid,
     matmul_config,
 )
@@ -43,58 +45,70 @@ class MLP_1D(LightweightModule):
     """
 
     @staticmethod
-    def convert_weights(state_dict, output_path, mesh_device):
+    def convert_weights(hf_config, state_dict, output_path, mesh_device):
         """Convert PyTorch weights to TTNN format for 1D tensor parallelism.
 
         Args:
             state_dict: PyTorch state dict for this layer
             output_path: Path to save converted weights
             mesh_device: TTNN mesh device
+
+        Returns:
+            Dict mapping operation names to their TTNN weight file paths
         """
         output_path.mkdir(parents=True, exist_ok=True)
+        weight_config = {}
+        dim = hf_config.hidden_size
+        hidden_dim = hf_config.intermediate_size
+        num_devices = mesh_device.get_num_devices()
+        dram_grid_size = mesh_device.dram_grid_size()
+        w1_w3_mem_config = dram_sharded_weight_config(dim, hidden_dim // num_devices, dram_grid_size)
+        w2_mem_config = dram_sharded_weight_config(hidden_dim // num_devices, dim, dram_grid_size)
+        mem_config = {"w1": w1_w3_mem_config, "w2": w2_mem_config, "w3": w1_w3_mem_config}
+        shard_dims = {"w1": [-2, -1], "w2": [-1, -2], "w3": [-1, -2]}
 
         for hf_name, our_name in [("gate_proj", "w1"), ("down_proj", "w2"), ("up_proj", "w3")]:
             torch_weight = state_dict[f"{hf_name}.weight"]
-
-            # Transpose to match TTNN's expected format
             torch_weight = torch.transpose(torch_weight, -2, -1)
-
-            # Define sharding based on weight type
-            shard_dims = [-2, -1] if our_name == "w2" else [-1, -2]
-
-            # Convert to TTNN tensor with sharding
             ttnn_weight = ttnn.as_tensor(
                 torch_weight,
                 dtype=ttnn.bfloat4_b,  # 1x Galaxy config
                 device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=list(mesh_device.shape)),
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, dims=shard_dims[our_name], mesh_shape=list(mesh_device.shape)
+                ),
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=mem_config[our_name],
             )
 
             # Save to disk with standard naming - our_name must match the op name used in the model config
             # so that RunConfig can populate it with the actual weight tensors at runtime
-            ttnn.dump_tensor(output_path / f"{our_name}.weight", ttnn_weight)
-
-            # Deallocate after saving
+            # similarly ttnn.linear uses input_tensor_b for the weights, not "weight"
+            weight_file_path = output_path / f"{our_name}.input_tensor_b"
+            ttnn.dump_tensor(weight_file_path, ttnn_weight)
             ttnn.deallocate(ttnn_weight)
+
+            # Add to weight config
+            weight_config[our_name] = {"input_tensor_b": str(weight_file_path)}
+
+        return weight_config
 
     @staticmethod
     def prefill_model_config(hf_config, mesh_device):
         """Prefill model config for an MLP with 1D tensor parallelism.
 
         Args:
-            hf_config: HuggingFace model configuration dict
+            hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device
 
         Returns:
             Dict containing operator configurations for prefill mode
         """
         # Extract dimensions from HF config
-        dim = hf_config["hidden_size"]
+        dim = hf_config.hidden_size
         num_devices = mesh_device.get_num_devices()
 
-        config = {}
+        config = {"mode": "prefill"}
 
         # Maximum rows to process at once in prefill mode
         config["max_rows"] = 512 if is_blackhole() else 1024
@@ -142,36 +156,36 @@ class MLP_1D(LightweightModule):
         """Generate decode operator configuration for this MLP layer.
 
         Args:
-            hf_config: HuggingFace model configuration dict
+            hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device
 
         Returns:
             Dict containing operator configurations for decode mode
         """
         # Extract dimensions from HF config
-        dim = hf_config["hidden_size"]
-        hidden_dim = hf_config["intermediate_size"]
+        dim = hf_config.hidden_size
+        hidden_dim = hf_config.intermediate_size
         num_devices = mesh_device.get_num_devices()
 
-        config = {}
+        config = {"mode": "decode"}
 
         # Decode mode configurations
         config["w1"] = {
             "memory_config": ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             "program_config": dram_sharded_matmul_config(dim, hidden_dim, mesh_device),
-            "compute_kernel_config": COMPUTE_KERNEL_CONFIG_HIFI2_FP16,  # FP16 accumulation saves L1
+            "compute_kernel_config": COMPUTE_KERNEL_CONFIG_LOFI,  # FP16 accumulation saves L1
         }
 
         config["w3"] = {
             "memory_config": ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             "program_config": dram_sharded_matmul_config(dim, hidden_dim, mesh_device),  # Same as w1
-            "compute_kernel_config": COMPUTE_KERNEL_CONFIG_HIFI2_FP16,
+            "compute_kernel_config": COMPUTE_KERNEL_CONFIG_LOFI,
         }
 
         config["w2"] = {
             "memory_config": ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             "program_config": dram_sharded_matmul_config(hidden_dim // num_devices, dim, mesh_device),
-            "compute_kernel_config": COMPUTE_KERNEL_CONFIG_HIFI2_FP16,
+            "compute_kernel_config": COMPUTE_KERNEL_CONFIG_LOFI,
         }
 
         # Activation configurations
@@ -208,14 +222,14 @@ class MLP_1D(LightweightModule):
 
         Args:
             mesh_device: TTNN mesh device
-            hf_config: HuggingFace model configuration dict
+            hf_config: HuggingFace model configuration object
 
         """
         super().__init__()
 
         prefill_rows = 8  # TODO if BH = 10, if wh = 8
-        dim = hf_config["hidden_size"]
-        hidden_dim = hf_config["intermediate_size"]
+        dim = hf_config.hidden_size
+        hidden_dim = hf_config.intermediate_size
         num_devices = mesh_device.get_num_devices()
 
         mlp1_3_grid = find_prefill_grid(prefill_rows, dim // TILE_SIZE)

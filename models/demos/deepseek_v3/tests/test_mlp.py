@@ -15,7 +15,7 @@ import ttnn
 
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.reference.mlp import DeepseekV3MLP
-from models.demos.deepseek_v3.tt.mlp import MLP
+from models.demos.deepseek_v3.tt.mlp import MLP_1D
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.utility_functions import comp_pcc
 
@@ -28,7 +28,7 @@ def temp_dir():
 
 
 @pytest.fixture
-def config():
+def hf_config():
     """Load DeepSeek config for testing"""
     config = AutoConfig.from_pretrained("deepseek-ai/DeepSeek-R1-0528", trust_remote_code=True)
     config.num_hidden_layers = 1  # Reduce layers for testing
@@ -36,15 +36,9 @@ def config():
 
 
 @pytest.fixture
-def reference_model(config):
+def reference_model(hf_config):
     """Get the actual DeepSeek MLP model using local implementation."""
-    return DeepseekV3MLP(config)
-
-
-@pytest.fixture
-def mlp_module():
-    """Create MLP module instance."""
-    return MLP()
+    return DeepseekV3MLP(hf_config)
 
 
 # Unit Tests
@@ -52,29 +46,37 @@ def mlp_module():
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+            os.environ.get("MESH_DEVICE"), (1, ttnn.get_num_devices())
         )
     ],
     indirect=True,
 )
-def test_convert_weights(mlp_module, reference_model, config, temp_dir, mesh_device):
+def test_convert_weights(reference_model, hf_config, temp_dir, mesh_device):
     """Test that weights are correctly converted to TTNN format."""
     output_path = temp_dir / "weights"
 
-    # Convert weights - now handles HF names directly
-    mlp_module.convert_weights(reference_model.state_dict(), output_path, mesh_device)
+    # Convert weights - now returns weight_config
+    weight_config = MLP_1D.convert_weights(reference_model.state_dict(), output_path, mesh_device)
+
+    # Verify weight_config structure
+    assert "w1" in weight_config
+    assert "w2" in weight_config
+    assert "w3" in weight_config
+    assert "input_tensor_b" in weight_config["w1"]
+    assert "input_tensor_b" in weight_config["w2"]
+    assert "input_tensor_b" in weight_config["w3"]
 
     # Verify files exist
-    assert (output_path / "w1.weight").exists()
-    assert (output_path / "w2.weight").exists()
-    assert (output_path / "w3.weight").exists()
+    assert Path(weight_config["w1"]["input_tensor_b"]).exists()
+    assert Path(weight_config["w2"]["input_tensor_b"]).exists()
+    assert Path(weight_config["w3"]["input_tensor_b"]).exists()
 
     # Load and verify a weight
-    w1_ttnn = ttnn.load_tensor(str(output_path / "w1.weight"))
+    w1_ttnn = ttnn.load_tensor(weight_config["w1"]["input_tensor_b"])
     w1_torch = ttnn.to_torch(w1_ttnn)
 
     # Weight should be transposed from PyTorch format
-    expected_shape = (config.hidden_size, config.intermediate_size)
+    expected_shape = (hf_config.hidden_size, hf_config.intermediate_size // mesh_device.get_num_devices())
     assert w1_torch.shape[-2:] == expected_shape
 
     # Verify the values match (accounting for transpose and bfloat8 conversion)
@@ -90,102 +92,84 @@ def test_convert_weights(mlp_module, reference_model, config, temp_dir, mesh_dev
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+            os.environ.get("MESH_DEVICE"), (1, ttnn.get_num_devices())
         )
     ],
     indirect=True,
 )
-def test_prefill_config_generation(mlp_module, config, mesh_device):
+def test_prefill_config_generation(hf_config, mesh_device):
     """Test prefill config generation."""
-    hf_config = {
-        "hidden_size": config.hidden_size,
-        "intermediate_size": config.intermediate_size,
-        "hidden_act": config.hidden_act,
-    }
-
-    model_config = mlp_module.prefill_model_config(hf_config, mesh_device)
+    model_config = MLP_1D.prefill_model_config(hf_config, mesh_device)
 
     # Check required keys exist
-    assert "w1.memory_config" in model_config
-    assert "w1.program_config" in model_config
-    assert "w1.compute_kernel_config" in model_config
+    assert "memory_config" in model_config["w1"]
+    assert "compute_kernel_config" in model_config["w1"]
     assert "max_rows" in model_config
-    assert "all_reduce.topology" in model_config
+    assert "topology" in model_config["all_reduce"]
 
-    # Verify program config is a list for prefill (chunk-dependent)
-    assert isinstance(model_config["w1.program_config"], list)
-    assert len(model_config["w1.program_config"]) == 8  # 8 different chunk sizes
+    # program_config should not be present, it's dynamic
+    assert "program_config" not in model_config["w1"]
 
 
 @pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+            os.environ.get("MESH_DEVICE"), (1, ttnn.get_num_devices())
         )
     ],
     indirect=True,
 )
-def test_decode_config_generation(mlp_module, config, mesh_device):
+def test_decode_config_generation(hf_config, mesh_device):
     """Test decode config generation."""
-    hf_config = {
-        "hidden_size": config.hidden_size,
-        "intermediate_size": config.intermediate_size,
-        "hidden_act": config.hidden_act,
-    }
-
-    model_config = mlp_module.decode_model_config(hf_config, mesh_device)
+    model_config = MLP_1D.decode_model_config(hf_config, mesh_device)
 
     # Check required keys exist
-    assert "w1.memory_config" in model_config
-    assert "w1.program_config" in model_config
-    assert "w1.compute_kernel_config" in model_config
+    assert "memory_config" in model_config["w1"]
+    assert "program_config" in model_config["w1"]
+    assert "compute_kernel_config" in model_config["w1"]
 
     # Decode should use L1 sharding
-    assert model_config["w1.memory_config"] == ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+    assert model_config["w1"]["memory_config"] == ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
 
     # Program config should not be a list for decode
-    assert not isinstance(model_config["w1.program_config"], list)
+    assert not isinstance(model_config["w1"]["program_config"], list)
 
 
 @pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+            os.environ.get("MESH_DEVICE"), (1, ttnn.get_num_devices())
         )
     ],
     indirect=True,
 )
-def test_run_config_creation(mlp_module, reference_model, config, temp_dir, mesh_device):
+def test_run_config_creation(reference_model, hf_config, temp_dir, mesh_device):
     """Test creating runtime config from ModelConfig and weights."""
     # Get state dict from actual model - pass directly to convert_weights
     hf_state_dict = reference_model.state_dict()
 
-    # First convert weights
+    # First convert weights and get weight_config
     weights_path = temp_dir / "weights"
-    mlp_module.convert_weights(hf_state_dict, weights_path, mesh_device)
+    weight_config = MLP_1D.convert_weights(hf_config, hf_state_dict, weights_path, mesh_device)
 
     # Generate model config
-    hf_config = {
-        "hidden_size": config.hidden_size,
-        "intermediate_size": config.intermediate_size,
-        "hidden_act": config.hidden_act,
-    }
-    model_config = mlp_module.decode_model_config(hf_config, mesh_device)
+    model_config = MLP_1D.decode_model_config(hf_config, mesh_device)
     model_config["mode"] = "decode"
 
-    # Create RunConfig directly from dict (no JSON serialization)
-    run_config = create_run_config(model_config, weights_path, mesh_device)
+    # Create RunConfig using both weight_config and model_config
+    run_config = create_run_config(model_config, weight_config, mesh_device)
 
     # Verify we can access operation configs
-    assert hasattr(run_config, "w1")
-    assert hasattr(run_config, "w2")
-    assert hasattr(run_config, "w3")
-    assert hasattr(run_config, "all_reduce")
+    assert "w1" in run_config
+    assert "w2" in run_config
+    assert "w3" in run_config
+    assert "all_reduce" in run_config
+    assert "input_tensor_b" in run_config["w1"]
 
     # Verify mode is accessible
-    assert run_config.mode == "decode"
+    assert run_config["mode"] == "decode"
 
 
 # Integration Tests
@@ -195,7 +179,7 @@ def test_run_config_creation(mlp_module, reference_model, config, temp_dir, mesh
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+            os.environ.get("MESH_DEVICE"), (1, ttnn.get_num_devices())
         )
     ],
     indirect=True,
@@ -211,9 +195,8 @@ def test_run_config_creation(mlp_module, reference_model, config, temp_dir, mesh
 def test_forward_pass(
     mode,
     seq_len,
-    mlp_module,
     reference_model,
-    config,
+    hf_config,
     temp_dir,
     mesh_device,
 ):
@@ -223,56 +206,40 @@ def test_forward_pass(
     # Get state dict from actual model - pass directly to convert_weights
     hf_state_dict = reference_model.state_dict()
 
-    # Setup: Convert weights
+    # Setup: Convert weights and get weight_config
     weights_path = temp_dir / "weights"
-    mlp_module.convert_weights(hf_state_dict, weights_path, mesh_device)
+    weight_config = MLP_1D.convert_weights(hf_config, hf_state_dict, weights_path, mesh_device)
 
     # Generate appropriate config
-    hf_config = {
-        "hidden_size": config.hidden_size,
-        "intermediate_size": config.intermediate_size,
-        "hidden_act": config.hidden_act,
-    }
-
     if mode == "prefill":
-        model_config = mlp_module.prefill_model_config(hf_config, mesh_device)
+        model_config = MLP_1D.prefill_model_config(hf_config, mesh_device)
     else:
-        model_config = mlp_module.decode_model_config(hf_config, mesh_device)
-    model_config["mode"] = mode
+        model_config = MLP_1D.decode_model_config(hf_config, mesh_device)
 
-    # Create RunConfig directly from dict instead of saving/loading
-    run_config = create_run_config(model_config, weights_path, mesh_device)
+    # Create RunConfig using both weight_config and model_config
+    run_config = create_run_config(model_config, weight_config, mesh_device)
+
+    # Instantiate the model to get dynamic program configs for prefill
+    tt_mlp = MLP_1D(mesh_device, hf_config)
 
     # Create input tensor
-    torch_input = torch.randn(batch_size, 1, seq_len, config.hidden_size)
+    torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
 
     # Reference forward pass
     reference_output = reference_model(torch_input)
 
     # Convert input to TTNN
-    if mode == "decode":
-        # For decode, use DRAM for simplicity
-        tt_input = ttnn.from_torch(
-            torch_input,
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-        )
-    else:
-        # For prefill, use DRAM
-        tt_input = ttnn.from_torch(
-            torch_input,
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-        )
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
 
     # TTNN forward pass
-    tt_output = mlp_module.forward(tt_input, run_config, mesh_device)
+    tt_output = tt_mlp.forward(tt_input, run_config, mesh_device)
 
     # Convert output back to torch
     tt_output_torch = ttnn.to_torch(tt_output)
@@ -288,7 +255,6 @@ def test_forward_pass(
 
     # Cleanup
     ttnn.deallocate(tt_output)
-    ttnn.deallocate(tt_input)
 
 
 if __name__ == "__main__":

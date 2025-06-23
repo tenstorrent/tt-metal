@@ -374,6 +374,23 @@ def create_sharded_norm_config(grid, dim, tile_padded_batch_rows):
     )
 
 
+def dram_sharded_weight_config(k, n, dram_grid_size):
+    """Create DRAM-sharded memory config for width-sharded tensors"""
+    dram_cores = dram_grid_size.x  # WH has 12 dram cores, P150 has 8, P100 has 7
+    assert dram_grid_size.y == 1, "Current dram sharding assumes y dim is 1"
+    dram_weight_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1),
+            )
+        }
+    )
+    padded_size = math.ceil(n / (TILE_SIZE * dram_cores)) * (TILE_SIZE * dram_cores)
+    shard_spec = ttnn.ShardSpec(dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+
 def dram_sharded_matmul_config(k, n, mesh_device):
     """Generate dram-sharded matmul configuration.
 
@@ -427,5 +444,5 @@ def matmul_config(
 
 def base_model_name(hf_config):
     """Get the base model name from the HuggingFace config."""
-    model_name = hf_config["name_or_path"].split("/")[-1]
+    model_name = hf_config.name_or_path.split("/")[-1]
     return model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
