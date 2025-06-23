@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from loguru import logger
 
 
 def main():
@@ -25,17 +26,17 @@ def main():
             device=device,
         )
 
-        # Print input tensors
-        print("Input tensors:")
-        print(tt_tensor1)
-        print(tt_tensor2)
+        # Log input tensors
+        logger.info("Input tensors:")
+        logger.info(tt_tensor1)
+        logger.info(tt_tensor2)
 
         # Perform eltwise addition on the device
         tt_result = ttnn.add(tt_tensor1, tt_tensor2)
 
-        # Print output tensor
-        print("Output tensor:")
-        print(tt_result)
+        # Log output tensor
+        logger.info("Output tensor:")
+        logger.info(tt_result)
 
     finally:
         # Close Tenstorrent device

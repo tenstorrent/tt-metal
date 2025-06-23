@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
+from loguru import logger
 
 
 # Define MLP model
@@ -47,7 +48,7 @@ def main():
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-        print(f"Epoch {epoch+1}, Loss: {total_loss:.4f}")
+        logger.info(f"Epoch {epoch+1}, Loss: {total_loss:.4f}")
 
     # Save weights
     weights = {
@@ -59,7 +60,7 @@ def main():
         "b3": model.fc3.bias.detach().clone(),  # [10]
     }
     torch.save(weights, "mlp_mnist_weights.pt")
-    print("Weights saved to mlp_mnist_weights.pt")
+    logger.info("Weights saved to mlp_mnist_weights.pt")
 
 
 if __name__ == "__main__":

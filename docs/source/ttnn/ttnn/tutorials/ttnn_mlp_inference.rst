@@ -22,6 +22,7 @@ Amongst these, torchvision is used to load the MNIST dataset, and ttnn is used f
    import torchvision.transforms as transforms
    import numpy as np
    import ttnn
+   from loguru import logger
 
 Open Tenstorrent device
 -----------------------
@@ -150,12 +151,12 @@ Final layer with 10 output (for digits 0-9). No ReLU activation here, as this is
    correct += predicted_label == label.item()
    total += 1
 
-   print(f"Sample {i+1}: Predicted={predicted_label}, Actual={label.item()}")
+   logger.info(f"Sample {i+1}: Predicted={predicted_label}, Actual={label.item()}")
 
 Full example and output
 -----------------------
 
-Lets put everything together in a complete example that can be run directly. This example will open a Tenstorrent device, create two tensors, perform the addition, and print the output tensor.
+Lets put everything together in a complete example that can be run directly. This example will open a Tenstorrent device, create two tensors, perform the addition, and log the output tensor.
 You can run the provided ``train_and_export_mlp.py`` script to generate the weights to a file named ``mlp_mnist_weights.pt``.
 
 .. literalinclude:: ttnn_tutorials_basic_python/ttnn_mlp_inference_mnist.py
@@ -168,11 +169,12 @@ Running this script will output the input tensors and the result of their additi
 
 .. code-block:: console
 
+   2025-06-23 09:51:47.723 | INFO     | __main__:main:17 -
    --- MLP Inference Using TT-NN on MNIST ---
-   Sample 1: Predicted=7, Actual=7
-   Sample 2: Predicted=2, Actual=2
-   Sample 3: Predicted=1, Actual=1
-   Sample 4: Predicted=0, Actual=0
-   Sample 5: Predicted=4, Actual=4
-
+   2025-06-23 09:52:10.480 | INFO     | __main__:main:85 - Sample 1: Predicted=7, Actual=7
+   2025-06-23 09:52:10.491 | INFO     | __main__:main:85 - Sample 2: Predicted=2, Actual=2
+   2025-06-23 09:52:10.499 | INFO     | __main__:main:85 - Sample 3: Predicted=1, Actual=1
+   2025-06-23 09:52:10.506 | INFO     | __main__:main:85 - Sample 4: Predicted=0, Actual=0
+   2025-06-23 09:52:10.514 | INFO     | __main__:main:85 - Sample 5: Predicted=4, Actual=4
+   2025-06-23 09:52:10.514 | INFO     | __main__:main:87 -
    TT-NN MLP Inference Accuracy: 5/5 = 100.00%

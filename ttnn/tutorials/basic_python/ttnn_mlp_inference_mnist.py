@@ -6,6 +6,7 @@ import torchvision
 import torchvision.transforms as transforms
 import numpy as np
 import ttnn
+from loguru import logger
 
 
 def main():
@@ -13,7 +14,7 @@ def main():
     device = ttnn.open_device(device_id=0)
 
     try:
-        print("\n--- MLP Inference Using TT-NN on MNIST ---")
+        logger.info("\n--- MLP Inference Using TT-NN on MNIST ---")
 
         # Load MNIST data
         transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
@@ -81,9 +82,9 @@ def main():
             correct += predicted_label == label.item()
             total += 1
 
-            print(f"Sample {i+1}: Predicted={predicted_label}, Actual={label.item()}")
+            logger.info(f"Sample {i+1}: Predicted={predicted_label}, Actual={label.item()}")
 
-        print(f"\nTT-NN MLP Inference Accuracy: {correct}/{total} = {100.0 * correct / total:.2f}%")
+        logger.info(f"\nTT-NN MLP Inference Accuracy: {correct}/{total} = {100.0 * correct / total:.2f}%")
 
     finally:
         ttnn.close_device(device)

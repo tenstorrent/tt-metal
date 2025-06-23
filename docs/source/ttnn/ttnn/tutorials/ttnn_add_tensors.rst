@@ -16,6 +16,7 @@ Import the necessary libraries
 .. code-block:: python
 
    import ttnn
+   from loguru import logger
 
 Open Tenstorrent device
 -----------------------
@@ -54,21 +55,21 @@ Create two TT-NN tensors, and initialize them with values 1 and 2 respectively. 
 Perform the addition operation and convert back
 -----------------------------------------------
 
-Now we can perform the addition operation on the two TT-NN tensors and print out the result.
+Now we can perform the addition operation on the two TT-NN tensors and log out the result.
 
 .. code-block:: python
 
    # Perform eltwise addition on the device
    tt_result = ttnn.add(tt_tensor1, tt_tensor2)
 
-   # Print output tensor
-   print("Output tensor:")
-   print(tt_result)
+   # Log output tensor
+   logger.info("Output tensor:")
+   logger.info(tt_result)
 
 Full example and output
 -----------------------
 
-Lets put everything together in a complete example that can be run directly. This example will open a Tenstorrent device, create two tensors, perform the addition, and print the output tensor.
+Lets put everything together in a complete example that can be run directly. This example will open a Tenstorrent device, create two tensors, perform the addition, and log the output tensor.
 
 .. literalinclude:: ttnn_tutorials_basic_python/ttnn_add_tensors.py
    :caption: Source Code
@@ -78,20 +79,20 @@ Running this script will output the input tensors and the result of their additi
 .. code-block:: console
 
    $ python3 $TT_METAL_HOME/ttnn/tutorials/basic_python/ttnn_add_tensors.py
-   Input tensors:
-   ttnn.Tensor([[ 1.00000,  1.00000,  ...,  1.00000,  1.00000],
-             [ 1.00000,  1.00000,  ...,  1.00000,  1.00000],
-             ...,
-             [ 1.00000,  1.00000,  ...,  1.00000,  1.00000],
-             [ 1.00000,  1.00000,  ...,  1.00000,  1.00000]], shape=Shape([32, 32]), dtype=DataType::FLOAT32, layout=Layout::TILE)
-   ttnn.Tensor([[ 2.00000,  2.00000,  ...,  2.00000,  2.00000],
-             [ 2.00000,  2.00000,  ...,  2.00000,  2.00000],
-             ...,
-             [ 2.00000,  2.00000,  ...,  2.00000,  2.00000],
-             [ 2.00000,  2.00000,  ...,  2.00000,  2.00000]], shape=Shape([32, 32]), dtype=DataType::FLOAT32, layout=Layout::TILE)
-   Output tensor:
-   ttnn.Tensor([[ 3.00000,  3.00000,  ...,  3.00000,  3.00000],
-             [ 3.00000,  3.00000,  ...,  3.00000,  3.00000],
-             ...,
-             [ 3.00000,  3.00000,  ...,  3.00000,  3.00000],
-             [ 3.00000,  3.00000,  ...,  3.00000,  3.00000]], shape=Shape([32, 32]), dtype=DataType::FLOAT32, layout=Layout::TILE)
+   2025-06-23 09:36:58.211 | INFO     | __main__:main:29 - Input tensors:
+   2025-06-23 09:36:58.211 | INFO     | __main__:main:30 - ttnn.Tensor([[ 1.00000,  1.00000,  ...,  1.00000,  1.00000],
+               [ 1.00000,  1.00000,  ...,  1.00000,  1.00000],
+               ...,
+               [ 1.00000,  1.00000,  ...,  1.00000,  1.00000],
+               [ 1.00000,  1.00000,  ...,  1.00000,  1.00000]], shape=Shape([32, 32]), dtype=DataType::FLOAT32, layout=Layout::TILE)
+   2025-06-23 09:36:58.211 | INFO     | __main__:main:31 - ttnn.Tensor([[ 2.00000,  2.00000,  ...,  2.00000,  2.00000],
+               [ 2.00000,  2.00000,  ...,  2.00000,  2.00000],
+               ...,
+               [ 2.00000,  2.00000,  ...,  2.00000,  2.00000],
+               [ 2.00000,  2.00000,  ...,  2.00000,  2.00000]], shape=Shape([32, 32]), dtype=DataType::FLOAT32, layout=Layout::TILE)
+   2025-06-23 09:37:00.524 | INFO     | __main__:main:37 - Output tensor:
+   2025-06-23 09:37:00.525 | INFO     | __main__:main:38 - ttnn.Tensor([[ 3.00000,  3.00000,  ...,  3.00000,  3.00000],
+               [ 3.00000,  3.00000,  ...,  3.00000,  3.00000],
+               ...,
+               [ 3.00000,  3.00000,  ...,  3.00000,  3.00000],
+               [ 3.00000,  3.00000,  ...,  3.00000,  3.00000]], shape=Shape([32, 32]), dtype=DataType::FLOAT32, layout=Layout::TILE)

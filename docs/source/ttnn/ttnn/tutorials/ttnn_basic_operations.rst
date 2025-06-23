@@ -19,6 +19,7 @@ Import the necessary libraries
    import torch
    import numpy as np
    import ttnn
+   from loguru import logger
 
 Open Tenstorrent device
 -----------------------
@@ -49,7 +50,7 @@ Create a tensor for our tests and fill with different values. We will use this a
 
 .. code-block:: python
 
-   print("\n--- TT-NN Tensor Creation with Tiles (32x32) ---")
+   logger.info("\n--- TT-NN Tensor Creation with Tiles (32x32) ---")
    host_rand = torch.rand((32, 32), dtype=torch.float32)
 
 Convert Host Tensors to TT-NN Tiled Tensors or Create Natively on Device
@@ -94,7 +95,7 @@ Lets use some of the tensors we created and perform different operations on them
 
 .. code-block:: python
 
-   print("\n--- TT-NN Tensor Operations on (32x32) Tiles ---")
+   logger.info("\n--- TT-NN Tensor Operations on (32x32) Tiles ---")
    add_result = ttnn.add(tt_t3, tt_t4)
    mul_result = ttnn.mul(tt_t4, tt_t5)
    matmul_result = ttnn.matmul(tt_t3, tt_t4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -106,7 +107,7 @@ Lets simulated broadcasting a row vector across a tile. This is useful for opera
 
 .. code-block:: python
 
-   print("\n--- Simulated Broadcasting (32x32 + Broadcasted Row Vector) ---")
+   logger.info("\n--- Simulated Broadcasting (32x32 + Broadcasted Row Vector) ---")
    broadcast_vector = torch.tensor([[1.0] * 32], dtype=torch.float32).repeat(32, 1)
    broadcast_tt = to_tt_tile(broadcast_vector)
    broadcast_add_result = ttnn.add(tt_t4, broadcast_tt)
@@ -115,7 +116,7 @@ Lets simulated broadcasting a row vector across a tile. This is useful for opera
 Full example and output
 -----------------------
 
-Lets put everything together in a complete example that can be run directly. This example will open a Tenstorrent device, create some input tensors and perform operations on them, print the output tensors, and close the device.
+Lets put everything together in a complete example that can be run directly. This example will open a Tenstorrent device, create some input tensors and perform operations on them, log the output tensors, and close the device.
 
 .. literalinclude:: ttnn_tutorials_basic_python/ttnn_basic_operations.py
    :caption: Source Code
@@ -125,85 +126,86 @@ Running this script will output the operation results as shown below
 .. code-block:: console
 
    $ python3 $TT_METAL_HOME/ttnn/tutorials/basic_python/ttnn_basic_operations.py
+   2025-06-23 09:47:12.093 | INFO     | __main__:main:19 -
    --- TT-NN Tensor Creation with Tiles (32x32) ---
-   Tensor from fill value 1:
+   2025-06-23 09:47:12.117 | INFO     | __main__:main:47 - Tensor from fill value 1:
    tensor([[1., 1., 1.,  ..., 1., 1., 1.],
-        [1., 1., 1.,  ..., 1., 1., 1.],
-        [1., 1., 1.,  ..., 1., 1., 1.],
-        ...,
-        [1., 1., 1.,  ..., 1., 1., 1.],
-        [1., 1., 1.,  ..., 1., 1., 1.],
-        [1., 1., 1.,  ..., 1., 1., 1.]])
-   Zeros:
+         [1., 1., 1.,  ..., 1., 1., 1.],
+         [1., 1., 1.,  ..., 1., 1., 1.],
+         ...,
+         [1., 1., 1.,  ..., 1., 1., 1.],
+         [1., 1., 1.,  ..., 1., 1., 1.],
+         [1., 1., 1.,  ..., 1., 1., 1.]])
+   2025-06-23 09:47:12.117 | INFO     | __main__:main:48 - Zeros:
    tensor([[0., 0., 0.,  ..., 0., 0., 0.],
-        [0., 0., 0.,  ..., 0., 0., 0.],
-        [0., 0., 0.,  ..., 0., 0., 0.],
-        ...,
-        [0., 0., 0.,  ..., 0., 0., 0.],
-        [0., 0., 0.,  ..., 0., 0., 0.],
-        [0., 0., 0.,  ..., 0., 0., 0.]], dtype=torch.bfloat16)
-   Ones:
+         [0., 0., 0.,  ..., 0., 0., 0.],
+         [0., 0., 0.,  ..., 0., 0., 0.],
+         ...,
+         [0., 0., 0.,  ..., 0., 0., 0.],
+         [0., 0., 0.,  ..., 0., 0., 0.],
+         [0., 0., 0.,  ..., 0., 0., 0.]], dtype=torch.bfloat16)
+   2025-06-23 09:47:12.118 | INFO     | __main__:main:49 - Ones:
    tensor([[1., 1., 1.,  ..., 1., 1., 1.],
-        [1., 1., 1.,  ..., 1., 1., 1.],
-        [1., 1., 1.,  ..., 1., 1., 1.],
-        ...,
-        [1., 1., 1.,  ..., 1., 1., 1.],
-        [1., 1., 1.,  ..., 1., 1., 1.],
-        [1., 1., 1.,  ..., 1., 1., 1.]], dtype=torch.bfloat16)
-   Random:
-   tensor([[0.7656, 0.8242, 0.4004,  ..., 0.2656, 0.1973, 0.2930],
-        [0.7617, 0.0187, 0.8945,  ..., 0.7891, 0.1875, 0.8828],
-        [0.8398, 0.6719, 0.5273,  ..., 0.1709, 0.3672, 0.8438],
-        ...,
-        [0.7695, 0.1118, 0.9961,  ..., 0.1758, 0.2207, 0.6250],
-        [0.5391, 0.6602, 0.0033,  ..., 0.0845, 0.0630, 0.5273],
-        [0.3340, 0.0104, 0.9062,  ..., 0.6836, 0.1367, 0.4746]],
-       dtype=torch.bfloat16)
-   From expanded NumPy (TT-NN):
+         [1., 1., 1.,  ..., 1., 1., 1.],
+         [1., 1., 1.,  ..., 1., 1., 1.],
+         ...,
+         [1., 1., 1.,  ..., 1., 1., 1.],
+         [1., 1., 1.,  ..., 1., 1., 1.],
+         [1., 1., 1.,  ..., 1., 1., 1.]], dtype=torch.bfloat16)
+   2025-06-23 09:47:12.119 | INFO     | __main__:main:50 - Random:
+   tensor([[0.1367, 0.3320, 0.8125,  ..., 0.7969, 0.6250, 0.8906],
+         [0.6914, 0.1377, 0.2480,  ..., 0.6406, 0.0109, 0.2080],
+         [0.6992, 0.8750, 0.6133,  ..., 0.3086, 0.6562, 0.6016],
+         ...,
+         [0.1455, 0.8672, 0.0221,  ..., 0.3926, 0.1074, 0.9414],
+         [0.5859, 0.1426, 0.8906,  ..., 0.5820, 0.0182, 0.7031],
+         [0.8711, 0.1377, 0.7305,  ..., 0.4102, 0.2812, 0.6836]],
+         dtype=torch.bfloat16)
+   2025-06-23 09:47:12.120 | INFO     | __main__:main:51 - From expanded NumPy (TT-NN):
    tensor([[5., 5., 5.,  ..., 6., 6., 6.],
-        [5., 5., 5.,  ..., 6., 6., 6.],
-        [5., 5., 5.,  ..., 6., 6., 6.],
-        ...,
-        [7., 7., 7.,  ..., 8., 8., 8.],
-        [7., 7., 7.,  ..., 8., 8., 8.],
-        [7., 7., 7.,  ..., 8., 8., 8.]], dtype=torch.bfloat16)
-
+         [5., 5., 5.,  ..., 6., 6., 6.],
+         [5., 5., 5.,  ..., 6., 6., 6.],
+         ...,
+         [7., 7., 7.,  ..., 8., 8., 8.],
+         [7., 7., 7.,  ..., 8., 8., 8.],
+         [7., 7., 7.,  ..., 8., 8., 8.]])
+   2025-06-23 09:47:12.120 | INFO     | __main__:main:53 -
    --- TT-NN Tensor Operations on (32x32) Tiles ---
-   Addition:
-   tensor([[1.7656, 1.8281, 1.3984,  ..., 1.2656, 1.1953, 1.2969],
-        [1.7656, 1.0156, 1.8984,  ..., 1.7891, 1.1875, 1.8828],
-        [1.8438, 1.6719, 1.5312,  ..., 1.1719, 1.3672, 1.8438],
-        ...,
-        [1.7734, 1.1094, 2.0000,  ..., 1.1797, 1.2188, 1.6250],
-        [1.5391, 1.6641, 1.0000,  ..., 1.0859, 1.0625, 1.5312],
-        [1.3359, 1.0078, 1.9062,  ..., 1.6875, 1.1406, 1.4766]],
-       dtype=torch.bfloat16)
-   Element-wise Multiplication:
-   tensor([[3.8281, 4.1250, 2.0000,  ..., 1.5938, 1.1875, 1.7578],
-        [3.8125, 0.0933, 4.4688,  ..., 4.7500, 1.1250, 5.3125],
-        [4.1875, 3.3594, 2.6406,  ..., 1.0234, 2.2031, 5.0625],
-        ...,
-        [5.3750, 0.7812, 6.9688,  ..., 1.4062, 1.7656, 5.0000],
-        [3.7812, 4.6250, 0.0227,  ..., 0.6758, 0.5039, 4.2188],
-        [2.3438, 0.0728, 6.3438,  ..., 5.4688, 1.0938, 3.7969]],
-       dtype=torch.bfloat16)
-   Matrix Multiplication:
-   tensor([[19.2500, 15.6250, 16.8750,  ..., 13.8125, 13.5000, 18.8750],
-        [19.2500, 15.6250, 16.8750,  ..., 13.8125, 13.5000, 18.8750],
-        [19.2500, 15.6250, 16.8750,  ..., 13.8125, 13.5000, 18.8750],
-        ...,
-        [19.2500, 15.6250, 16.8750,  ..., 13.8125, 13.5000, 18.8750],
-        [19.2500, 15.6250, 16.8750,  ..., 13.8125, 13.5000, 18.8750],
-        [19.2500, 15.6250, 16.8750,  ..., 13.8125, 13.5000, 18.8750]],
-       dtype=torch.bfloat16)
-
+   2025-06-23 09:47:18.928 | INFO     | __main__:main:59 - Addition:
+   tensor([[1.1406, 1.3359, 1.8125,  ..., 1.7969, 1.6250, 1.8906],
+         [1.6953, 1.1406, 1.2500,  ..., 1.6406, 1.0078, 1.2109],
+         [1.7031, 1.8750, 1.6172,  ..., 1.3125, 1.6562, 1.6016],
+         ...,
+         [1.1484, 1.8672, 1.0234,  ..., 1.3906, 1.1094, 1.9453],
+         [1.5859, 1.1406, 1.8906,  ..., 1.5859, 1.0156, 1.7031],
+         [1.8750, 1.1406, 1.7344,  ..., 1.4141, 1.2812, 1.6875]],
+         dtype=torch.bfloat16)
+   2025-06-23 09:47:18.929 | INFO     | __main__:main:62 - Element-wise Multiplication:
+   tensor([[0.6836, 1.6641, 4.0625,  ..., 4.7812, 3.7500, 5.3438],
+         [3.4531, 0.6875, 1.2422,  ..., 3.8438, 0.0654, 1.2500],
+         [3.5000, 4.3750, 3.0625,  ..., 1.8516, 3.9375, 3.6094],
+         ...,
+         [1.0156, 6.0625, 0.1543,  ..., 3.1406, 0.8594, 7.5312],
+         [4.0938, 1.0000, 6.2500,  ..., 4.6562, 0.1455, 5.6250],
+         [6.0938, 0.9648, 5.1250,  ..., 3.2812, 2.2500, 5.4688]],
+         dtype=torch.bfloat16)
+   2025-06-23 09:47:18.930 | INFO     | __main__:main:65 - Matrix Multiplication:
+   tensor([[17.5000, 13.4375, 16.7500,  ..., 15.2500, 13.0625, 17.2500],
+         [17.5000, 13.4375, 16.7500,  ..., 15.2500, 13.0625, 17.2500],
+         [17.5000, 13.4375, 16.7500,  ..., 15.2500, 13.0625, 17.2500],
+         ...,
+         [17.5000, 13.4375, 16.7500,  ..., 15.2500, 13.0625, 17.2500],
+         [17.5000, 13.4375, 16.7500,  ..., 15.2500, 13.0625, 17.2500],
+         [17.5000, 13.4375, 16.7500,  ..., 15.2500, 13.0625, 17.2500]],
+         dtype=torch.bfloat16)
+   2025-06-23 09:47:18.930 | INFO     | __main__:main:67 -
    --- Simulated Broadcasting (32x32 + Broadcasted Row Vector) ---
-   Broadcast Add Result (TT-NN):
-   tensor([[1.7656, 1.8281, 1.3984,  ..., 1.2656, 1.1953, 1.2969],
-        [1.7656, 1.0156, 1.8984,  ..., 1.7891, 1.1875, 1.8828],
-        [1.8438, 1.6719, 1.5312,  ..., 1.1719, 1.3672, 1.8438],
-        ...,
-        [1.7734, 1.1094, 2.0000,  ..., 1.1797, 1.2188, 1.6250],
-        [1.5391, 1.6641, 1.0000,  ..., 1.0859, 1.0625, 1.5312],
-        [1.3359, 1.0078, 1.9062,  ..., 1.6875, 1.1406, 1.4766]],
-       dtype=torch.bfloat16)
+   2025-06-23 09:47:18.932 | INFO     | __main__:main:71 - Broadcast Add Result (TT-NN):
+   tensor([[1.1406, 1.3359, 1.8125,  ..., 1.7969, 1.6250, 1.8906],
+         [1.6953, 1.1406, 1.2500,  ..., 1.6406, 1.0078, 1.2109],
+         [1.7031, 1.8750, 1.6172,  ..., 1.3125, 1.6562, 1.6016],
+         ...,
+         [1.1484, 1.8672, 1.0234,  ..., 1.3906, 1.1094, 1.9453],
+         [1.5859, 1.1406, 1.8906,  ..., 1.5859, 1.0156, 1.7031],
+         [1.8750, 1.1406, 1.7344,  ..., 1.4141, 1.2812, 1.6875]],
+         dtype=torch.bfloat16)
