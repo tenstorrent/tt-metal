@@ -24,12 +24,6 @@ COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d11
     ((50),),
 )
 @pytest.mark.parametrize(
-    "classifier_free_guidance",
-    [
-        (True),
-    ],
-)
-@pytest.mark.parametrize(
     "vae_on_device",
     [
         (True),
@@ -44,7 +38,6 @@ def test_accuracy_sdxl(
     use_program_cache,
     is_ci_env,
     num_inference_steps,
-    classifier_free_guidance,
     vae_on_device,
     captions_path,
     coco_statistics_path,
@@ -78,7 +71,6 @@ def test_accuracy_sdxl(
         is_ci_env,
         prompts[start_from : start_from + num_prompts],
         num_inference_steps,
-        classifier_free_guidance,
         vae_on_device,
         evaluation_range,
     )

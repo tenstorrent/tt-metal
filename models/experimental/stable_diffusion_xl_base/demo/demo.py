@@ -22,9 +22,7 @@ import gc
 
 
 @torch.no_grad()
-def run_demo_inference(
-    ttnn_device, is_ci_env, prompts, num_inference_steps, classifier_free_guidance, vae_on_device, evaluation_range
-):
+def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae_on_device, evaluation_range):
     batch_size = ttnn_device.get_num_devices()
 
     start_from, _ = evaluation_range
@@ -33,19 +31,10 @@ def run_demo_inference(
     if isinstance(prompts, str):
         prompts = [prompts]
 
-    needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
+    needed_padding = batch_size - len(prompts) % batch_size
     prompts = prompts + [""] * needed_padding
 
-    # In case of classifier free guidance this is set:
-    # - guidance_scale = 5.0
-    # - 2 runs of unet per iteration
-    # For non classifier free guidance do:
-    # - guidance_scale = 1.0
-    # - 1 run of unet per iteration
-    if classifier_free_guidance == True:
-        guidance_scale = 5.0
-    else:
-        guidance_scale = 1.0
+    guidance_scale = 5.0
 
     # 0. Set up default height and width for unet
     height = 1024
@@ -103,7 +92,7 @@ def run_demo_inference(
             prompt_2=None,
             device=cpu_device,
             num_images_per_prompt=1,
-            do_classifier_free_guidance=classifier_free_guidance,
+            do_classifier_free_guidance=True,
             negative_prompt=None,
             negative_prompt_2=None,
             prompt_embeds=None,
@@ -174,84 +163,49 @@ def run_demo_inference(
     )
     negative_add_time_ids = add_time_ids
 
-    if classifier_free_guidance:
-        torch_prompt_embeds = torch.stack([negative_prompt_embeds_torch, prompt_embeds_torch], dim=1)
-        torch_add_text_embeds = torch.stack([negative_pooled_prompt_embeds_torch, pooled_prompt_embeds_torch], dim=1)
-        ttnn_prompt_embeds = ttnn.from_torch(
-            torch_prompt_embeds,
-            dtype=ttnn.bfloat16,
-            device=ttnn_device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
-        )
-        ttnn_add_text_embeds = ttnn.from_torch(
-            torch_add_text_embeds,
-            dtype=ttnn.bfloat16,
-            device=ttnn_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
-        )
+    torch_prompt_embeds = torch.stack([negative_prompt_embeds_torch, prompt_embeds_torch], dim=1)
+    torch_add_text_embeds = torch.stack([negative_pooled_prompt_embeds_torch, pooled_prompt_embeds_torch], dim=1)
+    ttnn_prompt_embeds = ttnn.from_torch(
+        torch_prompt_embeds,
+        dtype=ttnn.bfloat16,
+        device=ttnn_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
+    )
+    ttnn_add_text_embeds = ttnn.from_torch(
+        torch_add_text_embeds,
+        dtype=ttnn.bfloat16,
+        device=ttnn_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
+    )
 
-        ttnn_add_time_id1 = ttnn.from_torch(
-            negative_add_time_ids.squeeze(0),
-            dtype=ttnn.bfloat16,
-            device=ttnn_device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
-        )
-        ttnn_add_time_id2 = ttnn.from_torch(
-            add_time_ids.squeeze(0),
-            dtype=ttnn.bfloat16,
-            device=ttnn_device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
-        )
-        ttnn_time_ids = [ttnn_add_time_id1, ttnn_add_time_id2]
-        ttnn_text_embeds = [
-            [
-                ttnn_add_text_embed[0],
-                ttnn_add_text_embed[1],
-            ]
-            for ttnn_add_text_embed in ttnn_add_text_embeds
+    ttnn_add_time_id1 = ttnn.from_torch(
+        negative_add_time_ids.squeeze(0),
+        dtype=ttnn.bfloat16,
+        device=ttnn_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
+    )
+    ttnn_add_time_id2 = ttnn.from_torch(
+        add_time_ids.squeeze(0),
+        dtype=ttnn.bfloat16,
+        device=ttnn_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
+    )
+    ttnn_time_ids = [ttnn_add_time_id1, ttnn_add_time_id2]
+    ttnn_text_embeds = [
+        [
+            ttnn_add_text_embed[0],
+            ttnn_add_text_embed[1],
         ]
-    else:
-        ttnn_prompt_embeds = [
-            ttnn.from_torch(
-                prompt_embeds,
-                dtype=ttnn.bfloat16,
-                device=ttnn_device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        ]
-        ttnn_add_text_embeds = [
-            ttnn.from_torch(
-                add_text_embeds,
-                dtype=ttnn.bfloat16,
-                device=ttnn_device,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        ]
-        ttnn_add_time_ids = [
-            ttnn.from_torch(
-                add_time_ids.squeeze(0),
-                dtype=ttnn.bfloat16,
-                device=ttnn_device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        ]
-        ttnn_added_cond_kwargs = [
-            {
-                "text_embeds": ttnn_add_text_embeds[0],
-                "time_ids": ttnn_add_time_ids[0],
-            }
-        ]
+        for ttnn_add_text_embed in ttnn_add_text_embeds
+    ]
 
     scaling_factor = ttnn.from_torch(
         torch.Tensor([pipeline.vae.config.scaling_factor]),
@@ -326,14 +280,11 @@ def run_demo_inference(
                 unet_outputs.append(noise_pred)
 
             # perform guidance
-            if classifier_free_guidance:
-                noise_pred_uncond, noise_pred_text = unet_outputs
-                noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+            noise_pred_uncond, noise_pred_text = unet_outputs
+            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
-                ttnn.deallocate(noise_pred_uncond)
-                ttnn.deallocate(noise_pred_text)
-            else:
-                noise_pred = unet_outputs[0]
+            ttnn.deallocate(noise_pred_uncond)
+            ttnn.deallocate(noise_pred_text)
 
             latents = tt_scheduler.step(
                 noise_pred, tt_scheduler.timesteps[i], latents, **extra_step_kwargs, return_dict=False
@@ -361,7 +312,9 @@ def run_demo_inference(
 
             imgs = pipeline.vae.decode(latents, return_dict=False)[0]
 
-        for img in imgs:
+        for idx, img in enumerate(imgs):
+            if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:
+                break
             img = img.unsqueeze(0)
             img = pipeline.image_processor.postprocess(img, output_type="pil")[0]
             images.append(img)
@@ -369,7 +322,7 @@ def run_demo_inference(
                 logger.info(f"Image {len(images)}/{len(prompts) // batch_size} generated successfully")
             else:
                 img.save(f"output/output{len(images) + start_from}.png")
-                logger.info(f"Image1 saved to output/output{len(images) + start_from}.png")
+                logger.info(f"Image saved to output/output{len(images) + start_from}.png")
 
         if vae_on_device:
             ttnn.deallocate(latents)
@@ -400,14 +353,6 @@ def run_demo_inference(
     ((50),),
 )
 @pytest.mark.parametrize(
-    "classifier_free_guidance",
-    [
-        (True),
-        (False),
-    ],
-    ids=("with_classifier_free_guidance", "no_classifier_free_guidance"),
-)
-@pytest.mark.parametrize(
     "vae_on_device",
     [
         (True),
@@ -421,10 +366,7 @@ def test_demo(
     is_ci_env,
     prompt,
     num_inference_steps,
-    classifier_free_guidance,
     vae_on_device,
     evaluation_range,
 ):
-    return run_demo_inference(
-        mesh_device, is_ci_env, prompt, num_inference_steps, classifier_free_guidance, vae_on_device, evaluation_range
-    )
+    return run_demo_inference(mesh_device, is_ci_env, prompt, num_inference_steps, vae_on_device, evaluation_range)
