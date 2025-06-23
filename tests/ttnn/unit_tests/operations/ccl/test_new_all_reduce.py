@@ -80,7 +80,7 @@ def run_all_reduce_impl(
     ##### Set up fabric stuff
     ##################################
 
-    linear = True
+    linear = False
     if linear:
         all_reduce_topology = ttnn.Topology.Linear
         wrap_mesh = False
