@@ -182,7 +182,7 @@ void MetalContext::clear_l1_state(chip_id_t device_id) {
     }
 
     // Clear erisc unreserved L1
-    for (const auto& eth_core : cluster_->get_active_ethernet_cores(device_id)) {
+    for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
         static uint32_t zero_vec_size = tt::tt_metal::hal::get_erisc_l1_unreserved_size();
         auto zero_vec_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
@@ -232,10 +232,10 @@ void MetalContext::clear_launch_messages_on_eth_cores(chip_id_t device_id) {
             &go_msg, sizeof(go_msg_t), tt_cxy_pair(device_id, virtual_eth_core), go_addr);
     };
 
-    for (const auto& eth_core : cluster_->get_active_ethernet_cores(device_id)) {
+    for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
         clear_ethernet_core(eth_core);
     }
-    for (const auto& eth_core : cluster_->get_inactive_ethernet_cores(device_id)) {
+    for (const auto& eth_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
         clear_ethernet_core(eth_core);
     }
 }

@@ -72,7 +72,6 @@ TEST(IntermeshAPIs, ConsistencyChecks) {
 }
 
 TEST(IntermeshAPIs, IntermeshLinksAreDistinctFromEthernetLinks) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     if (!control_plane.system_has_intermesh_links()) {
@@ -85,8 +84,8 @@ TEST(IntermeshAPIs, IntermeshLinksAreDistinctFromEthernetLinks) {
     auto all_intermesh_links = control_plane.get_all_intermesh_eth_links();
 
     for (const auto& [chip_id, intermesh_links] : all_intermesh_links) {
-        auto active_eth_cores = cluster.get_active_ethernet_cores(chip_id);
-        auto inactive_eth_cores = cluster.get_inactive_ethernet_cores(chip_id);
+        auto active_eth_cores = control_plane.get_active_ethernet_cores(chip_id);
+        auto inactive_eth_cores = control_plane.get_inactive_ethernet_cores(chip_id);
 
         // Verify no overlap between intermesh links and active ethernet cores
         for (const auto& [eth_core, channel] : intermesh_links) {

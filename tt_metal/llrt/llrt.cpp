@@ -24,6 +24,7 @@
 #include <unordered_set>
 
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/control_plane.hpp>
 #include "hal_types.hpp"
 #include "llrt.hpp"
 #include "metal_soc_descriptor.h"
@@ -103,9 +104,10 @@ tt_metal::HalProgrammableCoreType get_core_type(chip_id_t chip_id, const CoreCoo
 
     // Determine whether an ethernet core is active or idle. Their host handshake interfaces are different.
     if (is_eth_core) {
-        auto active_eth_cores = tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(chip_id);
+        auto active_eth_cores =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(chip_id);
         auto inactive_eth_cores =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(chip_id);
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(chip_id);
         is_active_eth_core =
             active_eth_cores.find(logical_core_from_ethernet_core(chip_id, virtual_core)) != active_eth_cores.end();
         is_inactive_eth_core =
@@ -213,7 +215,8 @@ CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
 namespace internal_ {
 
 bool is_active_eth_core(chip_id_t chip_id, const CoreCoord& core) {
-    auto active_eth_cores = tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(chip_id);
+    auto active_eth_cores =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(chip_id);
     return active_eth_cores.find(logical_core_from_ethernet_core(chip_id, core)) != active_eth_cores.end();
 }
 

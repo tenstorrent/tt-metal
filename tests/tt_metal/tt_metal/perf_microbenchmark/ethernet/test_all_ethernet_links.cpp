@@ -265,7 +265,7 @@ private:
 
         for (auto sender_chip_id : sender_chips) {
             auto non_tunneling_eth_cores =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(
                     sender_chip_id, !slow_dispath_mode);
             for (auto logical_active_eth : non_tunneling_eth_cores) {
                 if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
