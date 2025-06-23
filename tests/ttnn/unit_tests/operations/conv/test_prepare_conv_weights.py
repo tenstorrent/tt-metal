@@ -459,8 +459,7 @@ def test_conv_dram(
         padding[0],
         padding[1],
         config,
-        True,
-        device=device,
+        device,
         groups=1,
         is_owned=False,
         slice_config=ttnn.Conv2dSliceConfig(

@@ -109,8 +109,8 @@ struct Conv2dWeightsBiasPrepConfig {
         std::optional<DataType> weights_bias_dtype_,
         uint32_t weight_block_h_ntiles_,
         uint32_t weight_block_w_ntiles_,
-        const sliding_window::ParallelConfig& input_parallel_config_,
-        const sliding_window::ParallelConfig& output_parallel_config_,
+        const sliding_window::ParallelConfig input_parallel_config_,
+        const sliding_window::ParallelConfig output_parallel_config_,
         uint32_t groups_,
         uint32_t act_block_h_ntiles_,
         uint32_t input_width_,
@@ -141,8 +141,8 @@ struct Conv2dWeightsBiasPrepConfig {
     const std::optional<DataType> weights_bias_dtype;
     uint32_t weight_block_h_ntiles;
     const uint32_t weight_block_w_ntiles;
-    const sliding_window::ParallelConfig& input_parallel_config;
-    const sliding_window::ParallelConfig& output_parallel_config;
+    const sliding_window::ParallelConfig input_parallel_config;
+    const sliding_window::ParallelConfig output_parallel_config;
     const uint32_t groups;
     const uint32_t act_block_h_ntiles;
     const uint32_t input_width;
@@ -163,6 +163,13 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     Conv2dWeightsBiasPrepConfig& params,
     T* device);
 
+template <typename T>
+std::optional<ttnn::Tensor> prepare_conv_bias_internal(
+    const std::optional<const ttnn::Tensor>& bias_tensor,
+    uint32_t out_channels,
+    const Conv2dWeightsBiasPrepConfig& params,
+    DataType weight_dtype,
+    T* device);
 }  // namespace conv2d
 }  // namespace operations::conv
 }  // namespace ttnn

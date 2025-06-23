@@ -519,29 +519,37 @@ Result conv2d_L1(
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
 
+    // Configure weight and bias preparation parameters
+    Conv2dWeightsBiasPrepConfig params(
+        input_channels_alignment,
+        conv_config.weights_dtype,
+        opt_conv_op_block_config.act_block_w_ntiles,
+        opt_conv_op_block_config.out_subblock_w_ntiles,
+        parallel_config,
+        output_parallel_config,
+        groups,
+        opt_conv_op_block_config.act_block_h_ntiles,
+        input_width,
+        bias_tensor.has_value(),
+        true,  // parameters_on_device
+        conv_config.enable_kernel_stride_folding,
+        kernel_size,
+        orig_stride,
+        padding_n4);
+
+    // Prepare weights and move to device if necessary
     if (!is_device_tensor(weight_tensor)) {
         log_debug(tt::LogOp, "conv2d: Preprocessing weights on host and moving to device.");
-        Conv2dWeightsBiasPrepConfig params(
-            input_channels_alignment,
-            conv_config.weights_dtype,
-            opt_conv_op_block_config.act_block_w_ntiles,
-            opt_conv_op_block_config.out_subblock_w_ntiles,
-            parallel_config,
-            output_parallel_config,
-            groups,
-            opt_conv_op_block_config.act_block_h_ntiles,
-            input_width,
-            bias_tensor.has_value(),
-            true,  // parameters_on_device
-            conv_config.enable_kernel_stride_folding,
-            kernel_size,
-            orig_stride,
-            padding_n4);
-
         std::tie(weight_tensor_on_device, bias_tensor_on_device) =
             prepare_conv_weights_biases_and_move_to_device(weight_tensor, bias_tensor, params, device);
     } else {
         log_debug(tt::LogOp, "conv2d: Using preprocessed weights from device.");
+    }
+
+    // Prepare bias tensor if it exists and is not yet on device
+    if (bias_tensor_on_device.has_value() && !is_device_tensor(bias_tensor_on_device.value())) {
+        bias_tensor_on_device = prepare_conv_bias_internal(
+            bias_tensor_on_device, out_channels, params, weight_tensor_on_device.dtype(), device);
     }
 
     // call optimized conv op or matmul micro op
