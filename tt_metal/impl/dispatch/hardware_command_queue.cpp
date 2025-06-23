@@ -314,7 +314,10 @@ void HWCommandQueue::enqueue_write_buffer(
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_write_buffer");
-    TT_FATAL(!this->manager_.get_bypass_mode(), "Enqueue Write Buffer cannot be used with tracing");
+    TT_FATAL(
+        !this->manager_.get_bypass_mode(),
+        "Enqueue Write Buffer cannot be used with tracing. If using EnqueueProgram, EnqueueProgram must be used at "
+        "least once before BeginTraceCapture");
     // Top level API to accept different variants for buffer and src
     // For shared pointer variants, object lifetime is guaranteed at least till the end of this function
     auto* data = std::visit(
