@@ -1010,6 +1010,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         kernel_size,
         conv_config,
         input_datatype,
+        output_datatype,
         dummy_input_shard_shape,
         enable_bias,
         is_1d_depthwise_conv);
