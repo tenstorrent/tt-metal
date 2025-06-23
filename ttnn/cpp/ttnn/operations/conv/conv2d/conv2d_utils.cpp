@@ -753,6 +753,34 @@ void validate_weight_and_bias_tensors(
     }
 }
 
+// Validate device weights format (minimal validation for main path)
+void validate_device_weights_format(
+    const ttnn::Tensor& weight_tensor,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    const std::optional<DataType>& expected_dtype) {
+    TT_FATAL(weight_tensor.layout() == Layout::TILE, "Device weights must be in TILE layout");
+
+    const auto& shape = weight_tensor.logical_shape();
+    TT_FATAL(shape.rank() == 4 && shape[0] == 1 && shape[1] == 1, "Invalid prepared weight tensor shape");
+    TT_FATAL(shape[2] >= in_channels && shape[3] >= out_channels, "Weight tensor too small for required channels");
+
+    if (expected_dtype.has_value()) {
+        TT_FATAL(weight_tensor.dtype() == expected_dtype.value(), "Weight tensor dtype mismatch");
+    }
+}
+
+// Validate device bias format (minimal validation for main path)
+void validate_device_bias_format(
+    const ttnn::Tensor& bias_tensor, uint32_t out_channels, const std::optional<DataType>& expected_dtype) {
+    TT_FATAL(bias_tensor.layout() == Layout::TILE, "Device bias must be in TILE layout");
+    TT_FATAL(bias_tensor.logical_shape()[3] >= out_channels, "Bias tensor too small for required channels");
+
+    if (expected_dtype.has_value()) {
+        TT_FATAL(bias_tensor.dtype() == expected_dtype.value(), "Bias tensor dtype mismatch");
+    }
+}
+
 ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
     OptimizedConvParallelizationConfig conv_parallelization_config,
     OptimizedConvBlockConfig conv_blocking_config,
