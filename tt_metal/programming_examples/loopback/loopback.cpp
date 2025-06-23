@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/ostream.h>
 #include <cstdint>
 #include <random>
 #include <tt-metalium/host_api.hpp>
@@ -145,14 +146,12 @@ int main() {
         }
 
     } catch (const std::exception& e) {
-        log_error(tt::LogTest, "Test failed with exception!");
-        log_error(tt::LogTest, "{}", e.what());
-
+        fmt::print(stderr, "Test failed with exception! what: {}\n", e.what());
         throw;
     }
 
     if (pass) {
-        log_info(tt::LogTest, "Test Passed");
+        fmt::print("Test Passed\n");
     } else {
         TT_THROW("Test Failed");
     }

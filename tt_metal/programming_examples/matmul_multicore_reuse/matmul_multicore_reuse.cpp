@@ -11,6 +11,8 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <matmul_common/bmm_op.hpp>
+#include <fmt/core.h>
+#include <iostream>
 
 using namespace tt::constants;
 using namespace std;
@@ -107,10 +109,9 @@ void matmul_multicore_reuse(
     uint32_t out_subblock_h = std::get<2>(matmul_params);
     uint32_t out_subblock_w = std::get<3>(matmul_params);
 
-    log_info(tt::LogVerif, " -- Metalium Core Sizing --");
-    log_info(
-        tt::LogVerif,
-        " -- per_core_M= {} -- per_core_N= {} -- out_subblock_h= {} -- out_subblock_w= {} --",
+    fmt::print(" -- Metalium Core Sizing --\n");
+    fmt::print(
+        " -- per_core_M= {} -- per_core_N= {} -- out_subblock_h= {} -- out_subblock_w= {} --\n",
         per_core_M,
         per_core_N,
         out_subblock_h,
@@ -404,23 +405,21 @@ int main() {
         matmul_multicore_reuse(src0_vec, src1_vec, result_vec, false, M, N, K, B, device);
         result_vec = untilize_nfaces(result_vec, M, N);
 
-        log_info(tt::LogVerif, "Output vector of size {}", result_vec.size());
+        fmt::print("Output vector of size {}\n", result_vec.size());
 
         float pearson = check_bfloat16_vector_pcc(golden_vec, result_vec);
-        log_info(tt::LogVerif, "Metalium vs Golden -- PCC = {}", pearson);
+        fmt::print("Metalium vs Golden -- PCC = {}\n", pearson);
         TT_FATAL(pearson > 0.99, "PCC not high enough. Result PCC: {}, Expected PCC: 0.99", pearson);
 
         pass &= CloseDevice(device);
 
     } catch (const std::exception& e) {
-        log_error(tt::LogTest, "Test failed with exception!");
-        log_error(tt::LogTest, "{}", e.what());
-
+        fmt::print(stderr, "Test failed with exception! what: {}\n", e.what());
         throw;
     }
 
     if (pass) {
-        log_info(tt::LogTest, "Test Passed");
+        fmt::print("Test Passed\n");
     } else {
         TT_THROW("Test Failed");
     }
