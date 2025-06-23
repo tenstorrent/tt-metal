@@ -25,6 +25,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_fabric_test_interfaces.hpp"
+#include "tt_fabric_test_common_types.hpp"
 
 using MeshDevice = tt::tt_metal::distributed::MeshDevice;
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
@@ -37,6 +38,16 @@ using Topology = tt::tt_fabric::Topology;
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
+struct pair_hash {
+    template <class T1, class T2>
+    std::size_t operator()(const std::pair<T1, T2>& p) const {
+        auto h1 = std::hash<T1>{}(p.first);
+        auto h2 = std::hash<T2>{}(p.second);
+        // Simple mixing
+        return h1 ^ (h2 << 1);
+    }
+};
+
 class TestFixture : public IDeviceInfoProvider, public IRouteManager {
     static constexpr uint32_t ROW_DIM = 0;
     static constexpr uint32_t COL_DIM = 1;
@@ -44,6 +55,9 @@ class TestFixture : public IDeviceInfoProvider, public IRouteManager {
     // mapping to convert coords to directions
     static constexpr uint32_t EW_DIM = 1;
     static constexpr uint32_t NS_DIM = 0;
+
+    static const std::unordered_map<std::pair<Topology, RoutingType>, tt::tt_metal::FabricConfig, pair_hash>
+        topology_to_fabric_config_map;
 
 public:
     void init() {
@@ -65,23 +79,34 @@ public:
         for (auto i = 0; i < available_device_coordinates_.size(); i++) {
             available_node_ids_.emplace_back(FabricNodeId(mesh_id, i));
         }
+
+        current_fabric_config_ = tt::tt_metal::FabricConfig::DISABLED;
     }
 
     std::vector<MeshCoordinate> get_available_device_coordinates() const { return this->available_device_coordinates_; }
 
-    void open_devices(tt::tt_metal::FabricConfig fabric_config) {
-        tt::tt_metal::detail::InitializeFabricConfig(fabric_config);
-        mesh_device_ = MeshDevice::create(mesh_shape_);
+    void open_devices(Topology topology, RoutingType routing_type) {
+        auto it = topology_to_fabric_config_map.find({topology, routing_type});
+        TT_FATAL(
+            it != topology_to_fabric_config_map.end(),
+            "Unsupported topology: {} with routing type: {}",
+            topology,
+            routing_type);
+        auto new_fabric_config = it->second;
+        if (new_fabric_config != current_fabric_config_) {
+            if (are_devices_open_) {
+                log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);
+                close_devices();
+            }
+            open_devices_internal(new_fabric_config);
 
-        for (const auto& coord : available_device_coordinates_) {
-            auto* device = mesh_device_->get_device(coord);
-            const auto fabric_node_id = control_plane_ptr_->get_fabric_node_id_from_physical_chip_id(device->id());
-            mesh_coordinate_to_node_id_.emplace(coord, fabric_node_id);
-            node_id_to_mesh_coordinate_.emplace(fabric_node_id, coord);
+            topology_ = topology;
+        } else {
+            log_info(tt::LogTest, "Reusing existing device setup with fabric config: {}", current_fabric_config_);
         }
 
+        // create a new mesh workload for every run
         mesh_workload_ = std::make_unique<MeshWorkload>();
-        topology_ = control_plane_ptr_->get_fabric_context().get_fabric_topology();
     }
 
     void enqueue_program(const MeshCoordinate& mesh_coord, tt::tt_metal::Program program) {
@@ -98,6 +123,11 @@ public:
     void close_devices() {
         mesh_device_->close();
         tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+
+        mesh_coordinate_to_node_id_.clear();
+        node_id_to_mesh_coordinate_.clear();
+        current_fabric_config_ = tt::tt_metal::FabricConfig::DISABLED;
+        are_devices_open_ = false;
     }
 
     // ======================================================================================
@@ -150,6 +180,8 @@ public:
     uint32_t get_max_payload_size_bytes() const override {
         return control_plane_ptr_->get_fabric_context().get_fabric_max_payload_size_bytes();
     }
+
+    bool is_2d_fabric() const override { return topology_ == Topology::Mesh; }
 
     // ======================================================================================
     // IRouteManager methods
@@ -407,12 +439,29 @@ private:
     ControlPlane* control_plane_ptr_;
     Topology topology_;
     MeshShape mesh_shape_;
+    tt::tt_metal::FabricConfig current_fabric_config_;
     std::vector<MeshCoordinate> available_device_coordinates_;
     std::vector<FabricNodeId> available_node_ids_;
     std::shared_ptr<MeshDevice> mesh_device_;
     std::unordered_map<MeshCoordinate, FabricNodeId> mesh_coordinate_to_node_id_;
     std::unordered_map<FabricNodeId, MeshCoordinate> node_id_to_mesh_coordinate_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
+    bool are_devices_open_ = false;
+
+    void open_devices_internal(tt::tt_metal::FabricConfig fabric_config) {
+        tt::tt_metal::detail::InitializeFabricConfig(fabric_config);
+        mesh_device_ = MeshDevice::create(mesh_shape_);
+
+        for (const auto& coord : available_device_coordinates_) {
+            auto* device = mesh_device_->get_device(coord);
+            const auto fabric_node_id = control_plane_ptr_->get_fabric_node_id_from_physical_chip_id(device->id());
+            mesh_coordinate_to_node_id_.emplace(coord, fabric_node_id);
+            node_id_to_mesh_coordinate_.emplace(fabric_node_id, coord);
+        }
+
+        current_fabric_config_ = fabric_config;
+        are_devices_open_ = true;
+    }
 
     MeshCoordinate get_displacement(const MeshCoordinate& src_coords, const MeshCoordinate& dst_coords) const {
         TT_FATAL(

@@ -185,6 +185,11 @@ static const StringEnumMapper<Topology> topology_mapper({
     {"Mesh", Topology::Mesh},
 });
 
+static const StringEnumMapper<RoutingType> routing_type_mapper({
+    {"Low Latency", RoutingType::LowLatency},
+    {"Dynamic", RoutingType::Dynamic},
+});
+
 static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mapper({
     {"RoundRobin", CoreAllocationPolicy::RoundRobin},
     {"ExhaustFirst", CoreAllocationPolicy::ExhaustFirst},
@@ -303,15 +308,6 @@ inline SenderConfig YamlConfigParser::parse_sender_config(
     return config;
 }
 
-inline TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_setup_yaml) {
-    TT_FATAL(fabric_setup_yaml.IsMap(), "Expected fabric setup to be a map");
-    TT_FATAL(fabric_setup_yaml["topology"], "Fabric setup missing Topolgy key");
-    TestFabricSetup fabric_setup;
-    auto topology_str = parse_scalar<std::string>(fabric_setup_yaml["topology"]);
-    fabric_setup.topology = detail::topology_mapper.from_string(topology_str, "Topology");
-    return fabric_setup;
-}
-
 inline TestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml) {
     TestConfig test_config;
 
@@ -393,6 +389,24 @@ inline CoreAllocationConfig YamlConfigParser::parse_core_allocation_config(
         config.pool_refill_size = parse_scalar<uint32_t>(config_yaml["pool_refill_size"]);
     }
     return config;
+}
+
+inline TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_setup_yaml) {
+    TT_FATAL(fabric_setup_yaml.IsMap(), "Expected fabric setup to be a map");
+    TT_FATAL(fabric_setup_yaml["topology"], "Fabric setup missing Topolgy key");
+    TestFabricSetup fabric_setup;
+    auto topology_str = parse_scalar<std::string>(fabric_setup_yaml["topology"]);
+    fabric_setup.topology = detail::topology_mapper.from_string(topology_str, "Topology");
+
+    if (fabric_setup_yaml["routing_type"]) {
+        auto routing_type_str = parse_scalar<std::string>(fabric_setup_yaml["routing_type"]);
+        fabric_setup.routing_type = detail::routing_type_mapper.from_string(routing_type_str, "RoutingType");
+    } else {
+        log_info(tt::LogTest, "No routing type specified, defaulting to LowLatency");
+        fabric_setup.routing_type = RoutingType::LowLatency;
+    }
+
+    return fabric_setup;
 }
 
 // CmdlineParser methods
@@ -1129,6 +1143,10 @@ private:
         return detail::routing_direction_mapper.to_string(dir, "RoutingDirection");
     }
 
+    static std::string to_string(RoutingType rtype) {
+        return detail::routing_type_mapper.to_string(rtype, "RoutingType");
+    }
+
     static std::string to_string(tt::tt_fabric::Topology topology) {
         return detail::topology_mapper.to_string(topology, "Topology");
     }
@@ -1196,13 +1214,6 @@ private:
         out << YAML::EndMap;
     }
 
-    static void to_yaml(YAML::Emitter& out, const TestFabricSetup& config) {
-        out << YAML::BeginMap;
-        out << YAML::Key << "topology";
-        out << YAML::Value << to_string(config.topology);
-        out << YAML::EndMap;
-    }
-
     static void to_yaml(YAML::Emitter& out, const TestConfig& config) {
         out << YAML::BeginMap;
         out << YAML::Key << "name";
@@ -1259,6 +1270,17 @@ private:
         out << YAML::Key << "receiver";
         out << YAML::Value;
         to_yaml(out, policies.receiver_config);
+        out << YAML::EndMap;
+    }
+
+    static void to_yaml(YAML::Emitter& out, const TestFabricSetup& config) {
+        out << YAML::BeginMap;
+        out << YAML::Key << "topology";
+        out << YAML::Value << to_string(config.topology);
+        if (config.routing_type.has_value()) {
+            out << YAML::Key << "routing_type";
+            out << YAML::Value << to_string(config.routing_type.value());
+        }
         out << YAML::EndMap;
     }
 };

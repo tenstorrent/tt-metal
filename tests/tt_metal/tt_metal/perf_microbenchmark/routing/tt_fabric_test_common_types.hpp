@@ -45,8 +45,14 @@ struct SenderConfig {
     std::vector<TrafficPatternConfig> patterns;
 };
 
+enum class RoutingType {
+    LowLatency,
+    Dynamic,
+};
+
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology;
+    std::optional<RoutingType> routing_type;
 };
 
 struct HighLevelPatternConfig {

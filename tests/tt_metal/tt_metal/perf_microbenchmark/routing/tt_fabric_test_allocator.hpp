@@ -362,6 +362,7 @@ public:
         const AllocatorPolicies& policies);
 
     void allocate_resources(TestConfig& test_config);
+    void reset();
 
 private:
     TestDeviceResources& get_or_create_device_resources(const FabricNodeId& node_id);
@@ -532,6 +533,11 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
             }
         }
     }
+}
+
+inline void GlobalAllocator::reset() {
+    all_device_resources_.clear();
+    worker_grid_size_ = std::nullopt;
 }
 
 }  // namespace tt::tt_fabric::fabric_tests

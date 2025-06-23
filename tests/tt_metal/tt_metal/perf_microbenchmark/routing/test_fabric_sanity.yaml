@@ -1,5 +1,5 @@
 Tests:
-  - name: "SimpleUnicast"
+  - name: "SimpleUnicastLinear1"
     fabric_setup:
       topology: Linear
 
@@ -12,3 +12,31 @@ Tests:
             num_packets: 10
             destination:
               device: [0, 1]
+
+  - name: "SimpleUnicastLinear2"
+    fabric_setup:
+      topology: Linear
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 10
+            destination:
+              device: [0, 3]
+
+  - name: "SimpleUnicastMesh"
+    fabric_setup:
+      topology: Mesh
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 10
+            destination:
+              device: [0, 3]

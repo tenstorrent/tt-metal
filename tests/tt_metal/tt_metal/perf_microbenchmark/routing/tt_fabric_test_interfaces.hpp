@@ -36,6 +36,7 @@ public:
     virtual uint32_t get_l1_unreserved_base(const FabricNodeId& node_id) const = 0;
     virtual uint32_t get_l1_alignment() const = 0;
     virtual uint32_t get_max_payload_size_bytes() const = 0;
+    virtual bool is_2d_fabric() const = 0;
 };
 
 class IRouteManager {

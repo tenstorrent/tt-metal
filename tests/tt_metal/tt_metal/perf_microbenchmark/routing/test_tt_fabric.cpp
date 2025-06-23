@@ -39,6 +39,18 @@ using YamlConfigParser = tt::tt_fabric::fabric_tests::YamlConfigParser;
 using CmdlineParser = tt::tt_fabric::fabric_tests::CmdlineParser;
 using YamlTestConfigSerializer = tt::tt_fabric::fabric_tests::YamlTestConfigSerializer;
 
+using Topology = tt::tt_fabric::Topology;
+using RoutingType = tt::tt_fabric::fabric_tests::RoutingType;
+
+const std::
+    unordered_map<std::pair<Topology, RoutingType>, tt::tt_metal::FabricConfig, tt::tt_fabric::fabric_tests::pair_hash>
+        TestFixture::topology_to_fabric_config_map = {
+            {{Topology::Linear, RoutingType::LowLatency}, tt::tt_metal::FabricConfig::FABRIC_1D},
+            {{Topology::Ring, RoutingType::LowLatency}, tt::tt_metal::FabricConfig::FABRIC_1D_RING},
+            {{Topology::Mesh, RoutingType::LowLatency}, tt::tt_metal::FabricConfig::FABRIC_2D},
+            {{Topology::Mesh, RoutingType::Dynamic}, tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC},
+};
+
 // TODO: move this to generated directory
 const std::string default_built_tests_dump_file = "built_tests.yaml";
 
@@ -48,7 +60,7 @@ public:
     void setup_devices();
     void reset_devices();
     void process_traffic_config(TestConfig& config);
-    void open_devices(tt::tt_metal::FabricConfig fabric_config);
+    void open_devices(Topology topology, RoutingType routing_type);
     void compile_programs();
     void launch_programs();
     void wait_for_prorgams();
@@ -128,9 +140,14 @@ void TestContext::setup_devices() {
     }
 }
 
-void TestContext::reset_devices() { test_devices_.clear(); }
+void TestContext::reset_devices() {
+    test_devices_.clear();
+    this->allocator_->reset();
+}
 
-void TestContext::open_devices(tt::tt_metal::FabricConfig fabric_config) { fixture_->open_devices(fabric_config); }
+void TestContext::open_devices(Topology topology, RoutingType routing_type) {
+    fixture_->open_devices(topology, routing_type);
+}
 
 void TestContext::compile_programs() {
     // TODO: should we be taking const ref?
@@ -236,12 +253,10 @@ int main(int argc, char** argv) {
     // any gaps/optionals/missing values
     TestConfigBuilder builder(*fixture, *fixture, gen);
 
-    // TODO: for now assume we are working with the same fabric config, later we need to close and re-open with
-    // different config
-    test_context.open_devices(tt::tt_metal::FabricConfig::FABRIC_1D);
-
     for (auto& test_config : raw_test_configs) {
         log_info(tt::LogTest, "Running Test: {}", test_config.name);
+
+        test_context.open_devices(test_config.fabric_setup.topology, test_config.fabric_setup.routing_type.value());
 
         test_context.setup_devices();
 
