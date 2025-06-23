@@ -197,7 +197,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
-    const bool use_noc1_only) {
+    bool use_noc1_only) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     return ttnn::operations::experimental::ccl::all_reduce_async(
         input_tensor,
@@ -224,7 +224,7 @@ std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
-    const bool use_noc1_only) {
+    bool use_noc1_only) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensors.at(0).memory_config());
     return ttnn::operations::experimental::ccl::all_reduce_async(
         input_tensors,
