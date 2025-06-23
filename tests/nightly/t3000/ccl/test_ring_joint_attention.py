@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import math
 import torch
 import torch.nn.functional as F
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -202,8 +200,8 @@ def run_ring_joint_sdpa(
         mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=sdpa_joint_shard_dims),
     )
 
-    print(f"tt_Q: {tt_Q.shape}")
-    print(f"tt_joint_Q: {tt_joint_Q.shape}")
+    logger.debug(f"tt_Q: {tt_Q.shape}")
+    logger.debug(f"tt_joint_Q: {tt_joint_Q.shape}")
 
     tt_out_list = []
     tt_joint_out_list = []
@@ -236,20 +234,20 @@ def run_ring_joint_sdpa(
             tt_joint_out_list.append(tt_joint_out)
 
     if trace_enabled:
-        print("Compile run")
+        logger.info("Compile run")
         run_iters([], [])
-        print("Capture trace")
+        logger.info("Capture trace")
         trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
         run_iters(tt_out_list, tt_joint_out_list)
         ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
         ttnn.synchronize_device(submesh)
-        print("Execute trace")
+        logger.info("Execute trace")
         ttnn.execute_trace(submesh, trace_id, blocking=False)
         ttnn.release_trace(submesh, trace_id)
         ttnn.synchronize_device(submesh)
 
     else:
-        print("Run without trace")
+        logger.info("Run without trace")
         run_iters(tt_out_list, tt_joint_out_list)
 
     pt_Q = torch.cat([Q, joint_Q], dim=2)
@@ -369,8 +367,8 @@ def test_ring_joint_sdpa(
 
     submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
 
-    print(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
-    print(f"submesh: {submesh.shape}")
+    logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
+    logger.debug(f"submesh: {submesh.shape}")
 
     run_ring_joint_sdpa(
         submesh,
@@ -455,8 +453,8 @@ def test_ring_joint_sdpa_program_cache(
     assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
     submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
 
-    print(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
-    print(f"submesh: {submesh.shape}")
+    logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
+    logger.debug(f"submesh: {submesh.shape}")
 
     dummy_tensors = []
     for i in range(3):

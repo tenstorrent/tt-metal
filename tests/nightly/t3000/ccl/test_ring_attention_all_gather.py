@@ -4,13 +4,9 @@
 
 import torch
 import pytest
-import math
-import os
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -199,7 +195,10 @@ def run_ring_attention_all_gather_impl(
                 ),
             )
             tt_ag_out = torch.narrow(tt_ag_out, sequence_index, 0, torch_ag_out_tensors[j].shape[sequence_index])
-            eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensors[j])
+            if ag_input_dtype == ttnn.bfloat16:
+                eq, output = comp_equal(tt_ag_out, torch_ag_out_tensors[j])
+            else:
+                eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensors[j])
             logger.info(f"{output}, iteration {i}, tensor {j}")
             assert eq, f"{i}{j} FAILED ag: {output}"
 
