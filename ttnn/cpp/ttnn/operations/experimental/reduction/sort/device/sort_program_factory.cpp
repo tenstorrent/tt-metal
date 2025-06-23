@@ -336,13 +336,179 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         get_number_of_tiles_per_core(tensor_args.input_tensor.dtype(), output_tensors.at(1).dtype());
 
     // Calculate the number of cores utilized based on the input tensor shape
-    const uint32_t all_core_utilization_count = Wt / number_of_tiles_per_core;
-
+    const uint32_t all_core_utilization_count = (Wt + number_of_tiles_per_core - 1) / number_of_tiles_per_core;
     std::cout << "Total number of cores: " << total_number_of_cores
               << ", Number of tiles per core: " << number_of_tiles_per_core
-              << ", All core utilization count: " << all_core_utilization_count << std::endl;
+              << ", All core utilization count: " << all_core_utilization_count << ", Wt: " << Wt << std::endl;
 
-    return {std::move(program), {}};
+    TT_FATAL(
+        all_core_utilization_count <= total_number_of_cores,
+        "All core utilization count exceeds total number of cores. Utilized cores: {}, Total cores: {}",
+        all_core_utilization_count,
+        total_number_of_cores);
+
+    // TODO: Write how this works
+    CoreRangeSet core_range;
+    if (all_core_utilization_count == total_number_of_cores) {
+        // All cores used
+        core_range = CoreRangeSet(
+            CoreRange({0, 0}, {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1}));
+    } else {
+        const uint32_t core_grid_calculated_rows_number = all_core_utilization_count / compute_with_storage_grid_size.x;
+        const uint32_t core_grid_calculated_columns_number =
+            all_core_utilization_count % compute_with_storage_grid_size.x;
+
+        if (core_grid_calculated_rows_number == 0 && core_grid_calculated_columns_number == 0) {
+            // Only one core used
+            core_range = CoreRangeSet(CoreCoord({0, 0}));
+        } else if (core_grid_calculated_rows_number == 0) {
+            // Only cores from first row used
+            core_range = CoreRangeSet(CoreRange({0, 0}, {core_grid_calculated_columns_number - 1, 0}));
+        } else {
+            // Rows and columns used
+            core_range = CoreRangeSet(
+                CoreRange({0, 0}, {compute_with_storage_grid_size.x - 1, core_grid_calculated_rows_number - 1}));
+            if (core_grid_calculated_columns_number != 0) {
+                const CoreRange additional_range(
+                    {0, core_grid_calculated_rows_number},
+                    {core_grid_calculated_columns_number, core_grid_calculated_rows_number});
+                core_range = core_range.merge(CoreRangeSet(additional_range));
+            }
+        }
+    }
+    std::cout << "Core range: " << core_range.str() << " core_range.num_cores(): " << core_range.num_cores()
+              << std::endl;
+    // TODO: Potentially create tensor with indexes of physical cores used
+
+    // Circular buffers
+    constexpr uint32_t cb_scale_factor = 2;
+
+    constexpr uint32_t input_tensor_cb_index = tt::CBIndex::c_0;
+    const tt::tt_metal::CircularBufferConfig input_tensor_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            cb_scale_factor * input_tensor_tile_size, {{input_tensor_cb_index, input_tensor_cb_data_format}})
+            .set_page_size(input_tensor_cb_index, input_tensor_tile_size);
+    const auto cb_input_tensor = tt::tt_metal::CreateCircularBuffer(program, core_range, input_tensor_cb_config);
+
+    constexpr uint32_t index_tensor_cb_index = tt::CBIndex::c_1;
+    const tt::tt_metal::CircularBufferConfig index_tensor_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            cb_scale_factor * index_tensor_tile_size, {{index_tensor_cb_index, index_tensor_cb_data_format}})
+            .set_page_size(index_tensor_cb_index, index_tensor_tile_size);
+    const auto cb_index_tensor = tt::tt_metal::CreateCircularBuffer(program, core_range, index_tensor_cb_config);
+
+    constexpr uint32_t input_tensor_transposed_cb_index = tt::CBIndex::c_2;
+    const tt::tt_metal::CircularBufferConfig input_tensor_transposed_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            number_of_tiles_per_core * input_tensor_tile_size,
+            {{input_tensor_transposed_cb_index, input_tensor_cb_data_format}})
+            .set_page_size(input_tensor_transposed_cb_index, input_tensor_tile_size);
+    const auto cb_input_tensor_transposed =
+        tt::tt_metal::CreateCircularBuffer(program, core_range, input_tensor_transposed_cb_config);
+
+    constexpr uint32_t index_tensor_transposed_cb_index = tt::CBIndex::c_3;
+    const tt::tt_metal::CircularBufferConfig index_tensor_transposed_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            number_of_tiles_per_core * index_tensor_tile_size,
+            {{index_tensor_transposed_cb_index, index_tensor_cb_data_format}})
+            .set_page_size(index_tensor_transposed_cb_index, index_tensor_tile_size);
+    const auto cb_index_tensor_transposed =
+        tt::tt_metal::CreateCircularBuffer(program, core_range, index_tensor_transposed_cb_config);
+
+    constexpr uint32_t value_tensor_cb_index = tt::CBIndex::c_4;
+    const tt::tt_metal::CircularBufferConfig value_tensor_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            cb_scale_factor * value_tensor_tile_size, {{value_tensor_cb_index, value_tensor_cb_data_format}})
+            .set_page_size(value_tensor_cb_index, index_tensor_tile_size);
+    const auto cb_value_tensor = tt::tt_metal::CreateCircularBuffer(program, core_range, value_tensor_cb_config);
+
+    constexpr uint32_t index_tensor_output_cb_index = tt::CBIndex::c_5;
+    const tt::tt_metal::CircularBufferConfig index_tensor_output_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            cb_scale_factor * index_tensor_tile_size, {{index_tensor_output_cb_index, index_tensor_cb_data_format}})
+            .set_page_size(index_tensor_output_cb_index, index_tensor_tile_size);
+    const auto cb_index_tensor_output =
+        tt::tt_metal::CreateCircularBuffer(program, core_range, index_tensor_output_cb_config);
+
+    // Semaphores
+    const uint32_t semaphore = CreateSemaphore(program, core_range, 0);  // TODO: change name
+
+    // Kernels
+    const std::vector<uint32_t> reader_compile_time_args = {
+        compute_with_storage_grid_size.x, compute_with_storage_grid_size.y,
+        // input_tensor_cb_index,
+        // index_tensor_output_cb_index,
+        // static_cast<uint32_t>(input_tensor_is_dram),
+        // static_cast<uint32_t>(index_tensor_is_dram),
+        // Wt,
+        // Ht,
+        // total_number_of_cores,
+        // compute_with_storage_grid_size.x,
+        // compute_with_storage_grid_size.y
+    };
+    const std::string reader_kernel_path =
+        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
+        "reader_hybrid.cpp";
+    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
+        program, reader_kernel_path, core_range, tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
+    // SetRuntimeArgs(
+    //     program,
+    //     reader_kernel_id,
+    //     core_range,
+    //     {input_buffer->address(),
+    //      index_buffer->address(),
+    //      all_core_utilization_loop_count ? all_core_utilization_loop_count : 1});
+
+    const std::vector<uint32_t> writer_compile_time_args = {
+        compute_with_storage_grid_size.x, compute_with_storage_grid_size.y,
+        // value_tensor_cb_index,
+        // index_tensor_cb_index,
+        // static_cast<uint32_t>(value_tensor_is_dram),
+        // Wt,
+        // Ht,
+        // total_number_of_cores,
+        // compute_with_storage_grid_size.x,
+        // compute_with_storage_grid_size.y
+    };
+    const std::string writer_kernel_path =
+        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
+        "writer_hybrid.cpp";
+    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
+        program, writer_kernel_path, core_range, tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
+    // SetRuntimeArgs(
+    //     program,
+    //     writer_kernel_id,
+    //     core_range,
+    //     {value_buffer->address(), all_core_utilization_loop_count ? all_core_utilization_loop_count : 1});
+
+    const std::vector<uint32_t> compute_compile_time_args = {
+        compute_with_storage_grid_size.x, compute_with_storage_grid_size.y,
+        // input_tensor_cb_index,
+        // index_tensor_cb_index,
+        // input_tensor_transposed_cb_index,
+        // index_tensor_transposed_cb_index,
+        // value_tensor_cb_index,
+        // index_tensor_output_cb_index,
+        // Wt,
+        // static_cast<uint32_t>(attributes.descending),
+        // static_cast<uint32_t>(attributes.stable),
+        // compute_with_storage_grid_size.x,
+        // compute_with_storage_grid_size.y
+    };
+    const std::string compute_kernel_path =
+        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort_hybrid.cpp";
+    tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        compute_kernel_path,
+        core_range,
+        tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
+    // SetRuntimeArgs(
+    //     program,
+    //     compute_kernel_id,
+    //     core_range,
+    //     {all_core_utilization_loop_count ? all_core_utilization_loop_count : 1});
+
+    return {std::move(program), {reader_kernel_id, compute_kernel_id, writer_kernel_id, core_range}};
 }
 
 void SortProgramFactoryHybrid::override_runtime_arguments(

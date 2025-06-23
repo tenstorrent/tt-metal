@@ -32,10 +32,10 @@ struct SortProgramFactorySingleRowSingleCore {
 // Hybrid approach - single row, multi core with processing multiple tiles on one core
 struct SortProgramFactoryHybrid {
     struct shared_variables_t {
-        // KernelHandle reader_kernel_id;
-        // KernelHandle compute_kernel_id;
-        // KernelHandle writer_kernel_id;
-        // CoreCoord storage_grid_size;
+        KernelHandle reader_kernel_id;
+        KernelHandle compute_kernel_id;
+        KernelHandle writer_kernel_id;
+        CoreRangeSet storage_grid_size;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
