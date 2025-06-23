@@ -22,7 +22,6 @@ namespace {
 std::string tensorMemoryLayoutToString(TensorMemoryLayout layout) {
     switch (layout) {
         case TensorMemoryLayout::INTERLEAVED: return "INTERLEAVED";
-        case TensorMemoryLayout::SINGLE_BANK: return "SINGLE_BANK";
         case TensorMemoryLayout::HEIGHT_SHARDED: return "HEIGHT_SHARDED";
         case TensorMemoryLayout::WIDTH_SHARDED: return "WIDTH_SHARDED";
         case TensorMemoryLayout::BLOCK_SHARDED: return "BLOCK_SHARDED";

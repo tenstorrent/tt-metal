@@ -96,11 +96,8 @@ int main() {
     auto distributed_buffer_size_bytes = mesh_device->num_rows() * mesh_device->num_cols() * tile_size_bytes;
 
     // Configure device-local buffer settings
-    auto local_buffer_config = DeviceLocalBufferConfig{
-        .page_size = tile_size_bytes,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
+    auto local_buffer_config =
+        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::DRAM, .bottom_up = false};
     auto distributed_buffer_config = tt::tt_metal::distributed::ShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,

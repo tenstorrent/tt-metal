@@ -11,10 +11,9 @@ namespace tt_metal {
 
 enum class TensorMemoryLayout {
     INTERLEAVED = 0,
-    SINGLE_BANK,
-    HEIGHT_SHARDED,
-    WIDTH_SHARDED,
-    BLOCK_SHARDED,
+    HEIGHT_SHARDED = 2,
+    WIDTH_SHARDED = 3,
+    BLOCK_SHARDED = 4,
 };
 
 enum class ShardOrientation {

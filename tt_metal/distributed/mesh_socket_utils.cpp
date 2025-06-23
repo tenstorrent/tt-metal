@@ -108,8 +108,7 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     DeviceLocalBufferConfig buffer_specs = {
         .page_size = config_buffer_size,
         .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = shard_params,
+        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = std::nullopt,
         .sub_device_id = is_sender ? socket_mem_config.sender_sub_device : socket_mem_config.receiver_sub_device,
     };
@@ -150,9 +149,9 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
     DeviceLocalBufferConfig socket_data_buffer_specs = {
         .page_size = socket_mem_config.fifo_size,
         .buffer_type = socket_mem_config.socket_storage_type,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters =
+        .sharding_args = BufferShardingArgs(
             ShardSpecBuffer(shard_grid, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_data_cores, 1}),
+            TensorMemoryLayout::HEIGHT_SHARDED),
         .bottom_up = std::nullopt,
         .sub_device_id = socket_mem_config.socket_storage_type == BufferType::DRAM
                              ? std::nullopt

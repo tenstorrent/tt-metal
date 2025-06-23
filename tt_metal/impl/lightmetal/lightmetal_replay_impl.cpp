@@ -412,6 +412,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
 
     // Handle optionals
     const auto shard_parameters = from_flatbuffer(cmd->shard_parameters());
+    auto buffer_layout = static_cast<TensorMemoryLayout>(cmd->buffer_layout());
     const auto bottom_up = cmd->bottom_up() ? std::optional<bool>{cmd->bottom_up()->value()} : std::nullopt;
     const auto sub_device_id =
         cmd->sub_device_id() ? std::optional<SubDeviceId>{cmd->sub_device_id()->value()} : std::nullopt;
@@ -424,8 +425,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
             cmd->size(),
             cmd->page_size(),
             from_flatbuffer(cmd->buffer_type()),
-            from_flatbuffer(cmd->buffer_layout()),
-            shard_parameters,
+            BufferShardingArgs(shard_parameters, buffer_layout),
             bottom_up,
             sub_device_id);
         add_buffer_to_map(cmd->global_id(), buffer);
@@ -436,8 +436,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
             cmd->size(),
             cmd->page_size(),
             from_flatbuffer(cmd->buffer_type()),
-            from_flatbuffer(cmd->buffer_layout()),
-            shard_parameters,
+            BufferShardingArgs(shard_parameters, buffer_layout),
             bottom_up,
             sub_device_id);
         add_buffer_to_map(cmd->global_id(), buffer);

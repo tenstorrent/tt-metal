@@ -91,8 +91,7 @@ std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
                                             .device = device,
                                             .size = test_config.size_bytes,
                                             .page_size = test_config.page_size_bytes,
-                                            .buffer_type = test_config.buffer_type,
-                                            .buffer_layout = test_config.buffer_layout});
+                                            .buffer_type = test_config.buffer_type});
 
     auto input =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, test_config.size_bytes / sizeof(uint32_t));
