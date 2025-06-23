@@ -119,6 +119,11 @@ void kernel_main() {
                     uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
                     tiles_read += backwards_offset;
                     pages_read_in_row += backwards_offset;
+
+                    if (pages_read_in_row >= slice_Wt) {
+                        row_offset += (pages_read_in_row / slice_Wt) * stride_Wt;
+                        pages_read_in_row = pages_read_in_row % slice_Wt;
+                    }
                 }
 
                 while (tiles_read < tiles_to_read) {
@@ -170,7 +175,7 @@ void kernel_main() {
 
                         pages_read_in_row++;
                         if (pages_read_in_row >= slice_Wt) {
-                            row_offset += stride_Wt;
+                            row_offset += (pages_read_in_row / slice_Wt) * stride_Wt;
                             pages_read_in_row = 0;
                         }
                     }
@@ -188,7 +193,7 @@ void kernel_main() {
                         tiles_read += num_pages_to_read;
                         pages_read_in_row += num_pages_to_read;
                         if (pages_read_in_row >= slice_Wt) {
-                            row_offset += stride_Wt;
+                            row_offset += (pages_read_in_row / slice_Wt) * stride_Wt;
                             pages_read_in_row = pages_read_in_row % slice_Wt;
                         }
                     }

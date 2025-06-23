@@ -98,7 +98,12 @@ void kernel_main() {
                 uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
                 tiles_read += backwards_offset;
                 pages_read_in_row += backwards_offset;
+                if (pages_read_in_row >= slice_Wt) {
+                    row_offset += (pages_read_in_row / slice_Wt) * stride_Wt;
+                    pages_read_in_row = pages_read_in_row % slice_Wt;
+                }
                 intermediate_pages_read_in_row = pages_read_in_row;
+                intermediate_row_offset = row_offset;
             }
 
             // DPRINT << "READER: for link " << link << ", tiles_read: " << tiles_read
@@ -177,7 +182,7 @@ void kernel_main() {
                     tiles_read += num_pages_to_read;
                     pages_read_in_row += num_pages_to_read;
                     if (pages_read_in_row >= slice_Wt) {
-                        row_offset += stride_Wt;
+                        row_offset += (pages_read_in_row / slice_Wt) * stride_Wt;
                         pages_read_in_row = pages_read_in_row % slice_Wt;
                     }
                     intermediate_pages_read_in_row = pages_read_in_row;
