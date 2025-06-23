@@ -63,8 +63,6 @@ static Tensor pool2d_invoke(
          input_tensor_shape[2],
          tt::round_up(input_tensor_shape[3], tt::constants::TILE_WIDTH)});
     auto input_padded_tensor = input_tensor;
-    // input_padded_tensor = input_padded_tensor.pad(input_tensor_shape, input_padded_shape,
-    // get_bf16_pool_init_value(pool_type));
     input_padded_tensor = input_padded_tensor.reshape(input_tensor_shape, input_padded_shape);
     auto input_tensor_sharded = input_padded_tensor;
     // pool output is row major
@@ -174,7 +172,6 @@ static Tensor pool2d_invoke(
         .ceil_mode = ceil_mode,
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
-    auto input_nesto = input_tensor.logical_shape();
 
     // Call the halo uop
     auto haloed_tensor = ttnn::halo(
