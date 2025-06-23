@@ -452,7 +452,7 @@ Result conv2d_DRAM(
 
     // dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
 
-    return {dram_output_tensor, output_height, output_width, sliced_output_tensor, bias_tensor_on_device};
+    return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
 
 template <typename T>
