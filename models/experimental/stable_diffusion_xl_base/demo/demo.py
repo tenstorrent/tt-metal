@@ -362,9 +362,6 @@ def run_demo_inference(
         if vae_on_device:
             latents = ttnn.div(latents, scaling_factor)
 
-            # Workaround for #22017
-            ttnn_device.disable_and_clear_program_cache()
-
             logger.info("Running TT VAE")
             image = tt_vae.forward(latents, [B, C, H, W])
             ttnn_device.enable_program_cache()

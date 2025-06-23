@@ -574,9 +574,12 @@ ALWI void power_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_init<APPRO
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst0           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idst1           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | vector_mode     | Controls face tiles which are operated on. Default RC - all face tiles.    | int      | Valid members of VectorMode enum                      | False    |
  */
 // clang-format on
-ALWI void max_tile(uint32_t idst0, uint32_t idst1) { MATH((llk_math_eltwise_unary_sfpu_max<APPROX>(idst0))); }
+ALWI void max_tile(uint32_t idst0, uint32_t idst1, int vector_mode = (int)VectorMode::RC) {
+    MATH((llk_math_eltwise_unary_sfpu_max<APPROX>(idst0, vector_mode)));
+}
 
 /**
  * Please refer to documentation for any_init.
@@ -976,6 +979,26 @@ ALWI void dbg_unhalt() {
  // clang-format on
 ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
     MATH((dbg_get_array_row(dbg_array_id::DEST, row_addr, rd_data)));
+}
+
+// unary_max : if x > value --> x, else value
+// clang-format off
+/**
+ * Performs element-wise computation of:  result = x if x > value , where x is each element of a tile
+ * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
+ */
+// clang-format on
+ALWI void unary_max_int32_tile(uint32_t idst, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_max_int32<APPROX>(idst, param0)));
 }
 
 // unary_max : if x > value --> x, else value

@@ -62,13 +62,13 @@ void find_max_value_in_row() {
     cb_reserve_back(cb_max_value_before_reduction, onetile);
     tile_regs_acquire();
     reconfig_data_format(cb_input, cb_input);
-    for (uint32_t col = 0; col < Wt; col += block_size) {
+    for (uint32_t col = 0; col < Wt;) {
         // try to procces data by blocks to improve performance
         cb_wait_front(cb_input, col + block_size);
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++col) {
             auto working_register = col == 0 ? max_value_register : tile_register;
             copy_tile_init(cb_input);
-            copy_tile(cb_input, /* tile_idx */ col + block_idx, /* register_idx */ working_register);
+            copy_tile(cb_input, /* tile_idx */ col, /* register_idx */ working_register);
 
             if constexpr (do_mask_w) {
                 if (col + 1 == Wt) {
@@ -173,7 +173,7 @@ void reduce_max_value() {
     const uint32_t reduction_register = 0;
     tile_regs_acquire();
     reconfig_data_format(cb_max_value_before_reduction, cb_reduction_scaler);
-    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>(
+    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(
         cb_max_value_before_reduction, cb_reduction_scaler, cb_max_value_after_reduction);
     reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(
         cb_max_value_before_reduction,
@@ -181,7 +181,7 @@ void reduce_max_value() {
         /* tile_idx */ 0,
         /* tile_idx */ 0,
         reduction_register);
-    reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_max_value_after_reduction);
+    reduce_uninit();
     tile_regs_commit();
 
     tile_regs_wait();
@@ -330,7 +330,7 @@ void reduce_sum_exp_x() {
     const uint32_t reduction_register = 0;
 
     // reconfig_data_format(cb_exp_sum_before_reduction, cb_reduction_scaler);
-    // reduce_init_delta<false, PoolType::SUM, ReduceDim::REDUCE_ROW>(
+    // reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
     //     cb_exp_sum_before_reduction, cb_reduction_scaler, cb_exp_sum_after_reduction);
     // reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
     //     cb_exp_sum_before_reduction,
@@ -338,7 +338,7 @@ void reduce_sum_exp_x() {
     //     /* tile_idx */ 0,
     //     /* tile_idx */ 0,
     //     /* reduction_register */ reduction_register);
-    // reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_exp_sum_after_reduction);
+    // reduce_uninit();
 
     // We used matmul_tiles instead of reduce_tile, because reduce_tile causes a loss of precision. The same issue has
     // been observed in moreh’s ops.
