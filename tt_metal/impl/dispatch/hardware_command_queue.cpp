@@ -433,6 +433,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         }
         program.set_program_binary_status(device_->id(), ProgramBinaryStatus::InFlight);
     }
+
     // Lower the program to device: Generate dispatch commands.
     // Values in these commands will get updated based on kernel config ring
     // buffer state at runtime.
@@ -447,6 +448,28 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         return;
     }
 
+    const auto sub_device_id = sub_device_ids[0];
+    const auto sub_device_index = *sub_device_id;
+
+    uint32_t num_additional_workers = 0;
+    if (program.runs_on_noc_multicast_only_cores()) {
+        num_additional_workers +=
+            calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
+    }
+    if (program.runs_on_noc_unicast_only_cores()) {
+        num_additional_workers +=
+            calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
+    }
+
+    // Expected number of workers from the previous run. Used to generate the wait command in the EnqueueProgramCommand
+    const auto expected_workers_completed = program_dispatch::update_expected_num_workers_completed(
+        device_,
+        sub_device_id,
+        get_config_buffer_mgr(sub_device_index),
+        expected_num_workers_completed_[sub_device_index],
+        num_additional_workers,
+        id_);
+
 #ifdef DEBUG
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager_.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
@@ -460,17 +483,6 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         }
     }
 #endif
-    auto sub_device_id = sub_device_ids[0];
-    auto sub_device_index = *sub_device_id;
-
-    // Snapshot of expected workers from previous programs, used for dispatch_wait cmd generation.
-    uint32_t expected_workers_completed = this->expected_num_workers_completed_[sub_device_index];
-    if (program.runs_on_noc_multicast_only_cores()) {
-        this->expected_num_workers_completed_[sub_device_index] += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
-    }
-    if (program.runs_on_noc_unicast_only_cores()) {
-        this->expected_num_workers_completed_[sub_device_index] += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
-    }
 
     auto& worker_launch_message_buffer_state =
         this->cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id];

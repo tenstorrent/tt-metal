@@ -224,9 +224,32 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
 
     program_dispatch::ProgramDispatchMetadata dispatch_metadata;
+    // Expected number of workers from the previous run
     uint32_t expected_num_workers_completed = sysmem_manager.get_bypass_mode()
                                                   ? trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores
                                                   : expected_num_workers_completed_[*sub_device_id];
+    if (sysmem_manager.get_bypass_mode()) {
+        if (mcast_go_signals) {
+            // The workload contains programs that required a go signal mcast. Capture this here
+            // to accurately update the launch msg ring buffer state post trace execution on all
+            // mcast cores.
+            trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_multicast++;
+        }
+        if (unicast_go_signals) {
+            trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_unicast++;
+        }
+        // Update the expected number of workers dispatch must wait on
+        trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores += num_workers;
+    } else {
+        expected_num_workers_completed = program_dispatch::update_expected_num_workers_completed(
+            mesh_device_,
+            sub_device_id,
+            get_config_buffer_mgr(*sub_device_id),
+            expected_num_workers_completed_[*sub_device_id],
+            num_workers,
+            id_);
+    }
+
     // Reserve space in the L1 Kernel Config Ring Buffer for this workload.
     program_dispatch::reserve_space_in_kernel_config_buffer(
         this->get_config_buffer_mgr(*sub_device_id),
@@ -331,21 +354,6 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].inc_unicast_wptr(1);
     }
 
-    if (sysmem_manager.get_bypass_mode()) {
-        if (mcast_go_signals) {
-            // The workload contains programs that required a go signal mcast. Capture this here
-            // to accurately update the launch msg ring buffer state post trace execution on all
-            // mcast cores.
-            trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_multicast++;
-        }
-        if (unicast_go_signals) {
-            trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_unicast++;
-        }
-        // Update the expected number of workers dispatch must wait on
-        trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores += num_workers;
-    } else {
-        expected_num_workers_completed_[*sub_device_id] += num_workers;
-    }
     // From the dispatcher's perspective, binaries are now committed to DRAM
     mesh_workload.impl().set_program_binary_status(mesh_device_id, ProgramBinaryStatus::Committed);
     mesh_workload.set_last_used_command_queue_for_testing(this);

@@ -172,6 +172,30 @@ void set_num_worker_sems_on_dispatch(
 void set_go_signal_noc_data_on_dispatch(
     IDevice* device, const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id);
 
+//
+// Update the expected number of workers completed value for the given Program to run on the sub device.
+// Expected number of workers is used for the wait command to stall until all workers are completed.
+//
+// Will trigger a reset of the config buffer if the expected number of workers is about to overflow.
+//
+// Returns a snapshot of the expected number of workers **before** the update.
+//
+uint32_t update_expected_num_workers_completed(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    tt::tt_metal::SubDeviceId sub_device_id,
+    WorkerConfigBufferMgr& config_buffer_mgr,
+    uint32_t& expected_num_workers_completed_to_update,
+    uint32_t num_additional_workers,
+    uint8_t cq_id);
+
+uint32_t update_expected_num_workers_completed(
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::SubDeviceId sub_device_id,
+    WorkerConfigBufferMgr& config_buffer_mgr,
+    uint32_t& expected_num_workers_completed_to_update,
+    uint32_t num_additional_workers,
+    uint8_t cq_id);
+
 }  // namespace program_dispatch
 
 }  // namespace tt_metal
