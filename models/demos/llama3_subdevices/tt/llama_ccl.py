@@ -444,7 +444,15 @@ class TT_CCL:
         return ag_persistent_buffers_all
 
     def line_all_reduce(
-        self, input_tensor_mesh, cluster_axis, num_links, memory_config, dtype=None, lm_head=False, buffer_key=None
+        self,
+        input_tensor_mesh,
+        cluster_axis,
+        num_links,
+        memory_config,
+        dtype=None,
+        lm_head=False,
+        buffer_key=None,
+        use_noc1_only=False,
     ):
         if self.mode == "decode":
             if lm_head:
@@ -465,6 +473,7 @@ class TT_CCL:
                 dtype=dtype,
                 topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
                 subdevice_id=self.worker_sub_device_id,
+                use_noc1_only=use_noc1_only,
             )
 
             if lm_head:
@@ -524,6 +533,7 @@ class TT_CCL:
         batch_offset,
         slice_size,
         dtype=None,
+        use_noc1_only=False,
     ):
         (
             xqkv_reduced,
@@ -546,6 +556,7 @@ class TT_CCL:
             batch_offset=batch_offset,
             slice_size=slice_size,
             dtype=dtype,
+            use_noc1_only=use_noc1_only,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return xqkv_reduced, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD
@@ -571,6 +582,7 @@ class TT_CCL:
         buffer_key=None,
         RS_memory_config=None,
         cluster_axis=1,
+        use_noc1_only=False,
     ):
         persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
             self.reduce_scatter_buffer_idx[cluster_axis]
@@ -593,6 +605,7 @@ class TT_CCL:
             memory_config_mm=memory_config,
             global_cb=global_cb,
             topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
+            use_noc1_only=use_noc1_only,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         self.reduce_scatter_buffer_idx[cluster_axis] = (self.reduce_scatter_buffer_idx[cluster_axis] + 1) % self.num_cbs
@@ -606,6 +619,7 @@ class TT_CCL:
         cluster_axis,
         dim,
         qkv_memory_config,
+        use_noc1_only=False,
     ):
         persistent_interim_buffer = self.rs_create_heads_buffers[cluster_axis]
         (
@@ -626,6 +640,7 @@ class TT_CCL:
             num_kv_heads=1,
             memory_config=qkv_memory_config,
             qkv_memory_config=qkv_memory_config,
+            use_noc1_only=use_noc1_only,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD
@@ -639,6 +654,7 @@ class TT_CCL:
         num_links=1,
         math_op=ttnn.ReduceType.Sum,
         buffer_key=None,
+        use_noc1_only=False,
     ):
         if self.mode == "prefill":
             # reshape input to [1, 1, S, x]
@@ -690,6 +706,7 @@ class TT_CCL:
                 num_links=num_links,
                 memory_config=memory_config,
                 topology=ttnn.Topology.Ring if is_RING_6U else ttnn.Topology.Linear,
+                use_noc1_only=use_noc1_only,
             )
             self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
             self.reduce_scatter_buffer_idx[cluster_axis] = (
@@ -740,7 +757,9 @@ class TT_CCL:
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         return ttnn_tensor_out
 
-    def all_gather_concat(self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, num_heads=8):
+    def all_gather_concat(
+        self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, num_heads=8, use_noc1_only=False
+    ):
         ttnn_tensor_out = ttnn.experimental.all_gather_concat(
             input_tensor_mesh,
             self.all_gather_concat_inter_tensor[0],
@@ -753,6 +772,7 @@ class TT_CCL:
             num_heads=num_heads,
             memory_config=memory_config,
             subdevice_id=self.worker_sub_device_id,
+            use_noc1_only=use_noc1_only,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
@@ -869,6 +889,7 @@ def tt_sharded_distributed_rmsnorm(
     ln_sharded_stats_memcfg,
     tt_ccl=None,
     output_mem_config=None,
+    use_noc1_only=False,
 ):
     # inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
 
@@ -889,6 +910,7 @@ def tt_sharded_distributed_rmsnorm(
         weight=gamma,
         stats=persistent_buffer,
         memory_config=output_mem_config,
+        use_noc1_only=use_noc1_only,
     )
     tt_ccl.gather_idx[cluster_axis] = (tt_ccl.gather_idx[cluster_axis] + 1) % tt_ccl.num_cbs
     return tt_out, res

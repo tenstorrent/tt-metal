@@ -37,7 +37,8 @@ tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     uint32_t ring_index,
     ::ttnn::ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    bool use_noc1_only);
 
 tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     const Tensor& a,
@@ -65,6 +66,7 @@ struct RMSAllGather {
     const GlobalSemaphore semaphore;
     const std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     const uint32_t cluster_axis = 0;
+    bool use_noc1_only = false;
 
     void validate(
         const std::vector<Tensor>& input_tensors,
@@ -92,7 +94,8 @@ struct RMSAllGather {
         const uint32_t ring_size,
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-        uint32_t cluster_axis) :
+        uint32_t cluster_axis,
+        bool use_noc1_only) :
         eps(eps),
         output_mem_config(output_mem_config),
         program_config(program_config),
@@ -103,7 +106,8 @@ struct RMSAllGather {
         ring_size(ring_size),
         semaphore(semaphore),
         sub_device_id(sub_device_id),
-        cluster_axis(cluster_axis) {}
+        cluster_axis(cluster_axis),
+        use_noc1_only(use_noc1_only) {}
 
     auto attributes() const {
         using tt::stl::reflection::Attribute;
