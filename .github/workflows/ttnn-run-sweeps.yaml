@@ -320,6 +320,14 @@ on:
           - eltwise.unary.isneginf.isneginf_sharded
           - eltwise.unary.isposinf.isposinf
           - eltwise.unary.isposinf.isposinf_sharded
+          - eltwise.binary.add.add_sharded_unary
+          - eltwise.binary.subtract.subtract_sharded_unary
+          - eltwise.binary.div.div_sharded_unary
+          - eltwise.binary.div_no_nan.div_no_nan_sharded_unary
+          - eltwise.binary.eq.eq_sharded_unary
+          - eltwise.binary.eq.eq_sharded_unary_
+          - eltwise.binary.ne.ne_sharded_unary
+          - eltwise.binary.ne.ne_sharded_unary_
           - eltwise.binary.add.add_all_pytorch2
           - eltwise.binary.add.add_set2_pytorch2
           - eltwise.binary.add.add_different_memory_configs
