@@ -316,7 +316,8 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program_at(
                     device_index,
                     this->topology,
                     this->semaphore,
-                    this->sub_device_id);
+                    this->sub_device_id,
+                    this->use_noc1_only);
             } else {
                 TT_FATAL(false, "Program Config does not match");
 
@@ -343,7 +344,8 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program_at(
                     device_index,
                     this->topology,
                     this->semaphore,
-                    this->sub_device_id);
+                    this->sub_device_id,
+                    this->use_noc1_only);
             }
         },
         this->program_config);

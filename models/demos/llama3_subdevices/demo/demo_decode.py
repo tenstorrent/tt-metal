@@ -748,7 +748,6 @@ def test_llama_demo(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
-
     if galaxy_type != "6U" and galaxy_type != "4U":
         raise Exception("Not running on TG nor on 6U, you must run on those systems for this test")
 
