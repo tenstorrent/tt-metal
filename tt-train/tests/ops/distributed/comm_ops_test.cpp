@@ -87,7 +87,6 @@ TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
 
 TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
     auto* device = &ttml::autograd::ctx().get_device();
-    device->enable_program_cache();
     auto mesh_shape = device->shape();
 
     size_t batch_multiplier = rand() % 8 + 1;

@@ -59,7 +59,6 @@ def test_multimodal_demo_chat(
         )
     else:
         logger.info(f"Creating TT model on {mesh_device.get_num_devices()} devices")
-        mesh_device.enable_program_cache()
 
         model_args, model, _ = create_multimodal_model(
             mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len

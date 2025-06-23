@@ -694,6 +694,9 @@ def test_WorldModel(device, use_pretrained_weight, reset_seeds):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @run_for_wormhole_b0()
 def test_YoloModel(device, use_pretrained_weight, reset_seeds):
+    # https://github.com/tenstorrent/tt-metal/issues/23275
+    device.disable_and_clear_program_cache()
+
     x = torch.randn(1, 3, 640, 640)
 
     if use_pretrained_weight:
