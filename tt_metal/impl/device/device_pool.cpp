@@ -327,6 +327,7 @@ void DevicePool::init_fabric(const std::vector<tt_metal::IDevice*>& active_devic
             if (dev->compile_fabric()) {
                 return dev;
             } else {
+                // compile failure mostly come from Nebula (TG)
                 return (tt_metal::IDevice*)nullptr;
             }
         }));
