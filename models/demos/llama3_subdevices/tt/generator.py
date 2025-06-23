@@ -315,7 +315,7 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
-        reset_inputs=False,
+        reset_inputs=True,
     ):
         assert (
             sampling_params is None or sampling_params.temperature == 0
@@ -323,7 +323,6 @@ class Generator:
 
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
-            reset_inputs = True
         kv_cache = kv_cache[0]
         decode_kwargs = {
             "current_pos": start_pos,
