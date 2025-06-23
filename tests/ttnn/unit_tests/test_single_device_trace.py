@@ -15,8 +15,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("blocking", [True, False])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
 def test_single_device_single_trace(device, shape, blocking):
-    device.enable_program_cache()
-
     # Preallocate activation tensors. These will be used when capturing and executing the trace
     input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
     input_1_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
@@ -72,8 +70,6 @@ def test_single_device_single_trace(device, shape, blocking):
 @pytest.mark.parametrize("blocking", [True, False])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 266240}], indirect=True)
 def test_single_device_multi_trace(device, shape, blocking):
-    device.enable_program_cache()
-
     # Preallocate activation tensors. These will be used when capturing and executing the trace
     input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
     input_1_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)

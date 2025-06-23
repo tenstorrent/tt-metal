@@ -276,8 +276,6 @@ def test_t3k_falcon_causal_lm_with_trace(
     model_config_str,
     num_loops,
 ):
-    t3k_mesh_device.enable_program_cache()
-
     torch.manual_seed(0)
     batch = device_batch_size * t3k_mesh_device.get_num_devices()
     if llm_mode == "decode":

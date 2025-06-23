@@ -54,8 +54,9 @@ def dealloc_output(output_tensor):
 )
 def test_perf(device, model_task, use_weights_from_ultralytics):
     disable_persistent_kernel_cache()
-
     enable_segment = model_task == "segment"
+    # https://github.com/tenstorrent/tt-metal/issues/23288
+    device.disable_and_clear_program_cache()
 
     torch_input, ttnn_input = create_yolov9c_input_tensors(device, model=True)
     batch_size = torch_input.shape[0]
