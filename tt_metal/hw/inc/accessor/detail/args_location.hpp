@@ -150,7 +150,7 @@ struct ArgsOffsets {
      * @brief Calculates the number of compile-time arguments used when building a DistributionSpec. Note that
      * compile_time_args_skip is required to be constexpr since cta argument index must be constexpr
      *
-     * @return constexpr size_t     Number of compile-time arguments used by the DistributionSpec.
+     * @return constexpr uint32_t Number of compile-time arguments used by the DistributionSpec.
      */
     static constexpr uint32_t compile_time_args_skip() { return NumArgsCT; }
 
