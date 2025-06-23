@@ -344,14 +344,19 @@ Tensor convert_python_tensor_to_tt_tensor(
         }
     }();
 
+    // Important: `inc_ref` and `dec_ref` must be called while holding GIL. We wrap them in `MemoryPin` in a way that
+    // triggers a single increment on constructuion below, and a single decrement on destruction, which should also be
+    // triggered from within the main thread.
+    tt::tt_metal::MemoryPin pydata_pin(std::make_shared<tt::tt_metal::MemoryPin>(
+        /*increment_ref_count=*/[t = preprocessed_py_tensor.contiguous_py_tensor] { t.inc_ref(); },
+        /*decrement_ref_count=*/[t = preprocessed_py_tensor.contiguous_py_tensor] { t.dec_ref(); }));
+
     auto output = create_tt_tensor_from_py_data(
         preprocessed_py_tensor.py_data_ptr,
         shape,
         TensorLayout(preprocessed_py_tensor.data_type, PageConfig(layout, optional_tile), memory_config),
         device,
-        tt::tt_metal::MemoryPin(
-            /*increment_ref_count=*/[t = preprocessed_py_tensor.contiguous_py_tensor] { t.inc_ref(); },
-            /*decrement_ref_count=*/[t = preprocessed_py_tensor.contiguous_py_tensor] { t.dec_ref(); }),
+        pydata_pin,
         cq_id,
         pad_value,
         mesh_mapper);
