@@ -19,9 +19,9 @@ namespace ttsl {
 // ...
 //
 template <typename Callable>
-class Cleanup {
+class Cleanup final {
 public:
-    explicit Cleanup(Callable callable) : callable_(std::move(callable)) {}
+    constexpr explicit Cleanup(Callable callable) : callable_(std::move(callable)) {}
     ~Cleanup() {
         if (callable_.has_value()) {
             (*callable_)();
@@ -35,7 +35,8 @@ public:
     Cleanup& operator=(Cleanup&& other) noexcept = delete;
 
     // Cancels the cleanup.
-    // Must be called on an rvalue-qualified object, to explicitly signal the cleanup instance should no longer be used.
+    // Must be called on an rvalue-qualified object, to explicitly signal the cleanup instance should no longer be used;
+    // use-after-move clang check can be used to enforce this.
     void cancel() && { callable_.reset(); }
 
 private:
