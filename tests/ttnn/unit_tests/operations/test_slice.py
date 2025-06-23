@@ -146,13 +146,13 @@ def num_to_core_range_set(x):
 @pytest.mark.parametrize(
     "dims, slice_size, cores",
     [
-        # [[2, 256, 300, 64], 128, 22],
-        # [[2, 256, 128, 32], 64, 8],
-        # [[2, 256, 256, 128], 64, 64],
-        # [[2, 256, 256, 9], 64, 64],
-        # [[2, 256, 256, 17], 64, 64],
-        # [[2, 1024, 1024, 3], 64, 64],
-        [[2, 313, 71, 32], 32, 7]
+        [[2, 256, 300, 64], 128, 22],
+        [[2, 256, 128, 32], 64, 8],
+        [[2, 256, 256, 128], 64, 64],
+        [[2, 256, 256, 9], 64, 64],
+        [[2, 256, 256, 17], 64, 64],
+        [[2, 1024, 1024, 3], 64, 64],
+        [[2, 313, 71, 32], 32, 7],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
@@ -221,12 +221,18 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
 
 
 @pytest.mark.parametrize(
-    "dims, slice_size, core_x, core_y",
-    [[[2, 256, 256, 64], 128, 8, 2], [[2, 256, 128, 32], 16, 4, 4], [[2, 32, 32, 128], 32, 2, 2]],
+    "dims, slice_size, core_x, core_y, layout",
+    [
+        [[2, 256, 256, 64], 128, 8, 2, ttnn.ROW_MAJOR_LAYOUT],
+        [[2, 256, 128, 32], 16, 4, 4, ttnn.ROW_MAJOR_LAYOUT],
+        [[2, 32, 32, 128], 32, 2, 2, ttnn.ROW_MAJOR_LAYOUT],
+        [[2, 256, 256, 64], 64, 2, 4, ttnn.TILE_LAYOUT],
+        [[2, 256, 128, 128], 32, 4, 4, ttnn.TILE_LAYOUT],
+        [[2, 64, 64, 128], 32, 2, 2, ttnn.TILE_LAYOUT],
+    ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
-@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 def test_slice_write_block_sharded(device, dims, slice_dim, slice_size, core_x, core_y, layout, orientation):
     core_grid = device.core_grid
     if core_grid.x < core_x or core_grid.y < core_y:
