@@ -17,6 +17,10 @@ inputs:
     description: 'Enable watcher'
     default: false
     type: boolean
+  enable-ccache-kernel-support:
+    description: 'Enable ccache kernel support'
+    required: false
+    default: 'true'
 runs:
   using: "composite"
   steps:
@@ -73,4 +77,12 @@ runs:
         echo "TT_METAL_WATCHER=1" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Set up env vars for ccache kernel support
+      if: ${{ inputs.enable-ccache-kernel-support == 'true' }}
+      working-directory: ${{ inputs.path }}
+      run: |
+        echo "Enabling TT Metal ccache kernel support"
+        echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
       shell: bash
