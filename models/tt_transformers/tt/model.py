@@ -28,6 +28,7 @@ class Transformer(LightweightModule):
         paged_attention_config=None,
         use_paged_kv_cache=False,
         attention_class=None,
+        rope_setup_class=None,
     ):
         super().__init__()
         self.args = args
@@ -48,7 +49,8 @@ class Transformer(LightweightModule):
             dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
         )
 
-        self.rope_setup = RotarySetup(
+        ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else RotarySetup
+        self.rope_setup = ActualRopeSetupClass(
             mesh_device,
             args.max_batch_size,
             args.head_dim,

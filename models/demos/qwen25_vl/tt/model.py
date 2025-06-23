@@ -349,17 +349,7 @@ class Transformer(LightweightModule):
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
             attention_class=QwenVLAttentionModule,
-        )
-
-        # Create a new rotary setup to override the one in the TTTransformer
-        self.__tt_transformer.rope_setup = RotarySetup(
-            mesh_device,
-            args.max_batch_size,
-            args.head_dim,
-            args.max_seq_len,
-            args.rope_theta,
-            args.rope_scaling_factor,
-            args.orig_context_len,
+            rope_setup_class=RotarySetup,
         )
 
     @property
