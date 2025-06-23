@@ -108,9 +108,9 @@ inline Tensor binary_impl(
     } else if (binary_op_type == BinaryOpType::NE) {
         output_tensor = ttnn::ne_unary(queue_id, lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::GTE) {
-        output_tensor = ttnn::gez(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
+        output_tensor = ttnn::ge_unary(queue_id, lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::LTE) {
-        output_tensor = ttnn::lez(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
+        output_tensor = ttnn::le_unary(queue_id, lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::EQ) {
         output_tensor = ttnn::eq_unary(queue_id, lhs, rhs, memory_config, output);
     } else {
