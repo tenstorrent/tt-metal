@@ -14,11 +14,8 @@ namespace nd_sharding {
 namespace detail {
 using std::size_t;
 
-template <size_t CTA_OFFSET_, size_t CRTA_OFFSET_ = UNKNOWN>
+template <size_t CTA_OFFSET, size_t CRTA_OFFSET = UNKNOWN>
 struct ArgsOffsets {
-    static constexpr size_t CTA_OFFSET = CTA_OFFSET_;
-    static constexpr size_t CRTA_OFFSET = CRTA_OFFSET_;
-
     static constexpr auto args_config =
         ArgsConfig(static_cast<ArgsConfig::Underlying>(get_compile_time_arg_val(CTA_OFFSET)));
 
@@ -60,10 +57,10 @@ struct ArgsOffsets {
 
     uint32_t crta_offset_rt = CRTA_OFFSET;  // Default CRTA offset
 
-    template <typename ArgsOffsets_ = ArgsOffsets, std::enable_if_t<ArgsOffsets_::CRTA_OFFSET == UNKNOWN, int> = 0>
-    ArgsOffsets(size_t crta_offset = CRTA_OFFSET) : crta_offset_rt(crta_offset) {}  // Constructor to set CRTA offset
+    template <size_t C = CRTA_OFFSET, std::enable_if_t<C == UNKNOWN, int> = 0>
+    ArgsOffsets(size_t crta_offset = CRTA_OFFSET) : crta_offset_rt(crta_offset) {}
 
-    template <typename ArgsOffsets_ = ArgsOffsets, std::enable_if_t<ArgsOffsets_::CRTA_OFFSET != UNKNOWN, int> = 0>
+    template <size_t C = CRTA_OFFSET, std::enable_if_t<C != UNKNOWN, int> = 0>
     ArgsOffsets() {}
 
     // Functions to calculate offsets for common runtime arguments
