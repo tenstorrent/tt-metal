@@ -49,12 +49,17 @@ def torch_tensor_map(request):
     return torch_tensor_map
 
 
-def randomize_torch_tensor(torch_tensor_map, tensor_shape):
-    if tensor_shape in torch_tensor_map.keys():
-        torch_tensor = torch_tensor_map[tensor_shape]
-    else:
+def randomize_torch_tensor(torch_tensor_map, tensor_shape, generate_positive_numbers=False):
+    if generate_positive_numbers:
         torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
-        torch_tensor_map[tensor_shape] = torch_tensor
+        torch_tensor = torch.abs(torch_tensor)
+        return torch_tensor
+    else:
+        if tensor_shape in torch_tensor_map.keys():
+            torch_tensor = torch_tensor_map[tensor_shape]
+        else:
+            torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
+            torch_tensor_map[tensor_shape] = torch_tensor
 
     return torch_tensor
 
@@ -149,11 +154,23 @@ def run_conv(
     conv_input_shape = (total_batch_size, input_channels, input_height, input_width)
     conv_weight_shape = (output_channels, input_channels // groups, filter_height, filter_width)
     conv_bias_shape = (1, 1, 1, output_channels)
-    torch_input_tensor_nchw = randomize_torch_tensor(torch_tensor_map, conv_input_shape)
+
+    # for Sqrt activation functions we need positive numbers as output of conv2d
+    # in order to get valid sqrt values
+    sqrt_act_function = activation == "sqrt"
+    torch_input_tensor_nchw = randomize_torch_tensor(
+        torch_tensor_map, conv_input_shape, generate_positive_numbers=sqrt_act_function
+    )
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
-    torch_weight_tensor = randomize_torch_tensor(torch_tensor_map, conv_weight_shape)
-    torch_bias_tensor = randomize_torch_tensor(torch_tensor_map, conv_bias_shape) * 10 if has_bias else None
+    torch_weight_tensor = randomize_torch_tensor(
+        torch_tensor_map, conv_weight_shape, generate_positive_numbers=sqrt_act_function
+    )
+    torch_bias_tensor = (
+        randomize_torch_tensor(torch_tensor_map, conv_bias_shape, generate_positive_numbers=sqrt_act_function) * 10
+        if has_bias
+        else None
+    )
 
     torch_padded_input = torch.nn.functional.pad(
         torch_input_tensor_nchw,
@@ -224,12 +241,6 @@ def run_conv(
 
     if config_override and "act_block_w_div" in config_override and not auto_shard:
         conv_config.act_block_w_div = config_override["act_block_w_div"]
-
-    if config_override and "num_cores_nhw" in config_override:
-        if config_override["num_cores_nhw"] == 98:
-            conv_config.core_grid = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (11, 7)), ttnn.CoreRange((0, 8), (1, 8))})
-            conv_config.override_sharding_config = True
-            print("Setting num_cores_nhw to 98")
 
     if config_override and "enable_act_double_buffer" in config_override:
         conv_config.enable_act_double_buffer = config_override["enable_act_double_buffer"]
@@ -317,6 +328,7 @@ def run_conv(
         passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
         logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
         assert passing, pcc_msg
+        assert pcc_msg != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"
 
     if memory_config:
         output_memory_config = ttnn.get_memory_config(tt_output_tensor_on_device)
@@ -944,6 +956,7 @@ def test_conv_ws(
     if not passing:
         logger.error("Fails with PCC ", pcc_msg)
     assert passing
+    assert pcc_msg != 1.0, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
