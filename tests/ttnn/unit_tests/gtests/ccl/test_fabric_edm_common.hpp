@@ -399,7 +399,7 @@ void run_programs(std::vector<Program>& programs, const std::vector<IDevice*>& d
         throw e;
     }
 
-    log_info(tt::LogTest, "Running...");
+    log_trace(tt::LogTest, "Running...");
 
     std::vector<std::thread> threads;
     threads.reserve(num_programs);
@@ -3055,7 +3055,7 @@ void Run1DFabricPacketSendTest(
     }
 
     for (size_t i = 0; i < params.num_op_invocations; i++) {
-        log_info(tt::LogTest, "Iteration: {}", i);
+        log_trace(tt::LogTest, "Iteration: {}", i);
         if (i != 0 && params.line_sync) {
             for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
                 auto& programs = programs_per_fabric[fabric_index];
@@ -3080,18 +3080,18 @@ void Run1DFabricPacketSendTest(
             build_and_enqueue(worker_devices, programs, i != 0);
         }
 
-        log_info(tt::LogTest, "Waiting for Op finish on all devices");
+        log_trace(tt::LogTest, "Waiting for Op finish on all devices");
         for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
             auto& worker_devices = fabric_under_test_worker_devices[fabric_index];
             wait_for_worker_program_completion(worker_devices, subdevice_managers);
         }
-        log_info(tt::LogTest, "Main op done");
+        log_trace(tt::LogTest, "Main op done");
     }
 
     if (!use_device_init_fabric) {
         auto& devices = fabrics_under_test_devices[0];
         TT_FATAL(fabric_programs->size() == devices.size(), "Expected fabric programs size to be same as devices size");
-        log_info(tt::LogTest, "Fabric teardown");
+        log_trace(tt::LogTest, "Fabric teardown");
         persistent_fabric_teardown_sequence(
             devices,
             subdevice_managers,
@@ -3102,7 +3102,7 @@ void Run1DFabricPacketSendTest(
         }
     }
 
-    log_info(tt::LogTest, "Waiting for teardown completion");
+    log_trace(tt::LogTest, "Waiting for teardown completion");
     for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
         auto& devices = fabrics_under_test_devices[fabric_index];
         for (IDevice* d : devices) {
@@ -3116,7 +3116,7 @@ void Run1DFabricPacketSendTest(
             tt_metal::detail::DumpDeviceProfileResults(d);
         }
     }
-    log_info(tt::LogTest, "Finished");
+    log_trace(tt::LogTest, "Finished");
 }
 
 struct FullMeshTestParams {
@@ -3224,7 +3224,7 @@ void launch_kernels_and_wait_for_completion(
     const per_axis_array_t<std::vector<std::vector<CoreCoord>>>& worker_cores_vec_per_axis_per_device,
     const per_axis_array_t<std::vector<tt::tt_metal::DeviceAddr>>& global_semaphore_addrs_per_axis) {
     for (size_t i = 0; i < params.num_op_invocations; i++) {
-        log_info(tt::LogTest, "Iteration: {}", i);
+        log_trace(tt::LogTest, "Iteration: {}", i);
         if (i != 0 && params.line_sync) {
             for (size_t axis = 0; axis < FullMeshTestParams::MAX_NUM_AXES; axis++) {
                 for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices_per_axis[axis].size();
@@ -4062,7 +4062,7 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     }
 
     for (size_t i = 0; i < num_op_invocations; i++) {
-        log_info(tt::LogTest, "Iteration: {}", i);
+        log_trace(tt::LogTest, "Iteration: {}", i);
         if (i != 0 && line_sync) {
             for (size_t k = 0; k < worker_kernel_ids.size(); k++) {
                 auto& worker_rt_args_by_core = GetRuntimeArgs(programs[k], worker_kernel_ids[k]);
@@ -4077,12 +4077,12 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
 
         build_and_enqueue(worker_devices, programs, i != 0);
 
-        log_info(tt::LogTest, "Waiting for Op finish on all devices");
+        log_trace(tt::LogTest, "Waiting for Op finish on all devices");
         for (IDevice* d : devices) {
             tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
         }
-        log_info(tt::LogTest, "Main op done");
+        log_trace(tt::LogTest, "Main op done");
     }
 
-    log_info(tt::LogTest, "Finished");
+    log_trace(tt::LogTest, "Finished");
 }
