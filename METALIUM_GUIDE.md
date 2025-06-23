@@ -11,7 +11,7 @@
   - [Tenstorrent hardware for GPU experts](#tenstorrent-hardware-for-gpu-experts)
   - [Tenstorrent hardware for CPU experts](#tenstorrent-hardware-for-cpu-experts)
   - [Scaling beyond one chip](#scaling-beyond-one-chip)
-- [tt-Metalium](#tt-metalium)
+- [TT-Metalium](#tt-metalium)
   - [Running code on device](#running-code-on-device)
   - [Register control and Data Flow within the Compute Kernels](#register-control-and-data-flow-within-the-compute-kernels)
   - [Compute APIs](#compute-apis)
@@ -20,7 +20,7 @@
 
 ## Executive Summary
 
-This guide introduces developers to Tenstorrent's AI processor architecture and the Metalium programming model. Unlike traditional GPUs that rely on massive thread parallelism, Tenstorrent chips use a grid of specialized compute nodes called Tensix cores. Each Tensix contains five small RISC-V CPUs for control and instruction dispatch, dedicated hardware units for matrix operations (FPU) and vector operations (SFPU), data packing/unpacking units, and 1.5MB of local SRAM.
+This guide introduces developers to Tenstorrent's AI processor architecture and the TT-Metalium™ programming model. Unlike traditional GPUs that rely on massive thread parallelism, Tenstorrent chips use a grid of specialized compute nodes called Tensix cores. Each Tensix contains five small RISC-V CPUs for control and instruction dispatch, dedicated hardware units for matrix operations (FPU) and vector operations (SFPU), data packing/unpacking units, and 1.5MB of local SRAM.
 
 The typical data flow uses Network-on-Chip (NoC) interfaces to bring data into a Tensix, where it gets unpacked, processed by the compute units, packed, and sent out via the NoC to DRAM or other Tensix cores. This design prioritizes efficient data movement and local SRAM usage, reducing frequent DRAM access.
 
@@ -32,7 +32,7 @@ This document covers these concepts in detail to help you develop efficient appl
 
 The Tenstorrent architecture is a different kind of AI processor. Unlike GPUs where the processor provides a massive pool of threads and parallelize across them. Tenstorrent chips are a grid of different nodes. Most are compute nodes called a Tensix core ("core" is overloaded in computer architecture, thus will be dropped from this point onwards) sprinkled with some memory, chip management and Ethernet nodes to facilitate the computation.
 
-The following image shows the NoC grid of the Tenstorrent Wormhole processor (D = DRAM, T = Tensix, E = Ethernet, A = ARC/management, P = PCIe).
+The following image shows the NoC grid of the Tenstorrent Wormhole™ processor (D = DRAM, T = Tensix, E = Ethernet, A = ARC/management, P = PCIe).
 
 <img width="900" alt="image" src="docs/source/common/images/tenstorrent-wormhole-logical-noc-diagram.webp">
 
@@ -214,11 +214,11 @@ As models grow larger, multi-chip co-processing becomes essential for serving st
 
 Tenstorrent takes a different approach by using standard Ethernet connectivity. While NVIDIA's NVLink 5.0 provides 400G (G = Gbps) connectivity, Tenstorrent chips support standard Ethernet up to 800G - infrastructure already present in modern data centers. This eliminates the need for proprietary interconnects and specialized switches. The chips have sufficient NoC bandwidth and processing capability to function as network switches themselves, enabling converged computing without affecting computational performance.
 
-The Wormhole N300 card illustrates this design with two Wormhole chips connected via Ethernet. The chip with direct PCIe host connectivity (L chip - Local) communicates with the secondary chip (R chip - Remote) through this Ethernet link. The SDK abstracts this topology, allowing developers to program both chips uniformly for memory allocation, kernel execution, and data transfer operations.
+The Wormhole n300 card illustrates this design with two Wormhole chips connected via Ethernet. The chip with direct PCIe host connectivity (L chip - Local) communicates with the secondary chip (R chip - Remote) through this Ethernet link. The SDK abstracts this topology, allowing developers to program both chips uniformly for memory allocation, kernel execution, and data transfer operations.
 
 <img width="900" alt="image" src="docs/source/common/images/tenstorrent-wormhole-board-connective-diagram.webp">
 
-This architecture scales efficiently beyond two chips. The QuietBox configuration contains 8 Wormhole or 4 Blackhole processors connected in a mesh topology. Data can be transferred between processors using specialized code called EDM (Ethernet Data Movers) that handles traffic routing over the Ethernet interconnects.
+This architecture scales efficiently beyond two chips. The QuietBox configuration contains 8 Wormhole or 4 Blackhole™ processors connected in a mesh topology. Data can be transferred between processors using specialized code called EDM (Ethernet Data Movers) that handles traffic routing over the Ethernet interconnects.
 
 <img width="900" alt="image" src="docs/source/common/images/tenstorrent-wormhole-quietbox-topology.webp">
 
@@ -232,9 +232,9 @@ Multiple 32-chip boxes can be connected together to form a mesh spanning several
 
 Please refer to the [tt-Fabric technical report](tech_reports/TT-Fabric/TT-Fabric-Architecture.md) for more details on the interconnect architecture and how it enables efficient scaling across multiple chips and hosts. And [Basic Ethernet Multichip](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/EthernetMultichip/BasicEthernetGuide.md) for a guide on Ethernet performance on Wormhole processors.
 
-## tt-Metalium
+## TT-Metalium
 
-tt-Metalium (also called Metalium, tt-Metal, or just Metal) is Tenstorrent's SDK for developing applications on Tenstorrent AI processors. The API design resembles OpenCL, providing C++ interfaces for both high-level operations and direct hardware control. The kernels shown in previous sections are written using Metalium.
+TT-Metalium™ (also shorthanded as Metalium, tt-Metal, or just Metal) is Tenstorrent's SDK for developing applications on Tenstorrent processors. The API design resembles OpenCL, providing C++ interfaces for both high-level operations and direct hardware control. The kernels shown in previous sections are written using Metalium.
 
 Metalium functions as the base layer for Tenstorrent's software stack. Higher-level tools like TTNN, tt-MLIR, and tt-Forge are built on top of Metalium. Applications can range from simple single-kernel programs running on one core to complex distributed computations spanning multiple chips.
 
