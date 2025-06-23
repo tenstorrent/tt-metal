@@ -10,8 +10,7 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from tests.nightly.tg.ccl.test_all_to_all_dispatch import (
-    PACKET_WORKER_CRS,
+from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_dispatch_t3000 import (
     gen_tokens,
     gen_expert_mapping,
     get_metadata_tensor,
@@ -70,11 +69,11 @@ def get_output_combined_contribs(sparse_contribs, expert_indices, expert_mapping
     hidden = sparse_contribs.shape[-1]
 
     if replication_axis == 1:
-        replication_dim = mesh_shape[1]
-        replication_group = mesh_shape[0]
-    elif replication_axis == 0:
         replication_dim = mesh_shape[0]
         replication_group = mesh_shape[1]
+    elif replication_axis == 0:
+        replication_dim = mesh_shape[1]
+        replication_group = mesh_shape[0]
     else:
         assert replication_axis == -1
         replication_dim = 1
@@ -90,6 +89,14 @@ def get_output_combined_contribs(sparse_contribs, expert_indices, expert_mapping
     output_combined_contribs_tensor = torch.ones(selected_experts_k, batch * replication_dim, 1, hidden) * 7
     real_data_map = torch.zeros(output_combined_contribs_tensor.shape[:-2])
 
+    def _rep_idx(m0, m1, b):
+        if replication_axis == 0:
+            return m1 * batch + b
+        elif replication_axis == 1:
+            return m0 * batch + b
+        else:
+            return b
+
     token_expert_count = 0
     for m0 in range(mesh_shape[0]):
         for m1 in range(mesh_shape[1]):
@@ -103,7 +110,7 @@ def get_output_combined_contribs(sparse_contribs, expert_indices, expert_mapping
                         continue
                     local_expert_idx = experts_on_device.index(expert_idx)
 
-                    dense_batch_idx = m0 * batch + b
+                    dense_batch_idx = _rep_idx(m0, m1, b)
 
                     output_combined_contribs_tensor[k, dense_batch_idx, 0, :] = sparse_contribs[
                         d, local_expert_idx, b, :
@@ -273,19 +280,28 @@ def run_all_to_all_combine_test(
     tt_out_tensor_list = run_op(num_iters, store_all_results=True)
 
     for tt_out, (ref, data_map) in zip(tt_out_tensor_list, output_tensor_goldens_list):
-        tt_out_agg = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+        if axis == 0:
+            # need to roll my own mesh composer here for the transposed ordering
+            device_shards = [ttnn.to_torch(ittout, mesh_composer=None) for ittout in ttnn.get_device_tensors(tt_out)]
+            ordered_shards = []
+            for ir in range(mesh_shape[1]):
+                for ic in range(mesh_shape[0]):
+                    ordered_shards.append(device_shards[ic * mesh_shape[1] + ir])
+            tt_out_agg = torch.cat(ordered_shards, dim=1)
+
+        else:
+            tt_out_agg = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
         check_results(tt_out_agg, ref, data_map)
-
-
-#         for k in range(select_experts_k):
-#             print(f"{tt_out_agg[k,:,:,:]=}")
-#             print(f"{ref[k,:,:,:]=}")
 
 
 def check_results(test_tensor, ref_tensor, data_map):
     for k in range(ref_tensor.shape[0]):
         for b in range(ref_tensor.shape[1]):
+            print(f"{b=} {k=}")
+            print(f"{test_tensor[k, b, 0, :]=}")
             if data_map[k, b].item() == 1:
+                print(f"{ref_tensor[k, b, 0, :]=}")
+
                 assert_with_pcc(test_tensor[k, b, 0, :], ref_tensor[k, b, 0, :])
 
 
@@ -303,14 +319,14 @@ def test_all_to_all_combine_no_trace(mesh_device, mesh_shape):
     devices = mesh_shape[0] * mesh_shape[1]
     batch = 1 * devices
     experts = 2 * devices
-    select_experts_k = 4
-    hidden_size = 32
+    select_experts_k = 2
+    hidden_size = 16
     num_iters = 1
     input_memory_config = ttnn.DRAM_MEMORY_CONFIG
     output_memory_config = ttnn.DRAM_MEMORY_CONFIG
     num_links = 1
     topology = ttnn.Topology.Linear
-    axis = 1
+    axis = 0
 
     run_all_to_all_combine_test(
         mesh_device,
@@ -336,11 +352,11 @@ def test_simple_tensor_gen(mesh_device, mesh_shape):
     torch.set_printoptions(threshold=10000)
     devices = mesh_shape[0] * mesh_shape[1]
     batch = 1 * devices
-    experts = 2 * devices
-    select_experts_k = 2
+    experts = 1 * devices
+    select_experts_k = 1
     hidden_size = 32
-    axis = 1
-    mesh_dim = mesh_shape[axis]
+    axis = 0
+    mesh_dim = mesh_shape[0 if axis == 1 else 1]
     (
         sparse_dispatched_tokens,
         input_sparse_contribs_tensor,

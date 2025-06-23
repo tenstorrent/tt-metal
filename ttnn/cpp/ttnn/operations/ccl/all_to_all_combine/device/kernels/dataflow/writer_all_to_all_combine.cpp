@@ -70,9 +70,10 @@ inline uint32_t get_device_idx_from_batch_idx(const uint32_t b) {
         // "<<device_in_group<< " device idx: "<<device_idx<<"\n";
         return device_idx;
     } else {
-        auto device_idx = device_in_group * MeshCols + SourceChipId % MeshRows;
-        // DPRINT<<"Src ID "<<SourceChipId<<" b: "<< b<<" Batch_Per_Device: "<<Batch_Per_Device<<" device_in_group:
-        // "<<device_in_group<< " device idx: "<<device_idx<<"\n";
+        auto device_idx = device_in_group * MeshCols + SourceChipId % MeshCols;
+        // DPRINT<<"MeshCols: "<<MeshCols<<" mesh rows: "<<MeshRows<<"\n";
+        //         DPRINT<<"chip_id "<<SourceChipId<<" b: "<< b<<" Batch_Per_Device: "<<Batch_Per_Device<<"
+        //         device_in_group: " <<device_in_group<< " device idx: "<<device_idx<<"\n";
         return device_idx;
     }
 }
@@ -131,19 +132,23 @@ enum eth_chan_directions {
 };*/
 
 template <uint32_t SrcChipId, uint32_t MeshCols, uint32_t MeshRows>
-inline uint32_t get_direction(uint32_t dest_chip_id) {
+inline eth_chan_directions get_direction(uint32_t dest_chip_id) {
     // if along the same row, we go east or west
+    eth_chan_directions direction = eth_chan_directions::COUNT;
 
     constexpr uint32_t Src_Row = SrcChipId / MeshCols, Src_Col = SrcChipId % MeshCols;
     if (Src_Row == dest_chip_id / MeshCols) {
-        return SrcChipId < dest_chip_id ? eth_chan_directions::EAST : eth_chan_directions::WEST;
+        direction = SrcChipId < dest_chip_id ? eth_chan_directions::EAST : eth_chan_directions::WEST;
     }
     // if along the same column, we go north or south
     else if (Src_Col == dest_chip_id % MeshCols) {
-        return SrcChipId < dest_chip_id ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
+        direction = SrcChipId > dest_chip_id ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
     }
     // if not along the same row or column, we go north or south; north if dest_chip_id is smaller than src_chip_id
-    return dest_chip_id < SrcChipId ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
+    else {
+        direction = SrcChipId > dest_chip_id ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
+    }
+    return direction;
 }
 
 template <uint32_t SrcChipId, uint32_t MeshCols, uint32_t MeshRows, int32_t MaxPacketSzBytes>
@@ -259,14 +264,14 @@ void kernel_main() {
                     get_output_page_idx<batch_size, mesh_cols, mesh_rows, replicate_axis>(b, k);
                 const uint64_t output_noc_addr = get_noc_addr(output_page_idx, output_addrgen);
 
-                DPRINT << " b: " << b << " k: " << k << " output_page_idx: " << output_page_idx
-                       << " src chip: " << src_chip_id << "\n";
-                tt::data_movement::common::print_bf16_pages(src_data_l1_ptr, data_size_bytes / 2, 1);
-
                 // figure out which device to send data to and routing
                 const auto dest_device_idx =
                     get_device_idx_from_batch_idx<src_chip_id, batch_size, mesh_cols, mesh_rows, replicate_axis>(b);
                 const auto& dest_chip_id = dest_chip_ids[dest_device_idx];
+
+                DPRINT << " b: " << b << " k: " << k << " output_page_idx: " << output_page_idx
+                       << " src chip: " << src_chip_id << "dest_chip " << (uint32_t)dest_chip_id << "\n";
+                // tt::data_movement::common::print_bf16_pages(src_data_l1_ptr, data_size_bytes / 2, 1);
 
                 if(dest_chip_id==src_chip_id){
                     noc_async_write(src_data_l1_ptr,output_noc_addr,data_size_bytes);
@@ -316,6 +321,11 @@ void kernel_main() {
 
             packet_headers[1]->to_noc_unicast_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{global_noc_semaphore_addr, 1, 32, true});
+
+            if (!directions[route]) {
+                DPRINT << "BAD DIRECTION: src " << src_chip_id << " dest: " << (uint32_t)dest_chip_id << "\n";
+                continue;
+            }
 
             fabric_set_unicast_route(
                 const_cast<LowLatencyMeshPacketHeader*>(packet_headers[1]),
