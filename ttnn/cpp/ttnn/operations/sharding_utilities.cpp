@@ -828,6 +828,9 @@ ShardedAccessorArgs get_sharded_accessor_args(
     auto& shard_shape_args = shard_shape_rt ? runtime_args : compile_time_args;
     auto& bank_coords_args = bank_coords_rt ? runtime_args : compile_time_args;
 
+    size_t rank = tensor_shape.size();
+    TT_FATAL(!rank_rt || rank <= 10, "Rank must be less than or equal to 10 for runtime rank");
+
     compile_time_args.push_back(args_config.raw());
     rank_args.push_back(tensor_shape.size());
     num_banks_args.push_back(bank_coords.size());
