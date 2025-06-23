@@ -380,7 +380,6 @@ def test_prepare_bias(
 
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
 
-    tt_bias_tensor = ttnn.to_device(tt_bias_tensor, device)
     tt_bias_tensor_formatted = (
         ttnn.prepare_conv_bias(
             bias_tensor=tt_bias_tensor, input_memory_config=tt_input_tensor.memory_config(), **conv_kwargs

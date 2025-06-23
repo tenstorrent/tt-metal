@@ -556,39 +556,10 @@ void validate_weight_tensor(const ttnn::Tensor& weight_tensor) {
 }
 
 void validate_bias_tensor(const ttnn::Tensor& bias_tensor) {
-    TT_FATAL(!ttnn::has_storage_type_of(bias_tensor, ttnn::DEVICE_STORAGE_TYPE), "conv bias should be placed on host");
     TT_FATAL(bias_tensor.logical_shape().rank() == 4, "bias tensor should be 4D tensor");
     TT_FATAL(bias_tensor.layout() == Layout::ROW_MAJOR, "bias tensor layout should be in row_major layout");
-}
-
-void validate_weights_format(const std::string& weights_format) {
-    TT_FATAL(weights_format.size() == 4, "weights_format must have exactly 4 characters");
-    TT_FATAL(weights_format.find("O") != string::npos, "weights_format must contain \"O\"");
-    TT_FATAL(weights_format.find("I") != string::npos, "weights_format must contain \"I\"");
-    TT_FATAL(weights_format.find("H") != string::npos, "weights_format must contain \"H\"");
-    TT_FATAL(weights_format.find("W") != string::npos, "weights_format must contain \"W\"");
-    TT_FATAL(weights_format == "OIHW", "Conv2d weights format must be \"OIHW\"");
-}
-
-ttnn::Tensor conv_bias_layout_convert(
-    const ttnn::Tensor& bias_tensor,
-    DataType bias_dtype,
-    uint32_t weight_block_h_ntiles,
-    uint32_t weight_block_w_ntiles,
-    const ParallelConfig& parallel_config,
-    uint32_t out_channels) {
-    ttnn::Tensor bias_tensor_ = bias_tensor;
-    validate_bias_tensor(bias_tensor_);
-    const auto& bias_shape = bias_tensor_.logical_shape();
+    const auto& bias_shape = bias_tensor.logical_shape();
     TT_FATAL(bias_shape[0] == 1 && bias_shape[1] == 1 && bias_shape[2] == 1, "bias shape is not correct");
-    ttnn::Shape bias_channels_padded_shape({1, 1, 32, round_up(out_channels, weight_block_w_ntiles * 32)});
-    bias_tensor_ =
-        ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D{0, 0, 0, 0}, 0);
-    bias_tensor_ = ttnn::to_layout(bias_tensor_, Layout::TILE);
-    if (bias_tensor_.dtype() != bias_dtype) {
-        bias_tensor_ = ttnn::to_dtype(bias_tensor_, bias_dtype);
-    }
-    return bias_tensor_;
 }
 
 template <typename T>
@@ -959,14 +930,16 @@ std::optional<ttnn::Tensor> prepare_conv_bias_internal(
     if (!is_bias_tensor_is_on_device) {
         TT_FATAL(bias_tensor_.logical_shape()[3] == out_channels, "Bias must have the same length as output channels");
         uint32_t out_channels_padded = calculate_out_channels_padded(out_channels, params.output_parallel_config);
-        bias_tensor_ = conv_bias_layout_convert(
-            bias_tensor_,
-            weight_dtype,
-            params.weight_block_h_ntiles,
-            params.weight_block_w_ntiles,
-            params.output_parallel_config,
-            device,
-            out_channels_padded);
+        // Inline the operations from conv_bias_layout_convert
+        validate_bias_tensor(bias_tensor_);
+        ttnn::Shape bias_channels_padded_shape(
+            {1, 1, 32, round_up(out_channels_padded, params.weight_block_w_ntiles * 32)});
+        bias_tensor_ =
+            ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D{0, 0, 0, 0}, 0);
+        bias_tensor_ = ttnn::to_layout(bias_tensor_, Layout::TILE);
+        if (bias_tensor_.dtype() != weight_dtype) {
+            bias_tensor_ = ttnn::to_dtype(bias_tensor_, weight_dtype);
+        }
         bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
     }
     TT_ASSERT(bias_tensor_.dtype() == weight_dtype, "Bias tensor should be in the same dtype as the weights tensor");
@@ -1077,6 +1050,7 @@ ttnn::Tensor prepare_conv_bias(
     T* device,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
+    TT_FATAL(!ttnn::has_storage_type_of(bias_tensor, ttnn::DEVICE_STORAGE_TYPE), "conv bias should be placed on host");
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
