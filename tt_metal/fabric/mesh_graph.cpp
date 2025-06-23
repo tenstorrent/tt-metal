@@ -232,24 +232,40 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             "MeshGraph: Board not found: {}",
             mesh["board"].as<std::string>());
 
-        std::uint32_t mesh_ew_size = mesh["topology"][1].as<std::uint32_t>();
-        std::uint32_t mesh_ns_size = mesh["topology"][0].as<std::uint32_t>();
+        // Parse device topology (actual number of chips used)
+        TT_FATAL(mesh["device_topology"].IsDefined(), "MeshGraph: Expecting yaml mesh to define device_topology");
+        std::uint32_t mesh_ns_size = mesh["device_topology"][0].as<std::uint32_t>();
+        std::uint32_t mesh_ew_size = mesh["device_topology"][1].as<std::uint32_t>();
 
-        std::uint32_t board_ew_size = board_name_to_topology[mesh_board][1];
+        // Parse host topology (number of boards)
+        TT_FATAL(mesh["host_topology"].IsDefined(), "MeshGraph: Expecting yaml mesh to define host_topology");
+        std::uint32_t mesh_board_ns_size = mesh["host_topology"][0].as<std::uint32_t>();
+        std::uint32_t mesh_board_ew_size = mesh["host_topology"][1].as<std::uint32_t>();
+
         std::uint32_t board_ns_size = board_name_to_topology[mesh_board][0];
+        std::uint32_t board_ew_size = board_name_to_topology[mesh_board][1];
 
+        // Assert that device topology is divisible by board topology
         TT_FATAL(
-            mesh_ew_size % board_ew_size == 0 and mesh_ns_size % board_ns_size == 0,
-            "MeshGraph: Mesh topology of {}x{} is not divisible by board topology of {}x{}",
-            mesh_ew_size,
+            mesh_ns_size % board_ns_size == 0 and mesh_ew_size % board_ew_size == 0,
+            "MeshGraph: Device topology size {}x{} must be divisible by board topology size {}x{}",
             mesh_ns_size,
-            board_ew_size,
-            board_ns_size);
+            mesh_ew_size,
+            board_ns_size,
+            board_ew_size);
 
-        std::uint32_t mesh_board_ew_size = mesh_ew_size / board_ew_size;
-        std::uint32_t mesh_board_ns_size = mesh_ns_size / board_ns_size;
+        // Assert that device topology aligns with host topology and board topology
+        TT_FATAL(
+            mesh_ns_size == mesh_board_ns_size * board_ns_size and mesh_ew_size == mesh_board_ew_size * board_ew_size,
+            "MeshGraph: Device topology size {}x{} must equal host topology size {}x{} * board topology size {}x{}",
+            mesh_ns_size,
+            mesh_ew_size,
+            mesh_board_ns_size,
+            mesh_board_ew_size,
+            board_ns_size,
+            board_ew_size);
 
-        std::uint32_t mesh_size = mesh_ew_size * mesh_ns_size;
+        std::uint32_t mesh_size = mesh_ns_size * mesh_ew_size;
         std::vector<chip_id_t> chip_ids(mesh_size);
         std::iota(chip_ids.begin(), chip_ids.end(), 0);
         this->mesh_to_chip_ids_.emplace(
@@ -258,7 +274,8 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         // Fill in host ranks for Mesh
         TT_FATAL(
             mesh["host_ranks"].IsSequence() and mesh["host_ranks"].size() == mesh_board_ns_size,
-            "MeshGraph: Expecting host_ranks to define a 2D array that matches topology");
+            "MeshGraph: Expecting host_ranks to define a 2D array that matches host topology NS size {}",
+            mesh_board_ns_size);
 
         std::vector<HostRankId> mesh_host_ranks_values;
         mesh_host_ranks_values.reserve(mesh_board_ns_size * mesh_board_ew_size);
@@ -268,7 +285,8 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         for (std::uint32_t i = 0; i < mesh_board_ns_size; i++) {
             TT_FATAL(
                 mesh["host_ranks"][i].IsSequence() and mesh["host_ranks"][i].size() == mesh_board_ew_size,
-                "MeshGraph: Expecting host_ranks to define a 2D array that matches topology");
+                "MeshGraph: Expecting host_ranks to define a 2D array that matches host topology EW size {}",
+                mesh_board_ew_size);
             for (std::uint32_t j = 0; j < mesh_board_ew_size; j++) {
                 HostRankId host_rank{mesh["host_ranks"][i][j].as<std::uint32_t>()};
                 if (host_rank_submesh_start_end_coords.find(host_rank) == host_rank_submesh_start_end_coords.end()) {
@@ -285,12 +303,9 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             this->mesh_host_rank_coord_ranges_.emplace(
                 std::make_pair(*mesh_id, host_rank),
                 MeshCoordinateRange(
+                    MeshCoordinate(coords.first[0] * board_ns_size, coords.first[1] * board_ew_size),
                     MeshCoordinate(
-                        coords.first[0] * board_name_to_topology[mesh_board][0],
-                        coords.first[1] * board_name_to_topology[mesh_board][1]),
-                    MeshCoordinate(
-                        (coords.second[0] + 1) * board_name_to_topology[mesh_board][0] - 1,
-                        (coords.second[1] + 1) * board_name_to_topology[mesh_board][1] - 1)));
+                        (coords.second[0] + 1) * board_ns_size - 1, (coords.second[1] + 1) * board_ew_size - 1)));
         }
         this->mesh_host_ranks_[*mesh_id] =
             MeshContainer<HostRankId>(MeshShape(mesh_board_ns_size, mesh_board_ew_size), mesh_host_ranks_values);
