@@ -543,8 +543,8 @@ Result conv2d_L1(
         std::tie(weight_tensor_on_device, bias_tensor_on_device) =
             prepare_conv_weights_biases_and_move_to_device(weight_tensor, bias_tensor, params, device);
     } else {
-        // Validate that the device weights are in the correct format
-        validate_device_weights_format(weight_tensor_on_device, in_channels, out_channels, conv_config.weights_dtype);
+        // Validate that the device conv weights are in the correct format
+        validate_device_conv_weights(weight_tensor_on_device, in_channels, out_channels, conv_config.weights_dtype);
         log_debug(tt::LogOp, "conv2d: Using preprocessed weights from device.");
     }
 
@@ -554,8 +554,8 @@ Result conv2d_L1(
             bias_tensor_on_device = prepare_conv_bias_internal(
                 bias_tensor_on_device, out_channels, params, weight_tensor_on_device.dtype(), device);
         } else {
-            // Validate that the device bias is in the correct format
-            validate_device_bias_format(bias_tensor_on_device.value(), out_channels, conv_config.weights_dtype);
+            // Validate that the device conv bias is in the correct format
+            validate_device_conv_bias(bias_tensor_on_device.value(), out_channels, conv_config.weights_dtype);
             log_debug(tt::LogOp, "conv2d: Using preprocessed bias from device.");
         }
     }

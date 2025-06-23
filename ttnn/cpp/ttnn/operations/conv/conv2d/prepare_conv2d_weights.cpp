@@ -548,18 +548,48 @@ static Tensor to_folded_weight_layout(
     }
 }
 
-void validate_weight_tensor(const ttnn::Tensor& weight_tensor) {
+void validate_host_conv_weights(const ttnn::Tensor& weight_tensor) {
     TT_FATAL(
-        !ttnn::has_storage_type_of(weight_tensor, ttnn::DEVICE_STORAGE_TYPE), "conv weight should be placed on host");
-    TT_FATAL(weight_tensor.layout() == Layout::ROW_MAJOR, "conv weight layout should be in row_major layout");
-    TT_FATAL(weight_tensor.logical_shape().rank() == 4, "conv weight should be 4D tensor");
+        !ttnn::has_storage_type_of(weight_tensor, ttnn::DEVICE_STORAGE_TYPE),
+        "Host conv weights should be placed on host");
+    TT_FATAL(weight_tensor.layout() == Layout::ROW_MAJOR, "Host conv weights layout should be in row_major layout");
+    TT_FATAL(weight_tensor.logical_shape().rank() == 4, "Host conv weights should be 4D tensor");
 }
 
-void validate_bias_tensor(const ttnn::Tensor& bias_tensor) {
-    TT_FATAL(bias_tensor.logical_shape().rank() == 4, "bias tensor should be 4D tensor");
-    TT_FATAL(bias_tensor.layout() == Layout::ROW_MAJOR, "bias tensor layout should be in row_major layout");
+void validate_host_conv_bias(const ttnn::Tensor& bias_tensor) {
+    TT_FATAL(bias_tensor.logical_shape().rank() == 4, "Host conv bias should be 4D tensor");
+    TT_FATAL(bias_tensor.layout() == Layout::ROW_MAJOR, "Host conv bias layout should be in row_major layout");
     const auto& bias_shape = bias_tensor.logical_shape();
-    TT_FATAL(bias_shape[0] == 1 && bias_shape[1] == 1 && bias_shape[2] == 1, "bias shape is not correct");
+    TT_FATAL(bias_shape[0] == 1 && bias_shape[1] == 1 && bias_shape[2] == 1, "Host conv bias shape is not correct");
+}
+
+// Validate device conv weights format (minimal validation for main path)
+void validate_device_conv_weights(
+    const ttnn::Tensor& weight_tensor,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    const std::optional<DataType>& expected_dtype) {
+    TT_FATAL(weight_tensor.layout() == Layout::TILE, "Device conv weights must be in TILE layout");
+
+    const auto& shape = weight_tensor.logical_shape();
+    TT_FATAL(shape.rank() == 4 && shape[0] == 1 && shape[1] == 1, "Invalid device conv weight tensor shape");
+    TT_FATAL(
+        shape[2] >= in_channels && shape[3] >= out_channels,
+        "Device conv weight tensor too small for required channels");
+
+    if (expected_dtype.has_value()) {
+        TT_FATAL(weight_tensor.dtype() == expected_dtype.value(), "Device conv weight tensor dtype mismatch");
+    }
+}
+
+// Validate device conv bias format (minimal validation for main path)
+void validate_device_conv_bias(
+    const ttnn::Tensor& bias_tensor, uint32_t out_channels, const std::optional<DataType>& expected_dtype) {
+    TT_FATAL(bias_tensor.logical_shape()[3] >= out_channels, "Device conv bias tensor too small for required channels");
+
+    if (expected_dtype.has_value()) {
+        TT_FATAL(bias_tensor.dtype() == expected_dtype.value(), "Device conv bias tensor dtype mismatch");
+    }
 }
 
 template <typename T>
@@ -831,7 +861,7 @@ static ttnn::Tensor prepare_conv_weights_internal(
     if (weight_shape.rank() == 3 && params.input_width == 1) {
         weight_tensor_ = ttnn::reshape(weight_tensor_, Shape({weight_shape[0], weight_shape[1], weight_shape[2], 1}));
     }
-    validate_weight_tensor(weight_tensor_);
+    validate_host_conv_weights(weight_tensor_);
 
     const auto& original_weights_shape = weight_tensor_.logical_shape();
     uint32_t original_weights_out_channels = original_weights_shape[0];
@@ -931,7 +961,7 @@ std::optional<ttnn::Tensor> prepare_conv_bias_internal(
         TT_FATAL(bias_tensor_.logical_shape()[3] == out_channels, "Bias must have the same length as output channels");
         uint32_t out_channels_padded = calculate_out_channels_padded(out_channels, params.output_parallel_config);
         // Inline the operations from conv_bias_layout_convert
-        validate_bias_tensor(bias_tensor_);
+        validate_host_conv_bias(bias_tensor_);
         ttnn::Shape bias_channels_padded_shape(
             {1, 1, 32, round_up(out_channels_padded, params.weight_block_w_ntiles * 32)});
         bias_tensor_ =

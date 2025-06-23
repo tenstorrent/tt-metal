@@ -17,6 +17,16 @@ namespace ttnn {
 namespace operations::conv {
 namespace conv2d {
 
+// Device validation functions for conv2d tensors (after preparation/on device)
+void validate_device_conv_weights(
+    const ttnn::Tensor& weight_tensor,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    const std::optional<DataType>& expected_dtype);
+
+void validate_device_conv_bias(
+    const ttnn::Tensor& bias_tensor, uint32_t out_channels, const std::optional<DataType>& expected_dtype);
+
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout(

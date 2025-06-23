@@ -122,17 +122,6 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
     std::array<uint32_t, 2> kernel_size,
     const CoreCoord& compute_grid);
 
-// Validate that device weights match the expected format for convolution (minimal validation for main path)
-void validate_device_weights_format(
-    const ttnn::Tensor& weight_tensor,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    const std::optional<DataType>& expected_dtype);
-
-// Validate that device bias matches the expected format for convolution (minimal validation for main path)
-void validate_device_bias_format(
-    const ttnn::Tensor& bias_tensor, uint32_t out_channels, const std::optional<DataType>& expected_dtype);
-
 template <typename T>
 static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config(
     T* device,
