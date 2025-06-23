@@ -25,7 +25,7 @@ Tensor tensor_to_device(
 Tensor tensor_to_device(
     const Tensor& input_tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id);
 
-Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevice* worker);
+Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout);
 
 Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id);
 
