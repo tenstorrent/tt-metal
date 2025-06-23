@@ -300,9 +300,9 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(
 }
 
 bool test_dummy_EnqueueProgram_with_sems(
-    IDevice* device,
-    CommandQueue& cq,
-    Program& program,
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    distributed::MeshCommandQueue& cq,
+    distributed::MeshWorkload& workload,
     const DummyProgramConfig& program_config,
     const vector<vector<uint32_t>>& expected_semaphore_vals) {
     TT_ASSERT(program_config.cr_set.size() == expected_semaphore_vals.size());
@@ -310,9 +310,10 @@ bool test_dummy_EnqueueProgram_with_sems(
     bool are_all_semaphore_values_correct = true;
 
     const bool is_blocking_op = false;
-    EnqueueProgram(cq, program, is_blocking_op);
+    distributed::EnqueueMeshWorkload(cq, workload, is_blocking_op);
     Finish(cq);
 
+    auto device = mesh_device->get_devices()[0];
     uint32_t expected_semaphore_vals_idx = 0;
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         const vector<uint32_t>& expected_semaphore_vals_for_core = expected_semaphore_vals[expected_semaphore_vals_idx];
@@ -323,7 +324,7 @@ bool test_dummy_EnqueueProgram_with_sems(
             uint32_t expected_semaphore_vals_for_core_idx = 0;
             const uint32_t semaphore_buffer_size =
                 program_config.num_sems * MetalContext::instance().hal().get_alignment(HalMemType::L1);
-            uint32_t semaphore_base = program.get_sem_base_addr(device, core_coord, CoreType::WORKER);
+            uint32_t semaphore_base = workload.get_sem_base_addr(mesh_device, core_coord, CoreType::WORKER);
             tt::tt_metal::detail::ReadFromDeviceL1(
                 device, core_coord, semaphore_base, semaphore_buffer_size, semaphore_vals);
             for (uint32_t i = 0; i < semaphore_vals.size();
@@ -341,16 +342,24 @@ bool test_dummy_EnqueueProgram_with_sems(
     return are_all_semaphore_values_correct;
 }
 
-bool test_dummy_EnqueueProgram_with_sems(IDevice* device, CommandQueue& cq, const DummyProgramConfig& program_config) {
+bool test_dummy_EnqueueProgram_with_sems(
+    std::shared_ptr<distributed::MeshDevice> device,
+    distributed::MeshCommandQueue& cq,
+    const DummyProgramConfig& program_config) {
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
-    vector<uint32_t> expected_semaphore_values;
 
+    vector<uint32_t> expected_semaphore_values;
     for (uint32_t initial_sem_value = 0; initial_sem_value < program_config.num_sems; initial_sem_value++) {
         expected_semaphore_values.push_back(initial_sem_value);
     }
 
     initialize_dummy_semaphores(program, program_config.cr_set, expected_semaphore_values);
-    return test_dummy_EnqueueProgram_with_sems(device, cq, program, program_config, {expected_semaphore_values});
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+
+    return test_dummy_EnqueueProgram_with_sems(device, cq, workload, program_config, {expected_semaphore_values});
 }
 
 bool test_dummy_EnqueueProgram_with_runtime_args(
@@ -367,7 +376,6 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
     CoreRangeSet cr_set = program_config.cr_set;
 
     uint32_t rta_base_dm0 = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    ;
     uint32_t rta_base_dm1 = rta_base_dm0 + num_runtime_args_dm0 * sizeof(uint32_t);
     uint32_t rta_base_compute = rta_base_dm1 + num_runtime_args_dm1 * sizeof(uint32_t);
     std::map<string, string> dm_defines0 = {
@@ -1148,14 +1156,15 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSingleCbConfigCorrectlyUp
     }
 }
 
-TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSingleSemaphoreConfigCorrectlySentSingleCore) {
+TEST_F(MeshCommandQueueSingleCardFixture, TensixTestSingleSemaphoreConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
     DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
 
-    for (IDevice* device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->command_queue(), config));
+    for (auto device : devices_) {
+        EXPECT_TRUE(
+            local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->mesh_command_queue(), config));
     }
 }
 
@@ -1430,21 +1439,21 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCbConfigsCorrectlySe
     }
 }
 
-TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllSemConfigsCorrectlySentMultiCore) {
-    for (IDevice* device : devices_) {
+TEST_F(MeshCommandQueueSingleCardFixture, TensixTestAllSemConfigsCorrectlySentMultiCore) {
+    for (auto device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
         CoreRangeSet cr_set(cr);
 
         DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
-
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->command_queue(), config));
+        EXPECT_TRUE(
+            local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->mesh_command_queue(), config));
     }
 }
 
-TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllSemaphoreConfigsCorrectlySentMultipleCoreRanges) {
-    for (IDevice* device : devices_) {
+TEST_F(MeshCommandQueueSingleCardFixture, TensixTestAllSemaphoreConfigsCorrectlySentMultipleCoreRanges) {
+    for (auto device : devices_) {
         CoreRange first_cr({0, 0}, {1, 1});
 
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
@@ -1476,9 +1485,12 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllSemaphoreConfigsCorrec
 
         local_test_functions::initialize_dummy_semaphores(program, second_cr, initial_semaphore_vals);
         expected_semaphore_vals.push_back(initial_semaphore_vals);
-
+        distributed::MeshWorkload workload;
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(
-            device, device->command_queue(), program, config, expected_semaphore_vals));
+            device, device->mesh_command_queue(), workload, config, expected_semaphore_vals));
     }
 }
 
