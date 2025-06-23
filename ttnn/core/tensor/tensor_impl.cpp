@@ -99,8 +99,7 @@ std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorS
         buffer_size_bytes,
         page_size_bytes,
         memory_config.buffer_type(),
-        memory_config.memory_layout(),
-        tensor_spec.compute_distribution_spec());
+        tensor_spec.compute_buffer_sharding_args());
 }
 
 std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
@@ -110,8 +109,7 @@ std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     distributed::DeviceLocalBufferConfig device_local_buffer_config{
         .page_size = tensor_spec.compute_page_size_bytes(),
         .buffer_type = memory_config.buffer_type(),
-        .buffer_layout = memory_config.memory_layout(),
-        .shard_parameters = tensor_spec.compute_distribution_spec(),
+        .sharding_args = tensor_spec.compute_buffer_sharding_args(),
     };
 
     // Use replicated buffer, which supports both working with individual shards and replicating data across all shards.
