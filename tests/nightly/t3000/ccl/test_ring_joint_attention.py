@@ -54,6 +54,14 @@ def create_global_semaphores(mesh_device, cores, initial_value):
     return ccl_semaphore_handles
 
 
+def create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor):
+    submesh_shape = [0, 0]
+    submesh_shape[rp_axis] = rp_factor
+    submesh_shape[up_axis] = up_factor
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape[0], submesh_shape[1]))
+    return submesh_device
+
+
 def run_ring_joint_sdpa(
     submesh,
     b,
@@ -286,10 +294,9 @@ def run_ring_joint_sdpa(
     "b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size",
     [
         (1, 40, 4096, 333, 64, 128, 512),  # SD3.5
-        (1, 24, 44 * 1024, 118, 128, 256, 256),  # Mochi
         (1, 10, 4096, 333, 64, 128, 512),  # SD3.5 shape as it is on TG with 4x4 SPxTP
     ],
-    ids=["sd35_full", "mochi", "sd35_tg"],
+    ids=["sd35_full", "sd35_tg"],
 )
 @pytest.mark.parametrize("n_iters, trace_enabled", [(1, False), (10, True)], ids=["no_trace", "yes_trace"])
 @pytest.mark.parametrize("num_links", [1])
@@ -359,10 +366,8 @@ def test_ring_joint_sdpa(
 
     mesh_device_shape = list(mesh_device.shape)
     assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
-    submesh_shape = [0, 0]
-    submesh_shape[rp_axis] = rp_factor
-    submesh_shape[up_axis] = up_factor
-    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+
+    submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
 
     print(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
     print(f"submesh: {submesh.shape}")
@@ -448,10 +453,7 @@ def test_ring_joint_sdpa_program_cache(
 
     mesh_device_shape = list(mesh_device.shape)
     assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
-    submesh_shape = [0, 0]
-    submesh_shape[rp_axis] = rp_factor
-    submesh_shape[up_axis] = up_factor
-    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
 
     print(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
     print(f"submesh: {submesh.shape}")

@@ -38,6 +38,14 @@ def create_persistent_buffers(ag_output_shape, num_inputs, mesh_device, ag_input
     return persistent_buffers
 
 
+def create_ring_attention_submesh(mesh_device, rp_axis, rp_factor, up_factor):
+    submesh_shape = [0, 0]
+    submesh_shape[rp_axis] = rp_factor
+    submesh_shape[1 - rp_axis] = up_factor
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape[0], submesh_shape[1]))
+    return submesh_device
+
+
 def run_ring_attention_all_gather_impl(
     mesh_device,
     ag_output_shape,
@@ -265,10 +273,7 @@ def test_ring_attention_all_gather(
     if all_gather_topology == ttnn.Topology.Ring:
         pytest.skip("Ring topology not supported on T3K - requires 2D torus")
 
-    submesh_shape = [0, 0]
-    submesh_shape[rp_axis] = rp_factor
-    submesh_shape[1 - rp_axis] = up_factor
-    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape[0], submesh_shape[1]))
+    submesh_device = create_ring_attention_submesh(mesh_device, rp_axis, rp_factor, up_factor)
 
     run_ring_attention_all_gather_impl(
         submesh_device,
@@ -287,8 +292,6 @@ def test_ring_attention_all_gather(
         enable_trace=enable_trace,
         num_iters=num_iters,
     )
-
-    ttnn.close_mesh_device(submesh_device)
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
@@ -348,10 +351,7 @@ def test_ring_attention_all_gather_program_cache(
     use_program_cache,
     all_gather_topology,
 ):
-    submesh_shape = [0, 0]
-    submesh_shape[rp_axis] = rp_factor
-    submesh_shape[1 - rp_axis] = up_factor
-    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape[0], submesh_shape[1]))
+    submesh_device = create_ring_attention_submesh(mesh_device, rp_axis, rp_factor, up_factor)
 
     dummy_tensors = []
     for i in range(3):
@@ -386,4 +386,3 @@ def test_ring_attention_all_gather_program_cache(
         ttnn.synchronize_device(submesh_device)
 
     assert submesh_device.num_program_cache_entries() == 1
-    ttnn.close_mesh_device(submesh_device)
