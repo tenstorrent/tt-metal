@@ -144,6 +144,7 @@ void kernel_main() {
     }
 
     // 2. mcast output ready semaphore
+    /*
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     // Write the mcast packet (forward)
@@ -179,11 +180,13 @@ void kernel_main() {
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
+    */
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close_start();
     }
 
     // 3. wait for mcast output ready semaphore
+    /*
     while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) != out_ready_sem_wait_value);
 
     // loop over mcast ranges
@@ -205,7 +208,7 @@ void kernel_main() {
 
     // 4. global semaphore reset
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) = 0;
-
+    */
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close_finish();
     }
