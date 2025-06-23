@@ -9,7 +9,12 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import (
+    check_with_pcc,
+    check_with_pcc_without_tensor_printout,
+    start_measuring_time,
+    stop_measuring_time,
+)
 from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
@@ -319,7 +324,7 @@ def run_conv2d_short_sweep(
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
 
-    return [check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.985), e2e_perf]
+    return [check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.985), e2e_perf]
 
 
 def run_conv1d_short_sweep(
@@ -393,4 +398,4 @@ def run_conv1d_short_sweep(
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 2, 1))
 
-    return [check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.998), e2e_perf]
+    return [check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.998), e2e_perf]
