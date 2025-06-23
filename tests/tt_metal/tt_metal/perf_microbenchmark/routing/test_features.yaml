@@ -13,6 +13,10 @@ allocation_policies:
     # 'RoundRobin' will distribute workers one by one across available cores.
     policy: ExhaustFirst
     max_workers_per_core: 2
+    # The initial number of cores to use for allocation before needing to add more.
+    initial_pool_size: 1
+    # When the initial pool is exhausted, how many new cores to add.
+    pool_refill_size: 1
   receiver:
     policy: RoundRobin
     max_workers_per_core: 8
@@ -156,6 +160,9 @@ Tests:
   - name: "MulticastHops"
     fabric_setup:
       topology: Mesh
+      # You can explicitly set the routing type. Options are "Low Latency" and "Dynamic".
+      # If not specified, it defaults to "Low Latency".
+      routing_type: "Low Latency"
 
     defaults:
       ntype: unicast_write
@@ -173,3 +180,75 @@ Tests:
               hops:
                 S: 1
                 E: 1
+            # For a multicast that doesn't start at the source chip, you can specify
+            # how many hops to traverse before the multicast packet is opened.
+            mcast_start_hops: 1
+
+  # ======================================================================================
+  # Test 7: Ring Topology and All-to-All Multicast
+  # This demonstrates the Ring topology and the all_to_all_multicast pattern, which
+  # creates a multicast from each device to every other device.
+  # ======================================================================================
+  - name: "Ring_AllToAllMulticast"
+    fabric_setup:
+      topology: Ring
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 128
+      num_packets: 10
+
+    patterns:
+      - type: all_to_all_multicast
+
+  # ======================================================================================
+  # Test 8: Dynamic Routing and Custom Atomic Operations
+  # This shows how to enable dynamic routing for 2D mesh topologies and how to
+  # customize the behavior of atomic increment operations.
+  # ======================================================================================
+  - name: "DynamicRouting_CustomAtomics"
+    fabric_setup:
+      topology: Mesh
+      routing_type: "Dynamic"
+
+    senders:
+      - device: 0
+        patterns:
+          - ftype: unicast
+            ntype: atomic_inc
+            destination:
+              device: 1
+            # Specify the value to increment by for each atomic operation.
+            atomic_inc_val: 5
+            # Specify the value at which the remote atomic counter will wrap around.
+            atomic_inc_wrap: 100
+
+  # ======================================================================================
+  # Test 9: Advanced Destination and Test Control
+  # This demonstrates specifying a fixed L1 address for the destination buffer,
+  # setting a fixed seed for reproducibility, and specifying a bandwidth calculation
+  # function.
+  # ======================================================================================
+  - name: "FixedDestinationAndSeed"
+    # Setting a seed ensures that any random elements (like payload data or
+    # randomized parameters) are the same every time you run the test.
+    seed: 12345
+    # Placeholder for a custom bandwidth calculation function identifier.
+    bw_calc_func: "MyCustomBWFunc"
+
+    fabric_setup:
+      topology: Linear
+
+    senders:
+      - device: 0
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 1024
+            num_packets: 10
+            destination:
+              device: 1
+              # Manually specify the target L1 address on the destination core.
+              # The allocator will respect this address.
+              target_address: 0x40000 # Example L1 address
