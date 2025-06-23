@@ -90,7 +90,7 @@ struct WatcherSettings {
 
 struct InspectorSettings {
     bool enabled = true;
-    bool initialization_is_important = true;
+    bool initialization_is_important = false;
     bool warn_on_write_exceptions = true;
     std::filesystem::path log_path;
 };

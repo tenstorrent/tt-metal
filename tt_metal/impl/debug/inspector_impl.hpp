@@ -56,6 +56,7 @@ private:
     time_point start_time;
     std::ofstream programs_ostream;
     std::ofstream kernels_ostream;
+    bool initialized;
 
     int64_t convert_timestamp(const time_point& tp) const {
         return std::chrono::duration_cast<std::chrono::nanoseconds>(tp.time_since_epoch()).count();
