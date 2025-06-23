@@ -15,6 +15,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
+from loguru import logger
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -186,7 +187,7 @@ def test_argmax(
     result, reason = invalidate_vector(test_vector)
     if result:
         pytest.skip(reason)
-    result, msg, _perf = run_argmax(
+    (result, msg), e2e_perf = run_argmax(
         input_shape,
         dim,
         keepdim,
@@ -196,5 +197,7 @@ def test_argmax(
         output_memory_config,
         device=device,
     )
-    if not result:
-        assert False, msg
+    assert result, msg
+    logger.info(msg)
+    if e2e_perf:
+        logger.info(f"E2E Performance: {e2e_perf}")

@@ -175,8 +175,7 @@ ttnn::Tensor RepeatOperation::invoke(
 
     // tiled -> RM
     if (working_tensor.layout() == ttnn::TILE_LAYOUT) {
-        working_tensor =
-            ttnn::to_layout(working_tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (IDevice*)nullptr);
+        working_tensor = ttnn::to_layout(working_tensor, ttnn::ROW_MAJOR_LAYOUT);
     }
 
     // loop over dims in repetition vector, backwards because repeat pages first is faster
@@ -198,8 +197,7 @@ ttnn::Tensor RepeatOperation::invoke(
 
     // RM -> OG page layout
     if (tensor.layout() == ttnn::TILE_LAYOUT) {
-        working_tensor =
-            ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT, tensor.dtype(), std::nullopt, (IDevice*)nullptr);
+        working_tensor = ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT, tensor.dtype());
     }
 
     // Interleaved to OG mem layout

@@ -17,12 +17,12 @@ struct ExecuteLlamaReduceScatter {
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         ttnn::Tensor& intermediate_packet_buffer,
-        const int32_t dim,
+        int32_t dim,
         const GlobalSemaphore& cross_device_semaphore,
         const tt::tt_metal::SubDeviceId& subdevice_id,
-        const uint32_t cluster_axis,
+        uint32_t cluster_axis,
         const MeshDevice& mesh_device,
-        const uint32_t num_links,
+        uint32_t num_links,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear);
 };
