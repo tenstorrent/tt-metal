@@ -384,7 +384,8 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                     src.at(i) = i;
                 }
 
-                auto buf = Buffer::create(device, buf_size, config.page_size(), buftype, config.mem_config, shard_spec);
+                auto buf = Buffer::create(
+                    device, buf_size, config.page_size(), buftype, BufferShardingArgs(shard_spec, config.mem_config));
                 vector<uint32_t> src2 = src;
                 if (cq_write) {
                     EnqueueWriteBuffer(cq, *buf, src2.data(), false);
@@ -742,7 +743,11 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteShardedSubBuffer) {
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
             {8, 8});
         auto buffer = Buffer::create(
-            device, buffer_size, page_size, BufferType::DRAM, TensorMemoryLayout::BLOCK_SHARDED, shard_spec);
+            device,
+            buffer_size,
+            page_size,
+            BufferType::DRAM,
+            BufferShardingArgs(shard_spec, TensorMemoryLayout::BLOCK_SHARDED));
 
         local_test_functions::clear_buffer(device->command_queue(), *buffer);
 
@@ -1135,8 +1140,12 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteShardedSubBufferForL1) 
                 config.orientation,
                 config.page_shape,
                 config.tensor2d_shape_in_pages);
-            auto buffer =
-                Buffer::create(device, config.buffer_size, config.page_size, BufferType::L1, config.layout, shard_spec);
+            auto buffer = Buffer::create(
+                device,
+                config.buffer_size,
+                config.page_size,
+                BufferType::L1,
+                BufferShardingArgs(shard_spec, config.layout));
 
             local_test_functions::clear_buffer(device->command_queue(), *buffer);
 
@@ -1166,7 +1175,11 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestMultipleNonOverlappingWritesShar
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
             {16, 1});
         auto buffer = Buffer::create(
-            device, buffer_size, page_size, BufferType::L1, TensorMemoryLayout::WIDTH_SHARDED, shard_spec);
+            device,
+            buffer_size,
+            page_size,
+            BufferType::L1,
+            BufferShardingArgs(shard_spec, TensorMemoryLayout::WIDTH_SHARDED));
 
         local_test_functions::clear_buffer(device->command_queue(), *buffer);
 
@@ -1247,7 +1260,11 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestMultipleNonOverlappingReadsShard
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
             {8, 2});
         auto buffer = Buffer::create(
-            device, buffer_size, page_size, BufferType::L1, TensorMemoryLayout::BLOCK_SHARDED, shard_spec);
+            device,
+            buffer_size,
+            page_size,
+            BufferType::L1,
+            BufferShardingArgs(shard_spec, TensorMemoryLayout::BLOCK_SHARDED));
 
         vector<uint32_t> expected = local_test_functions::generate_arange_vector(buffer_size);
         EnqueueWriteBuffer(device->command_queue(), *buffer, expected, true);
@@ -1300,7 +1317,11 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteShardedSubBufferMultipl
             {tt::constants::TILE_HEIGHT / 4, tt::constants::TILE_WIDTH / 2},
             {8, 2});
         auto buffer = Buffer::create(
-            device, buffer_size, page_size, BufferType::L1, TensorMemoryLayout::BLOCK_SHARDED, shard_spec);
+            device,
+            buffer_size,
+            page_size,
+            BufferType::L1,
+            BufferShardingArgs(shard_spec, TensorMemoryLayout::BLOCK_SHARDED));
         local_test_functions::clear_buffer(device->command_queue(), *buffer);
         const BufferRegion region(buffer_region_offset, buffer_region_size);
         EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, region, false);

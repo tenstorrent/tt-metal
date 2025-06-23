@@ -83,17 +83,16 @@ bool l1_buffer_read_write_test(IDevice* device, const L1Config& test_config) {
     for (uint32_t loop_idx = 0; loop_idx < num_loops; loop_idx++) {
         log_debug(tt::LogTest, "Running loop: {}", loop_idx);
 
-        auto buffer = test_config.sharded ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{
-                                                .device = device,
-                                                .size = test_config.size_bytes,
-                                                .page_size = test_config.page_size_bytes,
-                                                .buffer_layout = test_config.buffer_layout,
-                                                .shard_parameters = test_config.shard_spec()})
-                                          : CreateBuffer(tt::tt_metal::BufferConfig{
-                                                .device = device,
-                                                .size = test_config.size_bytes,
-                                                .page_size = test_config.page_size_bytes,
-                                                .buffer_layout = test_config.buffer_layout});
+        auto buffer =
+            test_config.sharded
+                ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{
+                      .device = device,
+                      .size = test_config.size_bytes,
+                      .page_size = test_config.page_size_bytes,
+                      .buffer_layout = test_config.buffer_layout,
+                      .shard_parameters = test_config.shard_spec()})
+                : CreateBuffer(tt::tt_metal::BufferConfig{
+                      .device = device, .size = test_config.size_bytes, .page_size = test_config.page_size_bytes});
 
         if (loop_idx > 1) {
             buffers_vec.push_back(buffer);

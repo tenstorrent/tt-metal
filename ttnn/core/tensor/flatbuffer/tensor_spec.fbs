@@ -22,7 +22,6 @@ table Tile {
 
 enum TensorMemoryLayout: ushort {
     Interleaved = 0,
-    SingleBank = 1,
     HeightSharded = 2,
     WidthSharded = 3,
     BlockSharded = 4,

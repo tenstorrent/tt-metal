@@ -76,10 +76,11 @@ TEST_P(NDShardingTests, LoopbackTest) {
     }
 
     auto tensor = Tensor::from_vector(data, tensor_spec, device_);
+    EXPECT_TRUE(tensor.buffer()->buffer_distribution_spec().has_value());
     auto readback_data = tensor.to_vector<uint16_t>();
 
     for (size_t i = 0; i < volume; i++) {
-        ASSERT_EQ(data[i], readback_data[i]);
+        EXPECT_EQ(data[i], readback_data[i]);
     }
 }
 
@@ -590,20 +591,6 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_2d = std::nullopt,
             .layout = Layout::ROW_MAJOR,
             .shard_shape_nd = std::nullopt,
-        },
-        LegacyToNdShardingParams{
-            .shape = Shape({2, 32 * 2, 32 * 2}),
-            .memory_layout = TensorMemoryLayout::SINGLE_BANK,
-            .shard_shape_2d = Shape2D{32 * 4, 32 * 2},
-            .layout = Layout::TILE,
-            .shard_shape_nd = Shape({2, 32 * 2, 32 * 2}),
-        },
-        LegacyToNdShardingParams{
-            .shape = Shape({2, 3, 4}),
-            .memory_layout = TensorMemoryLayout::SINGLE_BANK,
-            .shard_shape_2d = Shape2D{6, 4},
-            .layout = Layout::ROW_MAJOR,
-            .shard_shape_nd = Shape({2, 3, 4}),
         }));
 
 INSTANTIATE_TEST_SUITE_P(

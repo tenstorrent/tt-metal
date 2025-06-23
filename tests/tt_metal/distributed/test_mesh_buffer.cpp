@@ -88,10 +88,7 @@ void skip_for_tg() {
 // MeshBuffer tests on T3000
 TEST_F(MeshBufferTestT3000, ShardedBufferInitialization) {
     const DeviceLocalBufferConfig device_local_config{
-        .page_size = 1024,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
 
     const ShardedBufferConfig buffer_config{
         .global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 32}};
@@ -105,10 +102,7 @@ TEST_F(MeshBufferTestT3000, ShardedBufferInitialization) {
 
 TEST_F(MeshBufferTestT3000, ReplicatedBufferInitialization) {
     const DeviceLocalBufferConfig device_local_config{
-        .page_size = 1024,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
 
     const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
     auto replicated_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
@@ -124,10 +118,7 @@ TEST_F(MeshBufferTestT3000, Deallocation) {
     // scope. Record its address. Create another buffer with the same config
     // outside the scope. Verify that addresses match.
     const DeviceLocalBufferConfig device_local_config{
-        .page_size = 1024,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
 
     const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
 
@@ -168,10 +159,7 @@ TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
             MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
 
         const DeviceLocalBufferConfig device_local_config{
-            .page_size = 2048,
-            .buffer_type = BufferType::DRAM,
-            .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-            .bottom_up = false};
+            .page_size = 2048, .buffer_type = BufferType::DRAM, .bottom_up = false};
         const ReplicatedBufferConfig buffer_config{.size = 2048};
         auto buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
 
@@ -188,10 +176,7 @@ TEST(MeshBufferTest, DeallocationWithMeshDeviceClosed) {
             MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
 
         const DeviceLocalBufferConfig device_local_config{
-            .page_size = 2048,
-            .buffer_type = BufferType::DRAM,
-            .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-            .bottom_up = false};
+            .page_size = 2048, .buffer_type = BufferType::DRAM, .bottom_up = false};
         const ReplicatedBufferConfig buffer_config{.size = 2048};
         auto buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
 
@@ -201,10 +186,7 @@ TEST(MeshBufferTest, DeallocationWithMeshDeviceClosed) {
 
 TEST_F(MeshBufferTestT3000, GetDeviceBuffer) {
     const DeviceLocalBufferConfig device_local_config{
-        .page_size = 1024,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
 
     auto replicated_buffer =
         MeshBuffer::create(ReplicatedBufferConfig{.size = 16 << 10}, device_local_config, mesh_device_.get());
@@ -232,8 +214,7 @@ TEST_P(DeviceLocalMeshBufferShardingTest, ShardingTest) {
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = test_config.page_size(),
         .buffer_type = BufferType::L1,
-        .buffer_layout = test_config.mem_config,
-        .shard_parameters = test_config.shard_parameters(),
+        .sharding_args = BufferShardingArgs(test_config.shard_parameters(), test_config.mem_config),
         .bottom_up = false};
 
     uint32_t buf_size = test_config.num_pages() * test_config.page_size();
@@ -286,10 +267,7 @@ TEST_F(MeshBufferTestT3000, SweepShardAndConcat) {
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = true};
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
     std::vector<Shape2D> global_buffer_shapes = {
         {64, 128}, {128, 128}, {32, 1024}, {1024, 32}, {512, 64}, {2048, 2048}};
     std::vector<Shape2D> shard_shapes = {{32, 32}, {32, 64}, {32, 128}, {128, 32}, {128, 32}, {512, 1024}};
@@ -323,10 +301,7 @@ TEST_F(MeshBufferTestT3000, SweepShardAndConcat) {
 // MeshBuffer tests on N300 and T3000
 TEST_F(MeshBufferTestSuite, ConfigValidation) {
     const DeviceLocalBufferConfig device_local_config{
-        .page_size = 1024,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
 
     // Unaligned shard shape
     EXPECT_ANY_THROW(MeshBuffer::create(
@@ -357,10 +332,7 @@ TEST_F(MeshBufferTestSuite, InterleavedShardsReadWrite) {
 
     for (auto buffer_type : {BufferType::L1, BufferType::DRAM}) {
         DeviceLocalBufferConfig per_device_buffer_config{
-            .page_size = single_tile_size,
-            .buffer_type = BufferType::L1,
-            .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-            .bottom_up = false};
+            .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
 
         std::uniform_int_distribution<int> gen_num_tiles(1, 1024);
         std::mt19937 rng(seed);
@@ -396,10 +368,7 @@ TEST_F(MeshBufferTestSuite, RowMajorShardingAndReplication) {
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = true};
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
 
     std::vector<Shape2D> global_buffer_shapes = {{64, 256}, {128, 128}, {256, 2048}, {32, 512}, {512, 1024}};
 
@@ -450,10 +419,7 @@ TEST_F(MeshBufferTestSuite, ColMajorShardingAndReplication) {
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = true};
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
 
     std::vector<Shape2D> global_buffer_shapes = {{256, 64}, {1024, 1024}, {128, 32}, {512, 64}, {2048, 256}};
 
@@ -510,10 +476,7 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWrite) {
     std::mt19937 rng(seed);
 
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = true};
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
 
