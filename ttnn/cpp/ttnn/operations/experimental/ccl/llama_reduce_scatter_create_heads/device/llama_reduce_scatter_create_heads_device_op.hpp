@@ -33,6 +33,7 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
         const uint32_t head_dim;
         const uint32_t slice_size;
         const std::optional<MemoryConfig> qkv_memory_config;
+        bool use_noc1_only;
     };
     struct tensor_args_t {
         const Tensor input_tensor;
@@ -109,7 +110,8 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
         uint32_t head_dim,
         uint32_t slice_size,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& qkv_memory_config = std::nullopt);
+        const std::optional<ttnn::MemoryConfig>& qkv_memory_config = std::nullopt,
+        bool use_noc1_only = false);
 };
 }  // namespace ttnn::operations::experimental::ccl
 

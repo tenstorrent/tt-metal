@@ -71,7 +71,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const uint32_t num_heads) {
+    const uint32_t num_heads,
+    bool use_noc1_only) {
     tt::tt_metal::Program program{};
     ttnn::MeshDevice* mesh_device = input_tensor.mesh_device();
     const bool enable_async_output_tensor = false;
@@ -264,7 +265,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const auto& cores = corerange_to_cores(q_cores, num_cores, true);
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_1;
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::NOC::NOC_0;
+    tt::tt_metal::NOC writer_noc = use_noc1_only ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
     // cores for input
     const uint32_t in_num_cores = in_cores.num_cores();  // number of cores of the input
@@ -307,6 +308,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = reader_noc,
+            .noc_mode =
+                (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = concat_reader_ct_args});
 
     std::vector<uint32_t> tilize_ct_args = {
@@ -320,6 +323,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = writer_noc,
+            .noc_mode =
+                (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = tilize_ct_args});
 
     auto tilize_compute_kernel_id = tt::tt_metal::CreateKernel(
@@ -345,6 +350,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = reader_noc,
+            .noc_mode =
+                (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = all_gather_reader_ct_args});
 
     // Writer
@@ -370,6 +377,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = writer_noc,
+            .noc_mode =
+                (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = all_gather_writer_ct_args});
 
     // Kernel Runtime Args

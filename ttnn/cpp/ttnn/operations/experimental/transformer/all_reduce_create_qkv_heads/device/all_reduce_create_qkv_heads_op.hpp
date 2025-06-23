@@ -35,6 +35,7 @@ struct AllReduceCreateQkvHeads {
 
     // create qkv heads parameters
     const uint32_t head_dim;
+    bool use_noc1_only;
     const uint32_t num_heads;
     const uint32_t num_kv_heads;
     const bool input_on_subcoregrids;
@@ -51,6 +52,7 @@ struct AllReduceCreateQkvHeads {
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         uint32_t head_dim,
+        bool use_noc1_only,
         uint32_t num_heads,
         uint32_t num_kv_heads,
         bool input_on_subcoregrids,
@@ -65,6 +67,7 @@ struct AllReduceCreateQkvHeads {
         semaphore(semaphore),
         sub_device_id(sub_device_id),
         head_dim(head_dim),
+        use_noc1_only(use_noc1_only),
         num_heads(num_heads),
         num_kv_heads(num_kv_heads),
         input_on_subcoregrids(input_on_subcoregrids),
@@ -131,6 +134,7 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     uint32_t head_dim = 0,
+    bool use_noc1_only = false,
     uint32_t num_heads = 8,
     uint32_t num_kv_heads = 1,
     bool input_on_subcoregrids = false,

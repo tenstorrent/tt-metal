@@ -8,20 +8,6 @@
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 // #include <unistd.h>
 
-template <uint8_t noc_ind = noc_index>
-FORCE_INLINE std::uint64_t static_noc_multicast_addr(
-    std::uint32_t noc_x_start,
-    std::uint32_t noc_y_start,
-    std::uint32_t noc_x_end,
-    std::uint32_t noc_y_end,
-    std::uint32_t addr) {
-    if constexpr (noc_ind == 0) {
-        return get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr);
-    } else {
-        return get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, addr);
-    }
-}
-
 void kernel_main() {
     // Constants for indexing
     constexpr uint8_t x_index = 0;
