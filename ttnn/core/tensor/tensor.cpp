@@ -390,38 +390,32 @@ template Tensor Tensor::from_span<uint32_t>(
 template Tensor Tensor::from_borrowed_data<float>(
     tt::stl::Span<float> buffer,
     const ttnn::Shape& shape,
-    const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
+    tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<bfloat16>(
     tt::stl::Span<bfloat16> buffer,
     const ttnn::Shape& shape,
-    const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
+    tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<int32_t>(
     tt::stl::Span<int32_t> buffer,
     const ttnn::Shape& shape,
-    const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
+    tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<uint8_t>(
     tt::stl::Span<uint8_t> buffer,
     const ttnn::Shape& shape,
-    const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
+    tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<uint16_t>(
     tt::stl::Span<uint16_t> buffer,
     const ttnn::Shape& shape,
-    const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
+    tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<uint32_t>(
     tt::stl::Span<uint32_t> buffer,
     const ttnn::Shape& shape,
-    const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
+    tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_vector<bfloat16>(
     std::vector<bfloat16>&& buffer,
