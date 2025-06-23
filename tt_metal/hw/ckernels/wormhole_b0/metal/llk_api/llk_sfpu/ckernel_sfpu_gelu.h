@@ -6,7 +6,6 @@
 
 #include "ckernel_defs.h"
 #include "ckernel.h"
-#include "ckernel_sfpu_cdf.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -34,12 +33,7 @@ inline void calculate_gelu() {
     } else {
         constexpr bool scaled = true;
         // SFPU microcode
-        for (int d = 0; d < ITERATIONS; d++) {
-            vFloat val = dst_reg[0];
-            vFloat result = calculate_cdf_appx(val, scaled);
-            dst_reg[0] = result;
-            dst_reg++;
-        }
+        _calculate_gelu_accurate_(ITERATIONS);
     }
 }
 

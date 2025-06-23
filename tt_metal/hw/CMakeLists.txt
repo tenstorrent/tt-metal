@@ -311,7 +311,6 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bitwise_or.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bitwise_xor.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h
-                ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_cdf.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_clamp.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_comp.h
                 ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_copy_dest_values.h
