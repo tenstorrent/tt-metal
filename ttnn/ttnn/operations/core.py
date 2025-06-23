@@ -366,7 +366,7 @@ def to_torch(
         if (tensor.layout != ttnn.ROW_MAJOR_LAYOUT) and not (
             tensor.dtype == ttnn.bfloat8_b or tensor.dtype == ttnn.bfloat4_b
         ):
-            tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT, device)
+            tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT)
 
         tensor = tensor.to_torch()
 
@@ -633,7 +633,7 @@ def as_tensor(
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            tensor = ttnn.to_layout(tensor, layout, dtype=dtype, memory_config=memory_config, device=device)
+            tensor = ttnn.to_layout(tensor, layout, dtype=dtype, memory_config=memory_config)
         else:
             tensor = ttnn.from_torch(
                 tensor,

@@ -87,9 +87,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     std::vector<Tensor>& output_tensors,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
@@ -99,20 +99,20 @@ namespace operations::experimental::ccl {
 std::vector<Tensor> all_broadcast_async(
     const Tensor& input_tensor,
     const GlobalSemaphore& multi_device_global_semaphore,
-    const uint32_t num_links = 1,
+    uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
 std::vector<Tensor> all_broadcast_async(
     const Tensor& input_tensor,
-    const uint32_t cluster_axis,
+    uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const ttnn::ccl::Topology topology,
+    ttnn::ccl::Topology topology,
     const GlobalSemaphore& multi_device_global_semaphore,
     const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<size_t> num_preferred_links = std::nullopt,
+    std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
 }  // namespace operations::experimental::ccl
