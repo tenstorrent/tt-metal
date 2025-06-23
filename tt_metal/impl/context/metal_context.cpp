@@ -377,6 +377,7 @@ void MetalContext::set_default_control_plane_mesh_graph() {
 }
 
 void MetalContext::teardown_fabric_config() {
+    this->cluster_->configure_ethernet_cores_for_fabric_routers(tt_metal::FabricConfig::DISABLED);
     this->fabric_config_ = tt_metal::FabricConfig::DISABLED;
     this->cluster_->configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;
