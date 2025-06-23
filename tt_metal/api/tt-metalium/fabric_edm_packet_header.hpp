@@ -91,9 +91,6 @@ struct NocUnicastCommandHeader {
     uint64_t noc_address;
 };
 
-// TODO: extend
-// TODO: reduce size. use offset?
-//       currently only for 4KB filled by 2 pages of bf16
 struct NocUnicastScatterCommandHeader {
     uint64_t noc_address1;
     uint64_t noc_address2;
