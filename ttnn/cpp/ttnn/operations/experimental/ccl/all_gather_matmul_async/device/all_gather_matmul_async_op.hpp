@@ -22,8 +22,8 @@
 #include <algorithm>
 
 /* Fusion includes */
-#include "cpp/ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
-#include "cpp/ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn {
@@ -75,7 +75,7 @@ namespace all_gather_matmul_async_detail {
 AllGatherMatmulAsync create_all_gather_matmul_async_struct(
     const ttnn::AllGatherAsync& all_gather_struct_input,
     const operations::matmul::Matmul& matmul_struct_input,
-    const CoreCoord all_gather_core_grid_offset,
+    CoreCoord all_gather_core_grid_offset,
     const std::vector<IDevice*>& devices);
 }  // namespace all_gather_matmul_async_detail
 }  // namespace ccl
@@ -91,17 +91,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
     IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const CoreCoord core_grid_offset,
+    CoreCoord core_grid_offset,
 
     /* Matmul Params */
-    const std::optional<const Tensor> bias,
+    std::optional<const Tensor> bias,
     bool bcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     const operations::matmul::MatmulProgramConfig& program_config,
@@ -116,22 +116,22 @@ std::vector<Tensor> all_gather_matmul_async(
     const Tensor& weight_tensor,
     Tensor& persistent_intermediate_buffer,
     Tensor& persistent_output_buffer,
-    const uint32_t dim,
+    uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    const CoreCoord all_gather_core_grid_offset,
+    CoreCoord all_gather_core_grid_offset,
     const std::optional<const Tensor>& bias = std::nullopt,
-    const uint32_t num_links = 1,
+    uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config_ag = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     const std::optional<MemoryConfig>& memory_config_mm = std::nullopt,
-    const bool transpose_a = false,
-    const bool transpose_b = false,
-    const std::optional<const DataType> dtype = std::nullopt,
+    bool transpose_a = false,
+    bool transpose_b = false,
+    std::optional<const DataType> dtype = std::nullopt,
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
     const std::optional<const std::string>& activation = std::nullopt,
-    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
 
 }  // namespace ccl
 }  // namespace experimental

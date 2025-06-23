@@ -37,7 +37,7 @@ struct ExecuteUnaryWithFastAndApproximateMode {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const bool parameter = false,
+        bool parameter = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -47,8 +47,8 @@ struct ExecuteUnaryWithVectorAndFastAndApproximateMode {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const int vector_mode = (int32_t)VecMode::RC,
-        const bool parameter = false,
+        int vector_mode = (int32_t)VecMode::RC,
+        bool parameter = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -58,7 +58,7 @@ struct ExecuteUnaryWithFloatParameter {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const float parameter,
+        float parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -69,7 +69,7 @@ struct ExecuteUnaryWithVariantFloatIntParameter {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const T parameter,
+        T parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -102,8 +102,8 @@ struct Softplus {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input,
-        const float beta,
-        const float threshold,
+        float beta,
+        float threshold,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -169,9 +169,9 @@ struct Ceil {
 struct Dropout {
     static Tensor invoke(
         const Tensor& input,
-        const uint32_t seed,
-        const float probability,
-        const float scale,
+        uint32_t seed,
+        float probability,
+        float scale,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -314,6 +314,7 @@ REGISTER_UNARY_OPERATION(acos, ACOS);
 REGISTER_UNARY_OPERATION(asin, ASIN);
 REGISTER_UNARY_OPERATION(atan, ATAN);
 REGISTER_UNARY_OPERATION(cos, COS);
+REGISTER_UNARY_OPERATION(acosh, ACOSH);
 REGISTER_UNARY_OPERATION(erfinv, ERFINV);
 REGISTER_UNARY_OPERATION(exp2, EXP2);
 REGISTER_UNARY_OPERATION(expm1, EXPM1);

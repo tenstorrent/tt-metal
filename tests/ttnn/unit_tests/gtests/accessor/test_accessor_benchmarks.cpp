@@ -11,7 +11,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
-#include "ttnn/cpp/ttnn/operations/sharding_utilities.hpp"
+#include "ttnn/operations/sharding_utilities.hpp"
 
 namespace accessor_benchmarks {
 

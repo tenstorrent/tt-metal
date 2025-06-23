@@ -8,11 +8,13 @@
 #include <sched.h>
 #include <tracy/Tracy.hpp>
 #include <tt_metal.hpp>
+#include <umd/device/types/arch.h>
 #include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
 #include <algorithm>
 #include <cstdlib>
 #include <future>
 #include <set>
+#include <unordered_map>
 #include <utility>
 
 #include "assert.hpp"
@@ -278,7 +280,62 @@ void DevicePool::initialize(
     // Need to reserve eth cores for fabric before we initialize individual devices to maintain consistent state
     // while initializing default sub device state.
     // This call will be a no-op if fabric is disabled.
+    // May be called again below
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    // Try to enable FD on Fabric if dispatching to remote devices. Fabric can only be enabled if all devices are open.
+    // If not, then fallback to tunneling.
+    // First check if all devices are enabled and if there any any remote devices. Then set the appropriate mode.
+    std::unordered_set<chip_id_t> device_ids_set{device_ids.begin(), device_ids.end()};
+    bool all_devices_open = true;
+    bool any_remote_devices = false;
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
+        for (int dev_id = 0; dev_id < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
+             ++dev_id) {
+            if (!device_ids_set.contains(dev_id)) {
+                all_devices_open = false;
+                break;
+            }
+            any_remote_devices =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev_id) != dev_id;
+        }
+
+        const auto fallback_to_tunneling = [&]() {
+            tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
+            // Need to reinitialize because FD Fabric setting has changed
+            tt::tt_metal::MetalContext::instance().initialize(
+                dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()});
+        };
+
+        if (all_devices_open && any_remote_devices) {
+            FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+            if (tt::tt_fabric::is_2d_fabric_config(fabric_config) || hal::get_arch() == tt::ARCH::BLACKHOLE) {
+                // 2D Fabric config or Blackhole
+                fallback_to_tunneling();
+                log_debug(
+                    tt::LogMetal, "Cannot launch Dispatch on Fabric on unsupported configuration. Using tunneling.");
+            } else if (fabric_config == FabricConfig::DISABLED) {
+                tt::tt_metal::detail::SetFabricConfig(
+                    FabricConfig::FABRIC_1D, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+                // Previously disabled. Need to init
+                if (fabric_config == FabricConfig::DISABLED) {
+                    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+                }
+                fabric_config = FabricConfig::FABRIC_1D;
+                log_info(tt::LogMetal, "Dispatch on 1D Fabric");
+            } else {
+                // Use the same 1D mode
+                tt::tt_metal::detail::SetFabricConfig(
+                    fabric_config, tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+                log_info(tt::LogMetal, "Dispatch on 1D Fabric");
+            }
+        } else {
+            fallback_to_tunneling();
+            log_debug(
+                tt::LogMetal,
+                "Cannot launch Dispatch on Fabric without all physical devices activated. Using tunneling.");
+        }
+    }
 
     _inst->skip_remote_devices = skip;
     _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
@@ -356,6 +413,32 @@ void DevicePool::initialize_active_devices() const {
         return;
     }
 
+    // Reserve for tunneling
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
+        for (auto dev : active_devices) {
+            if (!dev->is_mmio_capable()) {
+                continue;
+            }
+            if (tt::tt_metal::MetalContext::instance().get_cluster().get_mmio_device_tunnel_count(dev->id()) > 0) {
+                const auto& tunnels_from_mmio_ =
+                    tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(dev->id());
+                for (auto& tunnel : tunnels_from_mmio_) {
+                    for (uint32_t tunnel_stop = 0; tunnel_stop < tunnel.size() - 1; tunnel_stop++) {
+                        chip_id_t device_id = tunnel[tunnel_stop];
+                        chip_id_t ds_device_id = tunnel[tunnel_stop + 1];
+                        uint16_t channel =
+                            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
+                                ds_device_id);
+                        // Only one tunneler per connection, use CQ ID 0
+                        MetalContext::instance().get_dispatch_core_manager().tunneler_core(
+                            device_id, ds_device_id, channel, 0);
+                    }
+                }
+            }
+        }
+    }
+
+    // Generate static args
     for (auto dev : active_devices) {
         // For Galaxy init, we only need to loop over mmio devices
         const auto& mmio_device_id =
@@ -367,7 +450,6 @@ void DevicePool::initialize_active_devices() const {
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
         populate_cq_static_args(dev);
-        dev->init_command_queue_device();
         if (not this->skip_remote_devices) {
             for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
                 // Need to create devices from farthest to the closest.
@@ -375,6 +457,29 @@ void DevicePool::initialize_active_devices() const {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     auto device = get_device(mmio_controlled_device_id);
                     populate_cq_static_args(device);
+                }
+            }
+        }
+    }
+
+    // Init command queue
+    for (auto dev : active_devices) {
+        // For Galaxy init, we only need to loop over mmio devices
+        const auto& mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev->id());
+        if (mmio_device_id != dev->id()) {
+            continue;
+        }
+
+        auto tunnels_from_mmio =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+        dev->init_command_queue_device();
+        if (not this->skip_remote_devices) {
+            for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
+                // Need to create devices from farthest to the closest.
+                for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
+                    uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
+                    auto device = get_device(mmio_controlled_device_id);
                     device->init_command_queue_device();
                 }
             }
@@ -461,7 +566,9 @@ std::size_t DevicePool::get_max_num_eth_cores_across_all_devices() const {
 }
 
 void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
+    this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
     std::set<chip_id_t> devices_to_activate;
+
     if (this->skip_remote_devices) {
         for (const auto& device_id : device_ids) {
             const auto& mmio_device_id =
@@ -488,8 +595,8 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
         }
     }
 
-    FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     // Only can launch Fabric if all devices are active
+    FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         for (int i = 0; i < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); i++) {
             if (not _inst->is_device_active(i)) {
@@ -499,7 +606,6 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
         }
     }
 
-    this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
     if (this->using_fast_dispatch) {
         populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
     }
@@ -797,6 +903,10 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
         pass &= dev->close();
+    }
+
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
+        tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
     }
 
     return pass;

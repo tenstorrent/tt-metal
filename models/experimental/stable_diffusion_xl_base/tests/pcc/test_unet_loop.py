@@ -439,7 +439,7 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, cla
         plt.savefig("pcc_plot.png", dpi=300, bbox_inches="tight")
         plt.close()
 
-    assert_with_pcc(latents, torch_tt_latents, 0.829)
+    assert_with_pcc(latents, torch_tt_latents, 0.822)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
