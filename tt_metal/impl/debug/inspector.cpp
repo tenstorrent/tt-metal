@@ -26,6 +26,10 @@ bool Inspector::is_enabled() {
 }
 
 std::unique_ptr<inspector::Data> Inspector::initialize() {
+    if (!is_enabled()) {
+        // Inspector is not enabled, skipping initialization.
+        return nullptr;
+    }
     try {
         auto* data = new inspector::Data();
 
