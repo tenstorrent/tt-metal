@@ -3753,13 +3753,20 @@ def test_conv_yolov10x(
 )
 
 @pytest.mark.parametrize(
-    "batch, input_height, input_width, weights_dtype, output_dtype, groups, kernel, padding, dilation",
+    "batch, input_height, input_width, weights_dtype, output_dtype, groups, padding, dilation",
     (
-        (1, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (0, 0, 0, 0), (1, 1)),
+        (1, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (0, 0, 0, 0), (1, 1)),
     ),
 )
 @pytest.mark.parametrize( "input_channels, output_channels", [(640, 640),(64,64)])
-@pytest.mark.parametrize("stride", [(1, 1),(2, 2)])
+@pytest.mark.parametrize("kernel,", [
+    (1, 1),
+    (2, 2)]
+    )
+@pytest.mark.parametrize("stride", [
+    (1, 1),
+    (2, 2)]
+)
 @pytest.mark.parametrize(
     "input_layout",
     [
@@ -3782,6 +3789,13 @@ def test_conv_yolov10x(
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ]
 )
+@pytest.mark.parametrize(
+    "enable_fenable_kernel_stride_folding",
+    [
+        True,
+        False,
+    ],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv2d_act_dealloc(
     device,
@@ -3800,13 +3814,18 @@ def test_conv2d_act_dealloc(
     dilation,
     input_layout,
     output_layout,
-    shard_layout
+    shard_layout,
+    enable_fenable_kernel_stride_folding
 ):
     if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED and input_layout == ttnn.ROW_MAJOR_LAYOUT and stride == (1,1):
         pytest.skip("Block sharded conv2d does not support input with row major layout")
-
-    if input_channels > 64 and shard_layout is not None:
+    if enable_fenable_kernel_stride_folding and stride != kernel:
+        pytest.skip("Kernel stride folding is only supported when stride == kernel size")
+    if enable_fenable_kernel_stride_folding and shard_layout is not None:
+        pytest.skip("Kernel stride folding is not supported for non L1 inputs")
+    if (input_channels > 64 and shard_layout is not None) or kernel > stride:
         pytest.skip("OOM for this given core_grid (expected)")
+
     input_shape = (batch, input_channels, input_height, input_width)
     weight_shape = (output_channels, input_channels // groups, kernel[0], kernel[1])
     torch_input_tensor = randomize_torch_tensor(torch_tensor_map, input_shape)
@@ -3851,6 +3870,7 @@ def test_conv2d_act_dealloc(
         weights_dtype=weights_dtype,
         deallocate_activation=True,
         output_layout=output_layout,
+        enable_kernel_stride_folding=enable_fenable_kernel_stride_folding,
     )
     _ = ttnn.conv2d(
         input_tensor=tt_input_tensor,
