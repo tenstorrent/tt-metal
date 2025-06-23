@@ -89,71 +89,124 @@ The vector addition operation demonstrates the three-kernel architecture clearly
 The following are the kernels, when run together, will perform vector addition on two input buffers A and B, each containing `n_tiles` tiles and write the result to an output buffer C.
 
 ```c++
-// data read kernel (data movement kernel 0)
+// Data read kernel (data movement kernel 0)
+#include <dataflow_api.h>
+
 void kernel_main() {
-    // Read parameters from the kernel arguments
-    uint32_t a_addr = get_arg_val<uint32_t>(0);
-    uint32_t b_addr = get_arg_val<uint32_t>(1);
-    uint32_t n_tiles = get_arg_val<uint32_t>(2);
+    // Read parameters from the kernel run-time arguments
+    const uint32_t a_addr = get_arg_val<uint32_t>(0);
+    const uint32_t b_addr = get_arg_val<uint32_t>(1);
+    const uint32_t n_tiles = get_arg_val<uint32_t>(2);
+
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
 
     const uint32_t tile_size_bytes = get_tile_size(cb_in0);
 
-    const InterleavedAddrGenFast<true> a = {a_addr, tile_size_bytes, DataFormat::Float16_b};
-    const InterleavedAddrGenFast<true> b = {b_addr, tile_size_bytes, DataFormat::Float16_b};
+    const InterleavedAddrGenFast<true> a = {
+        .bank_base_address = a_addr,
+        .page_size = tile_size_bytes,
+        .data_format = DataFormat::Float16_b
+    };
+    const InterleavedAddrGenFast<true> b = {
+        .bank_base_address = b_addr,
+        .page_size = tile_size_bytes,
+        .data_format = DataFormat::Float16_b
+    };
 
-    // Read from DRAM into circular buffers
+    // Read inputs from DRAM into circular buffers
     for (uint32_t i = 0; i < n_tiles; i++) {
-        cb_reserve_back(tt::c_1, 1);
-        cb_reserve_back(tt::c_0, 1);
-        noc_async_read_tile(get_write_ptr(tt::c_0), a, cb_in0_addr);
-        noc_async_read_tile(get_write_ptr(tt::c_1), b, cb_in1_addr);
+        cb_reserve_back(cb_in0, 1);
+        cb_reserve_back(cb_in1, 1);
+
+        const uint32_t cb_in0_addr = get_write_ptr(cb_in0);
+        const uint32_t cb_in1_addr = get_write_ptr(cb_in1);
+        noc_async_read_tile(i, a, cb_in0_addr);
+        noc_async_read_tile(i, b, cb_in1_addr);
 
         noc_async_read_barrier();  // Wait until tile reads are done
-        cb_push_back(tt::c_0, 1);
-        cb_push_back(tt::c_1, 1);
+
+        cb_push_back(cb_in0, 1);
+        cb_push_back(cb_in1, 1);
     }
 }
 ```
 
-Beyond synchronizing with the reader and writer. The compute kernel needs its own synchronization as internally it is 3 cores running cooperatively. After synchronizing both internally and with the reader and writer, the compute kernel can proceed with actual computation.
+For the compute kernel, the same source code is used to create kernels for all three Unpack/Math/Pack baby RISC-V cores. The Metalium compute API is implemented with code sections that are each enabled only for a specific type of core. In the example below, the `add_tiles` call has Unpack core code that copies the input tiles into the FPU's registers, as well as Math core code that performs the addition operation on the FPU and stores the result into the output register. On the other hand, the `cb_reserve_back` call only contains code that will execute on the Pack core. During execution, the runtime will automatically compile the compute kernel code three times, each time for a different core. The generated binaries will only contain code dedicated for a single type of core and will then be submitted to the device for concurrent execution.
+
+Synchronization with the reader and writer kernels, as well as between the three cores that are running the compute kernel, is done through the circular buffers and other synchronization primitives.
 
 ```c++
-// compute kernel
+// Compute kernel
+#include <compute_kernel_api.h>
+#include <compute_kernel_api/common.h>
+#include <compute_kernel_api/eltwise_binary.h>
+
+namespace NAMESPACE {
 void MAIN {
-    uint32_t n_tiles = get_arg_val<uint32_t>(0);
+    const uint32_t n_tiles = get_arg_val<uint32_t>(0);
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    constexpr auto cb_out = tt::CBIndex::c_16;
     constexpr uint32_t dst_reg = 0;
-    binary_op_init_common(tt::c_0, tt::c_1, tt::c_16);
-    add_tiles_init(tt::c_0, tt::c_1);
+
+    // Metalium API Calls                              Involved Cores
+    binary_op_init_common(cb_in0, cb_in1, cb_out);  // Unpack, Math, Pack
+    add_tiles_init(cb_in0, cb_in1, false);          // Unpack, Math
 
     for (uint32_t i = 0; i < n_tiles; i++) {
-        acquire_dst(); // ensure synchronization between the 3 compute cores
-        cb_wait_front(tt::c_0, 1); cb_wait_front(tt::c_1, 1); cb_reserve_back(tt::c_16, 1);
+        cb_wait_front(cb_in0, 1);                   // Unpack
+        cb_wait_front(cb_in1, 1);                   // Unpack
 
-        add_tiles(tt::c_0, tt::c_1, 0, 0, dst_reg); pack_tile(dst_reg, tt::c_16);
+        tile_regs_acquire();                        // Math
+        add_tiles(cb_in0, cb_in1, 0, 0, dst_reg);   // Unpack, Math
+        tile_regs_commit();                         // Math
 
-        cb_push_back(tt::c_16, 1); cb_pop_front(tt::c_0, 1); cb_pop_front(tt::c_1, 1);
-        release_dst();
+        cb_pop_front(cb_in0, 1);                    // Unpack
+        cb_pop_front(cb_in1, 1);                    // Unpack
+
+        cb_reserve_back(cb_out, 1);                 // Pack
+
+        tile_regs_wait();                           // Pack
+        pack_tile(dst_reg, cb_out, 0);              // Pack
+        tile_regs_release();                        // Pack
+
+        cb_push_back(cb_out, 1);                    // Pack
     }
+}
 }
 ```
 
-The writer is simple. Just waits for the data to be ready and writes it to the output buffer.
+The writer is simple. Just waits for the output data from the compute kernel to be ready in the output circular buffer and writes it to the output DRAM buffer.
 
 ```c++
-// data write kernel (data movement kernel 1)
+// Data write kernel (data movement kernel 1)
+#include <dataflow_api.h>
+
 void kernel_main() {
-    uint32_t c_addr = get_arg_val<uint32_t>(0);
-    uint32_t n_tiles = get_arg_val<uint32_t>(1);
+    const uint32_t c_addr = get_arg_val<uint32_t>(0);
+    const uint32_t n_tiles = get_arg_val<uint32_t>(1);
 
-    const uint32_t tile_size_bytes = get_tile_size(cb_out0);
+    constexpr auto cb_out = tt::CBIndex::c_16;
 
-    const InterleavedAddrGenFast<true> c = {c_addr, tile_size_bytes, DataFormat::Float16_b};
+    const uint32_t tile_size_bytes = get_tile_size(cb_out);
 
+    const InterleavedAddrGenFast<true> c = {
+        .bank_base_address = c_addr,
+        .page_size = tile_size_bytes,
+        .data_format = DataFormat::Float16_b
+    };
+
+    // Read outputs from circular buffers into DRAM
     for (uint32_t i = 0; i < n_tiles; i++) {
-        cb_wait_front(tt::c_16, 1);
-        noc_async_write_tile(get_read_ptr(tt::c_16), c, cb_out0_addr);
+        cb_wait_front(cb_out, 1);
+
+        const uint32_t cb_out_addr = get_read_ptr(cb_out);
+        noc_async_write_tile(i, c, cb_out_addr);
+
         noc_async_write_barrier();
-        cb_pop_front(tt::c_16, 1);
+
+        cb_pop_front(cb_out, 1);
     }
 }
 ```
@@ -251,76 +304,86 @@ The following example demonstrates vector addition implementation using the Meta
 First, we initialize the device connection and allocate the necessary buffers:
 
 ```c++
-IDevice* device = CreateDevice(0);
-CommandQueue& cq = device->command_queue();
+IDevice* device = CreateDevice(/*device_id=*/0);
+CommandQueue& cq = dev->command_queue(/*cq_id=*/0);
+Program program = tt::tt_metal::CreateProgram();
 
-size_t n_tiles = 64;
-size_t buffer_size = TILE_WIDTH * TILE_HEIGHT * n_tiles * sizeof(bfloat16);
-size_t page_size = TILE_WIDTH * TILE_HEIGHT * sizeof(bfloat16);
-InterleavedBufferConfig config{
+constexpr uint32_t n_tiles = 64;
+constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
+constexpr size_t tile_size_bytes = elements_per_tile * sizeof(bfloat16);
+constexpr uint32_t n_elements = n_tiles * elements_per_tile;
+constexpr size_t buffer_size_bytes = n_elements * sizeof(bfloat16);
+// Set page size to the size of a tile
+constexpr size_t page_size_bytes = tile_size_bytes;
+
+InterleavedBufferConfig dram_buffer_config{
     .device = device,
-    .size = buffer_size,
-    .page_size = page_size,
+    .size = buffer_size_bytes,
+    .page_size = page_size_bytes,
     .buffer_type = BufferType::DRAM};
-auto a = CreateBuffer(config);
-auto b = CreateBuffer(config);
-auto c = CreateBuffer(config);
+auto a = CreateBuffer(dram_buffer_config);
+auto b = CreateBuffer(dram_buffer_config);
+auto c = CreateBuffer(dram_buffer_config);
 
-EnqueueWriteBuffer(cq, a, some_data, false);
-EnqueueWriteBuffer(cq, b, some_data, false);
+std::vector<uint32_t> a_data = create_random_vector_of_bfloat16(buffer_size_bytes, 2, 42, -1.0f);
+std::vector<bfloat16> b_data(n_elements, 3.14159f);
+
+EnqueueWriteBuffer(cq, a, a_data, /*blocking=*/false);
+EnqueueWriteBuffer(cq, b, b_data, /*blocking=*/false);
 ```
 
 Next, we allocate the circular buffers required for inter-kernel communication. Each circular buffer is configured to hold two or more tiles worth of data, enabling the reader kernel to fetch new data while the compute kernel processes the previous tile. This overlapping of data movement and computation significantly improves overall throughput. While increasing the number of tiles per circular buffer can further enhance performance, developers should carefully evaluate memory usage constraints and recognize the diminishing returns associated with larger buffer sizes. The circular buffer configuration utilizes buffers 0, 1, and 16 for inter-kernel communication. These specific buffer IDs are arbitrary selections - any unique identifiers would function equivalently. The key requirement is that each circular buffer must have a distinct ID to prevent conflicts during execution.
 
 ```c++
+// This example executes on a single Tensix core
+constexpr CoreCoord core {0, 0};
 constexpr uint32_t tiles_per_cb = 2;
 
 // Configure source buffer A (input 0)
-tt::CBIndex src0_cb_index = tt::CBIndex::c_0;
-CBHandle cb_src0 = CreateCircularBuffer(
+constexpr auto cb_in0_index = tt::CBIndex::c_0;
+CBHandle cb_in0 = CreateCircularBuffer(
     program, core,
     CircularBufferConfig(
         /*total_size=*/tiles_per_cb * tile_size_bytes,
-        /*data_format_spec=*/{{src0_cb_index, tt::DataFormat::Float16_b}})
-        .set_page_size(src0_cb_index, tile_size_bytes));
+        /*data_format_spec=*/{{cb_in0_index, tt::DataFormat::Float16_b}})
+        .set_page_size(cb_in0_index, tile_size_bytes));
 
 // Configure source buffer B (input 1)
-tt::CBIndex src1_cb_index = tt::CBIndex::c_1;
-CBHandle cb_src1 = CreateCircularBuffer(
+constexpr auto cb_in1_index = tt::CBIndex::c_1;
+CBHandle cb_in1 = CreateCircularBuffer(
     program, core,
     CircularBufferConfig(
         /*total_size=*/tiles_per_cb * tile_size_bytes,
-        /*data_format_spec=*/{{src1_cb_index, tt::DataFormat::Float16_b}})
-        .set_page_size(src1_cb_index, tile_size_bytes));
+        /*data_format_spec=*/{{cb_in1_index, tt::DataFormat::Float16_b}})
+        .set_page_size(cb_in1_index, tile_size_bytes));
 
 // Configure destination buffer (output)
-tt::CBIndex dst_cb_index = tt::CBIndex::c_16;
-CBHandle cb_dst = CreateCircularBuffer(
+constexpr auto cb_out_index = tt::CBIndex::c_16;
+CBHandle cb_out = CreateCircularBuffer(
     program, core,
     CircularBufferConfig(
         /*total_size=*/tiles_per_cb * tile_size_bytes,
-        /*data_format_spec=*/{{dst_cb_index, tt::DataFormat::Float16_b}})
-        .set_page_size(dst_cb_index, tile_size_bytes));
+        /*data_format_spec=*/{{cb_out_index, tt::DataFormat::Float16_b}})
+        .set_page_size(cb_out_index, tile_size_bytes));
 ```
 
 Then, we compile the kernels for data movement and computation. For simplicity, this example targets a single Tensix at coordinates (0, 0). Runtime arguments are then configured for each kernel to specify their operational parameters.
 
 ```c++
-Program program = CreateProgram();
 auto reader = CreateKernel(
     program,
-    "tt_metal/programming_examples/contributed/vecadd/kernels/interleaved_tile_read.cpp",
-    {0, 0},
+    "path/to/reader_kernel.cpp",
+    core,
     DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 auto writer = CreateKernel(
     program,
-    "tt_metal/programming_examples/contributed/vecadd/kernels/tile_write.cpp",
-    {0, 0},
+    "path/to/writer_kernel.cpp",
+    core,
     DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 auto compute = CreateKernel(
     program,
-    "tt_metal/programming_examples/contributed/vecadd/kernels/add.cpp",
-    {0, 0},
+    "path/to/compute_kernel.cpp",
+    core,
     ComputeConfig{.math_approx_mode = false, .compile_args = {}, .defines = {}});
 SetRuntimeArgs(program, reader, core, {a->address(), b->address(), n_tiles});
 SetRuntimeArgs(program, writer, core, {c->address(), n_tiles});
@@ -330,9 +393,9 @@ SetRuntimeArgs(program, compute, core, {n_tiles});
 Following setting the arguments, the program is enqueued for execution, synchronized for completion, and the computational results are retrieved.
 
 ```c++
-EnqueueProgram(cq, program, true);
-std::vector<uint32_t> c_data;
-EnqueueReadBuffer(cq, c, c_data, true);
+EnqueueProgram(cq, program, /*blocking=*/true);
+std::vector<bfloat16> c_data(n_elements, 0.0f);
+EnqueueReadBuffer(cq, c, c_data, /*blocking=*/true);
 ```
 
 ### Register control and Data Flow within the Compute Kernels
@@ -355,9 +418,9 @@ For instance, adding two tiles together using the FPU requires the following ste
 // Dst register index for the result
 constexpr uint32_t dst_reg = 0;
 // Add two tiles together using the FPU and store in Dst register
-add_tiles(tt::c_0, tt::c_1, 0, 0, dst_reg);
+add_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, dst_reg);
 // Pack the result into the result circular buffer
-pack_tile(dst_reg, tt::c_16);
+pack_tile(dst_reg, tt::CBIndex::c_16, /*output_tile_index=*/0);
 ```
 
 For functions such as sine or cosine, you must explicitly load the input tile into the Dst register, call the relevant SFPU function, and then write the result back to the circular buffer.
@@ -366,11 +429,11 @@ For functions such as sine or cosine, you must explicitly load the input tile in
 // Dst register index for the result
 constexpr uint32_t dst_reg = 0;
 // Load the input tile into the `dst_reg`-th register.
-copy_tile(tt::c_0, 0, dst_reg);
+copy_tile(tt::CBIndex::c_0, 0, dst_reg);
 // Call the SFPU sine function. It overwrites original value in register
 sin_tile(dst_reg);
 // Write the result back to the circular buffer
-pack_tile(dst_reg, tt::c_16);
+pack_tile(dst_reg, tt::CBIndex::c_16, /*output_tile_index=*/0);
 ```
 
 In general, FPU operations can work directly on circular buffers, while SFPU operations require data to be moved into into the Dst register before invoking the SFPU. But almost always `pack_tile` is needed to write the result back to the circular buffer, which is then pushed and the writer kernel can proceed to write the result to the output buffer.
@@ -456,7 +519,7 @@ Fast dispatch is much faster - Slow dispatch forces the host CPU to actively man
 
 ```c++
 // Fast dispatch. Can be async or the process waits until completion
-EnqueueReadBuffer(queue, buffer, host_ptr, /*async=*/false);
+EnqueueReadBuffer(queue, buffer, host_ptr, /*blocking=*/false);
 
 // Slow dispatch. No queue. But also CPU has to do all the job
 ReadFromBuffer(buffer, host_ptr);
