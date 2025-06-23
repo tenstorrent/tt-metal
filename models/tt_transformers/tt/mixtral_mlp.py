@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
@@ -125,21 +126,21 @@ class TtMixtralMLP(LightweightModule):
                 w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, self.model_args.dim])
 
         else:  # Decode mode
-            breakpoint()
             w1_out = ttnn.matmul(
                 x,
                 self.w1,
-                program_config=self.model_config["FF1_OUTPUT_PROGCFG"],  # SILu activation fused in the op
-                # memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                program_config=self.model_config[
+                    "DECODE_MIXTRAL_MLP_W1_W3_PRG_CONFIG"
+                ],  # SILu activation fused in the op
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 compute_kernel_config=self.model_args.compute_kernel_config_lofi,
                 dtype=ttnn.bfloat8_b,
             )
-            breakpoint()
             w3_out = ttnn.matmul(
                 x,
                 self.w3,
-                program_config=self.model_config["FF3_OUTPUT_PROGCFG"],
-                # memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                program_config=self.model_config["DECODE_MIXTRAL_MLP_W1_W3_PRG_CONFIG"],
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 compute_kernel_config=self.model_args.compute_kernel_config_lofi,
                 dtype=ttnn.bfloat8_b,
             )
@@ -147,11 +148,12 @@ class TtMixtralMLP(LightweightModule):
             w2_in = ttnn.mul(w1_out, w3_out)
             w1_out.deallocate(True)
             w3_out.deallocate(True)
+            breakpoint()
             w2_out = ttnn.matmul(
                 w2_in,
                 self.w2,
-                program_config=self.model_config["FF2_OUTPUT_PROGCFG"],
-                memory_config=self.model_config["FF2_OUTPUT_MEMCFG"],
+                program_config=self.model_config["DECODE_MIXTRAL_MLP_W2_PRG_CONFIG"],
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 compute_kernel_config=self.model_args.compute_kernel_config_lofi,
                 dtype=ttnn.bfloat8_b,
             )
