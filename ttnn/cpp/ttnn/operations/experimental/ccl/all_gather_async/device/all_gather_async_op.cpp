@@ -220,8 +220,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
     AllGatherAsyncVersion version = select_version(input_tensors[0]);
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
-    const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
     if (this->cluster_axis.has_value()) {
+        const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
         // User specified the cluster-axis. Derive devices based on the current coordinate
         // and the cluster-axis.
         devices_to_use = (this->cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])

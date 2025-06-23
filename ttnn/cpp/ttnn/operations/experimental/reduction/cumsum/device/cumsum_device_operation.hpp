@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,8 +28,16 @@ struct CumSumDeviceOperation {
     using spec_return_value_t = ttnn::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    struct SingleCore {
-        struct shared_variables_t {};
+    struct ProgramFactory {
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle cumsum_reader_kernel_id;
+            tt::tt_metal::KernelHandle cumsum_writer_kernel_id;
+
+            // For multicore, define list of cores with `num_cores` and grid height (`num_cores_y`)
+            // For i=0 to num_cores, Core coordinates {core.x, core.y} = {i / num_cores_y, i % num_cores_y}
+            std::size_t num_cores;
+            std::size_t num_cores_y;
+        };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
@@ -44,7 +52,7 @@ struct CumSumDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<SingleCore>;
+    using program_factory_t = std::variant<ProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
