@@ -30,13 +30,13 @@ namespace detail {
 template <
     uint32_t RankCT = 0,
     uint32_t NumBanksCT = 0,
-    typename TensorShapeWrapper_ = ArrayDynamicWrapper,
-    typename ShardShapeWrapper_ = ArrayDynamicWrapper,
-    typename BankCoordsWrapper_ = ArrayDynamicWrapper>
+    typename TensorShapeWrapper = ArrayDynamicWrapper,
+    typename ShardShapeWrapper = ArrayDynamicWrapper,
+    typename BankCoordsWrapper = ArrayDynamicWrapper>
 struct DistributionSpec {
-    using TensorShapeWrapper = TensorShapeWrapper_;
-    using ShardShapeWrapper = ShardShapeWrapper_;
-    using BankCoordsWrapper = BankCoordsWrapper_;
+    // using TensorShapeWrapper = TensorShapeWrapper_;
+    // using ShardShapeWrapper = ShardShapeWrapper_;
+    // using BankCoordsWrapper = BankCoordsWrapper_;
 
     static constexpr bool has_static_rank = RankCT != 0;
     static constexpr bool has_static_num_banks = NumBanksCT != 0;
@@ -104,7 +104,7 @@ struct DistributionSpec {
     }
 
     // === Shape and Dimension Queries ===
-    FORCE_INLINE constexpr uint32_t rank() const { getter_helper(has_static_rank, rank_ct, rank_rt); }
+    FORCE_INLINE constexpr uint32_t rank() const {getter_helper(has_static_rank, rank_ct, rank_rt)}
 
     FORCE_INLINE constexpr uint32_t num_banks() const {getter_helper(has_static_num_banks, num_banks_ct, num_banks_rt)}
 

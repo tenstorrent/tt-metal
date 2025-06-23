@@ -28,10 +28,10 @@ struct ArgsOffsets {
     // Impossible to have runtime rank without runtime tensor and shard shapes since then impossible to calculate CTA
     // offsets in compile time
     static_assert(
-        !rank_is_crta || (rank_is_crta and tensor_shape_is_crta and shard_shape_is_crta),
+        !rank_is_crta || (rank_is_crta && tensor_shape_is_crta && shard_shape_is_crta),
         "If rank is runtime, tensor_shape and shard_shape must also be runtime");
     static_assert(
-        !num_banks_is_crta || (num_banks_is_crta and bank_coords_is_crta),
+        !num_banks_is_crta || (num_banks_is_crta && bank_coords_is_crta),
         "If num_banks is runtime, bank_coords must also be runtime");
 
     // Calculate offsets for compile-time arguments

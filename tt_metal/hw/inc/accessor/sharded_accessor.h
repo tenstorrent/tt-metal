@@ -163,16 +163,16 @@ FORCE_INLINE auto make_sharded_accessor_from_args(
 template <
     uint32_t RankCT = 0,
     uint32_t NumBanksCT = 0,
-    typename TensorShapeWrapper_ = ArrayDynamicWrapper,
-    typename ShardShapeWrapper_ = ArrayDynamicWrapper,
-    typename BankCoordsWrapper_ = ArrayDynamicWrapper>
+    typename TensorShapeWrapper = ArrayDynamicWrapper,
+    typename ShardShapeWrapper = ArrayDynamicWrapper,
+    typename BankCoordsWrapper = ArrayDynamicWrapper>
 FORCE_INLINE auto make_dspec(
     uint32_t rank_rt = 0,
     uint32_t num_banks_rt = 0,
     uint32_t* tensor_shape_ptr = nullptr,
     uint32_t* shard_shape_ptr = nullptr,
     uint16_t* bank_coords_ptr = nullptr) {
-    return detail::make_dspec<RankCT, NumBanksCT, TensorShapeWrapper_, ShardShapeWrapper_, BankCoordsWrapper_>(
+    return detail::make_dspec<RankCT, NumBanksCT, TensorShapeWrapper, ShardShapeWrapper, BankCoordsWrapper>(
         rank_rt, num_banks_rt, tensor_shape_ptr, shard_shape_ptr, bank_coords_ptr);
 }
 
