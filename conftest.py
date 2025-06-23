@@ -415,7 +415,14 @@ def mesh_device(request, silicon_arch_name, device_params):
     fabric_config = updated_device_params.pop("fabric_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     set_fabric(fabric_config)
-    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
+
+    # physical_device_ids = [6, 5, 8, 13, 2, 7, 15, 11, 1, 3, 10, 14, 4, 0, 12, 9, 17, 21, 29, 26, 20, 18, 28, 25, 16, 23, 31, 30, 19, 22, 24, 27]
+    physical_device_ids = []
+    print(f"device_ids: {device_ids}")
+    print(f"request.node.pci_ids: {request.node.pci_ids}")
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape=mesh_shape, physical_device_ids=physical_device_ids, **updated_device_params
+    )
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device

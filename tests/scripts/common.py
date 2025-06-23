@@ -266,6 +266,7 @@ def get_updated_device_params(device_params):
     import ttnn
 
     dispatch_core_type = get_dispatch_core_type()
+    print(f"Using dispatch_core_type: {dispatch_core_type}")
     new_device_params = device_params.copy()
 
     is_blackhole = ttnn.get_arch_name() == "blackhole"

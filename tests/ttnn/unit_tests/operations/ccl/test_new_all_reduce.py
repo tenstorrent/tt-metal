@@ -67,6 +67,7 @@ def run_all_reduce_impl(
     trace_mode=False,
     validate_all=True,
     profiler=BenchmarkProfiler(),
+    topology=ttnn.Topology.Linear,
 ):
     cluster_shape = (8, 4)
 
@@ -87,6 +88,8 @@ def run_all_reduce_impl(
     else:
         all_reduce_topology = ttnn.Topology.Ring
         wrap_mesh = False
+    all_reduce_topology = topology
+    print(f"Using all_reduce_topology: {all_reduce_topology}")
 
     worker_sub_device = ttnn.SubDevice([SUB_DEVICE_CRS])
 

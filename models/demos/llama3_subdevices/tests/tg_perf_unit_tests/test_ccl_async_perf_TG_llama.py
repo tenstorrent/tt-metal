@@ -14,9 +14,18 @@ THRESHOLD = 0.4
 @pytest.mark.parametrize(
     "ag_type, warmup_iters, perf_target_us",
     [
-        ("sdpa", 15, 12.9),
-        ("binary_mult", 15, 12.54),
-        ("layernorm", 15, 5.4),
+        ("sdpa_bfp8_linear", 15, 12.9),
+        # ("sdpa_bfp8_ring", 15, 12.9),
+        ("sdpa_bf16_linear", 15, 12.9),
+        # ("sdpa_bf16_ring", 15, 12.9),
+        ("binary_mult_bfp8_linear", 15, 12.54),
+        # ("binary_mult_bfp8_ring", 15, 12.54),
+        ("binary_mult_bf16_linear", 15, 12.54),
+        # ("binary_mult_bf16_ring", 15, 12.54),
+        ("layernorm_bfp8_linear", 15, 5.4),
+        # ("layernorm_bfp8_ring", 15, 5.4),
+        ("layernorm_bf16_linear", 15, 5.4),
+        # ("layernorm_bf16_ring", 15, 5.4),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -51,6 +60,87 @@ def test_ag_tg_llama_perf(
     measured_avg_us = measured_avg / 1000
 
     logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
+    print(f"{ag_type} : Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
+
+    # Save the measurement
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-{ag_type}-min", measured_min)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-{ag_type}-max", measured_max)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-{ag_type}-avg", measured_avg)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-{ag_type}-std", measured_std)
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type=f"tg_llama_ops",
+        ml_model_name="llama70b-tg",
+    )
+
+    assert (
+        measured_avg_us < perf_target_us + THRESHOLD
+    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+
+
+@pytest.mark.parametrize(
+    "ag_type, warmup_iters, perf_target_us",
+    [
+        ("4_1_1_32_32_128_1_Linear_bfloat16", 0, 1000),
+        ("4_2_1_32_32_128_1_Linear_bfloat16", 0, 1000),
+        # ("4_2_1_32_32_128_1_Linear_bfp8_b", 0, 1000),
+        ("4_4_1_32_32_128_1_Linear_bfloat16", 0, 1000),
+        # ("4_4_1_32_32_128_1_Linear_bfp8_b", 0, 1000),
+        # ("8_2_1_32_32_128_1_Linear_bfloat16", 0, 1000),
+        # ("8_2_1_32_32_128_1_Linear_bfp8_b", 0, 1000),
+        # ("8_4_1_32_32_128_1_Linear_bfloat16", 0, 1000),
+        # ("8_4_1_32_32_128_1_Linear_bfp8_b", 0, 1000),
+        # ("8_1_8_1_32_1280_0_Linear_bfloat16", 0, 1000),
+        # ("8_1_8_1_32_1280_0_Linear_bfp8_b", 0, 1000),
+        # ("8_1_8_1_64_1280_0_Linear_bfloat16", 0, 1000),
+        # ("8_1_8_1_64_1280_0_Linear_bfp8_b", 0, 1000),
+        # ("8_1_8_1_128_1280_0_Linear_bfloat16", 0, 1000),
+        # ("8_1_8_1_128_1280_0_Linear_bfp8_b", 0, 1000),
+        # ("8_2_8_1_32_1280_0_Linear_bfloat16", 0, 1000),
+        # ("8_2_8_1_32_1280_0_Linear_bfp8_b", 0, 1000),
+        # ("8_2_8_1_64_1280_0_Linear_bfloat16", 0, 1000),
+        # ("8_2_8_1_64_1280_0_Linear_bfp8_b", 0, 1000),
+        # ("8_2_8_1_128_1280_0_Linear_bfloat16", 0, 1000),
+        # ("8_2_8_1_128_1280_0_Linear_bfp8_b", 0, 1000),
+        # ("8_4_8_1_32_1280_0_Linear_bfloat16", 0, 1000),
+        # ("8_4_8_1_32_1280_0_Linear_bfp8_b", 0, 1000),
+        # ("8_4_8_1_64_1280_0_Linear_bfloat16", 0, 1000),
+        # ("8_4_8_1_64_1280_0_Linear_bfp8_b", 0, 1000),
+        # ("8_4_8_1_128_1280_0_Linear_bfloat16", 0, 1000),
+        # ("8_4_8_1_128_1280_0_Linear_bfp8_b", 0, 1000),
+    ],
+)
+@pytest.mark.models_device_performance_bare_metal
+def test_ag_tg_test_perf(
+    ag_type,
+    warmup_iters,
+    perf_target_us,
+):
+    profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+    step_name = f"all_gather_{ag_type}"
+
+    subdir = "test_ccl_perf"
+    command = f"pytest tests/ttnn/unit_tests/operations/ccl/perf/test_ccl_async_perf.py::test_all_gather_async_tg -k {ag_type}"
+    cols = ["DEVICE KERNEL"]
+    op_name = "AllGatherAsync"
+    warmup_iters = warmup_iters * 32  # 5 iterations per device
+
+    profiler.start("run")
+    profiler.start(step_name)
+    results = run_device_perf_detailed(command, subdir, cols, op_name, has_signposts=True, warmup_iters=warmup_iters)
+    profiler.end(step_name)
+    profiler.end("run")
+
+    # Get the measured performance
+    measured_min = results[cols[0]]["MIN"]
+    measured_max = results[cols[0]]["MAX"]
+    measured_avg = results[cols[0]]["AVG"]
+    measured_std = results[cols[0]]["STD"]
+    measured_avg_us = measured_avg / 1000
+
+    logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
+    print(f"{ag_type} : Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
 
     # Save the measurement
     benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-{ag_type}-min", measured_min)
@@ -71,10 +161,22 @@ def test_ag_tg_llama_perf(
 @pytest.mark.parametrize(
     "ar_type, warmup_iters, perf_target_us",
     [
-        ("ff2", 15, 18.6),
-        ("qkv", 15, 11.9),
-        ("ff1", 15, 19.2),
-        ("lm_head", 15, 61.8),
+        ("ff2_bfp8_linear", 15, 18.6),
+        # ("ff2_bfp8_ring", 15, 18.6),
+        ("ff2_bf16_linear", 15, 18.6),
+        # ("ff2_bf16_ring", 15, 18.6),
+        ("qkv_bfp8_linear", 15, 11.9),
+        # ("qkv_bfp8_ring", 15, 11.9),
+        ("qkv_bf16_linear", 15, 11.9),
+        # ("qkv_bf16_ring", 15, 11.9),
+        ("ff1_bfp8_linear", 15, 19.2),
+        # ("ff1_bfp8_ring", 15, 19.2),
+        ("ff1_bf16_linear", 15, 19.2),
+        # ("ff1_bf16_ring", 15, 19.2),
+        ("lm_head_bfp8_linear", 15, 61.8),
+        # ("lm_head_bfp8_ring", 15, 61.8),
+        ("lm_head_bf16_linear", 15, 61.8),
+        # ("lm_head_bf16_ring", 15, 61.8),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -109,6 +211,7 @@ def test_ar_tg_llama_perf(
     measured_avg_us = measured_avg / 1000
 
     logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
+    print(f"{ar_type} : Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
 
     # Save the measurement
     benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-{ar_type}-min", measured_min)

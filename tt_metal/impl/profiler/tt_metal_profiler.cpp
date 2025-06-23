@@ -611,6 +611,7 @@ void ProfilerSync(ProfilerSyncState state) {
         }
         // If at least one sender reciever pair has been found
         if (first_connected_device_id != -1) {
+            log_info(tt::LogMetal, "first_connected_device_id {}", first_connected_device_id);
             syncAllDevices(first_connected_device_id);
         }
     }

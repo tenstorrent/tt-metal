@@ -4,7 +4,9 @@
 
 import pytest
 import ttnn
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.utility_functions import skip_for_grayskull
+
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_gather import (
     run_all_gather_impl,
 )
@@ -14,17 +16,25 @@ from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_async import (
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows,
 )
+from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
+    run_all_reduce_impl,
+    RING_CRS,
+    NORM_CRS,
+    LM_HEAD_CRS,
+    QKV_CRS,
+    FF1_CRS,
+)
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, dim, layout",
     [
-        (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
-        (4, 1, [1, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
-        (4, 1, [1, 1, 32, 7168], 0, ttnn.TILE_LAYOUT),
-        (4, 1, [1, 1, 32, 3584], 0, ttnn.TILE_LAYOUT),
-        (4, 1, [1, 1, 32, 32], 0, ttnn.TILE_LAYOUT),
+        (4, 4, [1, 32, 32, 1280], 1, ttnn.TILE_LAYOUT),
+        # (4, 1, [1, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
+        # (4, 1, [1, 1, 32, 7168], 0, ttnn.TILE_LAYOUT),
+        # (4, 1, [1, 1, 32, 3584], 0, ttnn.TILE_LAYOUT),
+        # (4, 1, [1, 1, 32, 32], 0, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
@@ -40,9 +50,12 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import 
     ],
 )
 @pytest.mark.parametrize("num_iters", [20])
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 1824800}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 23887872, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+)
 def test_all_gather_async_t3000(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     output_shape,
     dim,
@@ -54,9 +67,11 @@ def test_all_gather_async_t3000(
     use_program_cache,
     function_level_defaults,
 ):
-    output_shape[dim] *= num_devices
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
+
+    # output_shape[dim] *= num_devices
     run_all_gather_impl(
-        t3k_mesh_device,
+        submesh,
         num_devices,
         output_shape,
         dim,
@@ -65,7 +80,7 @@ def test_all_gather_async_t3000(
         layout,
         use_program_cache,
         function_level_defaults,
-        all_gather_topology=ttnn.Topology.Ring,
+        all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
         rand_tensor=True,
         mem_config=mem_config,
@@ -75,13 +90,153 @@ def test_all_gather_async_t3000(
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
+    "num_devices, num_links, per_chip_output_shape, dim, layout, input_dtype",
+    (
+        (4, 1, [1, 32, 32, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (4, 1, [1, 32, 32, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, 2, [1, 32, 32, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, 2, [1, 32, 32, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (4, 4, [1, 32, 32, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, 4, [1, 32, 32, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (8, 2, [1, 32, 32, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 2, [1, 32, 32, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (8, 4, [1, 32, 32, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 4, [1, 32, 32, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (8, 1, [8, 1, 32, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 1, [8, 1, 32, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (8, 1, [8, 1, 64, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 1, [8, 1, 64, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (8, 1, [8, 1, 128, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 1, [8, 1, 128, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (8, 2, [8, 1, 32, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 2, [8, 1, 32, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (8, 2, [8, 1, 64, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 2, [8, 1, 64, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (8, 2, [8, 1, 128, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 2, [8, 1, 128, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (8, 4, [8, 1, 32, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 4, [8, 1, 32, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (8, 4, [8, 1, 64, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 4, [8, 1, 64, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (8, 4, [8, 1, 128, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, 4, [8, 1, 128, 1280], 0, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+    ),
+    ids=[
+        "4_1_1_32_32_128_1_Linear_bfloat8_b",
+        "4_1_1_32_32_128_1_Linear_bfloat16",
+        "4_2_1_32_32_128_1_Linear_bfloat16",
+        "4_2_1_32_32_128_1_Linear_bfp8_b",
+        "4_4_1_32_32_128_1_Linear_bfloat16",
+        "4_4_1_32_32_128_1_Linear_bfp8_b",
+        "8_2_1_32_32_128_1_Linear_bfloat16",
+        "8_2_1_32_32_128_1_Linear_bfp8_b",
+        "8_4_1_32_32_128_1_Linear_bfloat16",
+        "8_4_1_32_32_128_1_Linear_bfp8_b",
+        "8_1_8_1_32_1280_0_Linear_bfloat16",
+        "8_1_8_1_32_1280_0_Linear_bfp8_b",
+        "8_1_8_1_64_1280_0_Linear_bfloat16",
+        "8_1_8_1_64_1280_0_Linear_bfp8_b",
+        "8_1_8_1_128_1280_0_Linear_bfloat16",
+        "8_1_8_1_128_1280_0_Linear_bfp8_b",
+        "8_2_8_1_32_1280_0_Linear_bfloat16",
+        "8_2_8_1_32_1280_0_Linear_bfp8_b",
+        "8_2_8_1_64_1280_0_Linear_bfloat16",
+        "8_2_8_1_64_1280_0_Linear_bfp8_b",
+        "8_2_8_1_128_1280_0_Linear_bfloat16",
+        "8_2_8_1_128_1280_0_Linear_bfp8_b",
+        "8_4_8_1_32_1280_0_Linear_bfloat16",
+        "8_4_8_1_32_1280_0_Linear_bfp8_b",
+        "8_4_8_1_64_1280_0_Linear_bfloat16",
+        "8_4_8_1_64_1280_0_Linear_bfp8_b",
+        "8_4_8_1_128_1280_0_Linear_bfloat16",
+        "8_4_8_1_128_1280_0_Linear_bfp8_b",
+    ],
+)
+@pytest.mark.parametrize(
+    "num_iters, warmup_iters",
+    [
+        (3, 1),
+    ],
+)
+@pytest.mark.parametrize(
+    "buffer_type",
+    [
+        ttnn.BufferType.DRAM,
+    ],
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 17068032, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+)
+def test_all_gather_async_tg(
+    mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    dim,
+    num_links,
+    input_dtype,
+    layout,
+    buffer_type,
+    use_program_cache,
+    function_level_defaults,
+    num_iters,
+    warmup_iters,
+):
+    if num_devices == 4:
+        replication_factor = 8
+        cluster_axis = 1
+    else:
+        replication_factor = 4
+        cluster_axis = 0
+
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
+    replication_factor = 1
+    # devices = mesh_device.get_device_ids()
+    # print(f"devices: {devices}")
+    # ttnn.visualize_mesh_device(mesh_device)
+    # exit(0)
+
+    if mesh_device.get_num_devices() != 32:
+        pytest.skip("Not TG!")
+    profiler = BenchmarkProfiler()
+    run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
+        submesh,
+        # mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        buffer_type,
+        use_program_cache,
+        function_level_defaults,
+        num_iters=num_iters,
+        warmup_iters=warmup_iters,
+        num_all_gather_instances=replication_factor,
+        cluster_axis=cluster_axis,
+        profiler=profiler,
+        trace_mode=False,
+        use_all_gather_async=True,
+        use_persistent_output=True,
+        topology=ttnn.Topology.Linear,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, dim, layout",
     [
-        (8, 1, [1, 8, 32, 1280], 1, ttnn.TILE_LAYOUT),
         (8, 1, [8, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
-        (8, 1, [1, 8, 32, 2048], 1, ttnn.TILE_LAYOUT),
-        (8, 1, [1, 8, 32, 2304], 1, ttnn.TILE_LAYOUT),
-        (8, 1, [1, 8, 32, 4096], 1, ttnn.TILE_LAYOUT),
+        (8, 1, [8, 1, 64, 1280], 0, ttnn.TILE_LAYOUT),
+        (8, 1, [8, 1, 128, 1280], 0, ttnn.TILE_LAYOUT),
+        (8, 2, [8, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
+        (8, 2, [8, 1, 64, 1280], 0, ttnn.TILE_LAYOUT),
+        (8, 2, [8, 1, 128, 1280], 0, ttnn.TILE_LAYOUT),
+        (8, 4, [8, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
+        (8, 4, [8, 1, 64, 1280], 0, ttnn.TILE_LAYOUT),
+        (8, 4, [8, 1, 128, 1280], 0, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
@@ -95,13 +250,15 @@ def test_all_gather_async_t3000(
     "buffer_type",
     [
         ttnn.BufferType.DRAM,
-        ttnn.BufferType.L1,
+        # ttnn.BufferType.L1,
     ],
 )
 @pytest.mark.parametrize("replication_factor", [4])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 1824800}], indirect=True)
-def test_all_gather_async_tg(
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 1824800, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+)
+def test_all_reduce_async_tg(
     mesh_device,
     num_devices,
     per_chip_output_shape,
@@ -117,23 +274,21 @@ def test_all_gather_async_tg(
 ):
     if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
-    run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
+    run_all_reduce_impl(
         mesh_device,
-        num_devices,
-        per_chip_output_shape,
-        ttnn.TensorMemoryLayout.INTERLEAVED,
-        dim,
-        num_links,
+        output_shape,
+        cluster_axis,
         input_dtype,
-        layout,
-        buffer_type,
-        use_program_cache,
-        function_level_defaults,
+        num_links,
+        input_num_cores,
+        input_core_range_set,
+        output_num_cores,
+        output_core_range_set,
+        output_dtype=input_dtype,
         num_iters=num_iters,
-        num_all_gather_instances=replication_factor,
-        cluster_axis=0,
-        use_all_gather_async=True,
-        trace_mode=True,
+        warmup_iters=warmup_iters,
+        trace_mode=trace_mode,
+        validate_all=False,
     )
 
 

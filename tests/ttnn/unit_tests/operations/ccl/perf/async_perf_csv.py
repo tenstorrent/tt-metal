@@ -120,7 +120,9 @@ def perf_report(file_path):
         group_df = group_df.iloc[2 * group_df["n_chips"].iloc[0] :]
 
         group_df = group_df.sort_values(by=["DEVICE ID", "OP TO OP LATENCY [ns]"]).reset_index(drop=True)
-        group_df = group_df.groupby("DEVICE ID").apply(lambda x: x.iloc[0:-1]).reset_index(drop=True)
+        group_df = (
+            group_df.groupby("DEVICE ID").apply(lambda x: x.iloc[0:-1] if len(x) > 1 else x).reset_index(drop=True)
+        )
 
         group_df.rename(columns={"INPUT_0_LAYOUT": "Layout", "INPUT_0_DATATYPE": "Data Type"}, inplace=True)
 

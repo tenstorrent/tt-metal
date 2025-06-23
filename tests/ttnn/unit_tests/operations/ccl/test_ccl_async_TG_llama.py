@@ -67,16 +67,53 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
     "num_iters, warmup_iters",
     [
         (NUM_ITERATIONS, 10),
+        # (2, 1),
     ],
 )
 @pytest.mark.parametrize("shard_grid_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 @pytest.mark.parametrize(
-    "tensor_mem_layout, output_shape, num_links, dim, input_shard_shape,input_shard_grid,output_shard_shape, output_shard_grid, layout, input_dtype",
+    "tensor_mem_layout, output_shape, num_links, dim, input_shard_shape,input_shard_grid,output_shard_shape, output_shard_grid, layout, input_dtype, topology",
     (
         (  # AllGather after SDPA
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             (1, 32, 32, 128),
-            3,
+            4,
+            1,
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+            (32, 128),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 1)),
+                }
+            ),
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat8_b,
+            ttnn.Topology.Linear,
+        ),
+        (  # AllGather after SDPA
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (1, 32, 32, 128),
+            4,
+            1,
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+            (32, 128),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 1)),
+                }
+            ),
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat8_b,
+            ttnn.Topology.Ring,
+        ),
+        (  # AllGather after SDPA
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (1, 32, 32, 128),
+            4,
             1,
             (32, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
@@ -89,11 +126,56 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
             ),
             ttnn.TILE_LAYOUT,
             ttnn.bfloat16,
+            ttnn.Topology.Linear,
+        ),
+        (  # AllGather after SDPA
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (1, 32, 32, 128),
+            4,
+            1,
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+            (32, 128),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 1)),
+                }
+            ),
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.Topology.Ring,
         ),
         (  # AllGather after Binary Mult+Silu
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             (1, 1, 32, 3840),
+            4,
             3,
+            (32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 4))}),
+            (32, 160),
+            get_core_range_set(PREFETCHER_NOC1_GRID),
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat8_b,
+            ttnn.Topology.Linear,
+        ),
+        (  # AllGather after Binary Mult+Silu
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (1, 1, 32, 3840),
+            4,
+            3,
+            (32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 4))}),
+            (32, 160),
+            get_core_range_set(PREFETCHER_NOC1_GRID),
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat8_b,
+            ttnn.Topology.Ring,
+        ),
+        (  # AllGather after Binary Mult+Silu
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (1, 1, 32, 3840),
+            4,
             3,
             (32, 32),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 4))}),
@@ -101,11 +183,51 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
             get_core_range_set(PREFETCHER_NOC1_GRID),
             ttnn.TILE_LAYOUT,
             ttnn.bfloat16,
+            ttnn.Topology.Linear,
+        ),
+        (  # AllGather after Binary Mult+Silu
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (1, 1, 32, 3840),
+            4,
+            3,
+            (32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 4))}),
+            (32, 160),
+            get_core_range_set(PREFETCHER_NOC1_GRID),
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.Topology.Ring,
         ),
         (  # AllGather for layernorm
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             (1, 1, 32, 128),
-            1,
+            4,
+            3,
+            (32, 32),
+            CORE_RANGE_SET_1x1,
+            (32, 128),
+            CORE_RANGE_SET_1x1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat8_b,
+            ttnn.Topology.Linear,
+        ),
+        (  # AllGather for layernorm
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (1, 1, 32, 128),
+            4,
+            3,
+            (32, 32),
+            CORE_RANGE_SET_1x1,
+            (32, 128),
+            CORE_RANGE_SET_1x1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat8_b,
+            ttnn.Topology.Ring,
+        ),
+        (  # AllGather for layernorm
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (1, 1, 32, 128),
+            4,
             3,
             (32, 32),
             CORE_RANGE_SET_1x1,
@@ -113,38 +235,35 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
             CORE_RANGE_SET_1x1,
             ttnn.TILE_LAYOUT,
             ttnn.bfloat16,
+            ttnn.Topology.Linear,
         ),
-        (  # AllGather for sampling values
-            ttnn.TensorMemoryLayout.INTERLEAVED,
-            (1, 1, 32, 256),
-            1,
+        (  # AllGather for layernorm
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (1, 1, 32, 128),
+            4,
             3,
-            None,
-            None,
-            None,
-            None,
+            (32, 32),
+            CORE_RANGE_SET_1x1,
+            (32, 128),
+            CORE_RANGE_SET_1x1,
             ttnn.TILE_LAYOUT,
             ttnn.bfloat16,
-        ),
-        (  # AllGather for sampling indices
-            ttnn.TensorMemoryLayout.INTERLEAVED,
-            (1, 1, 32, 256),
-            1,
-            3,
-            None,
-            None,
-            None,
-            None,
-            ttnn.TILE_LAYOUT,
-            ttnn.uint16,
+            ttnn.Topology.Ring,
         ),
     ),
     ids=[
-        "sdpa",
-        "binary_mult",
-        "layernorm",
-        "sampling_values",
-        "sampling_indices",
+        "sdpa_bfp8_linear",
+        "sdpa_bfp8_ring",
+        "sdpa_bf16_linear",
+        "sdpa_bf16_ring",
+        "binary_mult_bfp8_linear",
+        "binary_mult_bfp8_ring",
+        "binary_mult_bf16_linear",
+        "binary_mult_bf16_ring",
+        "layernorm_bfp8_linear",
+        "layernorm_bfp8_ring",
+        "layernorm_bf16_linear",
+        "layernorm_bf16_ring",
     ],
 )
 @pytest.mark.parametrize("replication_factor", [8])
@@ -171,6 +290,7 @@ def test_all_gather_tg_llama(
     replication_factor,
     num_iters,
     warmup_iters,
+    topology,
 ):
     if mesh_device.get_num_devices() != 32:
         pytest.skip("Not TG!")
@@ -192,8 +312,13 @@ def test_all_gather_tg_llama(
     else:
         output_shard_spec = None
 
-    profiler = BenchmarkProfiler()
+    # submesh = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
+    # replication_factor = 1
 
+    # input_shard_spec = None
+    # output_shard_spec = None
+    profiler = BenchmarkProfiler()
+    num_links = 1
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
         num_devices,
@@ -216,23 +341,180 @@ def test_all_gather_tg_llama(
         trace_mode=True,
         use_all_gather_async=True,
         use_persistent_output=True,
+        topology=topology,
     )
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set, input_dtype, output_dtype",
+    "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set, input_dtype, output_dtype, topology",
     [
-        ([1, 1, 32, 2048], 0, 4, 24, RING_CRS, 16, NORM_CRS, ttnn.bfloat8_b, None),  # FF2/DO all reduce
-        ([1, 1, 32, 1280], 1, 3, 24, RING_CRS, 10, QKV_CRS, ttnn.bfloat8_b, ttnn.bfloat16),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 3, 24, RING_CRS, 28, FF1_CRS, ttnn.bfloat8_b, None),  # FF1 all reduce
-        ([1, 1, 32, 16 * 1024], 1, 3, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS, ttnn.bfloat8_b, None),  # LM head all reduce
+        (
+            [1, 1, 32, 2048],
+            0,
+            4,
+            24,
+            RING_CRS,
+            16,
+            NORM_CRS,
+            ttnn.bfloat8_b,
+            None,
+            ttnn.Topology.Linear,
+        ),  # FF2/DO all reduce
+        (
+            [1, 1, 32, 2048],
+            0,
+            4,
+            24,
+            RING_CRS,
+            16,
+            NORM_CRS,
+            ttnn.bfloat8_b,
+            None,
+            ttnn.Topology.Ring,
+        ),  # FF2/DO all reduce
+        (
+            [1, 1, 32, 2048],
+            0,
+            4,
+            24,
+            RING_CRS,
+            16,
+            NORM_CRS,
+            ttnn.bfloat16,
+            None,
+            ttnn.Topology.Linear,
+        ),  # FF2/DO all reduce
+        (
+            [1, 1, 32, 2048],
+            0,
+            4,
+            24,
+            RING_CRS,
+            16,
+            NORM_CRS,
+            ttnn.bfloat16,
+            None,
+            ttnn.Topology.Ring,
+        ),  # FF2/DO all reduce
+        (
+            [1, 1, 32, 1280],
+            1,
+            4,
+            24,
+            RING_CRS,
+            10,
+            QKV_CRS,
+            ttnn.bfloat8_b,
+            None,
+            ttnn.Topology.Linear,
+        ),  # QKV all reduce
+        ([1, 1, 32, 1280], 1, 4, 24, RING_CRS, 10, QKV_CRS, ttnn.bfloat8_b, None, ttnn.Topology.Ring),  # QKV all reduce
+        (
+            [1, 1, 32, 1280],
+            1,
+            4,
+            24,
+            RING_CRS,
+            10,
+            QKV_CRS,
+            ttnn.bfloat16,
+            None,
+            ttnn.Topology.Linear,
+        ),  # QKV all reduce
+        ([1, 1, 32, 1280], 1, 4, 24, RING_CRS, 10, QKV_CRS, ttnn.bfloat16, None, ttnn.Topology.Ring),  # QKV all reduce
+        (
+            [1, 1, 32, 3584],
+            1,
+            4,
+            24,
+            RING_CRS,
+            28,
+            FF1_CRS,
+            ttnn.bfloat8_b,
+            None,
+            ttnn.Topology.Linear,
+        ),  # FF1 all reduce
+        ([1, 1, 32, 3584], 1, 4, 24, RING_CRS, 28, FF1_CRS, ttnn.bfloat8_b, None, ttnn.Topology.Ring),  # FF1 all reduce
+        (
+            [1, 1, 32, 3584],
+            1,
+            4,
+            24,
+            RING_CRS,
+            28,
+            FF1_CRS,
+            ttnn.bfloat16,
+            None,
+            ttnn.Topology.Linear,
+        ),  # FF1 all reduce
+        ([1, 1, 32, 3584], 1, 4, 24, RING_CRS, 28, FF1_CRS, ttnn.bfloat16, None, ttnn.Topology.Ring),  # FF1 all reduce
+        (
+            [1, 1, 32, 16 * 1024],
+            1,
+            4,
+            32,
+            LM_HEAD_CRS,
+            32,
+            LM_HEAD_CRS,
+            ttnn.bfloat8_b,
+            None,
+            ttnn.Topology.Linear,
+        ),  # LM head all reduce
+        (
+            [1, 1, 32, 16 * 1024],
+            1,
+            4,
+            32,
+            LM_HEAD_CRS,
+            32,
+            LM_HEAD_CRS,
+            ttnn.bfloat8_b,
+            None,
+            ttnn.Topology.Ring,
+        ),  # LM head all reduce
+        (
+            [1, 1, 32, 16 * 1024],
+            1,
+            4,
+            32,
+            LM_HEAD_CRS,
+            32,
+            LM_HEAD_CRS,
+            ttnn.bfloat16,
+            None,
+            ttnn.Topology.Linear,
+        ),  # LM head all reduce
+        (
+            [1, 1, 32, 16 * 1024],
+            1,
+            4,
+            32,
+            LM_HEAD_CRS,
+            32,
+            LM_HEAD_CRS,
+            ttnn.bfloat16,
+            None,
+            ttnn.Topology.Ring,
+        ),  # LM head all reduce
     ],
     ids=[
-        "ff2",
-        "qkv",
-        "ff1",
-        "lm_head",
+        "ff2_bfp8_linear",
+        "ff2_bfp8_ring",
+        "ff2_bf16_linear",
+        "ff2_bf16_ring",
+        "qkv_bfp8_linear",
+        "qkv_bfp8_ring",
+        "qkv_bf16_linear",
+        "qkv_bf16_ring",
+        "ff1_bfp8_linear",
+        "ff1_bfp8_ring",
+        "ff1_bf16_linear",
+        "ff1_bf16_ring",
+        "lm_head_bfp8_linear",
+        "lm_head_bfp8_ring",
+        "lm_head_bf16_linear",
+        "lm_head_bf16_ring",
     ],
 )
 @pytest.mark.parametrize(
@@ -241,7 +523,7 @@ def test_all_gather_tg_llama(
         (NUM_ITERATIONS, 10),
     ],
 )
-@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -277,6 +559,7 @@ def test_all_reduce_tg_llama(
     use_program_cache,
     function_level_defaults,
     ensure_devices_tg,
+    topology,
 ):
     profiler = BenchmarkProfiler()
 
@@ -296,4 +579,5 @@ def test_all_reduce_tg_llama(
         trace_mode=trace_mode,
         validate_all=False,
         profiler=profiler,
+        topology=topology,
     )

@@ -106,7 +106,7 @@ def post_process_ops_log_detailed(
 def run_device_perf_detailed(command, subdir, cols, op_name="", has_signposts=False, warmup_iters=0):
     duration_cols = [col + " DURATION [ns]" for col in cols]
 
-    clear_profiler_runtime_artifacts()
+    # clear_profiler_runtime_artifacts()
 
     results = {}
     for d_col in duration_cols:
