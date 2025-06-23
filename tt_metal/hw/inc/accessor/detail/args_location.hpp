@@ -38,10 +38,22 @@ struct ArgsOffsets {
     static constexpr uint32_t RankCTAOffset = CTA_OFFSET + 1;
     static constexpr uint32_t NumBanksCTAOffset = RankCTAOffset + (rank_is_crta ? 0 : 1);
 
-    static constexpr uint32_t RankCT =
-        rank_is_crta ? 0 : get_compile_time_arg_val(rank_is_crta ? CTA_OFFSET : RankCTAOffset);
-    static constexpr uint32_t NumBanksCT =
-        num_banks_is_crta ? 0 : get_compile_time_arg_val(num_banks_is_crta ? CTA_OFFSET : NumBanksCTAOffset);
+    static constexpr uint32_t RankCT = [] {
+        if constexpr (rank_is_crta) {
+            return 0;
+        } else {
+            return get_compile_time_arg_val(RankCTAOffset);
+        }
+    }();
+
+    static constexpr uint32_t NumBanksCT = [] {
+        if constexpr (num_banks_is_crta) {
+            return 0;
+        } else {
+            return get_compile_time_arg_val(NumBanksCTAOffset);
+        }
+    }();
+
     static constexpr uint32_t PhysicalNumBanksCT = (NumBanksCT + 1) / 2;
 
     static_assert(rank_is_crta || RankCT > 0, "Rank must be greater than 0!");
