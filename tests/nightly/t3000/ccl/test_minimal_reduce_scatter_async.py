@@ -7,11 +7,7 @@ import pytest
 import math
 from loguru import logger
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
-
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 
 
 def create_global_semaphores(mesh_device, num_devices, cores, initial_value, num_links):
@@ -226,12 +222,12 @@ def run_reduce_scatter_impl(
         (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fusedd
     ],
     ids=[
-        "batch_8_links_1",
-        "batch_4_links_1",
-        "batch_1_sd35_spatial_links_1",
-        "batch_1_sd35_prompt_links_1",
-        "batch_2_links_1",
-        "batch_1_links_1",
+        "batch_8",
+        "batch_4",
+        "batch_1_sd35_spatial",
+        "batch_1_sd35_prompt",
+        "batch_2",
+        "batch_1",
     ],
 )
 @pytest.mark.parametrize(
