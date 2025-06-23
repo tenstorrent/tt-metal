@@ -115,19 +115,25 @@ void kernel_main() {
         size_t l1_read_addr = get_read_ptr(cb0_id);
 
         uint64_t noc0_dest_noc_addr =
-            get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], reduction_input_addr + writer_chip_offset);
+            safe_get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], reduction_input_addr + writer_chip_offset);
+
+        uint64_t sema_noc_addr = safe_get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], out_ready_sem_bank_addr);
 
         // Within-shard offset
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
 
         // This issues a flush barrier
-        write_and_advance_local_read_address_for_fabric_write(
+        fused_write_atomic_and_advance_local_read_address_for_fabric_write(
             noc0_dest_noc_addr,
             pkt_hdr_forward,
             pkt_hdr_backward,
             fabric_connection,
             l1_read_addr,
-            num_tiles_to_read_this_core * tensor0_page_size);
+            num_tiles_to_read_this_core * tensor0_page_size,
+            sema_noc_addr,
+            static_cast<uint16_t>(1),
+            static_cast<uint16_t>(32),
+            false);
         if constexpr (dynamic_alternate) {
             std::swap(
                 pkt_hdr_forward->routing_fields.value,
