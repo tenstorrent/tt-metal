@@ -189,21 +189,21 @@ void matmul_multi_core(
     MathFidelity math_fidelity = MathFidelity::HiFi4;  // High fidelity math for accurate results
     auto reader_id = tt_metal::CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "matmul_multi_core/kernels/dataflow/reader_mm_output_tiles_partitioned.cpp",
+        OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/dataflow/reader_mm_output_tiles_partitioned.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = {}});
 
     auto writer_id = tt_metal::CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "matmul_multi_core/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = {}});
 
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "matmul_multi_core/kernels/compute/mm.cpp",
+        OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/compute/mm.cpp",
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = {}});
 
