@@ -710,10 +710,7 @@ def test_demo_text(
 
             # Save output token to print out later
             for user in range(batch_size):
-                if batch_size == 1:
-                    user_tok = out_tok.squeeze(1).tolist()[0]
-                else:
-                    user_tok = out_tok.squeeze(1).tolist()[user]
+                user_tok = out_tok.squeeze(1).tolist()[user]
                 if (
                     user_tok not in tokenizer.stop_tokens and user_done[user] == False
                 ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
