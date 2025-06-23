@@ -1,14 +1,14 @@
 import sys
-from dataclasses import dataclass
 from glob import glob
 from itertools import chain
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable
 
 import torch
 from safetensors.torch import load_file
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from transformers.modeling_utils import no_init_weights
+
 
 def load_tokenizer(model_path: str):
     return AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
@@ -25,6 +25,7 @@ def load_model_uninitialized(model_path: str):
 
     model.eval()
     return model
+
 
 def load_model_weights(model_path: str) -> dict[str, torch.Tensor]:
     safetensors_filepaths = sorted(glob(f"{model_path}/*.safetensors"))
