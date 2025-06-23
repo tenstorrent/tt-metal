@@ -132,7 +132,7 @@ void kernel_main() {
 }
 ```
 
-For the compute kernel, the same source code is used to create kernels for all three Unpack/Math/Pack baby RISC-V cores. The Metalium compute API is implemented with code sections that are each enabled only for a specific type of core. In the example below, the `add_tiles` call has Unpack core code that copies the input tiles into the FPU's registers, as well as Math core code that performs the addition operation on the FPU and stores the result into the output register. On the other hand, the `cb_reserve_back` call only contains code that will execute on the Pack core. During execution, the runtime will automatically compile the compute kernel code three times, each time for a different core. The generated binaries will only contain code dedicated for a single type of core and will then be submitted to the device for concurrent execution.
+For the compute kernel, the same source code is used to create binaries for all three Unpack/Math/Pack baby RISC-V cores. The Metalium compute API is implemented with code sections that are each enabled only for a specific type of core. In the example below, the `add_tiles` call has Unpack core code that copies the input tiles into the FPU's source registers, as well as Math core code that performs the addition operation on the FPU and stores the result into the destination register. On the other hand, the `cb_reserve_back` call only contains code that will execute on the Pack core. During execution, the runtime will automatically compile the compute kernel code three times, each time for a different core. The generated binaries will only contain code dedicated for a single type of core and will then be submitted to the device for concurrent execution.
 
 Synchronization with the reader and writer kernels, as well as between the three cores that are running the compute kernel, is done through the circular buffers and other synchronization primitives.
 
@@ -311,10 +311,8 @@ Program program = tt::tt_metal::CreateProgram();
 constexpr uint32_t n_tiles = 64;
 constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
 constexpr size_t tile_size_bytes = elements_per_tile * sizeof(bfloat16);
-constexpr uint32_t n_elements = n_tiles * elements_per_tile;
-constexpr size_t buffer_size_bytes = n_elements * sizeof(bfloat16);
-// Set page size to the size of a tile
-constexpr size_t page_size_bytes = tile_size_bytes;
+constexpr size_t buffer_size_bytes = n_tiles * tile_size_bytes;
+constexpr size_t page_size_bytes = tile_size_bytes; // We choose to use one tile per page
 
 InterleavedBufferConfig dram_buffer_config{
     .device = device,
@@ -326,7 +324,7 @@ auto b = CreateBuffer(dram_buffer_config);
 auto c = CreateBuffer(dram_buffer_config);
 
 std::vector<uint32_t> a_data = create_random_vector_of_bfloat16(buffer_size_bytes, 2, 42, -1.0f);
-std::vector<bfloat16> b_data(n_elements, 3.14159f);
+std::vector<bfloat16> b_data(n_tiles * elements_per_tile, 3.14159f);
 
 EnqueueWriteBuffer(cq, a, a_data, /*blocking=*/false);
 EnqueueWriteBuffer(cq, b, b_data, /*blocking=*/false);
@@ -394,7 +392,7 @@ Following setting the arguments, the program is enqueued for execution, synchron
 
 ```c++
 EnqueueProgram(cq, program, /*blocking=*/true);
-std::vector<bfloat16> c_data(n_elements, 0.0f);
+std::vector<bfloat16> c_data(n_tiles * elements_per_tile, 0.0f);
 EnqueueReadBuffer(cq, c, c_data, /*blocking=*/true);
 ```
 
