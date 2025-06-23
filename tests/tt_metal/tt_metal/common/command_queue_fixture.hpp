@@ -199,6 +199,49 @@ protected:
 
 class CommandQueueSingleCardProgramFixture : virtual public CommandQueueSingleCardFixture {};
 
+class UnitMeshCommandQueueMultiDeviceFixture : public DispatchFixture {
+protected:
+    void SetUp() override {
+        this->slow_dispatch_ = false;
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch) {
+            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            this->slow_dispatch_ = true;
+            GTEST_SKIP();
+        }
+
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+
+        num_devices_ = tt::tt_metal::GetNumAvailableDevices();
+        if (num_devices_ < 2) {
+            GTEST_SKIP();
+        }
+
+        std::vector<chip_id_t> chip_ids;
+        for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
+            std::cout << "Adding chip ID: " << id << std::endl;
+            chip_ids.push_back(id);
+        }
+
+        const auto& dispatch_core_config =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
+            chip_ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
+        for (const auto& [id, device] : reserved_devices) {
+            devices_.push_back(device);
+        }
+    }
+
+    void TearDown() override {
+        for (auto& device : devices_) {
+            device.reset();
+        }
+    }
+
+    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
+    size_t num_devices_;
+};
+
 class CommandQueueMultiDeviceFixture : public DispatchFixture {
 protected:
     void SetUp() override {
@@ -242,7 +285,7 @@ class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixt
 
 class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixture {};
 
-class CommandQueueOnFabricMultiDeviceFixture : public CommandQueueMultiDeviceFixture,
+class CommandQueueOnFabricMultiDeviceFixture : public UnitMeshCommandQueueMultiDeviceFixture,
                                                public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
 protected:
     void SetUp() override {
@@ -252,7 +295,7 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
         // This will force dispatch init to inherit the FabricConfig param
         tt::tt_metal::detail::SetFabricConfig(GetParam(), FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-        CommandQueueMultiDeviceFixture::SetUp();
+        UnitMeshCommandQueueMultiDeviceFixture::SetUp();
 
         if (::testing::Test::IsSkipped()) {
             tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
@@ -260,7 +303,7 @@ protected:
     }
 
     void TearDown() override {
-        CommandQueueMultiDeviceFixture::TearDown();
+        UnitMeshCommandQueueMultiDeviceFixture::TearDown();
         tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
     }

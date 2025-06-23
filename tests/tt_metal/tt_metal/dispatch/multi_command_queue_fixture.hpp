@@ -162,11 +162,59 @@ protected:
     std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
 };
 
+class UnitMeshMultiCommandQueueMultiDeviceFixture : public DispatchFixture {
+protected:
+    void SetUp() override {
+        this->slow_dispatch_ = false;
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch) {
+            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            this->slow_dispatch_ = true;
+            GTEST_SKIP();
+        }
+
+        auto num_cqs = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
+        if (num_cqs != 2) {
+            log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
+            GTEST_SKIP();
+        }
+
+        const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+
+        DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
+        if (arch == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
+            if (!tt::tt_metal::IsGalaxyCluster()) {
+                log_warning(
+                    tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
+                dispatch_core_type = DispatchCoreType::ETH;
+            }
+        }
+
+        std::vector<int> devices_to_open;
+        devices_to_open.reserve(tt::tt_metal::GetNumAvailableDevices());
+        for (int i = 0; i < tt::tt_metal::GetNumAvailableDevices(); ++i) {
+            devices_to_open.push_back(i);
+        }
+        auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
+            devices_to_open, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, num_cqs, dispatch_core_type);
+        for (const auto& [id, device] : reserved_devices) {
+            devices_.push_back(device);
+        }
+    }
+    void TearDown() override {
+        for (auto& device : devices_) {
+            device.reset();
+        }
+    }
+
+    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
+};
+
 class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiDeviceFixture {};
 
 class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture {};
 
-class MultiCommandQueueOnFabricMultiDeviceFixture : public MultiCommandQueueMultiDeviceFixture,
+class MultiCommandQueueOnFabricMultiDeviceFixture : public UnitMeshMultiCommandQueueMultiDeviceFixture,
                                                     public ::testing::WithParamInterface<tt::tt_metal::FabricConfig> {
 protected:
     void SetUp() override {
@@ -176,7 +224,7 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
         // This will force dispatch init to inherit the FabricConfig param
         tt::tt_metal::detail::SetFabricConfig(GetParam(), FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-        MultiCommandQueueMultiDeviceFixture::SetUp();
+        UnitMeshMultiCommandQueueMultiDeviceFixture::SetUp();
 
         if (::testing::Test::IsSkipped()) {
             tt::tt_metal::detail::SetFabricConfig(
@@ -185,7 +233,7 @@ protected:
     }
 
     void TearDown() override {
-        MultiCommandQueueMultiDeviceFixture::TearDown();
+        UnitMeshMultiCommandQueueMultiDeviceFixture::TearDown();
         tt::tt_metal::detail::SetFabricConfig(FabricConfig::DISABLED);
         tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
     }
