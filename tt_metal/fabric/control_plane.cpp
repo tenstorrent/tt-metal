@@ -536,8 +536,8 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_physical_chip_mapping_from_m
             logical_mesh_chip_id_to_physical_chip_id_mapping.insert({FabricNodeId(MeshId{4}, i), physical_chip_ids[i]});
         }
     } else if (
-        mesh_graph_desc_filename == "quanta_galaxy_mesh_graph_descriptor.yaml" ||
-        mesh_graph_desc_filename == "quanta_galaxy_torus_2d_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "single_galaxy_mesh_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "single_galaxy_torus_2d_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "dual_galaxy_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "p100_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "p150_mesh_graph_descriptor.yaml" ||

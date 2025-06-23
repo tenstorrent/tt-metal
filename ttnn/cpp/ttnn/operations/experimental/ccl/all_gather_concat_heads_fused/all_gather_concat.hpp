@@ -22,6 +22,7 @@ struct ExecuteAllGatherConcat {
         const GlobalSemaphore& global_semaphore,
         uint32_t num_heads,
         const ttnn::MemoryConfig& memory_config,
+        bool use_noc1_only = false,
         std::optional<uint32_t> num_links = std::nullopt,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);

@@ -845,6 +845,14 @@ void MeshDevice::init_command_queue_device() {
     TT_THROW("init_command_queue_device() is not supported on MeshDevice - use individual devices instead");
     reference_device()->init_command_queue_device();
 }
+bool MeshDevice::compile_fabric() {
+    TT_THROW("compile_fabric() is not supported on MeshDevice - use individual devices instead");
+    return reference_device()->compile_fabric();
+}
+void MeshDevice::configure_fabric() {
+    TT_THROW("configure_fabric() is not supported on MeshDevice - use individual devices instead");
+    reference_device()->configure_fabric();
+}
 void MeshDevice::init_fabric() {
     TT_THROW("init_fabric_program() is not supported on MeshDevice - use individual devices instead");
     reference_device()->init_fabric();
