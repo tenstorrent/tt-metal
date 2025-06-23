@@ -232,4 +232,5 @@ void kernel_main() {
         col_idx = col_start_idx;
         row_idx = row_start_idx;
     }
+    noc_async_full_barrier();
 }
