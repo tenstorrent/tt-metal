@@ -19,15 +19,17 @@
 #include <tt-metalium/device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
-#include <tt-metalium/small_vector.hpp>
+#include <tt_stl/small_vector.hpp>
 #include <tt_stl/strong_type.hpp>
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/cpp/ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/distributed/api.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -65,8 +67,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     ttnn::SmallVector<int64_t> reduce_dims = {3};
     Tensor np_out = ttnn::moreh_sum(np_tensor, reduce_dims, false, std::nullopt, std::nullopt, std::nullopt);
     Tensor np_out_host = np_out.cpu();
-    auto buffer = std::get<MultiDeviceHostStorage>(np_out_host.get_storage()).get_buffer(0);
-    const auto golden_output = buffer.view_as<bfloat16>();
+    const Tensor reference_tensor = ttnn::distributed::get_device_tensors(np_out_host).front();
+    auto golden_output = host_buffer::get_as<bfloat16>(reference_tensor);
     // Events for host - device synchronization
     // Running sum-reduce with preallocated output
     // Preallocate Input and Output Tensors on Device
@@ -74,9 +76,9 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(input_shape));
     ASSERT_EQ(
         output_buf_size_datums * datum_size_bytes,
-        tensor_layout.compute_packed_buffer_size_bytes(np_out.get_padded_shape()));
+        tensor_layout.compute_packed_buffer_size_bytes(np_out.padded_shape()));
     auto input_tensor = allocate_tensor_on_mesh(TensorSpec(input_shape, tensor_layout), device);
-    auto output_tensor = allocate_tensor_on_mesh(TensorSpec(np_out.get_logical_shape(), tensor_layout), device);
+    auto output_tensor = allocate_tensor_on_mesh(TensorSpec(np_out.logical_shape(), tensor_layout), device);
     // Populate input_tensor with data
     ttnn::write_buffer(io_cq, input_tensor, {host_data});
     // Record the completion of the write event

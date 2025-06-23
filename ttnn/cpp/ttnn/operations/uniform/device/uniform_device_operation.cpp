@@ -15,9 +15,9 @@ void UniformDeviceOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(tensor_args.input.storage_type() == StorageType::DEVICE, "Uniform: Input tensor need to be on device");
     TT_FATAL(tensor_args.input.buffer() != nullptr, "Uniform: Input tensor need to be allocated in buffers on device");
-    TT_FATAL((tensor_args.input.get_layout() == Layout::TILE), "Uniform: Input tensor must be tilized");
+    TT_FATAL((tensor_args.input.layout() == Layout::TILE), "Uniform: Input tensor must be tilized");
     TT_FATAL(
-        tensor_args.input.get_dtype() == DataType::BFLOAT16 || tensor_args.input.get_dtype() == DataType::FLOAT32,
+        tensor_args.input.dtype() == DataType::BFLOAT16 || tensor_args.input.dtype() == DataType::FLOAT32,
         "Uniform: Input tensor must be Float32 or Bfloat16");
     TT_FATAL(operation_attributes.from < operation_attributes.to, "Uniform: from param must be < to");
 }
@@ -34,7 +34,7 @@ void UniformDeviceOperation::validate_on_program_cache_hit(
 
 TensorSpec UniformDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tensor_args.input.get_tensor_spec();
+    return tensor_args.input.tensor_spec();
 }
 
 UniformDeviceOperation::tensor_return_value_t UniformDeviceOperation::create_output_tensors(

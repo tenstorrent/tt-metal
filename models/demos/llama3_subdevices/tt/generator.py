@@ -83,6 +83,7 @@ class Generator:
 
         if self.model.is_prefill_setup is False:
             self.model.switch_mode("prefill")
+
         kv_cache = kv_cache[0]
         batch, batch_seq_len = tokens.shape
         output_logits = torch.zeros(batch, 1, 1)
@@ -103,6 +104,10 @@ class Generator:
             last_token_idx = seq_len - 1
 
             prefill_seq_len = get_padded_prefill_len(seq_len)
+            if prefill_seq_len not in self.model.tt_ccl.support_seqlens:
+                enable_trace = False
+            else:
+                enable_trace = True
             prefill_ids = torch.cat(
                 [tokens[id : id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
@@ -324,16 +329,13 @@ class Generator:
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
         reset_inputs=True,
-        argmax_on_device=False,
         seq_groups=None,
         finished_requests_ids=None,
     ):
         assert (
             sampling_params is None or sampling_params.temperature == 0
         ), "Currently only supporting greedy decoding (temperature=0) on device"
-        # argmax_on_device = torch.all(start_pos[1:] == -1).item() and (
-        #     sampling_params is not None and sampling_params.temperature == 0
-        # )
+
         self.perm_table_tensor = None
         if seq_groups is not None:
             for req in finished_requests_ids:
@@ -369,14 +371,13 @@ class Generator:
             "tokens": tokens,
             "page_table": page_table,
             "kv_cache": kv_cache,
-            "argmax_on_device": argmax_on_device,
         }
         if enable_trace:
             tt_logits = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs)
         else:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
         if read_from_device:
-            tt_logits = self.read_decode_output(tt_logits, tokens.shape[0], is_tokens=(argmax_on_device))
+            tt_logits = self.read_decode_output(tt_logits, tokens.shape[0])
 
         return tt_logits
 
@@ -386,7 +387,6 @@ class Generator:
         current_pos,
         page_table=None,
         kv_cache=None,
-        argmax_on_device=False,
     ):
         """
         Performs text decode step.
@@ -401,7 +401,6 @@ class Generator:
             rot_mat_idxs=rot_mat_idxs,
             page_table=tt_page_table,
             kv_cache=kv_cache,
-            argmax_on_device=argmax_on_device,
         )
 
         return tt_logits
@@ -412,16 +411,13 @@ class Generator:
         current_pos,
         page_table=None,
         kv_cache=None,
-        argmax_on_device=False,
     ):
         """
         Captures a trace for the decode_forward method.
         """
 
         # Compile run
-        self._decode_forward_no_trace_text(
-            tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
-        )
+        self._decode_forward_no_trace_text(tokens, current_pos, page_table=page_table, kv_cache=kv_cache)
         logger.info("Done Compiling Model")
 
         # Get inputs ready for trace run
@@ -429,9 +425,7 @@ class Generator:
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        tt_out_trace = self.model.ttnn_decode_forward(
-            *device_inputs, kv_cache=kv_cache, argmax_on_device=argmax_on_device
-        )
+        tt_out_trace = self.model.ttnn_decode_forward(*device_inputs, kv_cache=kv_cache)
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
@@ -459,7 +453,6 @@ class Generator:
         current_pos,
         page_table=None,
         kv_cache=None,
-        argmax_on_device=False,
         reset_inputs=False,
     ):
         """
@@ -468,7 +461,7 @@ class Generator:
         tokens = tokens.view(-1, 1)
         if not hasattr(self, "trace_id_text"):
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_text(
-                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
+                tokens, current_pos, page_table=page_table, kv_cache=kv_cache
             )
             self.trace_id_text = trace_id
             self.trace_inputs_text = device_inputs
@@ -490,10 +483,10 @@ class Generator:
 
         return trace_logits_rm
 
-    def read_decode_output(self, tt_logits, unpadded_batch, is_tokens=False):
-        logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1, is_tokens=is_tokens)
+    def read_decode_output(self, tt_logits, unpadded_batch, is_tokens=True):
+        logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1)
         if self.perm_table_tensor is not None:
-            logits = logits[self.perm_table_tensor, :]
+            logits = logits[self.perm_table_tensor]
         return logits
 
     def chat_completion(

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include <tt-metalium/global_semaphore.hpp>

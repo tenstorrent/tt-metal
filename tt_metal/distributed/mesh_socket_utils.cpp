@@ -173,7 +173,7 @@ void write_socket_configs(
     SocketEndpoint socket_endpoint) {
     auto mesh_device = config_buffer->device();
     auto peer_device = peer_config_buffer->device();
-    auto& core_to_core_id = config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id_;
+    auto& core_to_core_id = config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
 
     auto grouped_connections = group_socket_connections(config, socket_endpoint);
@@ -245,7 +245,7 @@ void write_socket_configs(
     }
 }
 
-uint32_t get_physical_mesh_id(MeshDevice* mesh_device, const MeshCoordinate& coord) {
+uint32_t get_physical_mesh_id(const MeshDevice* mesh_device, const MeshCoordinate& coord) {
     auto physical_device_id = mesh_device->get_device(coord)->id();
     auto global_coord = SystemMesh::instance().get_global_device_coordinate(physical_device_id);
     return SystemMesh::instance().get_physical_mesh_id(global_coord);

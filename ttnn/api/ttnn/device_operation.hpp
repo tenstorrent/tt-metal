@@ -199,7 +199,9 @@ auto get_operation_name(const typename device_operation_t::operation_attributes_
     }
 }
 
-#ifdef DEBUG
+// GCC 12 has a bug that causes a segfault when using reflection to log tensors in debug mode.
+// If building with clang, allow this to be compiled
+#if !defined(NDEBUG) && defined(__clang__)
 
 template <typename device_operation_t>
 inline void log_operation(
@@ -578,7 +580,7 @@ typename device_operation_t::tensor_return_value_t invoke(
 
     // TODO: support the case when tensor args are empty? Or pass in the device as an argument in that case
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
-    const auto& storage = first_tensor.get_storage();
+    const auto& storage = first_tensor.storage();
 
     tensor_return_value_t tensor_return_value;
 

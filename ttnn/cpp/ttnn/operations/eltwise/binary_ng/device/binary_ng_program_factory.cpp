@@ -17,7 +17,7 @@ using namespace ttnn::operations::binary_ng;
 
 // For rank > 4 i.e. dims beyond NCHW will be collapsed into a single dim
 uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
-    const auto& shape = x.get_logical_shape();
+    const auto& shape = x.logical_shape();
     uint32_t nD_dim = 1;
     if (out_rank >= 5 && shape.rank() >= 5) {
         for (int i = -5; i >= -out_rank; --i) {
@@ -242,7 +242,7 @@ void set_or_update_runtime_arguments(
     const uint32_t tile_height = c.tensor_spec().tile().get_height();
     const uint32_t tile_width = c.tensor_spec().tile().get_width();
     const uint32_t tile_hw = tile_height * tile_width;
-    const uint32_t c_num_tiles = c.volume() / tile_hw;
+    const uint32_t c_num_tiles = c.physical_volume() / tile_hw;
     uint32_t c_shard_height{}, c_shard_width{}, num_shards_per_width{};
 
     ShardShapeGenerator a_shard_shape_generator;
@@ -328,8 +328,7 @@ void set_or_update_runtime_arguments(
                 auto b_shard_shape = b_shard_shape_generator(core);
                 b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
             }
-            // for the specific case of subtile no_bcast type, writer no longer needs b's information
-            // for other cases, it remains needing b's information for now.
+            // TODO: after transition, remove b from writer completely
             std::array writer_runtime_args = {
                 b->buffer()->address(),
                 c.buffer()->address(),
@@ -356,7 +355,7 @@ void set_or_update_runtime_arguments(
             // TODO: technically we should use the b_dtype deduced by ProgramFactory::create here, but currently only
             // quant ops have different dtypes for a & b and we want to force f32 for better accuracy when scale is
             // passed as a scalar, so we'll leave this here
-            const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.get_dtype(), is_quant_op);
+            const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), is_quant_op);
             std::array writer_runtime_args = {
                 packed_scalar,
                 c.buffer()->address(),
@@ -417,6 +416,38 @@ void set_or_update_runtime_arguments(
     }
 }
 
+KernelName get_reader_kernel_name_and_defines(
+    const SubtileBroadcastType subtile_broadcast_type, std::map<std::string, std::string>& reader_defines) {
+    if (subtile_broadcast_type == SubtileBroadcastType::NONE) {
+        return KernelName::ReaderNoBcastNg;
+    } else if (
+        subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
+        reader_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
+        reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B ? "1" : "0";
+        return KernelName::ReaderRowBcastNg;
+    } else if (
+        subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+        subtile_broadcast_type == SubtileBroadcastType::COL_B) {
+        reader_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::COL_A ? "1" : "0";
+        reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::COL_B ? "1" : "0";
+        return KernelName::ReaderColBcastNg;
+    } else if (
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B) {
+        reader_defines["SRC_BCAST_COL"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
+        reader_defines["SRC_BCAST_ROW_B"] = subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
+        return KernelName::ReaderRowBColABcastNg;
+    } else if (
+        subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+        subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
+        reader_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ? "1" : "0";
+        reader_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::SCALAR_B ? "1" : "0";
+        return KernelName::ReaderScalarBcastNg;
+    } else {
+        TT_FATAL(false, "Unsupported subtile broadcast type {}", static_cast<int>(subtile_broadcast_type));
+    }
+}
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -447,13 +478,13 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     uint32_t b_num_tiles_per_shard = has_sharding ? shard_specs->b_shard_spec.numel() / tile_hw : 0;
     uint32_t c_num_tiles_per_shard = has_sharding ? shard_specs->c_shard_spec.numel() / tile_hw : 0;
 
-    const auto a_dtype = a.get_dtype();
+    const auto a_dtype = a.dtype();
     // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
-    const auto b_dtype = b.has_value() ? b->get_dtype()
+    const auto b_dtype = b.has_value() ? b->dtype()
                          : is_quant_op ? DataType::FLOAT32
                          : is_sfpu_op  ? a_dtype
                                        : DataType::BFLOAT16;
-    const auto c_dtype = c.get_dtype();
+    const auto c_dtype = c.dtype();
     const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
     const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
@@ -513,10 +544,10 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
                 compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
                 unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
             } else {
-                add_activation_defines(compute_kernel_defines, post_activations, "POST", c.get_dtype());
+                add_activation_defines(compute_kernel_defines, post_activations, "POST", c.dtype());
             }
         } else {
-            add_activation_defines(compute_kernel_defines, post_activations, "POST", c.get_dtype());
+            add_activation_defines(compute_kernel_defines, post_activations, "POST", c.dtype());
         }
     }
 
@@ -587,17 +618,25 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         writer_kernel = kernel_config.writer_kernel;
         compute_kernel = kernel_config.compute_kernel;
     }
-    auto writer_defines = make_dataflow_defines(b_dtype);
+
+    // to maintain backward compatibility, old writer kernel only needs b_dtype
+    auto writer_defines = make_dataflow_defines(b_dtype, a_dtype);
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
 
-    // overwrite reader and write kernel names for the following specific case
-    // so that reader reads of both and b and writer does not read b
-    if (b.has_value() && operation_attributes.subtile_broadcast_type == SubtileBroadcastType::NONE) {
-        kernel_config.reader_kernel = KernelName::ReaderNoBcastSplit;
-        writer_kernel = KernelName::WriterNoBcastSplit;
-    }
+    auto reader_defines = make_dataflow_defines(a_dtype, b_dtype);
+    reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
+    reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
 
+    // overwrite reader and write kernel names so that reader reads both and b and
+    // writer does not read b. For the transition, it can choose the original kernels
+    // or overwrite with new kernel here. If going back to old kernels, we can just
+    // skip the if clause.
+    if (b.has_value()) {
+        kernel_config.reader_kernel = CMAKE_UNIQUE_NAMESPACE::get_reader_kernel_name_and_defines(
+            operation_attributes.subtile_broadcast_type, reader_defines);
+        writer_kernel = KernelName::WriterNoBcastNg;
+    }
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(writer_kernel, is_sfpu_op),
@@ -605,9 +644,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         tt_metal::WriterDataMovementConfig({b_is_dram, c_is_dram, has_sharding}, std::move(writer_defines)));
 
     // READER KERNEL
-    auto reader_defines = make_dataflow_defines(a_dtype);
-    reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
-    reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,

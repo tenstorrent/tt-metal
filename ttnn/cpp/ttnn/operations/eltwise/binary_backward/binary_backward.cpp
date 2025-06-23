@@ -12,7 +12,7 @@
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
-#include "cpp/ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
@@ -675,8 +675,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
             result.push_back(input_grad);
         }
     } else {
-        ttnn::zeros_like(
-            queue_id, grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config, input_grad);
+        ttnn::zeros_like(queue_id, grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config, input_grad);
         result.push_back(input_grad);
     }
     return result;
@@ -768,13 +767,11 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
         }
     } else {
         if (are_required_outputs.at(0)) {
-            ttnn::zeros_like(
-                queue_id, grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config, input_grad);
+            ttnn::zeros_like(queue_id, grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config, input_grad);
             result[0] = input_grad;
         }
         if (are_required_outputs.at(1)) {
-            ttnn::zeros_like(
-                queue_id, grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config, other_grad);
+            ttnn::zeros_like(queue_id, grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config, other_grad);
             result[1] = other_grad;
         }
     }

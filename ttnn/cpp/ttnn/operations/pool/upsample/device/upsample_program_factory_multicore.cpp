@@ -151,20 +151,19 @@ operation::ProgramWithCallbacks upsample_multi_core(
     Program program = CreateProgram();
     IDevice* device = input.device();
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
+    TT_FATAL(input.logical_shape()[-1] == output.logical_shape()[-1], "Expected input and output channels to match");
     TT_FATAL(
-        input.get_logical_shape()[-1] == output.logical_shape()[-1], "Expected input and output channels to match");
-    TT_FATAL(
-        input.get_layout() == tt_metal::Layout::ROW_MAJOR,
+        input.layout() == tt_metal::Layout::ROW_MAJOR,
         "Only row-major layout is currently supported in nearest upsample");
 
-    uint32_t input_stick_nbytes = input.get_padded_shape()[-1] * input.element_size();
-    uint32_t output_stick_nbytes = output.get_padded_shape()[-1] * output.element_size();
+    uint32_t input_stick_nbytes = input.padded_shape()[-1] * input.element_size();
+    uint32_t output_stick_nbytes = output.padded_shape()[-1] * output.element_size();
     TT_FATAL(input_stick_nbytes == output_stick_nbytes, "Input and output sticks should have same size");
 
-    uint32_t in_w = input.get_padded_shape()[2];
+    uint32_t in_w = input.padded_shape()[2];
 
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;
@@ -225,8 +224,8 @@ operation::ProgramWithCallbacks upsample_multi_core(
         config_tensor = create_config_tensor(
             device,
             shard_spec,
-            input.get_padded_shape()[0],
-            input.get_padded_shape()[1],
+            input.padded_shape()[0],
+            input.padded_shape()[1],
             in_w,
             scale_factor_h,
             scale_factor_w,
@@ -234,7 +233,7 @@ operation::ProgramWithCallbacks upsample_multi_core(
     } else {
         TT_THROW("Unsupported sharding layout");
     }
-    auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_logical_shape()[-1]});
+    auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.logical_shape()[-1]});
     auto config_tensor_shard_orientation = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED
                                                ? ShardOrientation::COL_MAJOR
                                                : shard_spec.orientation;

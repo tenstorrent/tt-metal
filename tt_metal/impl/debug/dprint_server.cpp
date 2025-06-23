@@ -437,6 +437,9 @@ void PrintTensixRegisterData(ostringstream* stream, int setwidth, uint32_t datum
             *stream << setw(setwidth) << (datum & 0xffff) << " ";
             *stream << setw(setwidth) << (datum >> 16) << " ";
             break;
+        case static_cast<std::uint8_t>(tt::DataFormat::Int32):
+            *stream << setw(setwidth) << static_cast<int32_t>(datum) << " ";
+            break;
         default: *stream << "Unknown data format " << data_format << " "; break;
     }
 }
@@ -1334,6 +1337,7 @@ void DprintServerAttach(chip_id_t device_id) {
     // If no server is running, create one
     if (!DprintServerIsRunning()) {
         DebugPrintServerContext* ctx = new DebugPrintServerContext();
+        tt::tt_metal::MetalContext::instance().rtoptions().set_disable_dma_ops(true);
     }
 
     // Add this device to the server
@@ -1348,6 +1352,7 @@ void DprintServerDetach(chip_id_t device_id) {
         if (DebugPrintServerContext::inst->GetNumAttachedDevices() == 0) {
             delete DebugPrintServerContext::inst;
             DebugPrintServerContext::inst = nullptr;
+            tt::tt_metal::MetalContext::instance().rtoptions().set_disable_dma_ops(false);
         }
     }
 }

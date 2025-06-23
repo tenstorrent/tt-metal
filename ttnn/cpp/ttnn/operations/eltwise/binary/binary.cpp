@@ -16,7 +16,7 @@ namespace ttnn::operations::binary {
 namespace detail {
 
 inline Tensor to_dtype(const Tensor& input, DataType dtype) {
-    if (input.get_dtype() == dtype) {
+    if (input.dtype() == dtype) {
         return input;
     }
 
@@ -34,7 +34,7 @@ inline bool is_block_format(DataType dtype) {
     }
 }
 
-inline bool is_layout(const Tensor& input, Layout layout) { return input.get_layout() == layout; }
+inline bool is_layout(const Tensor& input, Layout layout) { return input.layout() == layout; }
 
 inline bool is_layout([[maybe_unused]] float input, [[maybe_unused]] Layout layout) { return true; }
 
@@ -43,13 +43,13 @@ inline Tensor to_layout(const Tensor& input, Layout layout) {
         return input;
     }
 
-    return ttnn::to_layout(input, layout, std::nullopt, std::nullopt, (IDevice*)nullptr);
+    return ttnn::to_layout(input, layout);
 }
 
 inline float to_layout(float input, [[maybe_unused]] Layout layout) { return input; }
 
 inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input) {
-    if (not detail::is_block_format(input.get_dtype())) {
+    if (not detail::is_block_format(input.dtype())) {
         return false;
     }
 
@@ -63,7 +63,7 @@ inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, [[m
 }
 
 inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, const Tensor& other) {
-    if (not detail::is_block_format(input.get_dtype())) {
+    if (not detail::is_block_format(input.dtype())) {
         return false;
     }
 
@@ -73,8 +73,8 @@ inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, con
         return true;
     }
 
-    const auto& input_shape = input.get_logical_shape();
-    const auto& other_shape = other.get_logical_shape();
+    const auto& input_shape = input.logical_shape();
+    const auto& other_shape = other.logical_shape();
 
     return (input_shape[-2] == 1 and other_shape[-2] > 1) or (input_shape[-1] == 1 and other_shape[-1] > 1);
 }
@@ -146,8 +146,8 @@ inline Tensor binary_impl(
 inline auto preprocess_inputs(BinaryOpType binary_op_type, Tensor a, Tensor b) {
     // TODO: #7731 (Remove calls to repeat)
     constexpr auto repeat_smaller = [](const Tensor& first, Tensor& second) {
-        const auto& first_shape = first.get_logical_shape();
-        const auto& second_shape = second.get_logical_shape();
+        const auto& first_shape = first.logical_shape();
+        const auto& second_shape = second.logical_shape();
         // repeats second if it is smaller
         if (first_shape.rank() == 4 and second_shape.rank() == 4 and first_shape[0] > second_shape[0]) {
             TT_FATAL(second_shape[0] == 1, "Dimension trying to broadcast is not equal to 1");
@@ -169,7 +169,7 @@ inline auto preprocess_inputs(BinaryOpType binary_op_type, Tensor a, Tensor b) {
     repeat_smaller(b, a);
 
     // Swap tensors if a needs to be broadcasted to b
-    if (detail::is_associative(binary_op_type) and a.get_logical_volume() < b.get_logical_volume()) {
+    if (detail::is_associative(binary_op_type) and a.logical_volume() < b.logical_volume()) {
         return std::make_tuple(b, a);
     }
 
@@ -350,9 +350,9 @@ inline auto invoke_binary_ng(
         }
     }
 
-    const auto a_dtype = lhs.get_dtype();
+    const auto a_dtype = lhs.dtype();
     const auto output_preallocated = output.has_value();
-    const auto out_dtype = output_preallocated ? output->get_dtype() : dtype.value_or(a_dtype);
+    const auto out_dtype = output_preallocated ? output->dtype() : dtype.value_or(a_dtype);
 
     const auto mem_config = output_preallocated ? output->memory_config() : memory_config.value_or(lhs.memory_config());
 
@@ -409,7 +409,7 @@ inline auto invoke_binary_ng(
             input_a,
             input_b,
             binary_op_type,
-            input_a.get_dtype(),
+            input_a.dtype(),
             mem_config,
             output_tensor,
             lhs_activations,

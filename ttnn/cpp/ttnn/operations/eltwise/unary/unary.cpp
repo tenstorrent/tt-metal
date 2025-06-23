@@ -7,7 +7,6 @@
 #include "ttnn/common/queue_id.hpp"
 #include "device/unary_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
@@ -27,11 +26,11 @@ inline Tensor unary_impl(
     TT_FATAL(op_chain.size() > 0, "Op chain cannot be empty");
     DataType output_dtype = (op_chain[0].op_type == UnaryOpType::TYPECAST)
                                 ? static_cast<DataType>(op_chain[0].params[1])
-                                : input_tensor.get_dtype();
-    bool preserve_fp32_precision = input_tensor.get_dtype() == DataType::FLOAT32;
+                                : input_tensor.dtype();
+    bool preserve_fp32_precision = input_tensor.dtype() == DataType::FLOAT32;
     bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
                             output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
-                            input_tensor.get_dtype() == DataType::UINT32 or input_tensor.get_dtype() == DataType::INT32;
+                            input_tensor.dtype() == DataType::UINT32 or input_tensor.dtype() == DataType::INT32;
     bool bfp8_pack_precise = (op_chain[0].op_type == UnaryOpType::TYPECAST && output_dtype == DataType::BFLOAT8_B);
 
     auto output_memory_config = optional_output_tensor.has_value()
@@ -80,6 +79,7 @@ template struct ExecuteUnary<UnaryOpType::ACOS>;
 template struct ExecuteUnary<UnaryOpType::ASIN>;
 template struct ExecuteUnary<UnaryOpType::ATAN>;
 template struct ExecuteUnary<UnaryOpType::COS>;
+template struct ExecuteUnary<UnaryOpType::ACOSH>;
 template struct ExecuteUnary<UnaryOpType::ERFINV>;
 template struct ExecuteUnary<UnaryOpType::EXP2>;
 template struct ExecuteUnary<UnaryOpType::EXPM1>;
@@ -117,6 +117,7 @@ template struct ExecuteUnary<UnaryOpType::BITWISE_NOT>;
 template struct ExecuteUnary<UnaryOpType::ALT_COMPLEX_ROTATE90>;
 template struct ExecuteUnary<UnaryOpType::CEIL>;
 template struct ExecuteUnary<UnaryOpType::FLOOR>;
+template struct ExecuteUnary<UnaryOpType::TRUNC>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
@@ -172,6 +173,22 @@ Tensor ExecuteUnaryWithFloatParameter<unary_op_type>::invoke(
         optional_output_tensor);
 }
 
+template <UnaryOpType unary_op_type>
+template <typename T>
+Tensor ExecuteUnaryWithVariantFloatIntParameter<unary_op_type>::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const T parameter,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        queue_id,
+        input_tensor,
+        {UnaryWithParam{unary_op_type, static_cast<T>(parameter)}},
+        memory_config,
+        optional_output_tensor);
+}
+
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::ELU>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RSUB>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::HEAVISIDE>;
@@ -185,8 +202,15 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GT>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LT>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_NE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_EQ>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::MAXIMUM>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::MINIMUM>;
+
+template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MINIMUM>::invoke<float>(
+    QueueId, const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+
+template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MAXIMUM>::invoke<float>(
+    QueueId, const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+
+template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MAXIMUM>::invoke<int32_t>(
+    QueueId, const Tensor&, const int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
 
 Tensor Sigmoid_accurate::invoke(
     QueueId queue_id,
@@ -284,7 +308,7 @@ Tensor Identity::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::IDENTITY;
-    if (input_tensor.get_dtype() == DataType::UINT32) {
+    if (input_tensor.dtype() == DataType::UINT32) {
         op_type = UnaryOpType::IDENTITY_UINT32;
     }
 
@@ -297,7 +321,7 @@ Tensor Abs::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::ABS;
-    if (input_tensor.get_dtype() == DataType::INT32) {
+    if (input_tensor.dtype() == DataType::INT32) {
         op_type = UnaryOpType::ABS_INT32;
     }
     return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
@@ -323,8 +347,45 @@ Tensor Tanhshrink::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::TANHSHRINK;
-
     return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
+Tensor Deg2Rad::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    constexpr float DEG_TO_RAD = 0.017453292519943295f;  // pi/180
+    return binary::BinaryOperation<operations::binary::BinaryOpType::MUL>::invoke(
+        queue_id,
+        input_tensor,
+        DEG_TO_RAD,
+        input_tensor.dtype(),
+        memory_config,
+        optional_output_tensor,
+        {},
+        {},
+        {},
+        std::nullopt);
+}
+
+Tensor Rad2Deg::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    constexpr float RAD_TO_DEG = 57.29577951308232f;  // 180/pi
+    return binary::BinaryOperation<operations::binary::BinaryOpType::MUL>::invoke(
+        queue_id,
+        input_tensor,
+        RAD_TO_DEG,
+        input_tensor.dtype(),
+        memory_config,
+        optional_output_tensor,
+        {},
+        {},
+        {},
+        std::nullopt);
 }
 
 template <UnaryOpType unary_op_type, typename T>

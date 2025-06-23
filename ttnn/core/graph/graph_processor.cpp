@@ -255,7 +255,7 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
 }
 
 int GraphProcessor::add_tensor(const Tensor& t) {
-    auto& storage = t.get_storage();
+    auto& storage = t.storage();
     tt::tt_metal::Buffer* buffer = std::visit(
         [&t]<typename T>(const T& storage) -> tt::tt_metal::Buffer* {
             if constexpr (std::is_same_v<T, DeviceStorage>) {
@@ -283,7 +283,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
         tensor_id = t.tensor_id.value();
     }
     auto tensor_counter = tensor_id_to_counter.count(tensor_id) > 0 ? tensor_id_to_counter[tensor_id] : graph.size();
-    auto shape = t.get_logical_shape();
+    auto shape = t.logical_shape();
 
     std::unordered_map<std::string, std::string> params = {
         {kShape, fmt::format("{}", shape)},
@@ -300,7 +300,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
         log_debug(
             tt::LogAlways,
             "Tensor doesn't have buffer, but storage is {}",
-            graph_demangle(get_type_in_var(t.get_storage()).name()));
+            graph_demangle(get_type_in_var(t.storage()).name()));
     } else {
         auto buffer_id = add_buffer(buffer);
         graph[buffer_id].connections.push_back(tensor_counter);

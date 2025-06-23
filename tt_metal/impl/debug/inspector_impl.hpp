@@ -21,13 +21,13 @@ namespace tt::tt_metal {
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_initialization_is_important()) { \
         TT_THROW(__VA_ARGS__); \
     } else { \
-        log_warning(tt::LogMetalTrace, __VA_ARGS__); \
+        log_warning(tt::LogInspector, __VA_ARGS__); \
         return; \
     }
 
 #define TT_INSPECTOR_LOG(...) \
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_warn_on_write_exceptions()) { \
-        log_warning(tt::LogMetalTrace, __VA_ARGS__); \
+        log_warning(tt::LogInspector, __VA_ARGS__); \
     }
 
 namespace tt::tt_metal::inspector {

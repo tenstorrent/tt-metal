@@ -87,11 +87,11 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     uint32_t dim = 3;
     uint32_t num_chunks = 2;
 
-    auto input_shape = input_tensor.get_padded_shape();
+    auto input_shape = input_tensor.padded_shape();
 
     Program program{};
     tt::tt_metal::IDevice* device = input_tensor.device();
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
@@ -143,7 +143,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_r - 1, (std::size_t)start_core_y + num_cores_c - 1});
 
-    bool tile_dtype_is_bfloat16 = input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
+    bool tile_dtype_is_bfloat16 = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool out_is_dram = out0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(out0_buffer->buffer_type() == out1_buffer->buffer_type(), "Output buffers should be the same type");

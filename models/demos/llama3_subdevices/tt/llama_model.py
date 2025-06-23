@@ -17,6 +17,7 @@ from models.demos.llama3_subdevices.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_subdevices.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
+from models.demos.llama3_subdevices.tt.sampling import TTSampling
 
 
 class TtTransformer(LightweightModule):
@@ -163,6 +164,12 @@ class TtTransformer(LightweightModule):
         )
         if mesh_sub_device_manager_id_decode is None:
             self.tt_ccl = TT_CCL(self.mesh_device, self.args, self.prefetcher_setup.worker_sub_device_id)
+            self.tt_sampling = TTSampling(
+                args=self.args,
+                mesh_device=self.mesh_device,
+                sampling_params={"top_k": 1, "top_p": 0.00, "seed": 42},
+                tt_ccl=self.tt_ccl,
+            )
         else:
             self.tt_ccl = self.tt_ccl_decode
 
@@ -172,7 +179,6 @@ class TtTransformer(LightweightModule):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
-        TODO: Debate whether this function is responsible for padding
         """
 
         tokens = tokens.reshape(1, 1, 1, -1)
@@ -364,29 +370,22 @@ class TtTransformer(LightweightModule):
             ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
         )
 
-        tt_out = ttnn.argmax(
-            tt_logits, dim=3, keepdim=True, use_multicore=True
-        )  # TODO Add multicore support to batch > 1
+        tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
         if isinstance(tt_out, list):
             tt_out = tt_out[0]
 
         logits = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()[0, 0, 0, :1]
         return logits
 
-    def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
+    def process_output_decode(self, tt_out, B, S=1):
         """
-        Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
+        Input is ttnn device tensor of tokens. Output is the corresponding torch tensor.
         """
         if isinstance(tt_out, list):
             tt_out = tt_out[0]
         tt_out_cpu = tt_out.cpu(blocking=True, cq_id=0)
 
-        if tt_out_cpu.shape[-1] == 32:
-            tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out_cpu)[0])[0, 0, 0, :]
-
-        else:
-            tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out_cpu)[0])[0, 0, :, :]
-            tt_out = torch.argmax(tt_out, dim=-1, keepdim=True)
+        tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out_cpu)[0])[0, 0, 0, :]
 
         return tt_out
 
@@ -426,7 +425,6 @@ class TtTransformer(LightweightModule):
         rot_mat_idxs,
         page_table=None,
         kv_cache=None,
-        argmax_on_device=False,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -442,35 +440,9 @@ class TtTransformer(LightweightModule):
             page_table=page_table,
             kv_cache=kv_cache,
         )
-        sub_core_grids = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-            ]
-        )
 
-        # Gather the output across all devices and untilize the tensor (for argmax)
-        tt_logits = self.tt_ccl.line_all_gather(
-            tt_logits[0],
-            dim=3,
-            num_links=2,
-            cluster_axis=0,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            buffer_key="SAMPLING",
-        )
-
-        tt_logits = ttnn.untilize(tt_logits, use_multicore=True, sub_core_grids=sub_core_grids)
-
-        if argmax_on_device:
-            tt_logits = ttnn.reshape(
-                tt_logits,
-                ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
-                ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
-            )
-
-            tt_logits = ttnn.argmax(  # TODO Add multicore support to batch > 1
-                tt_logits, dim=3, keepdim=True, use_multicore=True, sub_core_grids=sub_core_grids, output_tensor=x
-            )
+        # sampling
+        tt_logits = self.tt_sampling(tt_logits[0], x)
 
         ttnn.plus_one(
             current_pos,
