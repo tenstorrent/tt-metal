@@ -980,8 +980,12 @@ void Device::init_command_queue_device() {
     }
 }
 
-void Device::init_fabric() {
+bool Device::compile_fabric() {
     fabric_program_ = create_and_compile_fabric_program(this);
+    return fabric_program_ != nullptr;
+}
+
+void Device::configure_fabric() {
     if (fabric_program_ == nullptr) {
         return;
     }
@@ -1014,6 +1018,12 @@ void Device::init_fabric() {
         }
     }
     log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
+}
+
+// backward compatibility
+void Device::init_fabric() {
+    this->compile_fabric();
+    this->configure_fabric();
 }
 
 bool Device::initialize(
