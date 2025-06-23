@@ -186,7 +186,7 @@ async def objdetection_v2(file: UploadFile = File(...)):
     else:
         print("unknow image type")
         exit(-1)
-
+    image = image.permute(0, 3, 1, 2)
     t1 = time.time()
     response = model.run(image)
     t2 = time.time()
