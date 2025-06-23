@@ -16,7 +16,8 @@
 #endif
 namespace ckernel {
 
-volatile uint32_t* throttle_ptr = reinterpret_cast<volatile uint32_t*>(0x00000a00);  // replace with correct addr
+// 4-byte word at 0x10 written by FW - even means no throttle, odd means throttle
+volatile uint32_t* throttle_ptr = reinterpret_cast<volatile uint32_t*>(0x10);
 static uint32_t throttled_mop_status = 0;
 
 // clang-format off
