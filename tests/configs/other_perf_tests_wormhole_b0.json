@@ -1,0 +1,164 @@
+{
+  "description": "Other models performance tests for Wormhole B0",
+  "tests": [
+    {
+      "name": "sentence_bert",
+      "command": "pytest -n auto models/experimental/sentence_bert/tests -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "wormhole_resnet50",
+      "command": "pytest models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "wormhole_bert_tiny",
+      "command": "pytest models/demos/wormhole/bert_tiny/tests/test_performance.py -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "yolov4",
+      "command": "pytest models/demos/yolov4/tests/perf/test_perf.py -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "wormhole_distilbert",
+      "command": "pytest models/demos/wormhole/distilbert/tests/test_perf_distilbert.py -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "segformer",
+      "command": "pytest models/demos/segformer/tests/perf/test_perf_segformer.py -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "vit_demo",
+      "command": "pytest models/demos/wormhole/vit/demo/demo_vit_ttnn_inference_perf_e2e_2cq_trace.py -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "segformer_trace_2cq",
+      "command": "pytest models/demos/segformer/tests/perf/test_perf_segformer_trace_2cq.py -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "whisper",
+      "command": "pytest -n auto models/demos/whisper/tests/test_performance.py -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "metal_BERT_large_11",
+      "command": "pytest -n auto models/demos/metal_BERT_large_11/tests -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "vgg_unet",
+      "command": "pytest -n auto models/demos/vgg_unet/tests -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "yolov9c",
+      "command": "pytest -n auto models/demos/yolov9c/tests/perf -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "functional_vanilla_unet",
+      "command": "pytest -n auto models/experimental/functional_vanilla_unet/test/test_perf_vanilla_unet.py -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "yolov8s_world",
+      "command": "pytest -n auto models/demos/yolov8s_world/tests -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "mobilenetv2",
+      "command": "pytest -n auto models/demos/mobilenetv2/tests -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "ufld_v2",
+      "command": "pytest -n auto models/demos/ufld_v2/tests -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "yolov8x",
+      "command": "pytest -n auto models/demos/yolov8x/tests -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "yolov8s",
+      "command": "pytest -n auto models/experimental/yolov8s/tests -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "yolov10",
+      "command": "pytest -n auto models/experimental/yolov10/tests -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1200
+    },
+    {
+      "name": "ttnn_bert",
+      "command": "pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m models_performance_bare_metal",
+      "timeout": 1200
+    },
+    {
+      "name": "ttnn_falcon7b",
+      "command": "pytest -n auto models/demos/ttnn_falcon7b/tests -m models_performance_bare_metal",
+      "timeout": 1200
+    },
+    {
+      "name": "distilbert",
+      "command": "pytest models/demos/distilbert/tests/test_perf_distilbert.py -m models_performance_bare_metal",
+      "timeout": 1200
+    },
+    {
+      "name": "vgg",
+      "command": "pytest -n auto models/demos/vgg/tests/test_perf_vgg.py -m models_performance_bare_metal",
+      "timeout": 1200
+    },
+    {
+      "name": "convnet_mnist",
+      "command": "pytest -n auto models/demos/convnet_mnist/tests -m models_performance_bare_metal",
+      "timeout": 1200
+    },
+    {
+      "name": "bert_tiny",
+      "command": "pytest -n auto models/demos/bert_tiny/tests/test_performance.py -m models_performance_bare_metal",
+      "timeout": 1200
+    },
+    {
+      "name": "mnist",
+      "command": "pytest -n auto models/demos/mnist/tests -m models_performance_bare_metal",
+      "timeout": 1200
+    },
+    {
+      "name": "squeezebert",
+      "command": "pytest -n auto models/demos/squeezebert/tests/test_performance.py -m models_performance_bare_metal",
+      "timeout": 1200
+    },
+    {
+      "name": "roberta",
+      "command": "pytest -n auto models/demos/roberta/tests/test_performance.py -m models_performance_bare_metal",
+      "timeout": 1200
+    }
+  ]
+}
