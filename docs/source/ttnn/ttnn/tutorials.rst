@@ -6,7 +6,7 @@ Tutorials
 This is a collection of tutorials written in Python to help you ramp up using TT-NN for various tasks such as tensor operations, model conversion, and profiling.
 
 These tutorials assume you already have a machine set up with either a wormhole or blackhole device available and that you have successfully
-followed the instructions for `TT-NN / TT-Metalium Installation, Option 1: From Source <https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md>`_.
+followed the instructions for `TT-NN / TT-Metalium Installation <https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md>`_.
 
 With the recommended virtual environment activated, you can run these tutorials directly:
 
