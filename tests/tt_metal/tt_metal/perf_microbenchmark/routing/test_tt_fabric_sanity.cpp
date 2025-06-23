@@ -188,7 +188,7 @@ struct test_board_t {
     void _init_galaxy_board(uint32_t num_chips, bool all_pcie = false) {
         // TODO: add support for quanta galaxy variant
         if (all_pcie) {
-            mesh_graph_descriptor = "quanta_galaxy_mesh_graph_descriptor.yaml";
+            mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor.yaml";
         } else {
             mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml";
         }
