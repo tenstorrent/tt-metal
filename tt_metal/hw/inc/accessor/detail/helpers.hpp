@@ -22,7 +22,7 @@ using struct_cta_sequence_wrapper_t =
     decltype(make_struct_from_sequence_wrapper<Wrapper, base>(std::make_index_sequence<rank>{}));
 
 // Statically conditional field of class with type T
-template <bool Emable, typename T = void>
+template <bool Enable, typename T = void>
 struct ConditionalField {
     T value;
     template <typename T_>
