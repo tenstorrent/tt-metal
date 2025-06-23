@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <umd/device/types/arch.h>
 #include "gtest/gtest.h"
 #include "dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
@@ -188,5 +189,21 @@ protected:
 class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixture {};
 
 class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixture {};
+
+class CommandQueueOnFabricMultiDeviceFixture : public CommandQueueMultiDeviceFixture {
+protected:
+    void SetUp() override {
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
+            GTEST_SKIP() << "Dispatch on Fabric tests only applicable on Wormhole B0";
+        }
+        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(true);
+        CommandQueueMultiDeviceFixture::SetUp();
+    }
+
+    void TearDown() override {
+        CommandQueueMultiDeviceFixture::TearDown();
+        tt::tt_metal::MetalContext::instance().rtoptions().set_fd_fabric(false);
+    }
+};
 
 }  // namespace tt::tt_metal
