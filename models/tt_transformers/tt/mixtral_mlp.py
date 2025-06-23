@@ -148,7 +148,6 @@ class TtMixtralMLP(LightweightModule):
             w2_in = ttnn.mul(w1_out, w3_out)
             w1_out.deallocate(True)
             w3_out.deallocate(True)
-            breakpoint()
             w2_out = ttnn.matmul(
                 w2_in,
                 self.w2,
