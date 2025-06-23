@@ -164,6 +164,7 @@ void kernel_main() {
             }
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
                 // TODO: (GR) Un hard-code
+                // TODO: (GR) Min on pages per packet
                 uint32_t max_tiles_per_packet = 2;
 
                 while (tiles_read < tiles_to_read) {
