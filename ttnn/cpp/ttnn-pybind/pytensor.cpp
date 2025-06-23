@@ -78,8 +78,7 @@ Tensor create_typed_tt_tensor_from_py_data(
     const Shape& py_data_shape,
     const TensorLayout& tensor_layout,
     MeshDevice* device,
-    const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
+    const tt::tt_metal::MemoryPin& pydata_pin,
     ttnn::QueueId cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
@@ -94,8 +93,9 @@ Tensor create_typed_tt_tensor_from_py_data(
     // Shapes of multi device shards will be derived automatically.
     if (mesh_mapper != nullptr) {
         return ttnn::distributed::create_distributed_tensor(
-            tt::stl::make_const_span(pydata_span),
+            pydata_span,
             py_data_shape,
+            pydata_pin,
             tensor_layout,
             *mesh_mapper,
             device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
@@ -109,12 +109,8 @@ Tensor create_typed_tt_tensor_from_py_data(
                                        tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
                                        tensor_spec.data_type() == convert_to_data_type<T>();
         pydata_borrowable) {
-        auto output = Tensor::from_borrowed_data(
-            pydata_span,
-            tensor_spec.logical_shape(),
-            on_creation_callback,
-            on_destruction_callback,
-            tensor_spec.tile());
+        auto output =
+            Tensor::from_borrowed_data(pydata_span, tensor_spec.logical_shape(), pydata_pin, tensor_spec.tile());
         if (device != nullptr) {
             output = output.to_device(device, tensor_spec.memory_config(), cq_id);
         }
@@ -130,22 +126,13 @@ Tensor create_tt_tensor_from_py_data(
     const Shape& py_data_shape,
     const TensorLayout& tensor_layout,
     MeshDevice* device,
-    const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
+    const tt::tt_metal::MemoryPin& pydata_pin,
     ttnn::QueueId cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
     auto create_concrete = [&]<typename T>() {
         return create_typed_tt_tensor_from_py_data<T>(
-            py_data_ptr,
-            py_data_shape,
-            tensor_layout,
-            device,
-            on_creation_callback,
-            on_destruction_callback,
-            cq_id,
-            pad_value,
-            mesh_mapper);
+            py_data_ptr, py_data_shape, tensor_layout, device, pydata_pin, cq_id, pad_value, mesh_mapper);
     };
     switch (tensor_layout.get_data_type()) {
         case DataType::UINT8: return create_concrete.operator()<uint8_t>();
@@ -362,8 +349,9 @@ Tensor convert_python_tensor_to_tt_tensor(
         shape,
         TensorLayout(preprocessed_py_tensor.data_type, PageConfig(layout, optional_tile), memory_config),
         device,
-        /*on_creation_callback=*/[t = preprocessed_py_tensor.contiguous_py_tensor] { t.inc_ref(); },
-        /*on_destruction_callback=*/[t = preprocessed_py_tensor.contiguous_py_tensor] { t.dec_ref(); },
+        tt::tt_metal::MemoryPin(
+            /*increment_ref_count=*/[t = preprocessed_py_tensor.contiguous_py_tensor] { t.inc_ref(); },
+            /*decrement_ref_count=*/[t = preprocessed_py_tensor.contiguous_py_tensor] { t.dec_ref(); }),
         cq_id,
         pad_value,
         mesh_mapper);
