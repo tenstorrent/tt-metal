@@ -167,7 +167,7 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
 
         // Set up compile-time args for reader kernel
         const auto& input_buffer_distribution_spec =
-            *input_mesh_buffer->device_local_config().sharding_args.buffer_distribution_spec_;
+            *input_mesh_buffer->device_local_config().sharding_args.buffer_distribution_spec();
         const auto input_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
             *mesh_device_, input_buffer_distribution_spec, input_shard_view->core_type());
         std::vector<uint32_t> input_compile_time_args = {
@@ -181,7 +181,7 @@ TEST_P(ShardedAccessorTestsOnDevice, SingleCoreReshard) {
 
         // Set up compile-time args for writer kernel
         const auto& output_buffer_distribution_spec =
-            *output_mesh_buffer->device_local_config().sharding_args.buffer_distribution_spec_;
+            *output_mesh_buffer->device_local_config().sharding_args.buffer_distribution_spec();
         const auto output_sharded_accessor_args = tt::tt_metal::sharded_accessor_utils::get_sharded_accessor_args(
             *mesh_device_, output_buffer_distribution_spec, output_shard_view->core_type());
         std::vector<uint32_t> output_compile_time_args = {

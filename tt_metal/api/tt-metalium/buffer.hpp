@@ -160,7 +160,8 @@ struct ShardedBufferConfig {
     ShardSpecBuffer shard_parameters;
 };
 
-struct BufferShardingArgs {
+class BufferShardingArgs {
+public:
     BufferShardingArgs() = default;
     BufferShardingArgs(std::nullopt_t) {}
 
@@ -186,6 +187,13 @@ struct BufferShardingArgs {
         shard_spec_(std::move(shard_spec)),
         buffer_layout_(buffer_layout) {}
 
+    const std::optional<BufferDistributionSpec>& buffer_distribution_spec() const { return buffer_distribution_spec_; }
+
+    const std::optional<ShardSpecBuffer>& shard_spec() const { return shard_spec_; }
+
+    TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
+
+private:
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
     std::optional<ShardSpecBuffer> shard_spec_;
     TensorMemoryLayout buffer_layout_ = TensorMemoryLayout::INTERLEAVED;
