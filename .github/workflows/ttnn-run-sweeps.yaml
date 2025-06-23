@@ -434,6 +434,7 @@ on:
           - eltwise.binary_backward.squared_difference_bw.squared_difference_bw
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
+          - eltwise.composite.binary.hypot.hypot_survey
           - eltwise.composite.binary.minimum.minimum
           - eltwise.composite.binary.minimum.minimum_sharded
           - eltwise.composite.binary.minimum.minimum_unary
