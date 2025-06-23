@@ -39,6 +39,7 @@ jobs:
       tests: ${{ steps.filter.outputs.tests }}
       github: ${{ steps.filter.outputs.github }}
       documentation: ${{ steps.filter.outputs.documentation }}
+      performance: ${{ steps.filter.outputs.performance }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -62,6 +63,9 @@ jobs:
                 - 'docs/**'
                 - '**/*.md'
                 - '**/*.rst'
+              performance:
+                - '**/*perf**'
+                - '**/*profiler**'
 
   label-pr:
     name: "🏷️ Label PR"
@@ -82,6 +86,7 @@ jobs:
             if ("${{ needs.detect-changes.outputs.tests }}" === "true") expectedLabels.add("test-infra");
             if ("${{ needs.detect-changes.outputs.github }}" === "true") expectedLabels.add("ci");
             if ("${{ needs.detect-changes.outputs.documentation }}" === "true") expectedLabels.add("documentation");
+            if ("${{ needs.detect-changes.outputs.performance }}" === "true") expectedLabels.add("performance");
 
             // Get current labels
             const {data: currentLabels} = await github.rest.issues.listLabelsOnIssue({
@@ -91,7 +96,8 @@ jobs:
             });
 
             // Create sets for comparison
-            const managedLabels = new Set(["blackhole", "ci", "documentation", "test-infra", "wormhole"]);
+            const managedLabels = new Set(["blackhole", "ci", "documentation",
+                                           "performance", "test-infra", "wormhole"]);
             const currentLabelSet = new Set(currentLabels.map(label => label.name));
 
             // Calculate labels to add and remove
