@@ -1650,7 +1650,7 @@ class ModelArgs:
 
         if self.checkpoint_type == CheckpointType.HuggingFace:
             # the model is a mixture-of-experts if we find any `.experts.` in the keys
-            
+
             state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
@@ -1676,16 +1676,21 @@ class ModelArgs:
             fused_activation=None,
             mcast_in0=True,
         )
-        self.model_config["FF1_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=2,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
-            out_subblock_h=1,  # Must be divisible by per_core_M
-            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
-            per_core_N=7,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
-            fuse_batch=True,
+        self.model_config[
+            "DECODE_MIXTRAL_MLP_W1_W3_PRG_CONFIG"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=2,  # 14336 / 32 / 8 / 8 the largest divisor
+            per_core_M=1,
+            per_core_N=56,
             fused_activation=ttnn.UnaryOpType.SILU,
-            mcast_in0=True,
+        )
+        self.model_config[
+            "DECODE_MIXTRAL_MLP_W2_PRG_CONFIG"
+        ] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=7,  # 14336 / 32 / 8 / 8 the largest divisor
+            per_core_M=1,
+            per_core_N=16,
+            fused_activation=ttnn.UnaryOpType.SILU,
         )
         self.model_config["FF2_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 8),
