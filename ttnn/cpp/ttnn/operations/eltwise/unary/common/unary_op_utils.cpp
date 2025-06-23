@@ -517,6 +517,8 @@ bool get_op_approx_mode(UnaryOpType op_type) {
 UnaryWithParam string_to_unary_with_param(const std::string& name) {
     if (name == "relu") {
         return UnaryWithParam(UnaryOpType::RELU);
+    } else if (name == "relu6") {
+        return UnaryWithParam(UnaryOpType::RELU6);
     } else if (name == "gelu") {
         return UnaryWithParam(UnaryOpType::GELU, static_cast<float>(true));
     } else if (name == "silu") {
