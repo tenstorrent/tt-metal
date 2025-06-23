@@ -585,6 +585,7 @@ void validate_device_conv_weights(
 // Validate device conv bias format (minimal validation for main path)
 void validate_device_conv_bias(
     const ttnn::Tensor& bias_tensor, uint32_t out_channels, const std::optional<DataType>& expected_dtype) {
+    TT_FATAL(bias_tensor.layout() == Layout::TILE, "Device conv bias must be in TILE layout");
     TT_FATAL(bias_tensor.logical_shape()[3] >= out_channels, "Device conv bias tensor too small for required channels");
 
     if (expected_dtype.has_value()) {
