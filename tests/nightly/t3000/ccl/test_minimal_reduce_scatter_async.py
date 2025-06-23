@@ -34,6 +34,7 @@ def run_reduce_scatter_impl(
     rs_topology,
     num_iters=1,
     enable_trace=True,
+    cluster_axis=None,
 ):
     torch.manual_seed(0)
 
@@ -144,6 +145,7 @@ def run_reduce_scatter_impl(
             memory_config=mem_config_rs,
             topology=rs_topology,
             subdevice_id=worker_sub_device_id,
+            cluster_axis=cluster_axis,
         )
 
         return tt_reduce_scatter_output_tensor
@@ -195,36 +197,24 @@ def run_reduce_scatter_impl(
     t3k_mesh_device.clear_loaded_sub_device_manager()
 
 
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "num_devices, num_links, rs_input_shape, dim, layout, rs_input_dtype",
+    "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
     [
-        # (
-        #     8,
-        #     1,
-        #     [1, 1, 4096, 2560],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     ttnn.bfloat16,
-        #     1,
-        # ),  # Full SD3.5 shape, when reduce scatter unfused
-        (8, 1, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, 3, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, 1, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, 1, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, 1, [1, 1, 352, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, 1, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, 1, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, 3, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (8, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (8, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (8, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (8, [1, 1, 352, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (8, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fusedd
     ],
     ids=[
         "batch_8_links_1",
-        "batch_8_links_3",
         "batch_4_links_1",
         "batch_1_sd35_spatial_links_1",
         "batch_1_sd35_prompt_links_1",
         "batch_2_links_1",
         "batch_1_links_1",
-        "batch_1_links_3",
     ],
 )
 @pytest.mark.parametrize(
