@@ -98,8 +98,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             device_local_size,
             device_local_config.page_size,
             device_local_config.buffer_type,
-            device_local_config.buffer_layout,
-            device_local_config.shard_parameters,
+            device_local_config.sharding_args,
             device_local_config.bottom_up,
             device_local_config.sub_device_id);
 
@@ -123,8 +122,7 @@ void MeshBuffer::initialize_device_buffers() {
             device_local_size_,
             device_local_config_.page_size,
             device_local_config_.buffer_type,
-            device_local_config_.buffer_layout,
-            device_local_config_.shard_parameters,
+            device_local_config_.sharding_args,
             device_local_config_.bottom_up,
             /*sub_device_id=*/std::nullopt);  // TODO: sub_device_id is unsupported
         return buffer;
@@ -242,8 +240,7 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std
     DeviceLocalBufferConfig local_config{
         .page_size = config.page_size,
         .buffer_type = config.buffer_type,
-        .buffer_layout = config.buffer_layout,
-        .shard_parameters = config.shard_parameters,
+        .sharding_args = BufferShardingArgs(config.shard_parameters, config.buffer_layout),
     };
     return MeshBuffer::create(mesh_config, local_config, mesh_device, address);
 }
@@ -263,7 +260,6 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config,
     DeviceLocalBufferConfig local_config{
         .page_size = config.page_size,
         .buffer_type = config.buffer_type,
-        .buffer_layout = config.buffer_layout,
     };
     return MeshBuffer::create(mesh_config, local_config, mesh_device, address);
 }
