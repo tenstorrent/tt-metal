@@ -43,6 +43,9 @@ jobs:
           - version: "24.04"
             toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
             build-type: "Release"
+          - version: "24.04"
+            toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
+            build-type: "RelWithDebInfo"
     with:
       version: ${{ matrix.config.version }}
       toolchain: ${{ matrix.config.toolchain }}
