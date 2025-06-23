@@ -370,7 +370,11 @@ def create_custom_preprocessor(device):
                     else:
                         assert False, "give support for Ec"
                     parameters["model"][index]["attn"]["bias"] = ttnn.from_torch(
-                        child.attn.bias, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
+                        child.attn.bias,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                        device=device,
                     )
                     parameters["model"][index]["attn"]["gl"] = {}
                     parameters["model"][index]["attn"]["gl"]["weight"] = preprocess_linear_weight(
@@ -544,10 +548,15 @@ def create_custom_preprocessor(device):
                     for i_1, child_1 in enumerate(child.cv4):
                         parameters["model"][index]["cv4"][i_1] = {}
                         parameters["model"][index]["cv4"][i_1]["bias"] = ttnn.from_torch(
-                            child_1.bias, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
+                            child_1.bias,
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT,
+                            memory_config=ttnn.L1_MEMORY_CONFIG,
+                            device=device,
                         )
                         parameters["model"][index]["cv4"][i_1]["logit_scale"] = ttnn.from_torch(
                             child_1.logit_scale,
+                            dtype=ttnn.bfloat16,
                             layout=ttnn.TILE_LAYOUT,
                             memory_config=ttnn.L1_MEMORY_CONFIG,
                             device=device,
@@ -569,7 +578,10 @@ def create_custom_preprocessor(device):
                     parameters["model"][index]["strides"] = strides
 
             parameters["txt_feats"] = ttnn.from_torch(
-                model.txt_feats, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT, device=device
+                model.txt_feats,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,  # keeping the dtype as bfloat16 instead of float32 affects demo result
             )
 
         return parameters
