@@ -7,10 +7,7 @@ import pytest
 import math
 from loguru import logger
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
-
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 def create_global_semaphores(mesh_device, num_devices, cores, initial_value, num_links):
@@ -188,7 +185,7 @@ def run_reduce_scatter_impl(
         torch_rs_out = torch.cat(torch_rs_out_tensor, 3)
 
         tt_rs_out = ttnn.from_device(tt_rs_out_tensor)
-        tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
+        tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=3))
         eq, output = comp_pcc(tt_rs_out, torch_rs_out)
         logger.info(f"{output}, iteration {i}")
         assert eq, f"{i} FAILED ag: {output}"
@@ -209,12 +206,12 @@ def run_reduce_scatter_impl(
         (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fusedd
     ],
     ids=[
-        "batch_8_links_1",
-        "batch_4_links_1",
-        "batch_1_sd35_spatial_links_1",
-        "batch_1_sd35_prompt_links_1",
-        "batch_2_links_1",
-        "batch_1_links_1",
+        "batch_8",
+        "batch_4",
+        "batch_1_sd35_spatial",
+        "batch_1_sd35_prompt",
+        "batch_2",
+        "batch_1",
     ],
 )
 @pytest.mark.parametrize(
