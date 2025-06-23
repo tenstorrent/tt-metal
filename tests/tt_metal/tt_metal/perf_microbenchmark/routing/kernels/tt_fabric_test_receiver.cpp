@@ -18,8 +18,6 @@ void kernel_main() {
 
     bool failed = false;
 
-    DPRINT << "num traffic config: " << (uint32_t)NUM_TRAFFIC_CONFIGS << ENDL();
-
     bool packets_left_to_validate = true;
     while (packets_left_to_validate) {
         packets_left_to_validate = false;
@@ -31,7 +29,6 @@ void kernel_main() {
 
             // if we are here, this means that we have atleast 1 packet left to validate
             packets_left_to_validate = true;
-
             bool got_new_data = traffic_config->poll();
             if (!got_new_data) {
                 continue;
