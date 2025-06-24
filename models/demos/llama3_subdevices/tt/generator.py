@@ -65,6 +65,7 @@ class Generator:
         self.trace_id_prefill = defaultdict(lambda: None)
         self.trace_inputs_prefill = defaultdict(lambda: None)
         self.trace_output_prefill = defaultdict(lambda: None)
+        self.prev_page_table = None
 
     def prefill_forward_text(
         self,
@@ -315,14 +316,21 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
-        reset_inputs=True,
+        reset_inputs=False,
     ):
         assert (
             sampling_params is None or sampling_params.temperature == 0
         ), "Currently only supporting greedy decoding (temperature=0) on device"
 
+        if self.prev_page_table is None:
+            self.prev_page_table = page_table
+        if torch.any(self.prev_page_table != page_table).item():
+            reset_inputs = True
+            self.prev_page_table = page_table
+
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
+            reset_inputs = True
         kv_cache = kv_cache[0]
         decode_kwargs = {
             "current_pos": start_pos,
