@@ -317,8 +317,12 @@ def run_sweeps_json(module_name, suite_name):
             results = execute_suite(test_module, test_vectors, pbar_manager, suite)
             logger.info(f"Completed tests for module {module_name}, suite {suite}.")
             logger.info(f"Tests Executed - {len(results)}")
-            logger.info("Dumping results to PostgreSQL database.")
-            export_test_results_postgres(header_info, results)
+            if DATABASE_BACKEND == "postgres":
+                logger.info("Dumping results to PostgreSQL database.")
+                export_test_results_postgres(header_info, results)
+            else:
+                logger.info("Dumping results to JSON file.")
+                export_test_results_json(header_info, results)
 
 
 def run_sweeps(module_name, suite_name, vector_id):
@@ -634,8 +638,8 @@ def disable_profiler():
     os.environ.pop("ENABLE_TRACY")
 
 
-def get_postgres_config(env="cloud"):
-    if env == "corp":
+def get_postgres_config(env="prod"):
+    if env == "prod":
         return {
             "host": "corp_postgres_host",
             "port": 5432,
@@ -643,7 +647,7 @@ def get_postgres_config(env="cloud"):
             "user": "username",
             "password": "password",
         }
-    elif env == "cloud":
+    elif env == "dev":
         return {
             "host": "ep-misty-surf-a5lm1q6p-pooler.us-east-2.aws.neon.tech",
             "port": 5432,
@@ -715,9 +719,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--postgres-env",
         required=False,
-        default="cloud",
-        choices=["corp", "cloud"],
-        help="PostgreSQL environment configuration. Available options: ['corp', 'cloud']",
+        default="dev",
+        choices=["dev", "prod"],
+        help="PostgreSQL environment configuration. Available options: ['dev', 'prod']",
     )
 
     args = parser.parse_args(sys.argv[1:])
