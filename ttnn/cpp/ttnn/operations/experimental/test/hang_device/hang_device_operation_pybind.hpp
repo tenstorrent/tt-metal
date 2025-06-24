@@ -9,5 +9,5 @@
 namespace ttnn::operations::experimental::test {
 namespace py = pybind11;
 
-void bind_test_hang_operation(py::module& module);
+void bind_test_hang_device_operation(py::module& module);
 }  // namespace ttnn::operations::experimental::test
