@@ -518,7 +518,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
 
     // Active ethernet
     if (hal_->get_eth_fw_is_cooperative()) {
-        for (const auto& logical_core : cluster_->get_active_ethernet_cores(device_id)) {
+        for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
             CoreCoord virtual_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
             if (erisc_app_still_running(virtual_core)) {
@@ -560,7 +560,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
 
     // Reset idle ethernet cores
     // TODO: reset BH eth cores as well
-    for (const auto& logical_core : cluster_->get_inactive_ethernet_cores(device_id)) {
+    for (const auto& logical_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
         cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core));
@@ -593,7 +593,7 @@ void MetalContext::assert_cores(chip_id_t device_id) {
 
     if (!hal_->get_eth_fw_is_cooperative()) {
         // Assert riscs on active eth
-        for (const auto& eth_core : cluster_->get_active_ethernet_cores(device_id)) {
+        for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
             CoreCoord virtual_eth_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
             TensixSoftResetOptions reset_val =
@@ -1026,7 +1026,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     }
 
     // Clear erisc sync info
-    for (const auto& eth_core : cluster_->get_active_ethernet_cores(device_id)) {
+    for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
         static std::vector<uint32_t> zero_vec_erisc_init(
             hal_->get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) / sizeof(uint32_t),
             0);
@@ -1043,7 +1043,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
 
     // Load erisc app base FW to eth cores on WH and active_erisc FW on second risc of BH active eth cores
     std::unordered_set<CoreCoord> active_eth_cores;
-    for (const auto& eth_core : cluster_->get_active_ethernet_cores(device_id)) {
+    for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
         core_info->absolute_logical_x = eth_core.x;
@@ -1060,7 +1060,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
         }
     }
 
-    for (const auto& eth_core : cluster_->get_inactive_ethernet_cores(device_id)) {
+    for (const auto& eth_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
         core_info->absolute_logical_x = eth_core.x;
