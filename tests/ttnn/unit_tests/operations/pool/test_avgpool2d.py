@@ -67,6 +67,7 @@ def tensor_map():
 @pytest.mark.parametrize(
     "shard_scheme",
     [
+        None,
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
