@@ -37,10 +37,6 @@ ExecuteTestHangDeviceOperation::tensor_return_value_t ExecuteTestHangDeviceOpera
 
 std::tuple<ExecuteTestHangDeviceOperation::operation_attributes_t, ExecuteTestHangDeviceOperation::tensor_args_t>
 ExecuteTestHangDeviceOperation::invoke(const Tensor& input_tensor) {
-#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
     return {operation_attributes_t{}, tensor_args_t{input_tensor}};
-#else
-    return {operation_attributes_t{}, tensor_args_t{input_tensor}};
-#endif
 }
 }  // namespace ttnn::prim

@@ -123,15 +123,6 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     this->populate_virtual_program_dispatch_core();
     this->populate_read_descriptor_queue();
     completion_queue_reader_thread_ = std::thread(&FDMeshCommandQueue::read_completion_queue, this);
-#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
-    error_callback_ = [&](const std::exception& e) {
-        if (completion_queue_reader_thread_.joinable()) {
-            completion_queue_reader_thread_.join();
-        }
-
-        throw e;
-    };
-#endif
 }
 
 FDMeshCommandQueue::~FDMeshCommandQueue() {
@@ -213,11 +204,23 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
     }
 
     // Block after clearing counter(s) on dispatcher
+#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
+    if (thread_exception_ptr_) {
+        // At this point the thread has already stopped and there is no much do I should do here.
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        // Let's ensure that no zombie process is left behind.
+        cluster.reset_cluster(mesh_device_->id());
+        return;
+    }
+#endif
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
         std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
     this->increment_num_entries_in_completion_queue();
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
-    reads_processed_cv_.wait(lock, [this] { return num_outstanding_reads_.load() == 0; });
+    reads_processed_cv_.wait(lock, [this] {
+        int num_outstanding_reads = num_outstanding_reads_.load();
+        return num_outstanding_reads == 0;
+    });
 }
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
@@ -498,6 +501,11 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
     for (auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         sub_device_cq_owner[*sub_device_id].finished(this->id_);
     }
+#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
+    if (thread_exception_ptr_) {
+        TT_THROW("TIMEOUT: potential hang detected, please check the graph capture");
+    }
+#endif
 }
 
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
@@ -762,11 +770,16 @@ void FDMeshCommandQueue::read_completion_queue() {
                         reads_processed_cv_.notify_one();
                     }
                 }
-        }
-        } catch (const std::exception& e) {
-            if (error_callback_) {
-                thread_timeout_.store(true);
             }
+        } catch (std::runtime_error e) {
+            // Let's clean up the state so the main thread can handle it.
+            thread_exception_ptr_ = std::current_exception();
+            exit_condition_.store(true);
+            exit_condition_.notify_all();
+            num_outstanding_reads_.store(0);
+            num_outstanding_reads_.notify_all();
+            reads_processed_cv_.notify_all();
+            return;
         }
     }
 }
