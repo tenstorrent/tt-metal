@@ -440,8 +440,8 @@ class TtModelArgs:
     )
 
     LOCAL_LLAMA_PARAMS = {
-        "LLAMA3_1_70B_PARAMS": "models/demos/llama3_subdevices/model_params/Llama3.1-70B-Instruct",
-        "LLAMA3_3_70B_PARAMS": "models/demos/llama3_subdevices/model_params/Llama3.3-70B-Instruct",
+        "LLAMA3_1_70B_PARAMS": "models/demos/llama3_subdevices/model_params/Llama-3.1-70B-Instruct",
+        "LLAMA3_3_70B_PARAMS": "models/demos/llama3_subdevices/model_params/Llama-3.3-70B-Instruct",
     }
 
     def __init__(
@@ -1955,24 +1955,24 @@ class TtModelArgs:
         # Meta-style config dicts don't specity model name or rope_scaling_factor so hard-code these
         # Set the model name based on the checkpoint directory being loaded
         if "3.2-1B" in checkpoint_dir:
-            self.model_name = "Llama3.2-1B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.2-1B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 32
         elif "3.2-3B" in checkpoint_dir:
-            self.model_name = "Llama3.2-3B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.2-3B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 32
         elif "3.1-8B" in checkpoint_dir:
-            self.model_name = "Llama3.1-8B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.1-8B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
         elif "3.2-11B" in checkpoint_dir:
-            self.model_name = "Llama3.2-11B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8  # shared with 3.1-8B
         elif "3.1-70B" in checkpoint_dir:
-            self.model_name = "Llama3.1-70B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.1-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
             self.max_prefill_chunk_size = 128 * 1024
         elif "3.3-70B" in checkpoint_dir:
-            self.model_name = "Llama3.3-70B" + ("-Instruct" if self.instruct else "")
+            self.model_name = "Llama-3.3-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
             self.max_prefill_chunk_size = 128 * 1024

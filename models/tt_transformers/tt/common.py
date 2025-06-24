@@ -506,10 +506,7 @@ def pad_to_size(x: torch.Tensor, dim: int, size: int) -> torch.Tensor:
 
 
 def get_base_model_name(model_name: str) -> str:
-    # HuggingFace name contains a dash, but Meta name does not (e.g. Llama-3.1-70B vs Llama3.1-70B)
-    # Until we switch to HF weights-first, we need to force the dash out
-    model_name = model_name.replace("Llama-", "Llama")
-    # Remove the suffix after B- (case insensitive), e.g. "Llama3.1-70B-Instruct" -> "Llama3.1-70B"
+    # Remove the suffix after B- (case insensitive), e.g. "Llama-3.1-70B-Instruct" -> "Llama-3.1-70B"
     match = re.search(r"(.*?\d+[bB])-", model_name)
     return match.group(1) if match else model_name
 
