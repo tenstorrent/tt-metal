@@ -26,12 +26,12 @@ void MAIN {
     uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
     uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
     uint32_t num_packets = div_up(tiles_to_read - tiles_read, tile_granularity);
+    binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
+    add_tiles_init(input_cb_id, intermediate_cb, false);
 
     for (uint32_t b = 0; b < num_batches; b++) {
         for (uint32_t i = 0; i < num_total_reduction_steps; i++) {  // Don't reduce on the first slice
             // Initialize binary operations - use the same constants consistently
-            binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
-            add_tiles_init(input_cb_id, intermediate_cb, false);
 
             // Wait for input data once before beginning processing
             for (uint32_t packet_id = 0; packet_id < num_packets; packet_id++) {
