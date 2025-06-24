@@ -143,8 +143,6 @@ public:
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
-    void reset_cores() override;
-    void initialize_and_launch_firmware() override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
 
@@ -193,14 +191,11 @@ public:
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
 
-    void initialize_cluster();
     std::unique_ptr<Allocator> initialize_allocator(
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_unreserved_start,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
-    void initialize_device_bank_to_noc_tables(const HalProgrammableCoreType &core_type, CoreCoord virtual_core);
-    void initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord virtual_core, launch_msg_t *launch_msg, go_msg_t* go_msg);
 
     void initialize_default_sub_device_state(
         size_t l1_small_size,
@@ -210,10 +205,6 @@ private:
 
     void compile_command_queue_programs();
     void configure_command_queue_programs();
-    void clear_l1_state();
-    void clear_dram_state();
-    void clear_launch_messages_on_eth_cores();
-    void generate_device_bank_to_noc_tables();
 
     void mark_allocations_unsafe();
     void mark_allocations_safe();
