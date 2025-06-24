@@ -7,6 +7,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/fabric.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "erisc_datamover_builder_helper.hpp"
@@ -56,9 +57,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         TT_FATAL(device_sequence.size() > 2, "Ring topology only supports more than 2 devices");
     }
 
-    static constexpr std::size_t edm_buffer_size =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-        sizeof(tt::tt_fabric::PacketHeader);
+    std::size_t edm_buffer_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const auto config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
     TT_ASSERT(device_sequence.size() == program_sequence.size());
 
@@ -368,9 +367,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     bool build_in_worker_connection_mode,
     Topology topology) :
     device_sequence({local_device}), programs({program}) {
-    static constexpr std::size_t edm_buffer_size =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-        sizeof(tt::tt_fabric::PacketHeader);
+    std::size_t edm_buffer_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const auto config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
 
     log_trace(tt::LogOp, "device id={}", local_device->id());
@@ -577,9 +574,7 @@ EdmLineFabricOpInterface::generate_local_chip_fabric_termination_infos(tt::tt_me
 
 std::vector<tt::tt_fabric::edm_termination_info_t>
 EdmLineFabricOpInterface::generate_ordered_termination_info_farthest_to_nearest() const {
-    static constexpr std::size_t edm_buffer_size =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-        sizeof(tt::tt_fabric::PacketHeader);
+    std::size_t edm_buffer_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     static const auto config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
     TT_ASSERT(device_sequence.size() > 0);
     const size_t num_hops = device_sequence.size() - 1;
