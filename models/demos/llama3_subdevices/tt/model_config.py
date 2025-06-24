@@ -463,6 +463,7 @@ class TtModelArgs:
         self.from_hf_url = False  # updated below if true
         self.max_prefill_chunk_size = max_seq_len
         self.use_prefetcher = False
+        self.max_top_k = 64
 
         if self.num_devices == 32:
             self.use_prefetcher = True
@@ -695,7 +696,19 @@ class TtModelArgs:
             )
 
             self.model_config["DECODE_SAMPLING_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(1, 1, max(self.max_batch_size, self.tile_size), self.tile_size),
+                shape=(1, 1, max(self.max_batch_size, self.tile_size), self.max_top_k),
+                core_grid=shard_grid,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            num_cores = 32
+            shard_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                start_core, num_cores, core_grid, row_wise=False
+            )
+            self.model_config["DECODE_LOGITS_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(1, 1, max(self.max_batch_size, self.tile_size), self.padded_vocab_size // num_cores),
                 core_grid=shard_grid,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
