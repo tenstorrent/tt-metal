@@ -24,12 +24,6 @@ COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d11
     ((50),),
 )
 @pytest.mark.parametrize(
-    "classifier_free_guidance",
-    [
-        (True),
-    ],
-)
-@pytest.mark.parametrize(
     "vae_on_device",
     [
         (True),
@@ -40,11 +34,10 @@ COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d11
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
 def test_accuracy_sdxl(
-    device,
+    mesh_device,
     use_program_cache,
     is_ci_env,
     num_inference_steps,
-    classifier_free_guidance,
     vae_on_device,
     captions_path,
     coco_statistics_path,
@@ -73,12 +66,11 @@ def test_accuracy_sdxl(
     logger.info(f"Start inference from prompt index: {start_from} to {start_from + num_prompts}")
 
     images = test_demo(
-        device,
+        mesh_device,
         use_program_cache,
         is_ci_env,
         prompts[start_from : start_from + num_prompts],
         num_inference_steps,
-        classifier_free_guidance,
         vae_on_device,
         evaluation_range,
     )
@@ -120,9 +112,10 @@ def test_accuracy_sdxl(
         },
     }
 
-    os.makedirs("generated/test_reports", exist_ok=True)
+    out_root, file_name = "test_reports", "sdxl_test_results.json"
+    os.makedirs(out_root, exist_ok=True)
 
-    with open("generated/test_reports/sdxl_test_results.json", "w") as f:
+    with open(f"{out_root}/{file_name}", "w") as f:
         json.dump(data, f, indent=4)
 
-    logger.info("Test results saved to generated/test_reports/sdxl_test_results.json")
+    logger.info(f"Test results saved to {out_root}/{file_name}")

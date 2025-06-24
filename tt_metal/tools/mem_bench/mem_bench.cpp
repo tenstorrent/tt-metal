@@ -557,7 +557,7 @@ int main(int argc, char* argv[]) {
     setenv("TT_METAL_SLOW_DISPATCH_MODE", "true", true);
     setenv("TT_METAL_CLEAR_L1", "1", true);
     // May be overridden by the user
-    setenv("TT_METAL_LOGGER_LEVEL", "FATAL", false);
+    setenv("TT_LOGGER_LEVEL", "FATAL", false);
 
     char arg0_default[] = "benchmark";
     char* args_default = arg0_default;

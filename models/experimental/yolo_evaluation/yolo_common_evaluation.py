@@ -397,9 +397,9 @@ def test_run_yolov4_eval(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("res", [(640, 640)])
 def test_yolov8s_world(device, model_type, res, reset_seeds):
-    from models.experimental.yolov8s_world.reference import yolov8s_world
-    from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world import TtYOLOWorld
-    from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
+    from models.demos.yolov8s_world.reference import yolov8s_world
+    from models.demos.yolov8s_world.tt.ttnn_yolov8s_world import TtYOLOWorld
+    from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
         create_custom_preprocessor,
         attempt_load,
         move_to_device,

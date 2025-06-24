@@ -149,11 +149,10 @@ public:
     virtual CommandQueue& command_queue(size_t cq_id = 0) = 0;
 
     // Metal trace device capture mode
-    virtual void begin_trace(const uint8_t cq_id, const uint32_t tid) = 0;
-    virtual void end_trace(const uint8_t cq_id, const uint32_t tid) = 0;
-    virtual void replay_trace(
-        const uint8_t cq_id, const uint32_t tid, const bool block_on_device, const bool block_on_worker_thread) = 0;
-    virtual void release_trace(const uint32_t tid) = 0;
+    virtual void begin_trace(uint8_t cq_id, uint32_t tid) = 0;
+    virtual void end_trace(uint8_t cq_id, uint32_t tid) = 0;
+    virtual void replay_trace(uint8_t cq_id, uint32_t tid, bool block_on_device, bool block_on_worker_thread) = 0;
+    virtual void release_trace(uint32_t tid) = 0;
 
     virtual std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) = 0;
     virtual uint32_t get_trace_buffers_size() const = 0;
@@ -167,17 +166,18 @@ public:
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
     virtual bool initialize(
-        const uint8_t num_hw_cqs,
+        uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) = 0;
-    virtual void reset_cores() = 0;
-    virtual void initialize_and_launch_firmware() = 0;
     virtual void init_command_queue_host() = 0;
     virtual void init_command_queue_device() = 0;
 
+    // return false if compile fails (mainly come from Nebula on TG)
+    virtual bool compile_fabric() = 0;
+    virtual void configure_fabric() = 0;
     virtual void init_fabric() = 0;
     // Puts device into reset
     virtual bool close() = 0;

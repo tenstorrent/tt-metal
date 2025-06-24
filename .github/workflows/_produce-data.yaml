@@ -33,17 +33,21 @@ on:
       - "(T3K) T3000 profiler tests"
       - "(T3K) T3000 unit tests"
       - "(T3K) T3000 fast tests"
+      - "(T3K) Choose your pipeline"
       - "(TG) TG unit tests"
       - "(TG) TG demo tests"
       - "(TG) TG frequent tests"
       - "(TG) TG model perf tests"
       - "(TG) TG nightly tests"
+      - "(TG) Choose your pipeline"
       - "Galaxy Quick"
       - "ttnn - Run sweeps"
       - "Blackhole post-commit tests"
       - "(Blackhole) Blackhole nightly tests"
       - "(Blackhole) Demo tests"
+      - "(Blackhole) LLMBox unit tests"
       - "PR Gate"
+      - "Merge Gate"
       - "Nightly tt-metal L2 tests"
       - "Package and release"
       - "Build test and publish upstream tests"
@@ -100,13 +104,13 @@ jobs:
           echo "::notice title=target-workflow-link::The workflow being analyzed is available at https://github.com/tenstorrent/tt-metal/actions/runs/$run_id/attempts/$attempt_number"
       - name: Get API rate limit status
         env:
-          GH_TOKEN: ${{ secrets.TTBOT_DOCS_ACCESS }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           echo "[Info] Grabbing API rate limit status"
           gh api rate_limit
       - name: Output auxiliary values
         env:
-          GH_TOKEN: ${{ secrets.TTBOT_DOCS_ACCESS }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           echo "Sleeping for 60 seconds for github to fully sync the workflow run before calling the API"
           sleep 60
@@ -120,7 +124,7 @@ jobs:
       - name: Collect workflow artifact and job logs
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.TTBOT_DOCS_ACCESS }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --workflow-run-id ${{ steps.get-run-id-and-attempt.outputs.run-id }} --attempt-number ${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
           find generated/cicd/ -type f

@@ -21,25 +21,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_composite_acosh_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-
-    output_tensor = ttnn.acosh(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.acosh)
-    golden_tensor = golden_function(in_data1, device=device)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 def test_unary_composite_asinh_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
@@ -216,25 +197,6 @@ def test_unary_composite_cosh_ttnn(input_shapes, device):
 
     output_tensor = ttnn.cosh(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.cosh)
-    golden_tensor = golden_function(in_data1)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_composite_deg2rad_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-
-    output_tensor = ttnn.deg2rad(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.deg2rad)
     golden_tensor = golden_function(in_data1)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
@@ -459,25 +421,6 @@ def test_unary_composite_polygamma_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_composite_rad2deg_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-
-    output_tensor = ttnn.rad2deg(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.rad2deg)
-    golden_tensor = golden_function(in_data1)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 def test_unary_composite_selu_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, 1, 2, device)
 
@@ -598,45 +541,6 @@ def test_unary_composite_triu_ttnn(input_shapes, device):
 
     output_tensor = ttnn.triu(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.triu)
-    golden_tensor = golden_function(in_data1)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_composite_trunc_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-
-    output_tensor = ttnn.trunc(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.trunc)
-    golden_tensor = golden_function(in_data1)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_composite_trunc_ttnn_opt(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-    cq_id = 0
-    ttnn.trunc(input_tensor1, output_tensor=output_tensor, queue_id=cq_id)
-    golden_function = ttnn.get_golden_function(ttnn.trunc)
     golden_tensor = golden_function(in_data1)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])

@@ -128,7 +128,7 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
 std::vector<ttnn::TensorSpec> RotaryEmbeddingLlama::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto shape = input_tensor.logical_shape();
+    const auto& shape = input_tensor.logical_shape();
     return {
         TensorSpec(shape, TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), output_mem_config))};
 }

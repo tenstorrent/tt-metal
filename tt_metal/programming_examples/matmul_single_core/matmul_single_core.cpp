@@ -22,6 +22,10 @@ using namespace tt::tt_metal;
 // Array A is of size MxK, Array B is of size KxN, and the output C is of size MxN.
 // The implementation is bare bones and does not include optimizations such as tiling or vectorization.
 // This is intended to be used as a golden reference for testing the Metalium implementation.
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
+
 void golden_matmul(
     const std::vector<bfloat16>& a,
     const std::vector<bfloat16>& b,
@@ -129,13 +133,13 @@ void matmul_single_core(
     // Create the data movement kernels and the compute kernel
     auto reader_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
+        OVERRIDE_KERNEL_PREFIX "matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     auto writer_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",
+        OVERRIDE_KERNEL_PREFIX "matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
@@ -150,7 +154,7 @@ void matmul_single_core(
     };
     auto matmul_single_core_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_single_core/kernels/compute/mm.cpp",
+        OVERRIDE_KERNEL_PREFIX "matmul_single_core/kernels/compute/mm.cpp",
         core,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_compile_time_args});
 
@@ -228,26 +232,26 @@ int main() {
         // Reverse the tilization to get the result in the row-major format that the CPU expects
         result_vec = untilize_nfaces(result_vec, M, N);
 
-        log_info(tt::LogVerif, "Output vector of size {}", result_vec.size());
+        fmt::print("Output vector of size {}\n", result_vec.size());
 
         // Calculate the Pearson correlation coefficient (PCC) between the golden vector and the result vector
         // This is a measure of how similar the two vectors are.
         // A PCC close to 1 indicates that the two vectors are very similar.
         float pearson = check_bfloat16_vector_pcc(golden_vec, result_vec);
-        log_info(tt::LogVerif, "Metalium vs Golden -- PCC = {}", pearson);
+        fmt::print("Metalium vs Golden -- PCC = {}\n", pearson);
         TT_FATAL(pearson > 0.97, "PCC not high enough. Result PCC: {}, Expected PCC: 0.97", pearson);
 
         pass &= CloseDevice(device);
 
     } catch (const std::exception& e) {
-        log_error(tt::LogTest, "Test failed with exception!");
-        log_error(tt::LogTest, "{}", e.what());
+        fmt::print(stderr, "Test failed with exception!\n");
+        fmt::print(stderr, "{}\n", e.what());
 
         throw;
     }
 
     if (pass) {
-        log_info(tt::LogTest, "Test Passed");
+        fmt::print("Test Passed\n");
     } else {
         TT_THROW("Test Failed");
     }
