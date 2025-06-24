@@ -1,0 +1,17 @@
+{
+  "description": "CNN Javelin performance tests for Wormhole B0",
+  "tests": [
+    {
+      "name": "functional_unet",
+      "command": "pytest -n auto models/experimental/functional_unet/tests -m models_performance_bare_metal",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1800
+    },
+    {
+      "name": "stable_diffusion",
+      "command": "pytest -n auto models/demos/wormhole/stable_diffusion/tests -m models_performance_bare_metal --timeout=480",
+      "env": {"WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"},
+      "timeout": 1800
+    }
+  ]
+}

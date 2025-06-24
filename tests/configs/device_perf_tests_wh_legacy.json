@@ -1,0 +1,32 @@
+{
+  "description": "Device performance tests for Wormhole B0 (Legacy - not yet ported to CIv2)",
+  "arch": "wormhole_b0",
+  "tests": [
+    {
+      "name": "convnet_mnist",
+      "command": "pytest models/demos/convnet_mnist/tests/ -m models_device_performance_bare_metal",
+      "timeout": 600
+    },
+    {
+      "name": "mnist",
+      "command": "pytest models/demos/mnist/tests -m models_device_performance_bare_metal",
+      "timeout": 600
+    },
+    {
+      "name": "falcon7b_common",
+      "command": "pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal",
+      "env": {
+        "WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"
+      },
+      "timeout": 600
+    },
+    {
+      "name": "segformer",
+      "command": "pytest models/demos/segformer/tests/perf -m models_device_performance_bare_metal",
+      "env": {
+        "WH_ARCH_YAML": "wormhole_b0_80_arch_eth_dispatch.yaml"
+      },
+      "timeout": 600
+    }
+  ]
+}
