@@ -171,8 +171,14 @@ const core_descriptor_t& get_core_descriptor_config(
 
     CoreCoord grid_size =
         tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-    auto logical_active_eth_cores =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
+
+    // Check if there are any ethernet cores defined in the SoC descriptor before getting active ethernet cores
+    std::unordered_set<CoreCoord> logical_active_eth_cores;
+    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    if (!soc_desc.logical_eth_core_to_chan_map.empty()) {
+        logical_active_eth_cores =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
+    }
 
     for (const auto& core_node : desc_yaml[dispatch_cores_string]) {
         RelativeCoreCoord coord = {};
