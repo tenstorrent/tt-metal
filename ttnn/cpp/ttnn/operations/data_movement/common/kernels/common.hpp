@@ -189,10 +189,7 @@ FORCE_INLINE uint32_t align_address(const uint32_t address, const uint64_t mask)
 // Wait for a specified number of cycles
 // This is a blocking wait, so it should only be used for debugging purposes
 // It is not recommended to use this in production code
-template <typename T>
-inline void spin(T cycles) {
-    static_assert(std::is_integral_v<T>, "cycles must be an integer");
-    static_assert(std::is_unsigned_v<T>, "cycles must be an unsigned integer");
+inline void spin(uint32_t cycles) {
     volatile uint tt_reg_ptr* clock_lo = reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
     volatile uint tt_reg_ptr* clock_hi = reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_H);
     uint64_t wall_clock_timestamp = clock_lo[0] | ((uint64_t)clock_hi[0] << 32);
