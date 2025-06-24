@@ -14,6 +14,7 @@ std::vector<uint8_t> serialize_to_bytes(const IntermeshLinkTable& intermesh_link
 
     // Create vector of EthernetLink objects (flatbuffers dont support std::unordered_map directly)
     std::vector<flatbuffers::Offset<tt::tt_fabric::flatbuffer::EthernetLink>> ethernet_links;
+    ethernet_links.reserve(intermesh_link_table.intermesh_links.size());
 
     for (const auto& [local_chan, remote_chan] : intermesh_link_table.intermesh_links) {
         auto local_eth_chan =

@@ -139,7 +139,8 @@ TEST(IntermeshAPIs, LocalIntermeshLinkTable) {
             if (control_plane.get_asic_id(chip_id) == board_id) {
                 EXPECT_TRUE(control_plane.is_intermesh_eth_link(chip_id, CoreCoord{0, local_chan.chan_id}))
                     << "Expected valid intermesh links in the local intermesh link table";
-                    chip_found = true;
+                chip_found = true;
+                break;
             }
         }
         EXPECT_TRUE(chip_found) << "No chip found with ASIC ID " << board_id;

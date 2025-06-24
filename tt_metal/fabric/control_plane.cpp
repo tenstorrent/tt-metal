@@ -1664,6 +1664,26 @@ void ControlPlane::generate_local_intermesh_link_table() {
                 intermesh_link_table_.intermesh_links[local_eth_chan_desc] = remote_eth_chan_desc;
                 chip_id_to_asic_id_[chip_id] = local_board_id;
             }
+        } else if (cluster.arch() != ARCH::BLACKHOLE) {
+            // For chips without intermesh links, we still need to populate the asic IDs
+            // for consistency.
+            // Skip this on Blackhole for now.
+            if (this->get_active_ethernet_cores(chip_id).size() == 0) {
+                // No Active Ethernet Cores found. Not querying the board id off ethernet cores.
+                chip_id_to_asic_id_[chip_id] = chip_id;
+            } else {
+                auto first_eth_core = *(this->get_active_ethernet_cores(chip_id).begin());
+                tt_cxy_pair virtual_eth_core(
+                    chip_id,
+                    cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, first_eth_core, CoreType::ETH));
+                uint64_t local_board_id = 0;
+                cluster.read_core(
+                    &local_board_id,
+                    sizeof(uint64_t),
+                    virtual_eth_core,
+                    remote_config_base_addr + intermesh_constants::LOCAL_BOARD_ID_OFFSET);
+                chip_id_to_asic_id_[chip_id] = local_board_id;
+            }
         }
     }
 }
