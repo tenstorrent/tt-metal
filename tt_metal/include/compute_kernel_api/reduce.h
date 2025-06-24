@@ -63,7 +63,7 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
  *
  * | Param Type | Name | Description                                      | Type | Valid Range | Required |
  * |------------|------|--------------------------------------------------|------|-------------|----------|
- * | Function   | -    | No parameters                                    |  -   |      -      |    -     |
+ * | Function   | —    | No parameters                                    |  —   |      —      |    —     |
  */
 // clang-format on
 ALWI void reduce_uninit() { PACK((llk_pack_reduce_mask_clear())); }
