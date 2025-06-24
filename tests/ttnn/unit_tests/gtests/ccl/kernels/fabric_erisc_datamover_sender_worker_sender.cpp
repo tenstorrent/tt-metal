@@ -151,7 +151,7 @@ void kernel_main() {
                 packet_header->to_chip_unicast(config.unicast.distance)
                     ->to_noc_unicast_scatter_write(
                         tt::tt_fabric::NocUnicastScatterCommandHeader{
-                            dest_noc_address, dest_noc_address2, (uint16_t)page_size},
+                            {dest_noc_address, dest_noc_address2}, (uint16_t)page_size},
                         (pages_to_send * page_size));
             } else {
                 packet_header->to_chip_unicast(config.unicast.distance)

@@ -91,10 +91,10 @@ struct NocUnicastCommandHeader {
     uint64_t noc_address;
 };
 
+#define NOC_SCATTER_WRITE_MAX_CHUNKS 2
 struct NocUnicastScatterCommandHeader {
-    uint64_t noc_address1;
-    uint64_t noc_address2;
-    uint16_t chunk_size1;
+    uint64_t noc_address[NOC_SCATTER_WRITE_MAX_CHUNKS];
+    uint16_t chunk_size[NOC_SCATTER_WRITE_MAX_CHUNKS - 1];  // last chunk size is implicit
 };
 struct NocUnicastInlineWriteCommandHeader {
     uint64_t noc_address;
@@ -305,23 +305,18 @@ struct PacketHeaderBase {
         const NocUnicastScatterCommandHeader& noc_unicast_scatter_command_header, size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_SCATTER_WRITE;
-        auto noc_address_components = get_noc_address_components(noc_unicast_scatter_command_header.noc_address1);
-        auto noc_addr1 = safe_get_noc_addr(
-            noc_address_components.first.x,
-            noc_address_components.first.y,
-            noc_address_components.second,
-            edm_to_local_chip_noc);
-
-        noc_address_components = get_noc_address_components(noc_unicast_scatter_command_header.noc_address2);
-        auto noc_addr2 = safe_get_noc_addr(
-            noc_address_components.first.x,
-            noc_address_components.first.y,
-            noc_address_components.second,
-            edm_to_local_chip_noc);
-
-        this->command_fields.unicast_scatter_write.noc_address1 = noc_addr1;
-        this->command_fields.unicast_scatter_write.noc_address2 = noc_addr2;
-        this->command_fields.unicast_scatter_write.chunk_size1 = noc_unicast_scatter_command_header.chunk_size1;
+        for (int i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
+            auto noc_address_components = get_noc_address_components(noc_unicast_scatter_command_header.noc_address[i]);
+            auto noc_addr = safe_get_noc_addr(
+                noc_address_components.first.x,
+                noc_address_components.first.y,
+                noc_address_components.second,
+                edm_to_local_chip_noc);
+            this->command_fields.unicast_scatter_write.noc_address[i] = noc_addr;
+            if (i < NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
+                this->command_fields.unicast_scatter_write.chunk_size[i] = noc_unicast_scatter_command_header.chunk_size[i];
+            }
+        }
         this->payload_size_bytes = payload_size_bytes;
 #else
         TT_THROW("Calling to_noc_unicast_write from host is unsupported");
