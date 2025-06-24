@@ -115,13 +115,7 @@ operation::Hash ScatterDeviceOperation::compute_program_hash(
         tensor_args.src_tensor.memory_config(),
         tensor_args.input_tensor.layout(),
         tensor_args.index_tensor.layout(),
-        tensor_args.src_tensor.layout(),
-        tensor_args.input_tensor.device_storage(),
-        tensor_args.index_tensor.device_storage(),
-        tensor_args.src_tensor.device_storage(),
-        tensor_args.input_tensor.device(),
-        tensor_args.index_tensor.device(),
-        tensor_args.src_tensor.device());
+        tensor_args.src_tensor.layout());
 }
 
 }  // namespace ttnn::operations::experimental::scatter
