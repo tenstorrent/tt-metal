@@ -31,7 +31,7 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
     if isinstance(prompts, str):
         prompts = [prompts]
 
-    needed_padding = batch_size - len(prompts) % batch_size
+    needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
     prompts = prompts + [""] * needed_padding
 
     guidance_scale = 5.0
