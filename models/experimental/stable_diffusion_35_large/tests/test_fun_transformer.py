@@ -91,7 +91,7 @@ def test_transformer(
         torch_dtype=torch_dtype,
         local_files_only=True,
     )
-    torch_model.transformer_blocks = torch_model.transformer_blocks[:1]
+    # torch_model.transformer_blocks = torch_model.transformer_blocks[:1]
     embedding_dim = 1536 if model_name == "medium" else 2432
 
     torch_model.eval()

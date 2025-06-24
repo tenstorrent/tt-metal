@@ -122,11 +122,15 @@ def sd_transformer(
     L: int,
     cfg_index: int,
 ) -> ttnn.Tensor:
+    print("Executing patch embed")
     spatial = sd_patch_embed(spatial, parameters.pos_embed, parallel_manager=parallel_manager)
+    print("Executing time embed")
     time_embed = sd_combined_timestep_embed(
         timestep=timestep, pooled_projection=pooled_projection, parameters=parameters.time_text_embed
     )
+    print("Executing context embed")
     prompt = sd_linear(prompt, parameters.context_embedder)
+    print("Reshaping time embed")
     time_embed = time_embed.reshape([time_embed.shape[0], 1, 1, time_embed.shape[1]])
     spatial = ttnn.unsqueeze(spatial, 1)
     prompt = ttnn.unsqueeze(prompt, 1)
@@ -136,7 +140,7 @@ def sd_transformer(
     kv_gathered_shape = [spatial.shape[0], local_heads, full_seq_len, spatial.shape[3] // local_heads]
 
     parallel_manager.maybe_init_persistent_buffers(kv_gathered_shape)
-
+    print("Executing transformer blocks")
     for i, block in enumerate(parameters.transformer_blocks, start=1):
         spatial, prompt_out = sd_transformer_block(
             spatial=spatial,
@@ -151,8 +155,16 @@ def sd_transformer(
         )
         if prompt_out is not None:
             prompt = prompt_out
+
+    print("Finished transformer blocks")
+    ttnn.synchronize_device(spatial.device())
+    print("Syncrhonized")
+
     spatial_time = sd_linear(ttnn.silu(time_embed), parameters.time_embed_out)
     [scale, shift] = chunk_time(spatial_time, 2)
+
+    print("Executing all gather")
+
     if parallel_manager.is_sequence_parallel:
         spatial = ttnn.experimental.all_gather_async(
             spatial,
@@ -173,13 +185,21 @@ def sd_transformer(
             multi_device_global_semaphore=parallel_manager.cfg_semaphores[cfg_index]["ag"],
             num_links=1,
         )
+    print("Finished all gather")
+    ttnn.synchronize_device(spatial.device())
+    print("Synced")
 
     spatial = (
         sd_layer_norm(spatial, parameters.norm_out, parallel_manager=parallel_manager, cfg_index=cfg_index)
         * (1 + scale)
         + shift
     )
-    return sd_linear(spatial, parameters.proj_out)
+
+    output = sd_linear(spatial, parameters.proj_out, core_grid=ttnn.CoreGrid(x=8, y=6))
+    print("Finished linear")
+    ttnn.synchronize_device(output.device())
+    print("Synced")
+    return output
 
     # def cache_and_trace(
     #     self,
