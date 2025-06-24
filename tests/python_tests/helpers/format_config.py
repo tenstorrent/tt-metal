@@ -144,7 +144,7 @@ class FormatConfig:
 
 
 @dataclass
-class InputOutputFormat(FormatConfig):
+class InputOutputFormat:
     """
     A data class that holds configuration details for formats passed to LLKs.
     This class is used to hold input and output DataFormat that the client wants to test.

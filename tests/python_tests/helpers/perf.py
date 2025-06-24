@@ -4,7 +4,7 @@
 import csv
 import os
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
 from statistics import mean, variance
@@ -145,8 +145,9 @@ def perf_benchmark(test_config, run_types: list[PerfRunType], run_count=8):
 
 
 def delete_reports():
-    assert "LLK_HOME" in os.environ, "Environment variable LLK_HOME is not set"
-    root = os.environ["LLK_HOME"]
+    root = os.environ.get("LLK_HOME")
+    if not root:
+        raise AssertionError("Environment variable LLK_HOME is not set")
 
     path = Path(root) / "perf"
     print(path)
@@ -155,9 +156,40 @@ def delete_reports():
         shutil.rmtree(path)
 
 
-def write_to_report(test_config, run_types, results):
-    assert "LLK_HOME" in os.environ, "Environment variable LLK_HOME is not set"
-    root = os.environ["LLK_HOME"]
+def _dataclass_names(parent, obj):
+    """Provides the **names** of the columns for the report"""
+    return [f"{parent}.{f.name}" for f in fields(obj)]
+
+
+def _dataclass_values(obj):
+    """Provides the **values** of the columns for the report"""
+    return [getattr(obj, f.name) for f in fields(obj)]
+
+
+def report_header(params, result):
+    columns = []
+    for param, value in params.items():
+        if is_dataclass(value):
+            columns.extend(_dataclass_names(param, value))
+        else:
+            columns.append(param)
+
+    for run_type, stats in result.items():
+        for i, _ in enumerate(stats):
+            columns.extend(
+                [
+                    f"mean({run_type.name}[{i}])",
+                    f"variance({run_type.name}[{i}])",
+                ]
+            )
+
+    return columns
+
+
+def write_to_report(test_config, result):
+    root = os.environ.get("LLK_HOME")
+    if not root:
+        raise AssertionError("Environment variable LLK_HOME is not set")
 
     filename = f"{test_config['testname']}.csv"
     output_path = Path(root) / "perf" / filename
@@ -167,26 +199,27 @@ def write_to_report(test_config, run_types, results):
         "testname",
         "perf_run_type",
         "tile_cnt",
-        "formats",
-    }  # fix: include format info
-    sweep_columns = [param for param in test_config.keys() if not param in exclude]
+    }
 
-    result_columns = []
+    params = {
+        param: value for param, value in test_config.items() if param not in exclude
+    }
 
-    row = [test_config[k] for k in sweep_columns]
-    for run_type in run_types:
-        stats = results[run_type]
-        for i, stat in enumerate(stats):
-            # fixme: give results names instead of printing indicies
-            result_columns.append(f"mean({run_type.name}[{i}])")
-            result_columns.append(f"variance({run_type.name}[{i}])")
-            row.append(stat["mean"])
-            row.append(stat["variance"])
+    row = []
+    for value in params.values():
+        if is_dataclass(value):
+            row.extend(_dataclass_values(value))
+        else:
+            row.append(value)
+
+    for stats in result.values():
+        for stat in stats:
+            row.extend([stat["mean"], stat["variance"]])
 
     # Write to CSV
     first_entry = not os.path.exists(output_path)
     with open(output_path, "a", newline="") as csvfile:
         writer = csv.writer(csvfile)
         if first_entry:
-            writer.writerow(sweep_columns + result_columns)
+            writer.writerow(report_header(params, result))
         writer.writerow(row)
