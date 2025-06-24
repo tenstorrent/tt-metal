@@ -89,7 +89,7 @@ def run(test_module, input_queue, output_queue):
         device, device_name = next(device_generator)
         logger.info(f"Opened device configuration, {device_name}.")
     except AssertionError as e:
-        output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None])
+        output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None, None])
         return
     try:
         while True:
@@ -109,9 +109,9 @@ def run(test_module, input_queue, output_queue):
             if MEASURE_DEVICE_PERF:
                 perf_result = gather_single_test_perf(device, status)
                 message = get_updated_message(message, perf_result)
-                output_queue.put([status, message, e2e_perf, perf_result])
+                output_queue.put([status, message, e2e_perf, perf_result, device_name])
             else:
-                output_queue.put([status, message, e2e_perf, None])
+                output_queue.put([status, message, e2e_perf, None, device_name])
     except Empty as e:
         try:
             # Run teardown in mesh_device_fixture
@@ -173,7 +173,13 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                     )
                     run(test_module, input_queue, output_queue)
                 response = output_queue.get(block=True, timeout=timeout)
-                status, message, e2e_perf, device_perf = response[0], response[1], response[2], response[3]
+                status, message, e2e_perf, device_perf, device_name = (
+                    response[0],
+                    response[1],
+                    response[2],
+                    response[3],
+                    response[4],
+                )
                 if status and MEASURE_DEVICE_PERF and device_perf is None:
                     result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
                     result["message"] = message
@@ -203,6 +209,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                     result["e2e_perf"] = e2e_perf
                 else:
                     result["e2e_perf"] = None
+                result["device"] = device_name
             except Empty as e:
                 logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
                 p.terminate()
@@ -406,7 +413,7 @@ def run_multiple_modules_json(module_names, suite_name):
 def run_sweeps_json(module_names, suite_name):
     """Run sweeps from JSON files - supports single or multiple modules"""
     if isinstance(module_names, str):
-        # Single module - use existing logic
+        # Single module
         pbar_manager = enlighten.get_manager()
         with open(READ_FILE, "r") as file:
             print(READ_FILE)
@@ -432,7 +439,7 @@ def run_sweeps_json(module_names, suite_name):
                     logger.info("Dumping results to JSON file.")
                     export_test_results_json(header_info, results)
     else:
-        # Multiple modules - use new logic
+        # Multiple modules
         run_multiple_modules_json(module_names, suite_name)
 
 
@@ -844,7 +851,7 @@ def export_test_results_postgres(header_info, results):
                 testcase_values = (
                     test_id,
                     f"{sweep_name}_{header.get('vector_id', 'unknown')}",
-                    None,  # device - could be extracted from result if available
+                    result.get("device"),
                     result.get("host"),
                     start_time,
                     None,  # end_time_ts - could be calculated if we track duration
