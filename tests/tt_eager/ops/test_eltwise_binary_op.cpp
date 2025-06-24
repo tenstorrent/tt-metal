@@ -118,6 +118,8 @@ int main() {
         }
     };
 
+    device->enable_program_cache();
+
     run_binary_ops();
     run_binary_ops();
 

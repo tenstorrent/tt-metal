@@ -74,8 +74,7 @@ def run_bert_question_and_answering_inference(
     else:
         raise ValueError(f"Unknown bert: {bert}")
 
-    if not use_program_cache:
-        device.disable_and_clear_program_cache()
+    device.disable_and_clear_program_cache()
 
     profiler.start(f"preprocessing_parameter")
     parameters = preprocess_model_parameters(
@@ -178,6 +177,7 @@ def run_bert_question_and_answering_inference(
         logger.info(f"End to end inference Iteration {iteration}: {measurements['end_to_end_inference']} s")
         logger.info(f"iteration_{iteration} total time: {measurements['iteration']} s")
         profiler.clear()
+        device.enable_program_cache()
     return measurements
 
 

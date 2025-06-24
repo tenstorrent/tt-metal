@@ -121,9 +121,6 @@ def create_custom_preprocessor(device):
 @pytest.mark.parametrize("use_torch_model", [False])
 @run_for_wormhole_b0()
 def test_unet_demo_single_image(device, reset_seeds, model_location_generator, use_torch_model):
-    # https://github.com/tenstorrent/tt-metal/issues/23269
-    device.disable_and_clear_program_cache()
-
     weights_path = "models/experimental/functional_vanilla_unet/unet.pt"
     if not os.path.exists(weights_path):
         os.system("bash models/experimental/functional_vanilla_unet/weights_download.sh")

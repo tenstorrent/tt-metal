@@ -96,6 +96,8 @@ def run_falcon_demo_kv(
 ):
     torch.manual_seed(0)
 
+    device.enable_program_cache()
+
     tt_cache_path = get_tt_cache_path(model_version)
 
     configuration = FalconConfig(**model_config_entries)
@@ -395,6 +397,8 @@ def run_falcon_demo_kv(
     logger.info(f"Total number of tokens generated in decode: {num_tokens_generated_decode}")
 
     print_output_prompts(generated_ids, tokenizer)
+
+    device.disable_and_clear_program_cache()
 
     generated_text = tokenizer.batch_decode(generated_ids.tolist())
 
