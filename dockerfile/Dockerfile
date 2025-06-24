@@ -159,4 +159,6 @@ RUN mkdir -p /etc && \
 
 ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
-RUN pip3 install $WHEEL_FILENAME
+RUN pip3 install $WHEEL_FILENAME --no-cache-dir && \
+    pip3 install torch==2.2.1+cpu --no-cache-dir
+
