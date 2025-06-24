@@ -44,28 +44,11 @@ namespace ckernel {
  * | Function   | ocb          | The identifier of the output circular buffer (CB)               | uint32_t  | 0 to 31                                        | True     |
  */
 // clang-format on
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
+template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool fp32_transpose = false>
 ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
-    UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
+    UNPACK((llk_unpack_AB_reduce_init<reduce_dim, BroadcastType::NONE, fp32_transpose>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>()));
     PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>()));
-}
-
-// clang-format off
-/**
- * Resets the packer edge mask configuration to its default state by clearing any previously set masks. Needs to be called after
- * reduce_tile if the next operation requires default packer state. In case that the next operation is reduce operation across the
- * same dimension, this call can be omitted. If this function is not called, the packer will continue to use the edge masks set
- * by the latest reduce_init call, which may lead to incorrect packing behavior in subsequent operations.
- *
- * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025.
- *
- * | Param Type | Name | Description                                      | Type | Valid Range | Required |
- * |------------|------|--------------------------------------------------|------|-------------|----------|
- * | Function   | —    | No parameters                                    |  —   |      —      |    —     |
- */
-// clang-format on
-ALWI void reduce_uninit() { PACK((llk_pack_reduce_mask_clear())); }
 
 // clang-format off
 /**
@@ -101,9 +84,9 @@ ALWI void reduce_uninit() { PACK((llk_pack_reduce_mask_clear())); }
  * | Function   | idst     | The index of the tile in DST REG for the result                 | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
+template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool fp32_transpose = false>
 ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_t itile_sclaer, uint32_t idst) {
-    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(icb, icb_scaler, idst)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, fp32_transpose>(icb, icb_scaler, idst)));
     UNPACK((llk_unpack_AB(icb, icb_scaler, itile, itile_sclaer)));
 }
 
@@ -119,9 +102,9 @@ ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_
  * | Function   | num_faces    | Number of faces to reduce (optional, default 4)                 | uint32_t  | >= 1                                           | False    |
  */
 // clang-format on
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
+template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool fp32_transpose = false>
 ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
-    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, num_faces)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, fp32_transpose>(idst, num_faces)));
 }
 
 }  // namespace ckernel
