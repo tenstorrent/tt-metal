@@ -538,9 +538,10 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     const uint32_t max_scatter_write_pages = 2;
+    const uint32_t max_dst_size = 8;  // TODO: generalize based on arch and fp32 acc
     uint32_t tiles_to_write_per_packet = std::min(num_pages_per_packet, max_scatter_write_pages);
-    uint32_t tile_granularity = 4 * num_pages_per_packet;
-    uint32_t cb_num_pages = 3 * tile_granularity;  // double buffering
+    uint32_t tile_granularity = std::min(4 * num_pages_per_packet, max_dst_size);
+    uint32_t cb_num_pages = 3 * tile_granularity;  // triple buffering
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     uint32_t input_cb_index = tt::CB::c_in0;
