@@ -196,6 +196,11 @@ Result conv2d_DRAM(
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
     Layout output_layout = dram_slice_config.output_layout.value_or(input_tensor_on_device.layout());
     if (conv_config.dtype == tt::tt_metal::DataType::BFLOAT8_B) {
+        if (dram_slice_config.output_layout.has_value()) {
+            TT_FATAL(
+                dram_slice_config.output_layout.value() == tt::tt_metal::Layout::ROW_MAJOR,
+                "BFLOAT8_B must always be Tiled, but Conv2D DRAM got ROW_MAJOR as the output layout.");
+        }
         output_layout = tt::tt_metal::Layout::TILE;
     }
 
@@ -217,7 +222,7 @@ Result conv2d_DRAM(
 
     uint32_t slice_rounding_value = 1;
     if (output_layout == tt_metal::Layout::TILE) {
-        // For width sharded conv2d with TILE layout, we need to round the slice size to a multiple of TILE_HEIGHT.
+        // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
         slice_rounding_value = tt::constants::TILE_HEIGHT;
     }
 
