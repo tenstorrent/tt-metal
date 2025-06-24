@@ -4,6 +4,8 @@
 
 #include "sort_program_factory.hpp"
 
+#include <cstdint>
+#include <iostream>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
@@ -377,8 +379,30 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
         }
     }
     std::cout << "Core range: " << core_range.str() << " core_range.num_cores(): " << core_range.num_cores()
-              << std::endl;
-    // TODO: Potentially create tensor with indexes of physical cores used
+              << std::endl;  // TODO: Remove
+
+    // Lookup tensor data with physical core coordinates
+    std::vector<uint16_t> physical_core_lookup_table_data;
+    for (const auto& core_range : core_range.ranges()) {
+        for (const auto& core_coord : core_range) {
+            std::cout << "Core coord: " << core_coord.x << ", " << core_coord.y << std::endl;  // TODO: Remove
+            const auto physical_core = device->worker_core_from_logical_core(core_coord);
+            physical_core_lookup_table_data.emplace_back(physical_core.x);
+            physical_core_lookup_table_data.emplace_back(physical_core.y);
+        }
+    }
+    const TensorSpec physical_core_lookup_table_spec(
+        ttnn::Shape{1, physical_core_lookup_table_data.size()},
+        TensorLayout{DataType::UINT16, PageConfig{Layout::ROW_MAJOR}, MemoryConfig()});
+    Tensor physical_core_lookup_table_tensor =
+        Tensor::from_vector(std::move(physical_core_lookup_table_data), physical_core_lookup_table_spec);
+    physical_core_lookup_table_tensor = physical_core_lookup_table_tensor.to_device(device);
+    const auto physical_core_lookup_table_tensor_buffer = physical_core_lookup_table_tensor.buffer();
+    const tt::DataFormat physical_core_lookup_table_cb_data_format =
+        tt::tt_metal::datatype_to_dataformat_converter(physical_core_lookup_table_tensor.dtype());
+    const uint32_t physical_core_lookup_table_tile_size = tile_size(physical_core_lookup_table_cb_data_format);
+    const bool physical_core_lookup_table_is_dram =
+        physical_core_lookup_table_tensor_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // Circular buffers
     constexpr uint32_t cb_scale_factor = 2;
@@ -430,34 +454,44 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     const auto cb_index_tensor_output =
         tt::tt_metal::CreateCircularBuffer(program, core_range, index_tensor_output_cb_config);
 
+    constexpr uint32_t physical_core_lookup_table_cb_index = tt::CBIndex::c_6;
+    const tt::tt_metal::CircularBufferConfig physical_core_lookup_table_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            physical_core_lookup_table_tile_size,
+            {{physical_core_lookup_table_cb_index, physical_core_lookup_table_cb_data_format}})
+            .set_page_size(physical_core_lookup_table_cb_index, physical_core_lookup_table_tile_size);
+    const auto cb_physical_core_lookup_table =
+        tt::tt_metal::CreateCircularBuffer(program, core_range, physical_core_lookup_table_cb_config);
+
     // Semaphores
     const uint32_t semaphore = CreateSemaphore(program, core_range, 0);  // TODO: change name
 
     // Kernels
     const std::vector<uint32_t> reader_compile_time_args = {
-        compute_with_storage_grid_size.x, compute_with_storage_grid_size.y,
-        // input_tensor_cb_index,
-        // index_tensor_output_cb_index,
-        // static_cast<uint32_t>(input_tensor_is_dram),
-        // static_cast<uint32_t>(index_tensor_is_dram),
-        // Wt,
-        // Ht,
-        // total_number_of_cores,
-        // compute_with_storage_grid_size.x,
-        // compute_with_storage_grid_size.y
+        compute_with_storage_grid_size.x,
+        compute_with_storage_grid_size.y,
+        input_tensor_cb_index,
+        index_tensor_output_cb_index,
+        physical_core_lookup_table_cb_index,
+        input_tensor_is_dram,
+        index_tensor_is_dram,
+        physical_core_lookup_table_is_dram,
+        Ht,
+        Wt,
+        number_of_tiles_per_core,
+        all_core_utilization_count,
+        !attributes.descending,
     };
     const std::string reader_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
         "reader_hybrid.cpp";
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program, reader_kernel_path, core_range, tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
-    // SetRuntimeArgs(
-    //     program,
-    //     reader_kernel_id,
-    //     core_range,
-    //     {input_buffer->address(),
-    //      index_buffer->address(),
-    //      all_core_utilization_loop_count ? all_core_utilization_loop_count : 1});
+    SetRuntimeArgs(
+        program,
+        reader_kernel_id,
+        core_range,
+        {input_buffer->address(), index_buffer->address(), physical_core_lookup_table_tensor_buffer->address()});
 
     const std::vector<uint32_t> writer_compile_time_args = {
         compute_with_storage_grid_size.x, compute_with_storage_grid_size.y,
@@ -482,18 +516,13 @@ SortProgramFactoryHybrid::cached_program_t SortProgramFactoryHybrid::create(
     //     {value_buffer->address(), all_core_utilization_loop_count ? all_core_utilization_loop_count : 1});
 
     const std::vector<uint32_t> compute_compile_time_args = {
-        compute_with_storage_grid_size.x, compute_with_storage_grid_size.y,
-        // input_tensor_cb_index,
-        // index_tensor_cb_index,
-        // input_tensor_transposed_cb_index,
-        // index_tensor_transposed_cb_index,
-        // value_tensor_cb_index,
-        // index_tensor_output_cb_index,
-        // Wt,
-        // static_cast<uint32_t>(attributes.descending),
-        // static_cast<uint32_t>(attributes.stable),
-        // compute_with_storage_grid_size.x,
-        // compute_with_storage_grid_size.y
+        compute_with_storage_grid_size.x,
+        compute_with_storage_grid_size.y,
+        Ht,
+        Wt,
+        number_of_tiles_per_core,
+        all_core_utilization_count,
+        !attributes.descending,
     };
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort_hybrid.cpp";
