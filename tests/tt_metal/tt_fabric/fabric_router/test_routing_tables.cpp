@@ -370,4 +370,14 @@ TEST(MeshGraphValidation, TestGetHostRankForChip) {
     EXPECT_EQ(mesh_graph_2x2->get_host_rank_for_chip(MeshId{1}, 4), std::nullopt);
 }
 
+TEST(MeshGraphValidation, TestExplicitShapeValidationNegative) {
+    // Test that invalid shapes are properly rejected
+    const std::filesystem::path invalid_shape_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_invalid_shape_mesh_graph_descriptor.yaml";
+
+    // This should throw an exception due to incompatible shape
+    EXPECT_THROW(std::make_unique<tt_fabric::MeshGraph>(invalid_shape_mesh_graph_desc_path.string()), std::exception);
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests
