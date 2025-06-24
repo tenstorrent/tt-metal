@@ -260,13 +260,13 @@ Tensor ScatterOperation::invoke(
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config,
     const std::optional<scatter::ScatterReductionType>& opt_reduction) {
-    const ttnn::Shape original_input_tensor_lshape = input_tensor.logical_shape();
+    const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.padded_shape().rank();
 
     CMAKE_UNIQUE_NAMESPACE::check_support(input_tensor, index_tensor, source_tensor, dim);
     CMAKE_UNIQUE_NAMESPACE::validate_inputs(input_tensor, index_tensor, source_tensor, dim);
 
-    const auto original_index_tensor_lshape = index_tensor.logical_shape();
+    const auto& original_index_tensor_lshape = index_tensor.logical_shape();
     if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
         return input_tensor;
     }

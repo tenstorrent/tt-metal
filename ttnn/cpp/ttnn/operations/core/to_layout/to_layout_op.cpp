@@ -124,7 +124,7 @@ Tensor to_layout_impl(
                 "dtype cannot be different from tensor dtype when converting to ROW_MAJOR_LAYOUT on device!");
 
             if (tensor.is_sharded()) {
-                const auto memory_config = tensor.memory_config();
+                const auto& memory_config = tensor.memory_config();
                 output_memory_config =
                     tt::tt_metal::MemoryConfig{memory_config.memory_layout(), memory_config.buffer_type()};
             }

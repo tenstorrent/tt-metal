@@ -38,7 +38,6 @@ void override_runtime_args_mc_cn(
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
-    auto output_shape = output_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
 
@@ -179,7 +178,7 @@ operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor& a, Tensor&
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_tensor = input_tensors.at(0);
+        const auto& src_tensor = input_tensors.at(0);
         auto dst_tensor = output_tensors.at(0);
 
         uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -227,7 +226,6 @@ void override_runtime_args_mc_hc(
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
-    auto output_shape = output_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
     uint32_t HW = H * W;
@@ -327,7 +325,6 @@ void override_runtime_args_mc_hc_rm(
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
-    auto output_shape = output_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
     uint32_t W_bytes = W * input_tensor.element_size();
@@ -614,7 +611,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
-            auto src_tensor = input_tensors.at(0);
+            const auto& src_tensor = input_tensors.at(0);
             auto dst_tensor = output_tensors.at(0);
 
             override_runtime_args_mc_hc_tiled_interleaved<false>(
@@ -626,7 +623,6 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
 
 operation::ProgramWithCallbacks transpose_hc_multi_core(
     const Tensor& a, Tensor& output, const std::optional<float>& pad_value) {
-    const auto shape = a.padded_shape();
     if (a.layout() == Layout::TILE && !a.is_sharded()) {
         return transpose_hc_multi_core_tiled_interleaved(a, output, pad_value);
     }
@@ -797,7 +793,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_tensor = input_tensors.at(0);
+        const auto& src_tensor = input_tensors.at(0);
         auto dst_tensor = output_tensors.at(0);
 
         uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -855,7 +851,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
-    auto output_shape = output_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
     uint32_t W_bytes = W * input_tensor.element_size();
@@ -926,7 +921,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
-    auto output_shape = output_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
     uint32_t W_bytes = W * input_tensor.element_size();
@@ -1161,7 +1155,6 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    const auto shape = a.padded_shape();
     uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2], C = a.logical_shape()[1], N = a.logical_shape()[0];
     uint32_t total_height = N * C * H;
     uint32_t stick_size_bytes = W * a.element_size();
@@ -1311,7 +1304,6 @@ void override_runtime_args_wh(
     const CoreRangeSet& core_group_2,
     uint32_t num_tiles_per_core_group_2) {
     auto input_shape = input_tensor.padded_shape();
-    auto output_shape = output_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], NC = input_shape[1] * input_shape[0];
     uint32_t HW = H * W;
@@ -1434,7 +1426,6 @@ void override_runtime_args_wh_rm(
     const CoreRangeSet& core_group_2,
     uint32_t num_hw_blocks_per_core_group_2) {
     auto input_shape = input_tensor.logical_shape();
-    auto output_shape = output_tensor.logical_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], NC = input_shape[1] * input_shape[0];
     uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;
@@ -1711,7 +1702,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_tensor = input_tensors.at(0);
+        const auto& src_tensor = input_tensors.at(0);
         auto dst_tensor = output_tensors.at(0);
 
         uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -1789,8 +1780,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
     auto& all_cores = shard_spec.grid;
     uint32_t num_cores = all_cores.num_cores();
     uint32_t num_tiles_per_shard = shard_spec.numel() / tile_hw;
-
-    auto output_shape = output.padded_shape();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
 
@@ -1982,7 +1971,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    const auto shape = a.padded_shape();
     uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2], C = a.logical_shape()[1], N = a.logical_shape()[0];
     uint32_t total_height = N * C * H;
     uint32_t stick_size_bytes = W * a.element_size();
@@ -2048,8 +2036,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
 
     log_debug(tt::LogOp, "all_cores: {}", all_cores);
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
-
-    auto output_shape = output.padded_shape();
 
     // sharded cb
     uint32_t src0_cb_index = tt::CBIndex::c_0;

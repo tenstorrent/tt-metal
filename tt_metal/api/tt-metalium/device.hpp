@@ -172,11 +172,12 @@ public:
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) = 0;
-    virtual void reset_cores() = 0;
-    virtual void initialize_and_launch_firmware() = 0;
     virtual void init_command_queue_host() = 0;
     virtual void init_command_queue_device() = 0;
 
+    // return false if compile fails (mainly come from Nebula on TG)
+    virtual bool compile_fabric() = 0;
+    virtual void configure_fabric() = 0;
     virtual void init_fabric() = 0;
     // Puts device into reset
     virtual bool close() = 0;

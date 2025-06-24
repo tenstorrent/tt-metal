@@ -191,7 +191,7 @@ WatcherDeviceReader::WatcherDeviceReader(
         tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core :
-             tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+             tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
             CoreCoord virtual_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                     device_id, eth_core, CoreType::ETH);
@@ -212,7 +212,7 @@ WatcherDeviceReader::~WatcherDeviceReader() {
         tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core :
-             tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+             tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
             CoreCoord virtual_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                     device_id, eth_core, CoreType::ETH);
@@ -231,11 +231,14 @@ WatcherDeviceReader::~WatcherDeviceReader() {
                     virtual_core,
                     num_events);
             }
-            fprintf(
-                f,
-                "%s\n",
-                fmt::format("\tDevice {} Ethernet Core {} retraining events: {}", device_id, virtual_core, num_events)
-                    .c_str());
+            if (f) {
+                fprintf(
+                    f,
+                    "%s\n",
+                    fmt::format(
+                        "\tDevice {} Ethernet Core {} retraining events: {}", device_id, virtual_core, num_events)
+                        .c_str());
+            }
         }
     }
 }
@@ -281,12 +284,12 @@ void WatcherDeviceReader::Dump(FILE* file) {
 
     // Dump eth cores
     for (const CoreCoord& eth_core :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+         tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
         CoreDescriptor logical_core = {eth_core, CoreType::ETH};
         DumpCore(logical_core, true);
     }
     for (const CoreCoord& eth_core :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(device_id)) {
+         tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(device_id)) {
         CoreDescriptor logical_core = {eth_core, CoreType::ETH};
         DumpCore(logical_core, false);
     }
