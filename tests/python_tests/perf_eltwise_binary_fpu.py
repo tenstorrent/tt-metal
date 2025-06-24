@@ -58,4 +58,4 @@ def test_perf_eltwise_binary_fpu(testname, formats, dest_acc, mathop, math_fidel
     }
 
     results = perf_benchmark(test_config, ALL_RUN_TYPES)
-    write_to_report(test_config, ALL_RUN_TYPES, results)
+    write_to_report(test_config, results)
