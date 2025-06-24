@@ -151,18 +151,34 @@ CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create(
         tile_offset += num_tiles_per_core;
     }
 
+    auto cores = grid_to_cores(num_cores, grid.x, grid.y);
     return {
         std::move(program),
         {.cumprod_reader_kernel_id = cumprod_reader_kernel_id,
          .cumprod_compute_kernel_id = cumprod_compute_sc_kernel_id,
-         .cumprod_writer_kernel_id = cumprod_writer_kernel_id}};
+         .cumprod_writer_kernel_id = cumprod_writer_kernel_id,
+         .cores = cores}};
 }
 
 void CumprodDeviceOperation::MultiCoreCumprodProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {}
+    tensor_return_value_t& tensor_return_value) {
+    const auto& program = cached_program.program;
+    const auto& reader_kernel_id = cached_program.shared_variables.cumprod_reader_kernel_id;
+    const auto& writer_kernel_id = cached_program.shared_variables.cumprod_writer_kernel_id;
+    const auto& cores = cached_program.shared_variables.cores;
+
+    auto input_buffer_address = tensor_args.input_tensor.buffer()->address();
+    auto output_buffer_address = tensor_return_value.buffer()->address();
+    for (const auto& core : cores) {
+        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+        auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+        reader_runtime_args[0] = input_buffer_address;
+        writer_runtime_args[0] = output_buffer_address;
+    }
+}
 
 CBHandle CumprodDeviceOperation::MultiCoreCumprodProgramFactory::create_cb(
     Program& program,

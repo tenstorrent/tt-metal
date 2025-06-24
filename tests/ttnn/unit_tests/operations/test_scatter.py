@@ -98,176 +98,106 @@ def test_scatter_normal(input_shape, dim, index_and_source_shape, input_dtype, i
         torch.testing.assert_close(torch_result_from_ttnn, torch_result)
 
 
-@pytest.mark_parametrize(
-    "dim, input_shape, index_shape, source_shape, output_shape, torch_dtype, input_dtype, index_dtype, source_dtype, output_dtype, memory_config",
+@pytest.mark.parametrize(
+    "dim, input_shape, index_shape, source_shape, torch_dtype, input_dtype, index_dtype, source_dtype",
     [
         (
             10,
             [1, 2, 3, 4, 5, 6, 7, 8, 9],
             [1, 2, 3, 4, 5, 6, 7, 8, 9],
             [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
             torch.bfloat16,
             ttnn.bfloat16,
             ttnn.uint16,
             ttnn.bfloat16,
-            ttnn.bfloat16,
-            ttnn.DRAM_MEMORY_CONFIG,
         ),  # input_rank vs dim
         (
             -10,
             [1, 2, 3, 4, 5, 6, 7, 8, 9],
             [1, 2, 3, 4, 5, 6, 7, 8, 9],
             [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
             torch.bfloat16,
             ttnn.bfloat16,
             ttnn.uint16,
             ttnn.bfloat16,
-            ttnn.bfloat16,
-            ttnn.DRAM_MEMORY_CONFIG,
         ),  # input_rank vs dim
         (
             0,
             [1, 2, 3, 4, 5, 6, 7, 8, 9],
             [1, 2, 3, 4, 5, 6, 7, 8],
             [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
             torch.bfloat16,
             ttnn.bfloat16,
             ttnn.uint16,
             ttnn.bfloat16,
-            ttnn.bfloat16,
-            ttnn.DRAM_MEMORY_CONFIG,
         ),  # index_shape vs source_shape
         (
             0,
             [1, 2, 3, 4, 5, 6, 7, 8, 9],
             [1, 2, 3, 4, 5, 6, 7, 8, 1],
             [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
             torch.bfloat16,
             ttnn.bfloat16,
             ttnn.uint16,
             ttnn.bfloat16,
-            ttnn.bfloat16,
-            ttnn.DRAM_MEMORY_CONFIG,
         ),  # index_shape vs source_shape
         (
             0,
             [1, 2, 3, 4, 5, 6, 7, 8, 9],
             [1, 2, 3, 4, 5, 6, 7, 8, 1],
             [1, 2, 3, 4, 5, 6, 7, 8, 1],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
             torch.bfloat16,
             ttnn.bfloat16,
             ttnn.uint16,
             ttnn.bfloat16,
-            ttnn.bfloat16,
-            ttnn.DRAM_MEMORY_CONFIG,
         ),  # non-scatter-axis different between input/output and index/source
         (
             0,
             [1, 2, 3, 4, 5, 6, 7, 8, 9],
             [1, 2, 3, 4, 5, 6, 7, 8, 1],
             [1, 2, 3, 4, 5, 6, 7, 8, 1],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
             torch.bfloat16,
             ttnn.bfloat16,
             ttnn.uint16,
             ttnn.bfloat16,
-            ttnn.bfloat16,
-            ttnn.DRAM_MEMORY_CONFIG,
         ),  # input_dtype vs source_dtype
         (
             0,
             [1, 2, 3, 4, 5, 6, 7, 8, 9],
             [1, 2, 3, 4, 5, 6, 7, 8, 9],
             [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
             torch.bfloat16,
             ttnn.bfloat16,
             ttnn.bfloat16,
             ttnn.bfloat16,
-            ttnn.bfloat16,
-            ttnn.DRAM_MEMORY_CONFIG,
         ),  # index_dtype is integer
-        (
-            0,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [
-                1,
-                2,
-                3,
-                4,
-                5,
-                6,
-                7,
-                8,
-            ],
-            torch.bfloat16,
-            ttnn.bfloat16,
-            ttnn.uint16,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-            ttnn.DRAM_MEMORY_CONFIG,
-        ),  # input_shape vs output_shape
-        (
-            0,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 1],
-            torch.bfloat16,
-            ttnn.bfloat16,
-            ttnn.uint16,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-            ttnn.DRAM_MEMORY_CONFIG,
-        ),  # input_shape vs output_shape
-        (
-            0,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 1],
-            torch.bfloat16,
-            ttnn.bfloat16,
-            ttnn.uint16,
-            ttnn.bfloat16,
-            ttnn.float32,
-            ttnn.DRAM_MEMORY_CONFIG,
-        ),  # input_dtype vs output_dtype
-        (
-            0,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            [1, 2, 3, 4, 5, 6, 7, 8, 9],
-            torch.bfloat16,
-            ttnn.bfloat16,
-            ttnn.uint16,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-            ttnn.L1_MEMORY_CONFIG,
-        ),  # memory_config (tiling/sharding/buffer/source)
     ],
 )
-def test_sctter_failing_cases(
+def test_scatter_failing_cases(
     dim,
     input_shape,
     index_shape,
     source_shape,
-    output_shape,
+    torch_dtype,
     input_dtype,
     index_dtype,
     source_dtype,
-    output_dtype,
-    memory_config,
     device,
+    use_program_cache,
 ):
     torch.manual_seed(18062025)
+    torch_index_dtype = select_torch_dtype(index_dtype)
+    torch_source_dtype = select_torch_dtype(source_dtype)
+    ##
+    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    max_range = input_shape[dim] if (-len(input_shape) <= dim and dim < len(input_shape)) else 1
+    torch_index = torch.randint(0, max_range, index_shape, dtype=torch_index_dtype)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    torch_src = torch.randn(source_shape, dtype=torch_source_dtype)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=source_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
     with pytest.raises(RuntimeError):
-        ttnn.experimental.scatter()
+        ttnn.experimental.scatter(ttnn_input, dim, ttnn_index, ttnn_src)

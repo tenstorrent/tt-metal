@@ -96,6 +96,18 @@ CumprodDeviceOperation::tensor_return_value_t CumprodDeviceOperation::create_out
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
+operation::Hash CumprodDeviceOperation::compute_program_hash(
+    const operation_attributes_t& op_args, const tensor_args_t& tensor_args) {
+    return operation::hash_operation<CumprodDeviceOperation>(
+        select_program_factory(op_args, tensor_args).index(),
+        op_args.dim,
+        op_args.output_memory_config,
+        tensor_args.input_tensor.logical_shape(),
+        tensor_args.input_tensor.dtype(),
+        tensor_args.input_tensor.memory_config(),
+        tensor_args.input_tensor.layout());
+}
+
 CumprodDeviceOperation::invocation_result_t CumprodDeviceOperation::invoke(
     const Tensor& input_tensor,
     const int32_t& dim,

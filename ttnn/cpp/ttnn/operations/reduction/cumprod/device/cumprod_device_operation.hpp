@@ -52,6 +52,7 @@ struct CumprodDeviceOperation {
             KernelHandle cumprod_reader_kernel_id;
             KernelHandle cumprod_compute_kernel_id;
             KernelHandle cumprod_writer_kernel_id;
+            std::vector<CoreCoord> cores;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -96,6 +97,8 @@ struct CumprodDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    static operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static invocation_result_t invoke(
         const Tensor& input_tensor,
