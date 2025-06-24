@@ -187,16 +187,12 @@ public:
     CommandQueue& command_queue(size_t cq_id = 0) override;
 
     // Trace APIs
-    void begin_trace(const uint8_t cq_id, const uint32_t tid) override;
-    void end_trace(const uint8_t cq_id, const uint32_t tid) override;
+    void begin_trace(uint8_t cq_id, uint32_t tid) override;
+    void end_trace(uint8_t cq_id, uint32_t tid) override;
 
     // TODO: `block_on_worker_thread` can be removed once we remove multi-threaded async dispatch
-    void replay_trace(
-        const uint8_t cq_id,
-        const uint32_t tid,
-        const bool block_on_device,
-        const bool block_on_worker_thread) override;
-    void release_trace(const uint32_t tid) override;
+    void replay_trace(uint8_t cq_id, uint32_t tid, bool block_on_device, bool block_on_worker_thread) override;
+    void release_trace(uint32_t tid) override;
     std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
 
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
@@ -216,7 +212,7 @@ public:
 
     // Initialization APIs
     bool initialize(
-        const uint8_t num_hw_cqs,
+        uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_size,
@@ -226,9 +222,12 @@ public:
     void initialize_and_launch_firmware() override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
+    bool compile_fabric() override;
+    void configure_fabric() override;
     void init_fabric() override;
     bool close() override;
     void enable_program_cache() override;
+    void clear_program_cache() override;
     void disable_and_clear_program_cache() override;
     program_cache::detail::ProgramCache& get_program_cache() override;
     std::size_t num_program_cache_entries() override;

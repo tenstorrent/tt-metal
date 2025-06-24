@@ -145,8 +145,7 @@ Tensor pre_scatter_transform_tensor(
     Tensor processed_tensor = input_tensor;
     // if layout is tile, convert to row-major first
     if (processed_tensor.layout() != Layout::ROW_MAJOR) {
-        processed_tensor =
-            ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, input_tensor.device());
+        processed_tensor = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
     }
     // transposing a row-major tensor here
     processed_tensor = reduction_common::perform_transpose(processed_tensor, is_dim_last_idx, dim, -1);
@@ -168,8 +167,7 @@ Tensor pre_scatter_transform_tensor(
     Tensor processed_tensor = input_tensor;
     // if layout is tile, convert to row-major first - this allows for minimized memory usage by transpose (no padding)
     if (processed_tensor.layout() != Layout::ROW_MAJOR) {
-        processed_tensor =
-            ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, input_tensor.device());
+        processed_tensor = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
     }
     // transposing a row-major tensor here
     processed_tensor = reduction_common::perform_transpose(processed_tensor, is_dim_last_idx, dim, -1);
@@ -209,8 +207,7 @@ Tensor post_scatter_transform_tensor(
 
     // if the output tensor's original layout is not row-major, convert the output tensor back
     if (original_layout != Layout::ROW_MAJOR) {
-        output_tensor =
-            ttnn::to_layout(output_tensor, original_layout, std::nullopt, std::nullopt, output_tensor.device());
+        output_tensor = ttnn::to_layout(output_tensor, original_layout);
     }
 
     return output_tensor;
@@ -246,8 +243,7 @@ Tensor post_scatter_transform_tensor(
 
     // if the output tensor's original layout is not row-major, convert the output tensor back
     if (original_layout != Layout::ROW_MAJOR) {
-        output_tensor =
-            ttnn::to_layout(output_tensor, original_layout, std::nullopt, std::nullopt, output_tensor.device());
+        output_tensor = ttnn::to_layout(output_tensor, original_layout);
     }
 
     return output_tensor;

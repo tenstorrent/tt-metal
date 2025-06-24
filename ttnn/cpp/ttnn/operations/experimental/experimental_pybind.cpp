@@ -35,9 +35,9 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_pybind.hpp"
-#include "cpp/ttnn/operations/experimental/copy/typecast/typecast_pybind.hpp"
-#include "cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.hpp"
-#include "cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
+#include "ttnn/operations/experimental/copy/typecast/typecast_pybind.hpp"
+#include "ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.hpp"
+#include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/ccl_experimental_pybind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_pybind.hpp"
@@ -46,11 +46,12 @@
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_pybind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
 #include "ttnn/operations/experimental/scatter/scatter_pybind.hpp"
-#include "ttnn/operations/experimental/scatter/tosa/tosa_scatter_pybind.hpp"
+#include "ttnn/operations/experimental/scatter/tosa_scatter_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/sort/sort_pybind.hpp"
 #include "ttnn/operations/experimental/gather/gather_pybind.hpp"
 #include "ttnn/operations/experimental/gather/tosa/gather_tosa_pybind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_pybind.hpp"
+#include "ttnn/operations/experimental/where/where_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -123,6 +124,8 @@ void py_module(py::module& module) {
     ccl::py_module(m_experimental_ccl);
 
     broadcast_to::detail::py_bind_broadcast_to(module);
+
+    operations::experimental::ternary::detail::bind_where(module);
 }
 
 }  // namespace ttnn::operations::experimental

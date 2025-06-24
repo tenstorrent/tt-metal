@@ -168,7 +168,6 @@ Checks: >
   -performance-noexcept-swap,
   -performance-unnecessary-value-param,
   -portability-simd-intrinsics,
-  -readability-avoid-const-params-in-decls,
   -readability-avoid-unconditional-preprocessor-if,
   -readability-braces-around-statements,
   -readability-container-contains,

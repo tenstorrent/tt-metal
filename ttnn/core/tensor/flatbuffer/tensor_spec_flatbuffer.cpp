@@ -63,7 +63,6 @@ tt::tt_metal::BufferType from_flatbuffer(flatbuffer::BufferType type) {
 tt::tt_metal::TensorMemoryLayout from_flatbuffer(flatbuffer::TensorMemoryLayout layout) {
     switch (layout) {
         case flatbuffer::TensorMemoryLayout::Interleaved: return tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
-        case flatbuffer::TensorMemoryLayout::SingleBank: return tt::tt_metal::TensorMemoryLayout::SINGLE_BANK;
         case flatbuffer::TensorMemoryLayout::HeightSharded: return tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED;
         case flatbuffer::TensorMemoryLayout::WidthSharded: return tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
         case flatbuffer::TensorMemoryLayout::BlockSharded: return tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
@@ -89,7 +88,6 @@ tt::tt_metal::DataType from_flatbuffer(flatbuffer::DataType type) {
 flatbuffer::TensorMemoryLayout to_flatbuffer(tt::tt_metal::TensorMemoryLayout layout) {
     switch (layout) {
         case tt::tt_metal::TensorMemoryLayout::INTERLEAVED: return flatbuffer::TensorMemoryLayout::Interleaved;
-        case tt::tt_metal::TensorMemoryLayout::SINGLE_BANK: return flatbuffer::TensorMemoryLayout::SingleBank;
         case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED: return flatbuffer::TensorMemoryLayout::HeightSharded;
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED: return flatbuffer::TensorMemoryLayout::WidthSharded;
         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: return flatbuffer::TensorMemoryLayout::BlockSharded;

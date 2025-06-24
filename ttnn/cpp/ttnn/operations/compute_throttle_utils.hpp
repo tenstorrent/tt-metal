@@ -14,11 +14,9 @@ namespace operations {
 
 namespace compute_throttle_utils {
 
-void add_stagger_defines_if_needed(
-    const tt::ARCH arch, const int num_cores, std::map<std::string, std::string>& mm_kernel_defines);
-void add_dram_skip_defines_if_needed(
-    const tt::ARCH arch, std::map<std::string, std::string>& mm_in1_sender_writer_defines);
-bool should_sync_after_in1_dram(const tt::ARCH arch);
+void add_stagger_defines_if_needed(tt::ARCH arch, int num_cores, std::map<std::string, std::string>& mm_kernel_defines);
+void add_dram_skip_defines_if_needed(tt::ARCH arch, std::map<std::string, std::string>& mm_in1_sender_writer_defines);
+bool should_sync_after_in1_dram(tt::ARCH arch);
 
 /*
  * Optionally limit matmul compute throughput by inserting NOP instructions between MVMUL instructions of matmul kernel
@@ -32,7 +30,7 @@ bool should_sync_after_in1_dram(const tt::ARCH arch);
  * Level 4: throttle to 40% of max
  * Level 5: throttle to 33% of max
  */
-void throttle_mm_perf(const tt::ARCH arch, const int num_cores, std::map<std::string, std::string>& mm_kernel_defines);
+void throttle_mm_perf(tt::ARCH arch, int num_cores, std::map<std::string, std::string>& mm_kernel_defines);
 
 }  // namespace compute_throttle_utils
 

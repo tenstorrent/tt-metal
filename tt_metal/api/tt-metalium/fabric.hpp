@@ -18,6 +18,10 @@ class Program;
 }  // namespace tt_metal
 }  // namespace tt
 
+namespace tt::tt_metal::distributed {
+class MeshDevice;
+}  // namespace tt::tt_metal::distributed
+
 namespace tt::tt_fabric {
 
 size_t get_tt_fabric_channel_buffer_size_bytes();
@@ -46,12 +50,17 @@ size_t get_tt_fabric_channel_buffer_size_bytes();
 // connection appropriately. The API will not perform any checks to ensure that the
 // connection is indeed a 1D connection b/w all the workers.
 void append_fabric_connection_rt_args(
-    const chip_id_t src_chip_id,
-    const chip_id_t dst_chip_id,
-    const uint32_t link_idx,
+    chip_id_t src_chip_id,
+    chip_id_t dst_chip_id,
+    uint32_t link_idx,
     tt::tt_metal::Program& worker_program,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type = CoreType::WORKER);
+
+namespace experimental {
+size_t get_number_of_available_routing_planes(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, size_t cluster_axis, size_t row_or_col);
+}
 
 }  // namespace tt::tt_fabric

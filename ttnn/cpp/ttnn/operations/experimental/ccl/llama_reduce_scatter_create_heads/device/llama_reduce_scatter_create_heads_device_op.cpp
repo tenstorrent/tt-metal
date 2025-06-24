@@ -7,7 +7,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "llama_reduce_scatter_create_heads_device_op.hpp"
-#include "cpp/ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ccl {
@@ -142,7 +142,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::invoke(
     const uint32_t head_dim,
     const uint32_t slice_size,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::MemoryConfig>& qkv_memory_config) {
+    const std::optional<ttnn::MemoryConfig>& qkv_memory_config,
+    bool use_noc1_only) {
     return {
         operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
@@ -158,6 +159,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::invoke(
             .head_dim = head_dim,
             .slice_size = slice_size,
             .qkv_memory_config = qkv_memory_config,
+            .use_noc1_only = use_noc1_only,
         },
         tensor_args_t{.input_tensor = input_tensor, .intermediate_packet_buffer = intermediate_packet_buffer}};
 }

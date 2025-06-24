@@ -75,6 +75,7 @@
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
+#include <tt-metalium/control_plane.hpp>
 #include <umd/device/coordinate_manager.h>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_silicon_driver_common.hpp>
@@ -156,7 +157,7 @@ Device::Device(
 }
 
 std::unordered_set<CoreCoord> Device::get_active_ethernet_cores(bool skip_reserved_tunnel_cores) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(
+    return tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(
         this->id_, skip_reserved_tunnel_cores);
 }
 
@@ -166,12 +167,12 @@ bool Device::is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_
 }
 
 std::unordered_set<CoreCoord> Device::get_inactive_ethernet_cores() const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(this->id_);
+    return tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(this->id_);
 }
 
 bool Device::is_inactive_ethernet_core(CoreCoord logical_core) const {
     auto inactive_ethernet_cores =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(this->id_);
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(this->id_);
     return inactive_ethernet_cores.find(logical_core) != inactive_ethernet_cores.end();
 }
 
@@ -185,8 +186,7 @@ std::tuple<chip_id_t, CoreCoord> Device::get_connected_ethernet_core(CoreCoord e
 }
 
 std::vector<CoreCoord> Device::get_ethernet_sockets(chip_id_t connected_chip_id) const {
-    if (tt::tt_metal::MetalContext::instance().get_fabric_config() !=
-        tt::tt_metal::FabricConfig::DISABLED) {
+    if (tt::tt_metal::MetalContext::instance().get_fabric_config() != tt::tt_metal::FabricConfig::DISABLED) {
         return tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_routers_between_src_and_dest(
             this->id_, connected_chip_id);
     } else {
@@ -870,30 +870,8 @@ void Device::clear_dram_state() {
 
 void Device::compile_command_queue_programs() {
     ZoneScoped;
-    if (this->is_mmio_capable() && !tt::tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
-        auto command_queue_program_ptr = create_and_compile_cq_program(this);
-        this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
-        // Since devices could be set up in any order, on mmio device do a pass and populate cores for tunnelers.
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_mmio_device_tunnel_count(this->id_) > 0) {
-            tunnels_from_mmio_ =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(this->id_);
-            for (auto& tunnel : tunnels_from_mmio_) {
-                for (uint32_t tunnel_stop = 0; tunnel_stop < tunnel.size() - 1; tunnel_stop++) {
-                    chip_id_t device_id = tunnel[tunnel_stop];
-                    chip_id_t ds_device_id = tunnel[tunnel_stop + 1];
-                    uint16_t channel =
-                        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
-                            ds_device_id);
-                    // Only one tunneler per connection, use CQ ID 0
-                    MetalContext::instance().get_dispatch_core_manager().tunneler_core(
-                        device_id, ds_device_id, channel, 0);
-                }
-            }
-        }
-    } else {
-        auto command_queue_program_ptr = create_and_compile_cq_program(this);
-        this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
-    }
+    auto command_queue_program_ptr = create_and_compile_cq_program(this);
+    this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
 }
 
 // Writes issue and completion queue pointers to device and in sysmem and loads fast dispatch program onto dispatch cores
@@ -1003,8 +981,12 @@ void Device::init_command_queue_device() {
     }
 }
 
-void Device::init_fabric() {
+bool Device::compile_fabric() {
     fabric_program_ = create_and_compile_fabric_program(this);
+    return fabric_program_ != nullptr;
+}
+
+void Device::configure_fabric() {
     if (fabric_program_ == nullptr) {
         return;
     }
@@ -1039,6 +1021,12 @@ void Device::init_fabric() {
     log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
 }
 
+// backward compatibility
+void Device::init_fabric() {
+    this->compile_fabric();
+    this->configure_fabric();
+}
+
 bool Device::initialize(
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
@@ -1047,6 +1035,8 @@ bool Device::initialize(
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal) {
     ZoneScoped;
+    // Every initialization call should enable program cache
+    this->program_cache_.enable();
     log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache_.is_enabled() ? "": "NOT ");
     log_debug(tt::LogMetal, "Running with {} cqs ", num_hw_cqs);
     TT_FATAL(num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS, "num_hw_cqs can be between 1 and {}", dispatch_core_manager::MAX_NUM_HW_CQS);
@@ -1438,6 +1428,11 @@ void Device::enable_program_cache() {
     log_info(tt::LogMetal, "Enabling program cache on device {}", this->id_);
     program_cache_.enable();
 }
+void Device::clear_program_cache() {
+    log_info(tt::LogMetal, "Clearing program cache on device {}", this->id_);
+    program_cache_.clear();
+}
+
 void Device::disable_and_clear_program_cache() {
     log_info(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
     if (this->program_cache_.is_enabled()) {
