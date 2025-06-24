@@ -76,7 +76,8 @@ def run_tt_iteration(
     input_tensor,
     input_shape,
     ttnn_prompt_embeds,
-    ttnn_added_cond_kwargs,
+    time_ids,
+    text_embeds,
     ttnn_timestep,
     i,
 ):
@@ -88,7 +89,8 @@ def run_tt_iteration(
         [B, C, H, W],
         timestep=ttnn_timestep,
         encoder_hidden_states=ttnn_prompt_embeds,
-        added_cond_kwargs=ttnn_added_cond_kwargs,
+        time_ids=time_ids,
+        text_embeds=text_embeds,
     )
 
     return ttnn_noise_pred, output_shape

@@ -17,10 +17,11 @@ from loguru import logger
 
 
 class TtDecoder(nn.Module):
-    def __init__(self, device, state_dict, model_config, gn_fallback=False):
+    def __init__(self, device, state_dict, model_config, batch_size=1, gn_fallback=False):
         super().__init__()
 
         self.device = device
+        self.batch_size = batch_size
 
         self.norm_groups = 32
         self.norm_eps = 1e-5
@@ -189,8 +190,8 @@ class TtDecoder(nn.Module):
         C = self.conv_out_params["output_channels"]
 
         # Convert to torch
-        hidden_states = ttnn.to_torch(hidden_states).float()
-        hidden_states = hidden_states.reshape(B, H, W, C)
+        hidden_states = ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)).float()
+        hidden_states = hidden_states.reshape(self.batch_size * B, H, W, C)
         hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
 
         return hidden_states

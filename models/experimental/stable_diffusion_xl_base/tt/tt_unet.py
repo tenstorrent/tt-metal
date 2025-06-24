@@ -166,14 +166,12 @@ class TtUNet2DConditionModel(nn.Module):
             self.device, norm_weights_out.shape[0], self.norm_groups, self.norm_core_grid.y
         )
 
-    def forward(self, sample, input_shape, timestep, encoder_hidden_states, added_cond_kwargs):
+    def forward(self, sample, input_shape, timestep, encoder_hidden_states, time_ids, text_embeds):
         B, C, H, W = input_shape
 
         temb = self.time_proj.forward(timestep)
         temb = self.time_embedding.forward(temb)
 
-        text_embeds = added_cond_kwargs.get("text_embeds")
-        time_ids = added_cond_kwargs.get("time_ids")
         temb_add = self.add_time_proj.forward(time_ids)
         temb_add = ttnn.to_layout(temb_add, ttnn.ROW_MAJOR_LAYOUT)
         temb_add = ttnn.reshape(temb_add, (text_embeds.shape[0], -1))
