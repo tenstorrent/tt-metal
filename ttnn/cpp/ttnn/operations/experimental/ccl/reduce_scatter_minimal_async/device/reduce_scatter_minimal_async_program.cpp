@@ -267,7 +267,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             intermediate_cb_index,
             compute_output_cb_index,
             batch_slice_num_pages,
-            (8 < tile_granularity ? 8 : tile_granularity),
+            tile_granularity,
             ring_size,
             num_batches,
             num_links,

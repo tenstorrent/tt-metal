@@ -48,15 +48,15 @@ void MAIN {
                 cb_wait_front(intermediate_cb, tile_granularity);
                 cb_reserve_back(output_cb, tile_granularity);
                 acquire_dst();
-                for (uint32_t tile_id = 0; tile_id < num_pages_to_read; tile_id++) {
+                for (uint32_t tile_id = 0; tile_id < tile_granularity; tile_id++) {
                     add_tiles(input_cb_id, intermediate_cb, tile_id, tile_id, tile_id);
                     pack_tile(tile_id, output_cb);
-                    tiles_read++;
                 }
                 release_dst();
                 cb_pop_front(input_cb_id, tile_granularity);
                 cb_pop_front(intermediate_cb, tile_granularity);
                 cb_push_back(output_cb, tile_granularity);
+                tiles_read += num_pages_to_read;
 
                 // Skip the tiles going the other direction
                 if (tiles_read < tiles_to_read) {
