@@ -49,6 +49,7 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
 
+#pragma optimize("", off)
 namespace tt {
 namespace tt_metal {
 struct ProgramCommandSequence;
@@ -122,6 +123,15 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     this->populate_virtual_program_dispatch_core();
     this->populate_read_descriptor_queue();
     completion_queue_reader_thread_ = std::thread(&FDMeshCommandQueue::read_completion_queue, this);
+#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
+    error_callback_ = [&](const std::exception& e) {
+        if (completion_queue_reader_thread_.joinable()) {
+            completion_queue_reader_thread_.join();
+        }
+
+        throw e;
+    };
+#endif
 }
 
 FDMeshCommandQueue::~FDMeshCommandQueue() {
@@ -703,33 +713,59 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
 
 void FDMeshCommandQueue::read_completion_queue() {
     while (true) {
-        {
-            std::unique_lock<std::mutex> lock(reader_thread_cv_mutex_);
-            reader_thread_cv_.wait(lock, [this] { return num_outstanding_reads_ or exit_condition_; });
-        }
-        if (exit_condition_) {
-            return;
-        } else {
-            uint32_t num_reads = num_outstanding_reads_.load();
-            for (uint32_t i = 0; i < num_reads; i++) {
-                std::visit(
-                    ttsl::overloaded{
-                        [this](MeshBufferReadDescriptor& mesh_read_descriptor) {
-                            copy_buffer_data_to_user_space(mesh_read_descriptor);
-                        },
-                        [this](MeshReadEventDescriptor& mesh_read_descriptor) {
-                            read_completion_queue_event(mesh_read_descriptor);
-                        },
-                        [this](MeshCoreDataReadDescriptor& mesh_read_descriptor) {
-                            read_l1_data_from_completion_queue(mesh_read_descriptor);
-                        },
-                    },
-                    *completion_queue_reads_.pop());
+        try {
+            {
+                std::unique_lock<std::mutex> lock(reader_thread_cv_mutex_);
+                reader_thread_cv_.wait(lock, [this] { return num_outstanding_reads_ or exit_condition_; });
             }
-            std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
-            num_outstanding_reads_.fetch_sub(num_reads);
-            if (num_outstanding_reads_ == 0) {
-                reads_processed_cv_.notify_one();
+            if (exit_condition_) {
+                return;
+            } else {
+                uint32_t num_reads = num_outstanding_reads_.load();
+                for (uint32_t i = 0; i < num_reads; i++) {
+                    std::visit(
+                        ttsl::overloaded{
+                            [this](MeshBufferReadDescriptor& mesh_read_descriptor) {
+                                copy_buffer_data_to_user_space(mesh_read_descriptor);
+                            },
+                            [this](MeshReadEventDescriptor& mesh_read_descriptor) {
+                                read_completion_queue_event(mesh_read_descriptor);
+                            },
+                            [this](MeshCoreDataReadDescriptor& mesh_read_descriptor) {
+                                read_l1_data_from_completion_queue(mesh_read_descriptor);
+                            },
+                        },
+                        *completion_queue_reads_.pop());
+                }
+                if (exit_condition_) {
+                    return;
+                } else {
+                    uint32_t num_reads = num_outstanding_reads_.load();
+                    for (uint32_t i = 0; i < num_reads; i++) {
+                        auto mesh_read_descriptor = *(completion_queue_reads_.pop());
+                        std::visit(
+                            [&](auto&& mesh_read_descriptor) {
+                                using T = std::decay_t<decltype(mesh_read_descriptor)>;
+                                if constexpr (std::is_same_v<T, MeshBufferReadDescriptor>) {
+                                    this->copy_buffer_data_to_user_space(mesh_read_descriptor);
+                                } else if constexpr (std::is_same_v<T, MeshReadEventDescriptor>) {
+                                    this->read_completion_queue_event(mesh_read_descriptor);
+                                } else {
+                                    this->read_l1_data_from_completion_queue(mesh_read_descriptor);
+                                }
+                            },
+                            mesh_read_descriptor);
+                    }
+                    std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
+                    num_outstanding_reads_.fetch_sub(num_reads);
+                    if (num_outstanding_reads_ == 0) {
+                        reads_processed_cv_.notify_one();
+                    }
+                }
+        }
+        } catch (const std::exception& e) {
+            if (error_callback_) {
+                thread_timeout_.store(true);
             }
         }
     }
