@@ -90,7 +90,7 @@ struct WatcherSettings {
 
 struct InspectorSettings {
     bool enabled = true;
-    bool initialization_is_important = true;
+    bool initialization_is_important = false;
     bool warn_on_write_exceptions = true;
     std::filesystem::path log_path;
 };
@@ -162,6 +162,8 @@ class RunTimeOptions {
     std::filesystem::path simulator_path = "";
 
     bool erisc_iram_enabled = false;
+
+    bool fast_dispatch = true;
 
     bool skip_eth_cores_with_retrain = false;
 
@@ -400,6 +402,7 @@ public:
     inline const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
     inline bool get_erisc_iram_enabled() const { return erisc_iram_enabled; }
+    inline bool get_fast_dispatch() const { return fast_dispatch; }
 
     inline bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 

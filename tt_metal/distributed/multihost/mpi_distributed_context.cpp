@@ -182,7 +182,10 @@ void MPIContext::create(int argc, char** argv) {
 }
 
 const ContextPtr& MPIContext::get_current_world() {
-    TT_FATAL(current_world_, "MPIContext::get_current_world() called before MPIContext::create()");
+    if (!current_world_) {
+        // Default initialization of MPIContext if not already initialized
+        MPIContext::create(0, nullptr);
+    }
     return current_world_;
 }
 
@@ -191,6 +194,12 @@ void MPIContext::set_current_world(const ContextPtr& ctx) {
         ctx != nullptr && std::dynamic_pointer_cast<MPIContext>(ctx) != nullptr,
         "MPIContext::set_current_world: context is not a MPIContext or a nullptr");
     MPIContext::current_world_ = ctx;
+}
+
+bool MPIContext::is_initialized() {
+    int is_mpi_initialized;
+    MPI_CHECK(MPI_Initialized(&is_mpi_initialized));
+    return is_mpi_initialized != 0;
 }
 
 MPIContext::MPIContext(MPI_Comm comm) : comm_(comm) {
