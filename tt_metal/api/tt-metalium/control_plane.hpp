@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <unordered_set>
+
 #include <tt_stl/span.hpp>
 #include <tt-metalium/routing_table_generator.hpp>
 #include <tt-metalium/fabric_host_interface.h>
@@ -114,14 +116,21 @@ public:
 
     // Get all intermesh ethernet links in the system
     // Returns: map of chip_id -> vector of (eth_core, channel)
-    const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>>& get_all_intermesh_eth_links()
-        const;
+    const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>>& get_all_intermesh_eth_links() const;
 
     // Check if a specific ethernet core is an intermesh link
     bool is_intermesh_eth_link(chip_id_t chip_id, CoreCoord eth_core) const;
 
     // If the ethernet core is an intermesh link, probe to see if it is trained
     bool is_intermesh_eth_link_trained(chip_id_t chip_id, CoreCoord eth_core) const;
+
+    // Returns set of logical active ethernet coordinates on chip
+    // If skip_reserved_cores is true, will return cores that dispatch is not using,
+    // intended for users to grab available eth cores for testing
+    // `skip_reserved_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
+    // tunneling
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(chip_id_t chip_id, bool skip_reserved_cores = false) const;
+    std::unordered_set<CoreCoord> get_inactive_ethernet_cores(chip_id_t chip_id) const;
 
 private:
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED

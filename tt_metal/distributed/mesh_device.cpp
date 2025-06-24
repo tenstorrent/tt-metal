@@ -156,6 +156,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
 MeshDevice::ScopedDevices::~ScopedDevices() {
     if (!opened_devices_.empty()) {
         std::vector<IDevice*> devices_to_close;
+        devices_to_close.reserve(opened_devices_.size());
         for (auto& [id, device] : opened_devices_) {
             devices_to_close.push_back(device);
         }
@@ -829,14 +830,6 @@ bool MeshDevice::initialize(
     return true;
 }
 
-void MeshDevice::reset_cores() {
-    TT_THROW("reset_cores() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->reset_cores();
-}
-void MeshDevice::initialize_and_launch_firmware() {
-    TT_THROW("initialize_and_launch_firmware() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->initialize_and_launch_firmware();
-}
 void MeshDevice::init_command_queue_host() {
     TT_THROW("init_command_queue_host() is not supported on MeshDevice - use individual devices instead");
     reference_device()->init_command_queue_host();

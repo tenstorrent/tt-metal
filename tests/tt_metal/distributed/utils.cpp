@@ -59,10 +59,7 @@ std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
 
         ReplicatedBufferConfig global_buffer_config{.size = dram_buffer_size};
         DeviceLocalBufferConfig per_device_buffer_config{
-            .page_size = page_size,
-            .buffer_type = tt_metal::BufferType::DRAM,
-            .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-            .bottom_up = true};
+            .page_size = page_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = true};
 
         bool allocate_bufs = src0_bufs.empty();
         for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {

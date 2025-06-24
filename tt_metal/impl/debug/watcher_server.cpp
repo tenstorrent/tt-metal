@@ -240,6 +240,7 @@ static void watcher_loop(std::chrono::microseconds sleep_duration) {
 }  // namespace watcher
 
 void watcher_init(chip_id_t device_id) {
+    const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
     std::vector<uint32_t> watcher_init_val;
     watcher_init_val.resize(sizeof(watcher_msg_t) / sizeof(uint32_t), 0);
     watcher_msg_t* data = reinterpret_cast<watcher_msg_t*>(&(watcher_init_val[0]));
@@ -414,11 +415,11 @@ void watcher_init(chip_id_t device_id) {
             is_active_eth_core ? GET_WATCHER_ERISC_DEV_ADDR() : GET_WATCHER_IERISC_DEV_ADDR());
     };
     for (const CoreCoord& active_eth_core :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+         tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
         init_eth_debug_values(active_eth_core, true);
     }
     for (const CoreCoord& inactive_eth_core :
-         tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(device_id)) {
+         tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(device_id)) {
         init_eth_debug_values(inactive_eth_core, false);
     }
 
@@ -457,15 +458,17 @@ void watcher_attach(chip_id_t device_id) {
 
     // Always register the device w/ watcher, even if disabled
     // This allows dump() to be called from debugger
-    watcher::devices.emplace(
-        device_id,
-        watcher::WatcherDeviceReader(
-            watcher::logfile, device_id, watcher::kernel_names, &watcher::set_watcher_exception_message));
+    watcher::devices.try_emplace(
+        device_id, watcher::logfile, device_id, watcher::kernel_names, &watcher::set_watcher_exception_message);
 }
 
 void watcher_detach(chip_id_t device_id) {
     {
         const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
+        if (!watcher::enabled) {
+            // TODO: reinstate this after watcher server singleton is removed.
+            return;
+        }
 
         TT_ASSERT(watcher::devices.find(device_id) != watcher::devices.end());
         if (watcher::enabled && watcher::logfile != nullptr) {
@@ -570,5 +573,7 @@ std::string get_watcher_exception_message() {
     std::lock_guard<std::mutex> lock(watcher::watcher_exception_message_mutex);
     return watcher::watcher_exception_message();
 }
+
+std::unique_lock<std::mutex> watcher_get_lock() { return std::unique_lock<std::mutex>(watcher::watch_mutex); }
 
 }  // namespace tt

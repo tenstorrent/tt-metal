@@ -31,7 +31,7 @@ ttnn::global_semaphore::MultiDeviceGlobalSemaphore create_global_semaphore(const
 }
 
 std::vector<IDevice*> get_line_devices(distributed::MeshDevice* mesh_device) {
-    auto view = mesh_device->get_view();
+    const auto& view = mesh_device->get_view();
     return {
         view.get_device(distributed::MeshCoordinate(0, 0)),
         view.get_device(distributed::MeshCoordinate(0, 1)),

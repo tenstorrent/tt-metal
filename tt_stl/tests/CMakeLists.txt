@@ -7,6 +7,7 @@ target_sources(
     unit_tests_stl_smoke
     PRIVATE
         test_any_range.cpp
+        test_cleanup.cpp
         test_indestructible.cpp
         test_slotmap.cpp
         test_span.cpp

@@ -538,8 +538,8 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_physical_chip_mapping_from_m
             logical_mesh_chip_id_to_physical_chip_id_mapping.insert({FabricNodeId(MeshId{4}, i), physical_chip_ids[i]});
         }
     } else if (
-        mesh_graph_desc_filename == "quanta_galaxy_mesh_graph_descriptor.yaml" ||
-        mesh_graph_desc_filename == "quanta_galaxy_torus_2d_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "single_galaxy_mesh_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "single_galaxy_torus_2d_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "dual_galaxy_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "p100_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "p150_mesh_graph_descriptor.yaml" ||
@@ -1625,6 +1625,87 @@ const std::vector<std::pair<CoreCoord, chan_id_t>>& ControlPlane::get_intermesh_
 const std::unordered_map<chip_id_t, std::vector<std::pair<CoreCoord, chan_id_t>>>&
 ControlPlane::get_all_intermesh_eth_links() const {
     return intermesh_eth_links_;
+}
+
+std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(
+    chip_id_t chip_id, bool skip_reserved_cores) const {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    std::unordered_set<CoreCoord> active_ethernet_cores;
+    const auto& cluster_desc = cluster.get_cluster_desc();
+    const auto& soc_desc = cluster.get_soc_desc(chip_id);
+    if (cluster.arch() == ARCH::BLACKHOLE) {
+        // Can't just use `get_ethernet_cores_grouped_by_connected_chips` because there are some active ethernet cores
+        // without links. Only risc1 on these cores is available for Metal and should not be classified as idle
+        // to ensure that Metal does not try to program both riscs.
+        std::set<uint32_t> logical_active_eth_channels = cluster_desc->get_active_eth_channels(chip_id);
+        for (auto logical_active_eth_channel : logical_active_eth_channels) {
+            tt::umd::CoreCoord logical_active_eth =
+                soc_desc.get_eth_core_for_channel(logical_active_eth_channel, CoordSystem::LOGICAL);
+            active_ethernet_cores.insert(CoreCoord(logical_active_eth.x, logical_active_eth.y));
+        }
+    } else {
+        std::set<uint32_t> logical_active_eth_channels = cluster_desc->get_active_eth_channels(chip_id);
+        const auto& freq_retrain_eth_cores = cluster.get_eth_cores_with_frequent_retraining(chip_id);
+        const auto& eth_routing_info = cluster.get_eth_routing_info(chip_id);
+        for (const auto& eth_channel : logical_active_eth_channels) {
+            tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
+            const auto& routing_info = eth_routing_info.at(eth_core);
+            if ((routing_info == EthRouterMode::BI_DIR_TUNNELING or routing_info == EthRouterMode::FABRIC_ROUTER) and
+                skip_reserved_cores) {
+                continue;
+            }
+            if (freq_retrain_eth_cores.find(eth_core) != freq_retrain_eth_cores.end()) {
+                continue;
+            }
+
+            active_ethernet_cores.insert(eth_core);
+        }
+        // WH has a special case where mmio chips with remote connections must always have certain channels active
+        if (cluster.arch() == tt::ARCH::WORMHOLE_B0 && cluster_desc->is_chip_mmio_capable(chip_id) &&
+            cluster.get_tunnels_from_mmio_device(chip_id).size() > 0) {
+            // UMD routing FW uses these cores for base routing
+            // channel 15 is used by syseng tools
+            std::unordered_set<int> channels_to_skip = {};
+            if (cluster.is_galaxy_cluster()) {
+                // TODO: This may need to change, if we need additional eth cores for dispatch on Galaxy
+                channels_to_skip = {0, 1, 2, 3, 15};
+            } else {
+                channels_to_skip = {15};
+            }
+            for (const auto& eth_channel : channels_to_skip) {
+                if (logical_active_eth_channels.find(eth_channel) == logical_active_eth_channels.end()) {
+                    tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
+                    active_ethernet_cores.insert(eth_core);
+                }
+            }
+        }
+
+        if (cluster.get_board_type(chip_id) != BoardType::UBB) {
+            // For Non-UBB Wormhole systems, intermesh links must also be marked as active ethernet cores
+            // These cores are not seen by UMD or the cluster descriptor as active. Control Plane is
+            // responsible for querying this information.
+            // Note: On UBB systems, intermesh links are already identified as active by UMD, so control
+            // plane does not need to do this.
+            auto intermesh_links = this->get_intermesh_eth_links(chip_id);
+            for (const auto& [eth_coord, eth_chan] : intermesh_links) {
+                active_ethernet_cores.insert(eth_coord);
+            }
+        }
+    }
+    return active_ethernet_cores;
+}
+
+std::unordered_set<CoreCoord> ControlPlane::get_inactive_ethernet_cores(chip_id_t chip_id) const {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    std::unordered_set<CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
+    std::unordered_set<CoreCoord> inactive_ethernet_cores;
+    for (const auto& [eth_core, chan] : cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
+        if (active_ethernet_cores.find(eth_core) == active_ethernet_cores.end()) {
+            inactive_ethernet_cores.insert(eth_core);
+        }
+    }
+    return inactive_ethernet_cores;
 }
 
 ControlPlane::~ControlPlane() = default;

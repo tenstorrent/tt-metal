@@ -424,7 +424,7 @@ void DispatchKernel::CreateKernel() {
     uint32_t num_virtual_active_eth_cores = tt::DevicePool::instance().get_max_num_eth_cores_across_all_devices();
     uint32_t num_physical_active_eth_cores =
         MetalContext::instance()
-            .get_cluster()
+            .get_control_plane()
             .get_active_ethernet_cores(device_->id(), /*skip_reserved_tunnel_cores*/ true)
             .size();
     bool virtualize_num_eth_cores = num_virtual_active_eth_cores > num_physical_active_eth_cores;

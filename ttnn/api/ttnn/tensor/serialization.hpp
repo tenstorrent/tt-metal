@@ -11,8 +11,7 @@
 
 namespace tt::tt_metal {
 
-void dump_tensor(
-    const std::string& file_name, const Tensor& tensor, const std::unordered_map<std::string, std::string>& strategy);
+void dump_tensor(const std::string& file_name, const Tensor& tensor);
 
 Tensor load_tensor(const std::string& file_name, distributed::MeshDevice* device = nullptr);
 

@@ -39,7 +39,7 @@ std::tuple<ttnn::SmallVector<int>, ttnn::SmallVector<int>, ttnn::SmallVector<int
 std::pair<ttnn::SmallVector<int>, ttnn::SmallVector<int>> split_height_width_dims(
     const ttnn::SmallVector<int>& dim, const Tensor& input_tensor_arg) {
     ttnn::SmallVector<int> non_height_width_dims{}, height_width_dims{};
-    auto input_shape = input_tensor_arg.logical_shape();
+    const auto& input_shape = input_tensor_arg.logical_shape();
     int rank = input_shape.size();
     for (int i = 0; i < dim.size(); i++) {
         if (dim[i] >= (rank - 2)) {
@@ -53,7 +53,7 @@ std::pair<ttnn::SmallVector<int>, ttnn::SmallVector<int>> split_height_width_dim
 
 ttnn::SmallVector<int> generate_reduce_dim(
     const Tensor& input_tensor_arg, const std::optional<std::variant<int, ttnn::SmallVector<int>>>& dim_arg) {
-    auto input_shape = input_tensor_arg.logical_shape();
+    const auto& input_shape = input_tensor_arg.logical_shape();
     auto rank = input_shape.size();
     ttnn::SmallVector<int> dim{};
     if (dim_arg.has_value()) {
@@ -387,7 +387,7 @@ Tensor non_height_width_reduce(
     const std::optional<MemoryConfig>& memory_config_arg,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
-    auto input_shape = input_tensor.logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         std::nullopt,
