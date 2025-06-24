@@ -546,7 +546,24 @@ void SortProgramFactoryHybrid::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensors) {
     // TODO: Fill
-    log_error(tt::LogMetal, "override_runtime_arguments is not implemented for SortProgramFactoryHybrid");
+    const auto input_tensor_buffer = tensor_args.input_tensor.buffer();
+    const auto value_tensor_buffer = output_tensors.at(0).buffer();
+    const auto index_tensor_buffer = output_tensors.at(1).buffer();
+
+    for (const auto& core_range : cached_program.shared_variables.core_range_set.ranges()) {
+        for (const auto& core_coord : core_range) {
+            auto& reader_runtime_args =
+                GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id, core_coord);
+            // reader_runtime_args[0] = input_tensor_buffer->address();
+            // reader_runtime_args[1] = index_tensor_buffer->address();
+            // reader_runtime_args[2] =
+            // cached_program.shared_variables.physical_core_lookup_table_tensor_buffer->address(); // TODO: ?
+
+            // auto& writer_runtime_args =
+            //     GetRuntimeArgs(cached_program.program, cached_program.shared_variables.writer_kernel_id, core_coord);
+            // writer_runtime_args[0] = value_tensor_buffer->address();
+        }  // core_coord loop
+    }  // core_range loop
 }
 
 uint32_t SortProgramFactoryHybrid::get_number_of_tiles_per_core(
@@ -615,10 +632,11 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
      *    all cores in the compute grid are utilized. The core range is set to cover the entire grid.
      *
      * 3. If Wt is smaller than the total number of cores:
-     *    - The number of rows (`core_grid_calculated_rows_number`) and columns (`core_grid_calculated_columns_number`)
-     *      required to cover Wt are calculated based on the grid dimensions.
+     *    - The number of rows (`core_grid_calculated_rows_number`) and columns
+     * (`core_grid_calculated_columns_number`) required to cover Wt are calculated based on the grid dimensions.
      *    - If both rows and columns are zero, only a single core is used.
-     *    - If only rows are zero, the core range is set to cover the required number of columns in the first row.
+     *    - If only rows are zero, the core range is set to cover the required number of columns in the first
+     * row.
      *    - Otherwise, the core range is set to cover the required rows, and if there are remaining columns,
      *      an additional range is added to cover those columns in the next row.
      *
@@ -762,7 +780,8 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         compute_with_storage_grid_size.y,
         number_of_available_cores};
     const std::string reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
+        "reader_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program, reader_kernel_path, core_range, tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
     SetRuntimeArgs(
@@ -788,7 +807,8 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         compute_with_storage_grid_size.y,
         number_of_available_cores};
     const std::string writer_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/"
+        "writer_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program, writer_kernel_path, core_range, tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
     SetRuntimeArgs(
@@ -817,7 +837,8 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         static_cast<uint32_t>(attributes.descending),
         static_cast<uint32_t>(attributes.stable)};
     const std::string compute_kernel_path =
-        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort_single_row_multi_core.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/"
+        "sort_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
