@@ -30,14 +30,16 @@ def main():
         W3 = weights["W3"]
         b3 = weights["b3"]
 
-        # Random weights for MLP - will not predict correctly
-        # torch.manual_seed(0)
-        # W1 = torch.randn((128, 28 * 28), dtype=torch.float32)
-        # b1 = torch.randn((128,), dtype=torch.float32)
-        # W2 = torch.randn((64, 128), dtype=torch.float32)
-        # b2 = torch.randn((64,), dtype=torch.float32)
-        # W3 = torch.randn((10, 64), dtype=torch.float32)
-        # b3 = torch.randn((10,), dtype=torch.float32)
+        """
+        Random weights for MLP - will not predict correctly
+        torch.manual_seed(0)
+        W1 = torch.randn((128, 28 * 28), dtype=torch.float32)
+        b1 = torch.randn((128,), dtype=torch.float32)
+        W2 = torch.randn((64, 128), dtype=torch.float32)
+        b2 = torch.randn((64,), dtype=torch.float32)
+        W3 = torch.randn((10, 64), dtype=torch.float32)
+        b3 = torch.randn((10,), dtype=torch.float32)
+        """
 
         correct = 0
         total = 0
