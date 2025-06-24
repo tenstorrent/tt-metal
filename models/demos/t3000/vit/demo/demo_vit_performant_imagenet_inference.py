@@ -125,3 +125,70 @@ def test_run_vit_trace_2cqs_inference(
         f"ttnn_{model_version}_batch_size{batch_size} tests inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
     )
     logger.info(f"ttnn_{model_version}_batch_size{batch_size} compile time: {compile_time}")
+
+
+@run_for_wormhole_b0()
+@pytest.mark.model_perf_t3000
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1700000}], indirect=True
+)
+@pytest.mark.parametrize(
+    "batch_size_per_device, iterations",
+    ((8, 100),),
+)
+def test_run_vit_trace_2cqs_inference_with_random_inputs(
+    mesh_device,
+    use_program_cache,
+    batch_size_per_device,
+    iterations,
+    imagenet_label_dict=None,
+    model_location_generator=None,
+    entire_imagenet_dataset=False,
+    expected_accuracy=0.80,
+):
+    batch_size = batch_size_per_device * mesh_device.get_num_devices()
+    iterations = iterations // mesh_device.get_num_devices()
+
+    profiler.clear()
+    with torch.no_grad():
+        vit_trace_2cq = VitTrace2CQ()
+
+        profiler.start(f"compile")
+        vit_trace_2cq.initialize_vit_trace_2cqs_inference(
+            mesh_device,
+            batch_size_per_device,
+            use_random_input_tensor=True,
+        )
+        profiler.end(f"compile")
+
+        model_version = "google/vit-base-patch16-224"
+
+        logger.info("Starting performance inference with random inputs")
+        total_inference_time = 0
+
+        for iter in range(iterations):
+            # Use random inputs from the VitTrace2CQ test infrastructure
+            tt_inputs_host = vit_trace_2cq.tt_inputs_host
+
+            profiler.start(f"run")
+            output = vit_trace_2cq.execute_vit_trace_2cqs_inference(tt_inputs_host)
+            profiler.end(f"run")
+
+            total_inference_time += profiler.get(f"run")
+
+            if iter % 10 == 0:
+                logger.info(f"Completed iteration {iter}/{iterations}")
+
+        vit_trace_2cq.release_vit_trace_2cqs_inference()
+
+        first_iter_time = profiler.get(f"compile")
+        # ensuring inference time fluctuations is not noise
+        inference_time_avg = total_inference_time / iterations
+
+        compile_time = first_iter_time - 2 * inference_time_avg
+
+    logger.info(f"=============")
+    logger.info(f"Performance results for {batch_size}x{iterations} iterations:")
+    logger.info(f"ttnn_{model_version}_batch_size{batch_size} inference time (avg): {inference_time_avg:.6f}s")
+    logger.info(f"ttnn_{model_version}_batch_size{batch_size} FPS: {batch_size/inference_time_avg:.2f}")
+    logger.info(f"ttnn_{model_version}_batch_size{batch_size} compile time: {compile_time:.6f}s")
