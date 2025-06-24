@@ -549,9 +549,6 @@ def test_conv_features_multi_device(
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
-    if output_dtype == ttnn.bfloat8_b and shard_layout == WS:
-        pytest.skip("Skipping until Issue: #21209 is fixed")
-
     run_conv(
         mesh_device,
         torch_tensor_map,
