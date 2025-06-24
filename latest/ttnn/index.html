@@ -64,11 +64,6 @@
 <li class="toctree-l1"><a class="reference internal" href="ttnn/profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
 <li class="toctree-l1"><a class="reference internal" href="ttnn/demos.html">Building and Uplifting Demos</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">Models</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="tt_metal_models/get_started.html">Getting Started</a></li>
-<li class="toctree-l1"><a class="reference internal" href="tt_metal_models/get_performance.html">Performance</a></li>
-</ul>
 <p class="caption" role="heading"><span class="caption-text">Resources</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="resources/support.html">Support</a></li>
@@ -110,8 +105,6 @@
 <a class="reference internal" href="ttnn/get_started.html">Getting Started</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="ttnn/get_started.html#install-and-build">1. Install and Build</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn/get_started.html#explore-our-model-demos">2. Explore Our Model Demos</a></li>
-<li class="toctree-l2"><a class="reference internal" href="ttnn/get_started.html#tt-nn-tutorial-multi-head-attention-simple">3. TT-NN Tutorial: Multi-Head Attention (Simple)</a></li>
-<li class="toctree-l2"><a class="reference internal" href="ttnn/get_started.html#tt-nn-tutorial-multi-head-attention-optimized">4. TT-NN Tutorial: Multi-Head Attention (Optimized)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn/get_started.html#where-to-go-from-here">Where To Go From Here</a></li>
 </ul>
 </li>
@@ -2187,105 +2180,39 @@
 <li class="toctree-l1">
 <a class="reference internal" href="ttnn/tutorials.html">Tutorials</a><ul>
 <li class="toctree-l2">
-<a class="reference internal" href="ttnn/tutorials/tensor_and_add_operation.html">Tensor and Add Operation</a><ul>
-<li class="toctree-l3">
-<a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/001.html">Tensor and Add Operation</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/001.html#Creating-a-tensor">Creating a tensor</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/001.html#Host-Storage:-Borrowed-vs-Owned">Host Storage: Borrowed vs Owned</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/001.html#Data-Type">Data Type</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/001.html#Layout">Layout</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/001.html#Device-storage">Device storage</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/001.html#Open-the-device">Open the device</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/001.html#Initialize-tensors-a-and-b-with-random-values-using-torch">Initialize tensors a and b with random values using torch</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/001.html#Add-tensor-a-and-b">Add tensor a and b</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/001.html#Inspect-the-output-tensor-of-the-add-in-ttnn">Inspect the output tensor of the add in ttnn</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/001.html#Convert-to-torch-and-inspect-the-attributes-of-the-torch-tensor">Convert to torch and inspect the attributes of the torch tensor</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/001.html#Close-the-device">Close the device</a></li>
-</ul>
-</li>
+<a class="reference internal" href="ttnn/tutorials/ttnn_add_tensors.html">Create and Add Two Tensors</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_add_tensors.html#import-the-necessary-libraries">Import the necessary libraries</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_add_tensors.html#open-tenstorrent-device">Open Tenstorrent device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_add_tensors.html#tensor-creation">Tensor Creation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_add_tensors.html#perform-the-addition-operation-and-convert-back">Perform the addition operation and convert back</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_add_tensors.html#full-example-and-output">Full example and output</a></li>
 </ul>
 </li>
 <li class="toctree-l2">
-<a class="reference internal" href="ttnn/tutorials/matmul.html">Matmul Operation</a><ul>
-<li class="toctree-l3">
-<a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/002.html">Matrix Multiplication</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/002.html#Enable-program-cache">Enable program cache</a></li>
-</ul>
-</li>
-<li class="toctree-l3">
-<a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/002.html#Configuration">Configuration</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/002.html#Initialize-tensors-a-and-b-with-random-values-using-torch">Initialize tensors a and b with random values using torch</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/002.html#Matrix-multiply-tensor-a-and-b">Matrix multiply tensor a and b</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/002.html#Inspect-the-layout-of-matrix-multiplication-output">Inspect the layout of matrix multiplication output</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/002.html#Inspect-the-result-of-the-matrix-multiplication">Inspect the result of the matrix multiplication</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/002.html#Matrix-multiply-tensor-a-and-b-by-using-more-performant-config">Matrix multiply tensor a and b by using more performant config</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/002.html#Close-the-device">Close the device</a></li>
-</ul>
-</li>
+<a class="reference internal" href="ttnn/tutorials/ttnn_basic_operations.html">Basic Operations with TT-NN</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_basic_operations.html#import-the-necessary-libraries">Import the necessary libraries</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_basic_operations.html#open-tenstorrent-device">Open Tenstorrent device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_basic_operations.html#helper-function-for-tensor-preparation">Helper Function for Tensor Preparation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_basic_operations.html#host-tensor-creation">Host Tensor Creation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_basic_operations.html#convert-host-tensors-to-tt-nn-tiled-tensors-or-create-natively-on-device">Convert Host Tensors to TT-NN Tiled Tensors or Create Natively on Device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_basic_operations.html#tile-based-arithmetic-operations">Tile-Based Arithmetic Operations</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_basic_operations.html#simulated-broadcasting-row-vector-expansion">Simulated Broadcasting (Row Vector Expansion)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_basic_operations.html#full-example-and-output">Full example and output</a></li>
 </ul>
 </li>
 <li class="toctree-l2">
-<a class="reference internal" href="ttnn/tutorials/multihead-attention.html">Multi-Head Attention</a><ul>
-<li class="toctree-l3">
-<a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/003.html">Multi-Head Attention</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/003.html#Enable-program-cache">Enable program cache</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/003.html#Write-Multi-Head-Attention-using-ttnn">Write Multi-Head Attention using ttnn</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/003.html#Configuration">Configuration</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/003.html#Initialize-activations-and-weights-using-torch">Initialize activations and weights using torch</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/003.html#Convert-activations-and-weights-to-ttnn">Convert activations and weights to ttnn</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/003.html#Run-the-first-iteration-of-Multi-Head-Attention">Run the first iteration of Multi-Head Attention</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/003.html#Run-a-subsequent-iteration-of-Multi-Head-Attention">Run a subsequent iteration of Multi-Head Attention</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/003.html#Write-optimized-version-of-Multi-Head-Attention">Write optimized version of Multi-Head Attention</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/003.html#Pre-process-the-parameters-of-the-optimized-model">Pre-process the parameters of the optimized model</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/003.html#Run-the-first-iteration-of-the-optimized-Multi-Head-Attention">Run the first iteration of the optimized Multi-Head Attention</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/003.html#Run-a-subsequent-iteration-of-the-optimized-Multi-Head-Attention">Run a subsequent iteration of the optimized Multi-Head Attention</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/003.html#Check-that-the-output-of-the-optimized-version-matches-the-output-of-the-original-implementation">Check that the output of the optimized version matches the output of the original implementation</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/003.html#Close-the-device">Close the device</a></li>
-</ul>
-</li>
-</ul>
-</li>
-<li class="toctree-l2">
-<a class="reference internal" href="ttnn/tutorials/ttnn-tracer.html">ttnn Tracer</a><ul>
-<li class="toctree-l3">
-<a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/004.html">Tracing ttnn operations and torch modules/functions</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/004.html#Trace-torch-functions">Trace torch functions</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/004.html#Trace-torch-functions-and-ttnn-operations">Trace torch functions and ttnn operations</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/004.html#Trace-torch-functions,-torch-modules-and-ttnn-operations">Trace torch functions, torch modules and ttnn operations</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/004.html#Trace-models-written-using-ttnn">Trace models written using ttnn</a></li>
-</ul>
-</li>
-</ul>
-</li>
-<li class="toctree-l2">
-<a class="reference internal" href="ttnn/tutorials/profiling.html">ttnn Profiling</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/005.html">Profiling ttnn operations</a></li>
-</ul>
-</li>
-<li class="toctree-l2">
-<a class="reference internal" href="ttnn/tutorials/resnet-basic-block.html">Resnet Basic Block</a><ul>
-<li class="toctree-l3">
-<a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/006.html">Resnet Block</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/006.html#Torch-Module-(from-torchvision)">Torch Module (from torchvision)</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/006.html#Create-torch-module-and-preprocess-it-to-get-ttnn-parameters">Create torch module and preprocess it to get ttnn parameters</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/006.html#Display-the-parameters-of-the-module">Display the parameters of the module</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/006.html#Display-the-traced-torch-graph">Display the traced torch graph</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/006.html#Implement-ttnn-version-of-the-module.-Pass-in-the-parameters-into-the-constructor.">Implement ttnn version of the module. Pass in the parameters into the constructor.</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/006.html#Run-ttnn-module-and-display-the-traced-graph">Run ttnn module and display the traced graph</a></li>
-</ul>
-</li>
-</ul>
-</li>
-<li class="toctree-l2">
-<a class="reference internal" href="ttnn/tutorials/graphing_torch_dit.html">Graphing Torch DiT_XL_2 With TTNN</a><ul>
-<li class="toctree-l3">
-<a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/007.html">Build a graph of a pytorch based model</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/007.html#Clone-the-library-from-https://github.com/facebookresearch/DiT.git">Clone the library from https://github.com/facebookresearch/DiT.git</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/007.html#Download-DiT-XL/2-Models">Download DiT-XL/2 Models</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/007.html#Sample-from-Pre-trained-DiT-Models-and-build-the-graph">Sample from Pre-trained DiT Models and build the graph</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn/tutorials/ttnn_tutorials/007.html#Display-the-graph">Display the graph</a></li>
-</ul>
-</li>
+<a class="reference internal" href="ttnn/tutorials/ttnn_mlp_inference.html">MLP inference with TT-NN</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_mlp_inference.html#import-the-necessary-libraries">Import the necessary libraries</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_mlp_inference.html#open-tenstorrent-device">Open Tenstorrent device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_mlp_inference.html#load-mnist-test-data">Load MNIST Test Data</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_mlp_inference.html#load-pretrained-mlp-weights">Load Pretrained MLP Weights</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_mlp_inference.html#basic-accuracy-tracking-inference-loop-and-image-flattening">Basic accuracy tracking, inference, loop, and image flattening</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_mlp_inference.html#convert-to-tt-nn-tensor">Convert to TT-NN Tensor</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_mlp_inference.html#layer-1-linear-relu">Layer 1 (Linear + ReLU)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_mlp_inference.html#layer-2-linear-relu">Layer 2 (Linear + ReLU)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_mlp_inference.html#layer-3-output-layer">Layer 3 (Output Layer)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_mlp_inference.html#convert-back-to-pytorch-and-sum-results">Convert Back to PyTorch and sum results</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ttnn/tutorials/ttnn_mlp_inference.html#full-example-and-output">Full example and output</a></li>
 </ul>
 </li>
 </ul>
@@ -2333,24 +2260,6 @@
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="ttnn/demos.html">Building and Uplifting Demos</a></li>
-</ul>
-</div>
-<div class="toctree-wrapper compound">
-<p class="caption" role="heading"><span class="caption-text">Models</span></p>
-<ul>
-<li class="toctree-l1">
-<a class="reference internal" href="tt_metal_models/get_started.html">Getting Started</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="tt_metal_models/get_started.html#prerequisites">Prerequisites</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tt_metal_models/get_started.html#running-an-example-model">Running an example model</a></li>
-</ul>
-</li>
-<li class="toctree-l1">
-<a class="reference internal" href="tt_metal_models/get_performance.html">Performance</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="tt_metal_models/get_performance.html#prerequisites">Prerequisites</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tt_metal_models/get_performance.html#running-a-perf-file">Running a perf file</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tt_metal_models/get_performance.html#running-all-the-perf-files">Running all the perf files</a></li>
-</ul>
-</li>
 </ul>
 </div>
 <div class="toctree-wrapper compound">
