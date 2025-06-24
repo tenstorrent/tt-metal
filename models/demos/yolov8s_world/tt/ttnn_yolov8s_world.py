@@ -400,7 +400,15 @@ class TtMaxSigmoidAttnBlock:
 
     def __call__(self, x, guide):
         """Forward process."""
-        bs, h, w, _ = x.shape
+        if x.shape[1] == 1:
+            bs, h, w, _ = (
+                x.shape[0],
+                int(math.sqrt(x.shape[2]) // x.shape[0]),
+                int(math.sqrt(x.shape[2]) // x.shape[0]),
+                x.shape[3],
+            )
+        else:
+            bs, h, w, _ = x.shape
 
         guide = self.gl(
             guide,
