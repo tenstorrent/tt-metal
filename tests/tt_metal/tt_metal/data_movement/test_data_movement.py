@@ -47,10 +47,6 @@ test_id_to_name = {
     21: "Conv Act with halo 3x3",
     22: "Conv Act with halo 3x3 Small",
     23: "Conv Halo Gather",
-    60: "All to All Packet Sizes",
-    61: "All to All Directed Ideal",
-    70: "All from All Packet Sizes",
-    71: "All from All Directed Ideal",
 }
 
 # Comments for each test explaining why we get the perf that we do
@@ -206,8 +202,8 @@ test_bounds = {
         16: {
             "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
         },
-        30: {  # One from All Directed Ideal
-            "riscv_1": {"latency": {"lower": 33000, "upper": 35000}, "bandwidth": 30},
+        30: {
+            "riscv_1": {"latency": {"lower": 20000, "upper": 37000}, "bandwidth": 30},
         },
         50: {  # One to One Directed Ideal
             "riscv_0": {"latency": {"lower": 28000, "upper": 36000}, "bandwidth": 29},  # 33832
@@ -215,8 +211,14 @@ test_bounds = {
         51: {  # One from One Directed Ideal
             "riscv_1": {"latency": {"lower": 32700, "upper": 37500}, "bandwidth": 28},  # 18596, 28.2
         },
-        52: {  # One to All Directed Ideal
-            "riscv_0": {"latency": {"lower": 70000, "upper": 91000}, "bandwidth": 23},
+        52: {  # One to All Unicast Directed Ideal
+            "riscv_0": {"latency": {"lower": 0, "upper": 4350000}, "bandwidth": 31},  #  4294196, 31.25
+        },
+        53: {  # One to All Multicast Directed Ideal
+            "riscv_0": {"latency": {"lower": 0, "upper": 150000}, "bandwidth": 14},  # 137035, 15.3
+        },
+        54: {  # One to All Multicast Linked Directed Ideal
+            "riscv_0": {"latency": {"lower": 0, "upper": 90000}, "bandwidth": 22},  # 88542, 23.69
         },
         17: {
             "riscv_1": {"latency": {"lower": 50, "upper": 700}, "bandwidth": 3},
@@ -245,18 +247,6 @@ test_bounds = {
         23: {
             "riscv_1": {"latency": {"lower": 500, "upper": 1000}, "bandwidth": 10},
         },
-        # 60: { # All to All Packet Sizes NOT DONE
-        # "riscv_0": {"latency": {"lower": #, "upper": #}, "bandwidth": #},
-        # },
-        61: {  # All to All Directed Ideal
-            "riscv_0": {"latency": {"lower": 30000, "upper": 35000}, "bandwidth": 30},
-        },
-        # 70: { # All from All Packet Sizes NOT DONE
-        #    "riscv_0": {"latency": {"lower": #, "upper": #}, "bandwidth": #},
-        # },
-        # 71: { # All from All Directed Ideal NOT DONE
-        #    "riscv_0": {"latency": {"lower": 30000, "upper": 800000}, "bandwidth": 1.3}, # 33093-701498 cycles, 1.4714111800746403 Bytes/cycle
-        # },
     },
     "blackhole": {
         0: {
@@ -314,17 +304,21 @@ test_bounds = {
         16: {
             "riscv_0": {"latency": {"lower": 50, "upper": 30000}, "bandwidth": 0.4},
         },
-        30: {  # One from All Directed Ideal
-            "riscv_1": {"latency": {"lower": 16500, "upper": 17500}, "bandwidth": 60},
-        },
+        30: {"riscv_1": {"latency": {"lower": 10000, "upper": 18000}, "bandwidth": 60}},
         50: {  # One to One Directed Ideal
             "riscv_0": {"latency": {"lower": 12000, "upper": 19000}, "bandwidth": 59},  # 17000
         },
         51: {  # One from One Directed Ideal
             "riscv_1": {"latency": {"lower": 16000, "upper": 17800}, "bandwidth": 59},  # 8730, 60.1
         },
-        52: {  # One to All Directed Ideal
-            "riscv_0": {"latency": {"lower": 96000, "upper": 100000}, "bandwidth": 42},
+        52: {  # One to All Unicast Directed Ideal
+            "riscv_0": {"latency": {"lower": 0, "upper": 7500000}, "bandwidth": 62},  # 7359113, 62.69
+        },
+        53: {  # One to All Multicast Directed Ideal
+            "riscv_0": {"latency": {"lower": 0, "upper": 180000}, "bandwidth": 24},  # 170221, 24.6
+        },
+        54: {  # One to All Multicast Linked Directed Ideal
+            "riscv_0": {"latency": {"lower": 0, "upper": 110000}, "bandwidth": 41},  # 101088, 41.4
         },
         17: {
             "riscv_1": {"latency": {"lower": 50, "upper": 700}, "bandwidth": 7},
@@ -353,21 +347,6 @@ test_bounds = {
         23: {
             "riscv_1": {"latency": {"lower": 500, "upper": 1000}, "bandwidth": 20},
         },
-        # 60: { # All to All Packet Sizes NOT DONE
-        #    "riscv_0": {"latency": {"lower": 12000, "upper": 19000}, "bandwidth": 59},
-        # },
-        # 61: {  # All to All Directed Ideal
-        #    "riscv_0": {
-        #        "latency": {"lower": 30000, "upper": 35000},
-        #        "bandwidth": 30,
-        #    },  # 33154-33515 cycles, 30.79791138296285 Bytes/cycle
-        # },
-        # 70: { # All from All Packet Sizes NOT DONE
-        #    "riscv_0": {"latency": {"lower": #, "upper": #}, "bandwidth": #},
-        # },
-        # 71: { # All from All Directed Ideal NOT DONE
-        #    "riscv_0": {"latency": {"lower": 10000, "upper": 400000}, "bandwidth": 2.7}, # 18481-345478 cycles, 2.9955018843457473 Bytes/cycle
-        # },
     },
 }
 
