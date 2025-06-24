@@ -73,8 +73,6 @@ void py_bind_all_to_all_dispatch(py::module& module) {
                const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
                const std::optional<GlobalSemaphore>& global_semaphore,
                QueueId queue_id) {
-                // Invoke with correct parameter ordering: axis first, followed by optional_output_tensors, as expected
-                // by ExecuteAllToAllDispatch::invoke.
                 return self(
                     queue_id,
                     input_tensor,
