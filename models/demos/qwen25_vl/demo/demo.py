@@ -25,6 +25,7 @@ from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.tt_transformers.tt.generator import SamplingParams
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
 
@@ -426,8 +427,12 @@ def test_demo(
         # Start decoding
         iteration = 0
         # TODO Argmax on device is only supported for batch_size=1
-        # argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
-        argmax_on_device = False
+        argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
+        if argmax_on_device:
+            device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
+        else:
+            device_sampling_params = None
+
         users_decoding = True
         user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
         # Keep track of generated outputs to print out every iteration
@@ -457,7 +462,7 @@ def test_demo(
                 enable_trace=enable_trace,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
-                argmax_on_device=argmax_on_device,
+                sampling_params=device_sampling_params,
             )
 
             # Get the next token

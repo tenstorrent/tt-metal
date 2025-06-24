@@ -85,9 +85,8 @@ class Generator:
         kv_cache=None,
         enable_trace=True,
         read_from_device=True,
-        argmax_on_device=False,
+        sampling_params=None,
     ):
-        assert argmax_on_device is False, "todo)) the new decode_forward_text expects sampling_params"
         return self._ttt_generator.decode_forward_text(
             tokens=tokens,
             start_pos=start_pos,
@@ -95,6 +94,7 @@ class Generator:
             kv_cache=[kv_cache],
             enable_trace=enable_trace,
             read_from_device=read_from_device,
+            sampling_params=sampling_params,
         )
 
     def __prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, kv_cache=None):
