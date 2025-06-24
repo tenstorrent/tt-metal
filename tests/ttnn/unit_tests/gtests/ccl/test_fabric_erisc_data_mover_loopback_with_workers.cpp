@@ -98,7 +98,7 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_2_messages_Persiste
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
 
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram);
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, true);
     ASSERT_EQ(result, 0);
 }
 TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_3_messages_PersistentFabric_Scatter) {
@@ -107,7 +107,7 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_3_messages_Persiste
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
 
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram);
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, true);
     ASSERT_EQ(result, 0);
 }
 // Will wrapp sender but not receiver buffers
@@ -127,7 +127,7 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_10_messages_Persist
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
 
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram);
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, true);
     ASSERT_EQ(result, 0);
 }
 // Will wrapp sender and receiver buffers
@@ -147,7 +147,7 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_20_messages_Persist
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
 
-    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram);
+    auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, true);
     ASSERT_EQ(result, 0);
 }
 

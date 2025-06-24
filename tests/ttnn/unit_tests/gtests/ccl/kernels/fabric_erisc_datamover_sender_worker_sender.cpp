@@ -150,7 +150,8 @@ void kernel_main() {
                 uint64_t dest_noc_address2 = get_noc_addr(p + 1, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
                 packet_header->to_chip_unicast(config.unicast.distance)
                     ->to_noc_unicast_scatter_write(
-                        tt::tt_fabric::NocUnicastScatterCommandHeader{dest_noc_address, dest_noc_address2},
+                        tt::tt_fabric::NocUnicastScatterCommandHeader{
+                            dest_noc_address, dest_noc_address2, (uint16_t)page_size},
                         (pages_to_send * page_size));
             } else {
                 packet_header->to_chip_unicast(config.unicast.distance)
