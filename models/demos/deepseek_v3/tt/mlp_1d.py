@@ -6,7 +6,8 @@ import math
 import torch
 
 import ttnn
-from models.demos.deepseek_v3.tt.abstract_module import AbstractModule
+from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
+from models.demos.deepseek_v3.utils.config_dataclass import AllReduceConfig, LinearConfig, MulConfig, ReshardConfig
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2_FP16,
     COMPUTE_KERNEL_CONFIG_LOFI,
@@ -121,39 +122,25 @@ class MLP_1D(AbstractModule):
 
         # Program configs are dynamically generated in __init__ based on sequence length
         # See __init__ function for implementation details
-        # Note: avoid the temptation to combine these - create_run_config will look for these names
-        # and will fill them with the weights, so each op needs its own config entry.
-        config["w1"] = {
-            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-            "compute_kernel_config": COMPUTE_KERNEL_CONFIG_HIFI2_FP16,
-        }
+        config["w1"] = config["w2"] = config["w3"] = LinearConfig(
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2_FP16,
+        )
 
-        config["w3"] = {
-            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-            "compute_kernel_config": COMPUTE_KERNEL_CONFIG_HIFI2_FP16,
-        }
+        config["mul"] = MulConfig(
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+        )
 
-        config["w2"] = {
-            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-            "compute_kernel_config": COMPUTE_KERNEL_CONFIG_HIFI2_FP16,
-        }
-
-        # Activation configurations
-        config["mul"] = {
-            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-            "input_tensor_a_activations": [ttnn.UnaryOpType.SILU],
-        }
-
-        # All-reduce configuration for multi-device synchronization
-        config["all_reduce"] = {
-            "cluster_axis": 0,
-            "dim": 3,
-            "num_reduce_scatter_links": 1,
-            "num_all_gather_links": 1,
-            "topology": ttnn.Topology.Ring if num_devices == 8 else ttnn.Topology.Linear,
-            "dtype": ttnn.bfloat8_b,
-            "use_composite": dim >= 8192,  # Use composite for larger models
-        }
+        config["all_reduce"] = AllReduceConfig(
+            cluster_axis=0,
+            dim=3,
+            num_reduce_scatter_links=1,
+            num_all_gather_links=1,
+            topology=ttnn.Topology.Ring if num_devices == 8 else ttnn.Topology.Linear,
+            dtype=ttnn.bfloat8_b,
+            use_composite=dim >= 8192,  # Use composite for larger models
+        )
 
         return config
 
@@ -176,22 +163,16 @@ class MLP_1D(AbstractModule):
         config = {"mode": "decode"}
 
         # Decode mode configurations
-        config["w1"] = {
-            "memory_config": ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            "program_config": dram_sharded_matmul_config(dim, hidden_dim, mesh_device),
-            "compute_kernel_config": COMPUTE_KERNEL_CONFIG_LOFI,  # FP16 accumulation saves L1
-        }
-
-        config["w3"] = {
-            "memory_config": ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            "program_config": dram_sharded_matmul_config(dim, hidden_dim, mesh_device),  # Same as w1
-            "compute_kernel_config": COMPUTE_KERNEL_CONFIG_LOFI,
-        }
+        config["w1"] = config["w3"] = LinearConfig(
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            program_config=dram_sharded_matmul_config(dim, hidden_dim, mesh_device),
+            compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,  # FP16 accumulation saves L1
+        )
 
         tile_padded_batch_rows = TILE_SIZE * int(math.ceil(MLP_1D.MAX_BATCH_SIZE / TILE_SIZE))
         mlp2_core_grid = dram_shard_core_grid_for_k_and_n(hidden_dim // num_devices, dim)
-        config["w2_reshard"] = {
-            "memory_config": ttnn.create_sharded_memory_config(
+        config["w2_reshard"] = ReshardConfig(
+            memory_config=ttnn.create_sharded_memory_config(
                 (
                     tile_padded_batch_rows,
                     hidden_dim // num_devices // mlp2_core_grid.num_cores,
@@ -201,36 +182,36 @@ class MLP_1D(AbstractModule):
                 ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-        }
-        config["w2"] = {
-            "memory_config": ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            "program_config": dram_sharded_matmul_config(hidden_dim // num_devices, dim, mesh_device),
-            "compute_kernel_config": COMPUTE_KERNEL_CONFIG_LOFI,
-        }
+        )
+        config["w2"] = LinearConfig(
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            program_config=dram_sharded_matmul_config(hidden_dim // num_devices, dim, mesh_device),
+            compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+        )
 
         # Activation configurations
-        config["mul"] = {
-            "memory_config": ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            "input_tensor_a_activations": [ttnn.UnaryOpType.SILU],
-        }
+        config["mul"] = MulConfig(
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+        )
 
         # All-reduce configuration for multi-device synchronization
-        config["all_reduce"] = {
-            "cluster_axis": 0,
-            "dim": 3,
-            "num_reduce_scatter_links": 1,
-            "num_all_gather_links": 1,
-            "topology": ttnn.Topology.Ring if num_devices == 8 else ttnn.Topology.Linear,
-            "dtype": ttnn.bfloat8_b,
+        config["all_reduce"] = AllReduceConfig(
+            cluster_axis=0,
+            dim=3,
+            num_reduce_scatter_links=1,
+            num_all_gather_links=1,
+            topology=ttnn.Topology.Ring if num_devices == 8 else ttnn.Topology.Linear,
+            dtype=ttnn.bfloat8_b,
             # FIXME: From tt_transformers/tt/mlp.py, surely >= and not ==?
             # FIXME: Why this value and not e.g. 7*1024?
-            "use_composite": dim == 8192,  # Use composite for larger models
-        }
+            use_composite=dim == 8192,  # Use composite for larger models
+        )
 
         return config
 
-    def __init__(self, mesh_device, hf_config):
-        """Initialize the MLP with the given mesh device and HuggingFace config
+    def __init__(self, hf_config, mesh_device):
+        """Initialize the MLP with the given HuggingFace config and mesh device
 
         We use this to define lambdas for dynamic prefill program configs that
         will be used in the forward pass; putting dynamic functions in the
@@ -241,11 +222,11 @@ class MLP_1D(AbstractModule):
         we should find a way to make it beautiful and fast instead.
 
         Args:
-            mesh_device: TTNN mesh device
             hf_config: HuggingFace model configuration object
+            mesh_device: TTNN mesh device
 
         """
-        super().__init__()
+        super().__init__(hf_config, mesh_device)
 
         prefill_rows = 8  # TODO if BH = 10, if wh = 8
         dim = hf_config.hidden_size

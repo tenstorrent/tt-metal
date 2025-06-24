@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 from typing import Any, Dict, Optional, Union
 
 import ttnn
@@ -63,6 +64,14 @@ def pretty_print_run_config(run_config: Dict[str, Any], indent: int = 0) -> str:
                 "memory_config": value.memory_config() if hasattr(value, "memory_config") else "None",
             }
             lines.append(pretty_print_run_config(tensor_dict, indent + 1))
+        elif dataclasses.is_dataclass(value):
+            # Dataclass - format as nested structure showing all fields
+            lines.append(f"{indent_str}{key}: {value.__class__.__name__}")
+            # Get field values without deep copying (preserves ttnn object references)
+            dataclass_dict = {}
+            for field in dataclasses.fields(value):
+                dataclass_dict[field.name] = getattr(value, field.name)
+            lines.append(pretty_print_run_config(dataclass_dict, indent + 1))
         elif hasattr(value, "__class__") and value.__class__.__module__.startswith("ttnn"):
             # Other TTNN objects - format nicely
             ttnn_result = _format_ttnn_object(value)
@@ -232,6 +241,15 @@ def _format_value(value: Any, indent: int) -> str:
     Returns:
         Formatted string representation of the value
     """
+    # Check if this is a dataclass
+    if dataclasses.is_dataclass(value):
+        # Format dataclass as nested structure
+        # Get field values without deep copying (preserves ttnn object references)
+        dataclass_dict = {}
+        for field in dataclasses.fields(value):
+            dataclass_dict[field.name] = getattr(value, field.name)
+        return f"{value.__class__.__name__}\n" + pretty_print_run_config(dataclass_dict, indent + 1)
+
     # Check if this is a TTNN object that can be formatted nicely
     ttnn_result = _format_ttnn_object(value)
     if ttnn_result is not None:
@@ -421,13 +439,17 @@ def _merge_configs_and_load_weights(
 
             if isinstance(weight_value, dict) and weight_value:
                 # This key has weight entries, load the weights
-                if isinstance(model_value, dict):
+                if dataclasses.is_dataclass(model_value):
+                    # Handle dataclass: create a new instance with loaded weights to avoid shared references
+                    merged_value = _merge_dataclass_with_weights(model_value, weight_value, mesh_device)
+                    result[key] = merged_value
+                elif isinstance(model_value, dict):
                     # Merge model config with loaded weights
                     merged_value = model_value.copy()
                     for weight_key, weight_path in weight_value.items():
                         if isinstance(weight_path, str):
                             # Load the TTNN tensor from the file path
-                            weight_tensor = ttnn.load_tensor(weight_path)
+                            weight_tensor = ttnn.load_tensor(weight_path, device=mesh_device)
                             merged_value[weight_key] = weight_tensor
                         else:
                             # Keep non-string values as-is (e.g., nested configs)
@@ -438,14 +460,17 @@ def _merge_configs_and_load_weights(
                     merged_value = {}
                     for weight_key, weight_path in weight_value.items():
                         if isinstance(weight_path, str):
-                            weight_tensor = ttnn.load_tensor(weight_path)
+                            weight_tensor = ttnn.load_tensor(weight_path, device=mesh_device)
                             merged_value[weight_key] = weight_tensor
                         else:
                             merged_value[weight_key] = weight_path
                     result[key] = merged_value
             else:
                 # No weight entries for this key, recursively process nested dicts
-                if isinstance(model_value, dict) and isinstance(weight_value, dict):
+                if dataclasses.is_dataclass(model_value):
+                    # Even without weights, create a new instance to avoid shared references
+                    result[key] = _copy_dataclass(model_value)
+                elif isinstance(model_value, dict) and isinstance(weight_value, dict):
                     result[key] = _merge_configs_and_load_weights(model_value, weight_value, mesh_device)
                 else:
                     # Keep model value as-is
@@ -460,3 +485,47 @@ def _merge_configs_and_load_weights(
     else:
         # Return model_config as-is for non-dict/non-list types
         return model_config
+
+
+def _merge_dataclass_with_weights(
+    dataclass_instance: Any, weight_dict: Dict[str, Any], mesh_device: ttnn.Device
+) -> Any:
+    """Merge a dataclass instance with weights, creating a new instance to avoid shared references.
+
+    Args:
+        dataclass_instance: The dataclass instance to merge with weights
+        weight_dict: Dictionary mapping weight keys to file paths
+        mesh_device: TTNN device for loading weights
+
+    Returns:
+        New dataclass instance with weights loaded
+    """
+    # Get current field values without deep copying (preserves ttnn object references)
+    current_values = {}
+    for field in dataclasses.fields(dataclass_instance):
+        current_values[field.name] = getattr(dataclass_instance, field.name)
+
+    # Load weights and add them to the values
+    for weight_key, weight_path in weight_dict.items():
+        if isinstance(weight_path, str):
+            # Load the TTNN tensor from the file path
+            weight_tensor = ttnn.load_tensor(weight_path, device=mesh_device)
+            current_values[weight_key] = weight_tensor
+        else:
+            # Keep non-string values as-is (e.g., nested configs)
+            current_values[weight_key] = weight_path
+
+    # Create a new instance of the same dataclass type with the merged values
+    return type(dataclass_instance)(**current_values)
+
+
+def _copy_dataclass(dataclass_instance: Any) -> Any:
+    """Create a copy of a dataclass instance to avoid shared references.
+
+    Args:
+        dataclass_instance: The dataclass instance to copy
+
+    Returns:
+        New dataclass instance with the same values
+    """
+    return dataclasses.replace(dataclass_instance)

@@ -82,12 +82,12 @@ class AbstractModule(LightweightModule, ABC):
             Dict containing operator configurations for decode mode
         """
 
-    def __init__(self, mesh_device: ttnn.Device, hf_config: Any):
-        """Initialize the module with the given mesh device and HuggingFace config.
+    def __init__(self, hf_config: Any, mesh_device: ttnn.Device):
+        """Initialize the module with the given HuggingFace config and mesh device.
 
         Args:
-            mesh_device: TTNN mesh device
             hf_config: HuggingFace model configuration object
+            mesh_device: TTNN mesh device
         """
         super().__init__()
 

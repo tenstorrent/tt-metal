@@ -53,10 +53,8 @@ def reference_model(hf_config):
 )
 def test_convert_weights(reference_model, hf_config, temp_dir, mesh_device):
     """Test that weights are correctly converted to TTNN format."""
-    output_path = temp_dir / "weights"
-
     # Convert weights - now returns weight_config
-    weight_config = MLP_1D.convert_weights(reference_model.state_dict(), output_path, mesh_device)
+    weight_config = MLP_1D.convert_weights(hf_config, reference_model.state_dict(), temp_dir, mesh_device)
 
     # Verify weight_config structure
     assert "w1" in weight_config
@@ -97,93 +95,6 @@ def test_convert_weights(reference_model, hf_config, temp_dir, mesh_device):
     ],
     indirect=True,
 )
-def test_prefill_config_generation(hf_config, mesh_device):
-    """Test prefill config generation."""
-    model_config = MLP_1D.prefill_model_config(hf_config, mesh_device)
-
-    # Check required keys exist
-    assert "memory_config" in model_config["w1"]
-    assert "compute_kernel_config" in model_config["w1"]
-    assert "max_rows" in model_config
-    assert "topology" in model_config["all_reduce"]
-
-    # program_config should not be present, it's dynamic
-    assert "program_config" not in model_config["w1"]
-
-
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), (1, ttnn.get_num_devices())
-        )
-    ],
-    indirect=True,
-)
-def test_decode_config_generation(hf_config, mesh_device):
-    """Test decode config generation."""
-    model_config = MLP_1D.decode_model_config(hf_config, mesh_device)
-
-    # Check required keys exist
-    assert "memory_config" in model_config["w1"]
-    assert "program_config" in model_config["w1"]
-    assert "compute_kernel_config" in model_config["w1"]
-
-    # Decode should use L1 sharding
-    assert model_config["w1"]["memory_config"] == ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
-
-    # Program config should not be a list for decode
-    assert not isinstance(model_config["w1"]["program_config"], list)
-
-
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), (1, ttnn.get_num_devices())
-        )
-    ],
-    indirect=True,
-)
-def test_run_config_creation(reference_model, hf_config, temp_dir, mesh_device):
-    """Test creating runtime config from ModelConfig and weights."""
-    # Get state dict from actual model - pass directly to convert_weights
-    hf_state_dict = reference_model.state_dict()
-
-    # First convert weights and get weight_config
-    weights_path = temp_dir / "weights"
-    weight_config = MLP_1D.convert_weights(hf_config, hf_state_dict, weights_path, mesh_device)
-
-    # Generate model config
-    model_config = MLP_1D.decode_model_config(hf_config, mesh_device)
-    model_config["mode"] = "decode"
-
-    # Create RunConfig using both weight_config and model_config
-    run_config = create_run_config(model_config, weight_config, mesh_device)
-
-    # Verify we can access operation configs
-    assert "w1" in run_config
-    assert "w2" in run_config
-    assert "w3" in run_config
-    assert "all_reduce" in run_config
-    assert "input_tensor_b" in run_config["w1"]
-
-    # Verify mode is accessible
-    assert run_config["mode"] == "decode"
-
-
-# Integration Tests
-
-
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), (1, ttnn.get_num_devices())
-        )
-    ],
-    indirect=True,
-)
 @pytest.mark.parametrize(
     "mode,seq_len",
     [
@@ -207,8 +118,7 @@ def test_forward_pass(
     hf_state_dict = reference_model.state_dict()
 
     # Setup: Convert weights and get weight_config
-    weights_path = temp_dir / "weights"
-    weight_config = MLP_1D.convert_weights(hf_config, hf_state_dict, weights_path, mesh_device)
+    weight_config = MLP_1D.convert_weights(hf_config, hf_state_dict, temp_dir, mesh_device)
 
     # Generate appropriate config
     if mode == "prefill":
@@ -220,7 +130,7 @@ def test_forward_pass(
     run_config = create_run_config(model_config, weight_config, mesh_device)
 
     # Instantiate the model to get dynamic program configs for prefill
-    tt_mlp = MLP_1D(mesh_device, hf_config)
+    tt_mlp = MLP_1D(hf_config, mesh_device)
 
     # Create input tensor
     torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)

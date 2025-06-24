@@ -495,3 +495,8 @@ def save_and_get_path(path, tensor):
     ttnn.dump_tensor(path, tensor)
     ttnn.deallocate(tensor)
     return str(path)
+
+
+def sub_state_dict(state_dict, prefix):
+    """Get a subset of the state dict with a given prefix."""
+    return {k.replace(prefix, ""): v for k, v in state_dict.items() if k.startswith(prefix)}

@@ -3,16 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.deepseek_v3.tt.abstract_module import AbstractModule
+from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
+from models.demos.deepseek_v3.utils.config_dataclass import EmbeddingConfig
 from models.demos.deepseek_v3.utils.config_helpers import save_and_get_path
 
 
 class Embedding_1D(AbstractModule):
-    """Embedding module with 1D tensor parallelism from TTT code."""
+    """Embedding module with 1D tensor parallelism from TTT code.
+    Uses DRAM-sharded weights split 1D across all wormholes"""
 
     @staticmethod
     def convert_weights(hf_config, state_dict, output_path, mesh_device):
-        """Convert PyTorch weights to TTNN format for 1D tensor parallelism.
+        """DRAM-sharded weights split 1D across all wormholes
 
         Args:
             hf_config: HuggingFace model configuration object
@@ -26,7 +28,7 @@ class Embedding_1D(AbstractModule):
         weight_config = {}
 
         # Get the embedding weight from the state dict (in the full model: model.embed_tokens.weight)
-        torch_weight = state_dict["weight"]
+        torch_weight = state_dict["embed_tokens.weight"]
 
         # Convert to TTNN tensor with 1D sharding across final dimension
         ttnn_weight = ttnn.as_tensor(
@@ -60,10 +62,10 @@ class Embedding_1D(AbstractModule):
         config = {"mode": "prefill"}
 
         # Embedding configuration for prefill mode
-        config["embedding"] = {
-            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-            "layout": ttnn.TILE_LAYOUT,
-        }
+        config["embedding"] = EmbeddingConfig(
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+        )
 
         return config
 
@@ -83,9 +85,9 @@ class Embedding_1D(AbstractModule):
         config["mode"] = "decode"
         return config
 
-    def __init__(self, mesh_device, hf_config):
-        """Initialize the embedding with the given mesh device and HuggingFace config."""
-        super().__init__()
+    def __init__(self, hf_config, mesh_device):
+        """Initialize the embedding with the given HuggingFace config and mesh device."""
+        super().__init__(hf_config, mesh_device)
         # Embedding doesn't need dynamic program configs or temporary tensors
 
     def forward(self, x, cfg, mesh_device):
