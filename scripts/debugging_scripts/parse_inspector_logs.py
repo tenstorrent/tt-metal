@@ -149,7 +149,10 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, Program
             info = entry["program_kernel_compile_finished"]
             program_id = int(info.get("id"))
             watcher_kernel_id = int(info.get("watcher_kernel_id"))
-            programs[program_id].watcher_kernel_ids.append(watcher_kernel_id)
+            try:
+                programs[program_id].watcher_kernel_ids.append(watcher_kernel_id)
+            except:
+                print(f"Program ID {program_id} is out of range. Skipping...")
             if verbose:
                 print_log(
                     int(info.get("timestamp_ns")),
