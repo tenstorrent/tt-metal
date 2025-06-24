@@ -109,6 +109,11 @@ add_executable(unit_tests_ttnn_fabric_edm)
 target_sources(unit_tests_ttnn_fabric_edm PRIVATE ccl/test_fabric_edm.cpp)
 setup_ttnn_test_target(unit_tests_ttnn_fabric_edm)
 
+# unit_tests_transaction_id_tracker
+add_executable(unit_tests_ttnn_transaction_id_tracker)
+target_sources(unit_tests_ttnn_transaction_id_tracker PRIVATE ccl/test_transaction_id_tracker.cpp)
+setup_ttnn_test_target(unit_tests_ttnn_transaction_id_tracker)
+
 # unit_tests_ttnn_ccl_multi_tensor
 
 add_executable(unit_tests_ttnn_ccl_multi_tensor)
