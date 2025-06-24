@@ -178,6 +178,7 @@ class TransformerBlock(LightweightModule):
         # MLP takes replicated inputs and produces fractured outputs
         # Check the input sizes here and make sure they are what a MOE expects for Mixtral
         ff_out = self.feed_forward.forward(ff_in, mode)  # ff_out is replicated
+        breakpoint()
         ff_out = ff_out[:, :, :, 0:512]
         # ff_out = ff_out.to_memory_config(memory_config=ttnn.MemoryConfig(memory_config=ttnn.MemoryConfig(memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,buffer_type=ttnn.BufferType.DRAM)))
         ff_out = ttnn.to_memory_config(
