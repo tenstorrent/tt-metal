@@ -202,6 +202,7 @@ void DataCollector::DumpData() {
 
     // Extra DispatchData objects to collect data across programs
     std::vector<DispatchData*> cross_program_data;
+    cross_program_data.reserve(DISPATCH_DATA_COUNT);
     for (int idx = 0; idx < DISPATCH_DATA_COUNT; idx++) {
         cross_program_data.push_back(new DispatchData(idx));
     }

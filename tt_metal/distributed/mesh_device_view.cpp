@@ -61,6 +61,7 @@ std::vector<IDevice*> MeshDeviceView::get_devices_on_row(size_t row) const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
     TT_FATAL(row < shape_2d_->height(), "Row index out of bounds: {}", row);
     std::vector<IDevice*> row_devices;
+    row_devices.reserve(shape_2d_->width());
     for (int col = 0; col < shape_2d_->width(); ++col) {
         row_devices.push_back(devices_.at(MeshCoordinate(row, col)));
     }
@@ -71,6 +72,7 @@ std::vector<IDevice*> MeshDeviceView::get_devices_on_column(size_t col) const {
     TT_FATAL(shape_2d_.has_value(), "MeshDeviceView is not 2D!");
     TT_FATAL(col < shape_2d_->width(), "Column index out of bounds: {}", col);
     std::vector<IDevice*> col_devices;
+    col_devices.reserve(shape_2d_->height());
     for (int row = 0; row < shape_2d_->height(); ++row) {
         col_devices.push_back(devices_.at(MeshCoordinate(row, col)));
     }

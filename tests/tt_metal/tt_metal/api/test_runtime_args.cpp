@@ -160,6 +160,7 @@ std::pair<tt::tt_metal::Program, std::vector<tt::tt_metal::KernelHandle>> initia
     tt::tt_metal::Program program = tt_metal::CreateProgram();
     std::vector<tt::tt_metal::KernelHandle> kernel_ids;
 
+    kernel_ids.reserve(core_range_sets.size());
     for (const auto& core_range_set : core_range_sets) {
         kernel_ids.push_back(initialize_program_compute(device, program, core_range_set, num_unique_rt_args, num_common_rt_args));
     }

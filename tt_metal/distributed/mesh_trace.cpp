@@ -129,6 +129,7 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
     DeviceCommand command_sequence(MetalContext::instance().hal().get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
 
+    exec_buf_end.reserve(command_sequence.size_bytes() / sizeof(uint32_t));
     for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
         exec_buf_end.push_back(((uint32_t*)command_sequence.data())[i]);
     }
