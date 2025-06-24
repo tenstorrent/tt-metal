@@ -801,7 +801,6 @@ class TtWorldDetect:
                     input_params=input_params["cv2_params"][i]["input_params"][2],
                     is_act_false=True,
                     conv_alone=True,
-                    reshape_tensor=True,
                 ),
             ]
             for i in range(self.nl)
@@ -825,7 +824,6 @@ class TtWorldDetect:
                     self.parameters["cv3"][i][2],
                     input_params=input_params["cv3_params"][i]["input_params"][2],
                     is_act_false=True,
-                    reshape_tensor=True,
                     conv_alone=True,
                 ),
             ]
