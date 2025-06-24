@@ -23,12 +23,6 @@ Welcome to TT-NN documentation!
    ttnn/demos
 
 .. toctree::
-   :caption: Models
-
-   tt_metal_models/get_started
-   tt_metal_models/get_performance
-
-.. toctree::
    :caption: Resources
 
    resources/support
