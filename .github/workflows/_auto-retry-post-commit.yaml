@@ -56,7 +56,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          MAX_ATTEMPTS=4
+          MAX_ATTEMPTS=3
           read original_trigger conclusion workflow_name <<< $(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} --jq '.event + " " + .conclusion + " " + .name')
           caller_branch_name=$(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }} --jq '.head_branch')
           echo "caller workflow branch name: $caller_branch_name"
