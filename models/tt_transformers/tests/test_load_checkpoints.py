@@ -168,11 +168,11 @@ def hf_mllama_save_tensor_states(loaded: list, model_name: str, params: dict, te
 
 
 # [INFO]: start of copied function from known good implementation of load_sharded_checkpoints for the following models:
-# "Llama3.2-1B"
-# "Llama3.2-3B"
-# "Llama3.1-8B"
-# "Llama3.2-11B"
-# "Llama3.1-70B"
+# "Llama-3.2-1B"
+# "Llama-3.2-3B"
+# "Llama-3.1-8B"
+# "Llama-3.2-11B"
+# "Llama-3.1-70B"
 def load_sharded_checkpoints_orig(checkpoints, n_layers):
     checkpoint = {}
     logger.info(f"Loading {len(checkpoints)} checkpoint files")
@@ -240,9 +240,9 @@ def test_load_checkpoints():
     assert (
         is_70b or is_90b
     ), "this test is only needed for models with sharded checkpoints (only 70B and 90B models atm)"
-    model_name = "Llama3.1-70B-Instruct" if is_70b else "Llama3.2-90B-Vision-Instruct"
-    model_names_with_hf_golden_func = ("Llama3.2-90B-Vision-Instruct",)
-    model_names_with_orig_golden_func = ("Llama3.1-70B-Instruct",)
+    model_name = "Llama-3.1-70B-Instruct" if is_70b else "Llama-3.2-90B-Vision-Instruct"
+    model_names_with_hf_golden_func = ("Llama-3.2-90B-Vision-Instruct",)
+    model_names_with_orig_golden_func = ("Llama-3.1-70B-Instruct",)
 
     with open(os.path.join(input_base_path, "params.json"), "r") as f:
         params = json.load(f)

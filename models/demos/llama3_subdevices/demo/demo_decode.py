@@ -189,8 +189,8 @@ def run_llama3_demo(
     tt_device_name = model_args.device_name  # ["N150", "N300", "T3K", "TG"]
 
     if llama_model_name == "3.1-70B":
-        assert tt_device_name in ["TG"], "Llama3.1-70B is only supported on TG"
-        assert max_seq_len <= 128 * 1024, "TG supports the official max context length of 128k tokens for Llama3.1-70B"
+        assert tt_device_name in ["TG"], "Llama-3.1-70B is only supported on TG"
+        assert max_seq_len <= 128 * 1024, "TG supports the official max context length of 128k tokens for Llama-3.1-70B"
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
@@ -227,7 +227,7 @@ def run_llama3_demo(
         )
         logger.info("Page table tensor done")
 
-    # Load TTNN Llama3.1 model
+    # Load TTNN Llama-3.1 model
     logger.info("Loading weights to device...")
     profiler.start("loading_weights_to_device")
     tt_model = TtTransformer(
@@ -596,7 +596,7 @@ def run_llama3_demo(
 # input_prompts (string): input json file with prompts to process. See models/demos/llama3/demo/*.json for list of input files
 # instruct (bool): Whether to use instruct weights or general weights
 # repeat_batches (int): Number of consecutive batches of users to run (default: 1)
-# max_seq_len (int): Maximum context length supported by the model (Llama3.1 and Llama3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
+# max_seq_len (int): Maximum context length supported by the model (Llama-3.1 and Llama-3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
 # batch_size (int): Number of users in a batch (Supports 1/2/4/8/16/32 batches)
 # max_generated_tokens (int): Maximum number of tokens to generate for each user (Note that the users will stop generation before this limit if they reach a EoS token)
 # paged_attention (bool): Whether to use paged attention or default attention (vLLM requires paged attention)
