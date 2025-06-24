@@ -14,13 +14,10 @@ void bind_rand_operation(py::module& pymodule) {
         Generates a tensor with the given shape, filled with random values from a uniform distribution.
         based on the specified data type:
 
-        - DataType.uint16 / uint32 / int32:
-            Integer values: 0 or 1
-
-        - DataType.float32 / bfloat16:
+        - DataType.float32 / bfloat16 / bfloat4_b / bfloat8_b:
             Floating-point values in range [0.0, 1.0)
 
-        - DataType.bfloat4_b / bfloat8_b:
+        - Integer data types:
             Not supported for uniform random generation.
 
         Args:
@@ -31,6 +28,10 @@ void bind_rand_operation(py::module& pymodule) {
             dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to ttnn.bfloat16.
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to ttnn.TILE_LAYOUT.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
+            low (float, optional): The lower bound of the range (inclusive).
+            high (float, optional): The upper bound of the range (exclusive).
+            seed (int, optional): An optional seed to initialize the random number generator
+                                for reproducible results. Defaults to 0.
 
         Returns:
             ttnn.Tensor: A tensor with specified shape, dtype, and layout containing random values.
@@ -47,29 +48,26 @@ void bind_rand_operation(py::module& pymodule) {
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
-               const ttnn::Shape& size,
+               const ttnn::Shape& shape,
                MeshDevice& device,
                const DataType dtype,
                const Layout layout,
                const MemoryConfig& memory_config,
-               QueueId queue_id) { return self(queue_id, size, device, dtype, layout, memory_config); },
+               float from,
+               float to,
+               uint32_t seed,
+               QueueId queue_id) {
+                return self(queue_id, shape, device, dtype, layout, memory_config, from, to, seed);
+            },
             py::arg("shape"),
             py::arg("device"),
             py::kw_only(),
             py::arg("dtype") = DataType::BFLOAT16,
             py::arg("layout") = Layout::TILE,
             py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
-            py::arg("queue_id") = DefaultQueueId},
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Shape& size,
-               const DataType dtype,
-               const Layout layout,
-               QueueId queue_id) { return self(queue_id, size, dtype, layout); },
-            py::arg("shape"),
-            py::kw_only(),
-            py::arg("dtype") = DataType::BFLOAT16,
-            py::arg("layout") = Layout::TILE,
+            py::arg("low") = 0.0f,
+            py::arg("high") = 1.0f,
+            py::arg("seed") = 0,
             py::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace ttnn::operations::rand

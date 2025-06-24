@@ -11,15 +11,12 @@ struct Rand {
         QueueId queue_id,
         const ttnn::Shape& size,
         MeshDevice& device,
-        const DataType dtype = DataType::BFLOAT16,
-        const Layout layout = Layout::TILE,
-        const MemoryConfig& memory_config = types::DRAM_MEMORY_CONFIG);
-
-    static Tensor invoke(
-        QueueId queue_id,
-        const ttnn::Shape& size,
-        const DataType dtype = DataType::BFLOAT16,
-        const Layout layout = Layout::TILE);
+        DataType dtype = DataType::BFLOAT16,
+        Layout layout = Layout::TILE,
+        const MemoryConfig& memory_config = types::DRAM_MEMORY_CONFIG,
+        float from = 0.0f,
+        float to = 1.0f,
+        uint32_t seed = 0);
 };
 }  // namespace ttnn::operations::rand
 

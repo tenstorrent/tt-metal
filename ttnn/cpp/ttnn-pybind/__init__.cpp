@@ -66,6 +66,7 @@
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/uniform/uniform_pybind.hpp"
+#include "ttnn/operations/rand/rand_pybind.hpp"
 
 namespace ttnn::operations {
 
