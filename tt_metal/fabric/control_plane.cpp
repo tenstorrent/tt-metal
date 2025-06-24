@@ -1385,6 +1385,152 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_
     }
 }
 
+void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const {
+    FabricNodeId src_fabric_node_id{mesh_id, chip_id};
+    auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
+
+    const auto& fabric_context = this->get_fabric_context();
+    const auto& edm_config = fabric_context.get_fabric_router_config();
+    const auto topology = fabric_context.get_fabric_topology();
+    const bool is_2d_fabric = topology == Topology::Mesh;
+
+    tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_connections = {};
+
+    fprintf(stderr, "M%dD%d Physical:%d\n", *mesh_id, chip_id, physical_chip_id);
+
+    // Get all physically connected ethernet channels directly from the cluster
+    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& connected_chips_and_eth_cores = cluster.get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
+
+    // Collect all connected ethernet channels
+    std::set<chan_id_t> all_connected_channels;
+    for (const auto& [connected_chip_id, eth_cores] : connected_chips_and_eth_cores) {
+        for (const auto& eth_core : eth_cores) {
+            auto channel_id = soc_desc.logical_eth_core_to_chan_map.at(eth_core);
+            fprintf(
+                stderr,
+                "\tPhysically connected to chip %d via eth core %s chan %u\n",
+                connected_chip_id,
+                eth_core.str().c_str(),
+                channel_id);
+            all_connected_channels.insert(channel_id);
+        }
+    }
+
+    size_t eth_endpoint_idx = 0;
+    size_t total_physical_channels = all_connected_channels.size();
+    size_t fabric_routed_channels = 0;
+
+    // Iterate through all physically connected channels for reporting
+    for (const auto& eth_channel_id : all_connected_channels) {
+        fprintf(stderr, "\tM%dD%d EthChan %u:\n", *mesh_id, chip_id, eth_channel_id);
+
+        // Determine the fabric direction for this channel by checking the fabric mapping
+        bool is_fabric_connected = false;
+        eth_chan_directions router_direction = eth_chan_directions::COUNT;
+
+        // TODO: loop over this?
+        for (const auto& [direction, eth_chans] :
+             this->router_port_directions_to_physical_eth_chan_map_.at(src_fabric_node_id)) {
+            if (std::find(eth_chans.begin(), eth_chans.end(), eth_channel_id) != eth_chans.end()) {
+                is_fabric_connected = true;
+                router_direction = this->routing_direction_to_eth_direction(direction);
+                break;
+            }
+        }
+
+        // Get the virtual core coordinate for this ethernet channel
+        CoreCoord fabric_router_virtual_core =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+                physical_chip_id, eth_channel_id);
+
+        if (!is_fabric_connected) {
+            fprintf(stderr, "\t\teth channel %u not in fabric (physically connected but not routed)\n", eth_channel_id);
+            fprintf(stderr, "\t\tDirection: N/A (not routed)\n");
+            fprintf(
+                stderr,
+                "\t\tNoC XY: 0x%04X\n",
+                tt::tt_fabric::WorkerXY(fabric_router_virtual_core.x, fabric_router_virtual_core.y).to_uint32());
+            fprintf(stderr, "\t\tStatus: Physically connected but not fabric-routed\n\n");
+            continue;  // Don't populate fabric_connections for unrouted channels
+        }
+
+        // Only populate fabric_connections for fabric-routed channels
+        if (eth_endpoint_idx >= tt::tt_fabric::tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS) {
+            fprintf(stderr, "\t\tWarning: Reached max fabric endpoints, skipping remaining fabric-routed channels\n");
+            break;
+        }
+
+        // Populate connection info for fabric-routed channels
+        const auto sender_channel = is_2d_fabric ? router_direction : 0;
+        auto& connection_info = fabric_connections.connections[eth_channel_id];
+        connection_info.edm_direction = router_direction;
+        connection_info.edm_noc_xy =
+            tt::tt_fabric::WorkerXY(fabric_router_virtual_core.x, fabric_router_virtual_core.y).to_uint32();
+        connection_info.edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel];
+        connection_info.num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel];
+        connection_info.edm_l1_sem_addr =
+            edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel];
+        connection_info.edm_connection_handshake_addr =
+            edm_config.sender_channels_connection_semaphore_address[sender_channel];
+        connection_info.edm_worker_location_info_addr =
+            edm_config.sender_channels_worker_conn_info_base_address[sender_channel];
+        connection_info.buffer_size_bytes = edm_config.channel_buffer_size_bytes;
+        connection_info.buffer_index_semaphore_id =
+            edm_config.sender_channels_buffer_index_semaphore_address[sender_channel];
+
+        // print dump all info for fabric-routed channels
+        fprintf(stderr, "\t\tDirection: %d (fabric-routed)\n", connection_info.edm_direction);
+        fprintf(stderr, "\t\tNoC XY: 0x%04X\n", connection_info.edm_noc_xy);
+        fprintf(stderr, "\t\tBuffer Base Addr: 0x%08X\n", connection_info.edm_buffer_base_addr);
+        fprintf(stderr, "\t\tNum Buffers: %u\n", connection_info.num_buffers_per_channel);
+        fprintf(stderr, "\t\tL1 Sem Addr: 0x%08X\n", connection_info.edm_l1_sem_addr);
+        fprintf(stderr, "\t\tHandshake Addr: 0x%08X\n", connection_info.edm_connection_handshake_addr);
+        fprintf(stderr, "\t\tWorker Info Addr: 0x%08X\n", connection_info.edm_worker_location_info_addr);
+        fprintf(stderr, "\t\tBuffer Size (bytes): %u\n", connection_info.buffer_size_bytes);
+        fprintf(stderr, "\t\tBuffer Index Sem ID: %u\n\n", connection_info.buffer_index_semaphore_id);
+
+        // Mark this connection as valid for fabric communication
+        fabric_connections.valid_connections_mask |= (1u << eth_endpoint_idx);
+        eth_endpoint_idx++;
+        fabric_routed_channels++;
+    }
+
+    // Print summary
+    fprintf(
+        stderr,
+        "\tSummary for M%dD%d: %zu total physical channels, %zu fabric-routed, %zu unrouted\n\n",
+        *mesh_id,
+        chip_id,
+        total_physical_channels,
+        fabric_routed_channels,
+        total_physical_channels - fabric_routed_channels);
+
+    TT_FATAL(
+        tt_metal::MetalContext::instance().hal().get_dev_size(
+            tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS) >=
+            sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
+        "ControlPlane: Tensix fabric connections table size mismatch");
+
+    const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_desc.get_cores(CoreType::TENSIX, CoordSystem::PHYSICAL);
+
+    // Write to all Tensix cores using multicast for efficiency
+    for (const auto& tensix_core : tensix_cores) {
+        auto virtual_core =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
+                physical_chip_id, CoreCoord(tensix_core.x, tensix_core.y));
+
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            (void*)&fabric_connections,
+            sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
+            tt_cxy_pair(physical_chip_id, virtual_core),
+            tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+                tt::tt_metal::HalProgrammableCoreType::TENSIX,
+                tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS));
+    }
+}
+
 std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_routing_planes_in_direction(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction) const {
     auto eth_chans = get_active_fabric_eth_channels_in_direction(fabric_node_id, routing_direction);
@@ -1418,6 +1564,7 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
             this->inter_mesh_routing_tables_.contains(fabric_node_id),
             "Intra mesh routing tables keys mismatch with inter mesh routing tables");
         this->write_routing_tables_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        this->write_fabric_connections_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
         this->write_routing_tables_to_eth_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
     }
 }

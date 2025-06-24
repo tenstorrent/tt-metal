@@ -201,6 +201,7 @@ private:
 
     void write_routing_tables_to_eth_cores(MeshId mesh_id, chip_id_t chip_id) const;
     void write_routing_tables_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
+    void write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip_id_t chip_id) const;
 
     // Populate the local intermesh link to remote intermesh link table
     void generate_local_intermesh_link_table();

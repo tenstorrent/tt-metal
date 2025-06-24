@@ -398,6 +398,8 @@ void DevicePool::initialize_active_devices() const {
             // write routing tables to all ethernet cores
             tt::tt_metal::MetalContext::instance()
                 .get_control_plane().write_routing_tables_to_all_chips();
+        } else {
+            tt::tt_metal::MetalContext::instance().get_control_plane().write_routing_tables_to_all_chips();
         }
 
         // Initialize fabric on mmio device

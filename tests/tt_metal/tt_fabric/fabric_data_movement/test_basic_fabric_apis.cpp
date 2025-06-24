@@ -781,7 +781,7 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
 TEST_F(Fabric2DFixture, DISABLED_TestAsyncWrite) { RunAsyncWriteTest(this, fabric_mode::PUSH, false); }
 
 TEST_F(Fabric2DFixture, TestUnicastRaw) {
-    for (uint32_t i = 0; i < 10; i++) {
+    for (uint32_t i = 0; i < 10000; i++) {
         RunTestUnicastRaw(this);
     }
 }

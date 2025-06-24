@@ -164,6 +164,13 @@ void append_fabric_connection_rt_args(
         dst_fabric_node_id.chip_id);
 
     const auto fabric_router_channel = candidate_eth_chans[link_idx];
+    fprintf(
+        stderr,
+        "Using fabric router channel %u on chip %u to reach chip %u\n",
+        fabric_router_channel,
+        src_chip_id,
+        dst_chip_id);
+    worker_args.push_back(static_cast<uint32_t>(fabric_router_channel));
     const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
 
     // src_chip_id is still required to get the fabric_router_virtual_core from tt_cluster

@@ -429,6 +429,13 @@ void RunTestUnicastRaw(
             .compile_args = compile_time_args,
             .defines = defines});
 
+    fprintf(
+        stderr,
+        "CHIP: %u -> %u, PORT: %u, HOPS: %u\n",
+        src_fabric_node_id.chip_id,
+        dst_fabric_node_id.chip_id,
+        edm_port,
+        num_hops);
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.packet_header_address,
         worker_mem_map.source_l1_buffer_address,
@@ -462,6 +469,7 @@ void RunTestUnicastRaw(
     auto worker_teardown_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);
     auto worker_buffer_index_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);
 
+    sender_runtime_args.push_back(edm_port);
     append_worker_to_fabric_edm_sender_rt_args(
         edm_connection,
         worker_flow_control_semaphore_id,
