@@ -11,6 +11,8 @@
 #include <array>
 #include "debug/dprint.h"
 
+namespace tt::tt_metal::experimental {
+
 // Increments val and wraps to 0 if it reaches limit
 template <size_t LIMIT = 0, typename T>
 FORCE_INLINE auto wrap_increment(T val) -> T {
@@ -254,3 +256,5 @@ struct CBReaderTransactionIdTracker : public TransactionIdTrackerBase<NUM_TRIDS,
     }
 
 };
+
+} // namespace tt::tt_metal::experimental
