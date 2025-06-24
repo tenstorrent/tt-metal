@@ -132,7 +132,6 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
         [&](const auto& program_config) -> operation::ProgramWithCallbacks {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, GroupNormShardedMultiCoreProgramConfig>) {
-                MathFidelity fidelity = program_config.math_fidelity;
                 uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;
                 uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;
                 bool inplace = program_config.inplace;
@@ -148,12 +147,11 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
                     this->eps,
                     this->num_groups,
                     batch,
-                    fidelity,
                     program_config.im_data_format,
                     program_config.compute_with_storage_grid_size,
-                    inplace);
+                    inplace,
+                    this->compute_kernel_config);
             } else {
-                MathFidelity fidelity = program_config.math_fidelity;
                 uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;
                 uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;
                 bool inplace = program_config.inplace;
@@ -170,11 +168,11 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
                     this->eps,
                     this->num_groups,
                     batch,
-                    fidelity,
                     program_config.im_data_format,
                     program_config.compute_with_storage_grid_size,
                     inplace,
-                    num_out_blocks);
+                    num_out_blocks,
+                    this->compute_kernel_config);
             }
         },
         this->program_config);
