@@ -7,6 +7,9 @@
 #include <tt-metalium/tt_align.hpp>
 #include <algorithm>
 #include <atomic>
+#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
+#include <chrono>
+#endif
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -19,6 +22,7 @@
 #include "memcpy.hpp"
 #include "command_queue_common.hpp"
 #include "system_memory_cq_interface.hpp"
+#include <tt-logger/tt-logger.hpp>
 // #include <umd/device/driver_atomics.h> - Should be included as it is used here, but the file is missing include
 // guards
 #include <umd/device/tt_io.hpp>
@@ -390,13 +394,24 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     uint32_t write_ptr;
     uint32_t write_toggle;
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-
+#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
+    auto start_time = std::chrono::high_resolution_clock::now();
+#endif
     do {
         write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
+#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto elapsed_time = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
+
+        if (elapsed_time.count() > TTNN_OPERATION_TIMEOUT_SECONDS) {
+            TT_THROW("TIMEOUT: device timeout, potential hang detected, please check the graph capture");
+        }
+#endif
     } while (cq_interface.completion_fifo_rd_ptr == write_ptr and
              cq_interface.completion_fifo_rd_toggle == write_toggle and not exit_condition.load());
+
     return write_ptr_and_toggle;
 }
 

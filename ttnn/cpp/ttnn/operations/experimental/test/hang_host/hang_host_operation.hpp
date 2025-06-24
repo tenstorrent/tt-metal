@@ -9,15 +9,15 @@
 namespace ttnn {
 namespace operations::experimental::test {
 
-struct ExecuteTestHangOperation {
+struct ExecuteTestHangHostOperation {
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor);
 };
 
 }  // namespace operations::experimental::test
 
 namespace experimental::test {
-constexpr auto hang_operation = ttnn::register_operation<
-    "ttnn::experimental::test::test_hang_operation",
-    ttnn::operations::experimental::test::ExecuteTestHangOperation>();
-}
+constexpr auto hang_host_operation = ttnn::register_operation<
+    "ttnn::experimental::test::test_hang_host_operation",
+    ttnn::operations::experimental::test::ExecuteTestHangHostOperation>();
+}  // namespace experimental::test
 }  // namespace ttnn

@@ -252,6 +252,8 @@ void HWCommandQueue::enqueue_read_buffer(
     // Reading from device would clobber prefetcher cache, so reset it now
     this->reset_prefetcher_cache_manager();
 
+    // TODO DIEGO: I need to change this as well?
+
     // This is to make sure we block on the same sub_device_ids at the end
     // TODO: enqueue_read_from_core will call select_sub_device_ids every loop which will have minor overhead
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
