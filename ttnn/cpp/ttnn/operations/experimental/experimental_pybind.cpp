@@ -51,7 +51,6 @@
 #include "ttnn/operations/experimental/gather/gather_pybind.hpp"
 #include "ttnn/operations/experimental/gather/tosa/gather_tosa_pybind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_pybind.hpp"
-#include "ttnn/operations/experimental/where/where_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -124,8 +123,6 @@ void py_module(py::module& module) {
     ccl::py_module(m_experimental_ccl);
 
     broadcast_to::detail::py_bind_broadcast_to(module);
-
-    operations::experimental::ternary::detail::bind_where(module);
 }
 
 }  // namespace ttnn::operations::experimental
