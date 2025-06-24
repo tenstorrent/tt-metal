@@ -4,7 +4,6 @@
 
 import pytest
 import torch
-from tqdm import tqdm
 from diffusers import DiffusionPipeline
 from loguru import logger
 import ttnn
@@ -15,10 +14,10 @@ from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelO
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     retrieve_timesteps,
-    run_tt_iteration,
+    run_tt_image_gen,
 )
 import os
-import gc
+from models.utility_functions import profiler
 
 
 @torch.no_grad()
@@ -31,7 +30,7 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
     if isinstance(prompts, str):
         prompts = [prompts]
 
-    needed_padding = batch_size - len(prompts) % batch_size
+    needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
     prompts = prompts + [""] * needed_padding
 
     guidance_scale = 5.0
@@ -216,7 +215,6 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
     )
 
-    logger.info("Performing warmup run, to make use of program caching in actual inference...")
     B, C, H, W = latents.shape
 
     # All device code will work with channel last tensors
@@ -237,19 +235,26 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
     # UNet will deallocate the input tensor
     latent_model_input = ttnn.clone(latents)
 
-    # Compile run of Scheduler and UNet
-    run_tt_iteration(
+    logger.info("Performing warmup run, to make use of program caching in actual inference...")
+    run_tt_image_gen(
         ttnn_device,
         tt_unet,
         tt_scheduler,
         latent_model_input,
+        ttnn_prompt_embeds,
+        ttnn_time_ids,
+        ttnn_text_embeds,
+        [ttnn_timesteps[0]],
+        extra_step_kwargs,
+        guidance_scale,
+        scaling_factor,
         [B, C, H, W],
-        ttnn_prompt_embeds[0][0],
-        ttnn_time_ids[0],
-        ttnn.unsqueeze(ttnn_text_embeds[0][0], dim=0),
-        ttnn_timesteps[0],
+        tt_vae if vae_on_device else pipeline.vae,
+        batch_size,
         0,
     )
+    profiler.clear()
+
     if not is_ci_env and not os.path.exists("output"):
         os.mkdir("output")
 
@@ -259,58 +264,29 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         logger.info(
             f"Running inference for prompts {iter * batch_size + 1}-{iter * batch_size + batch_size}/{len(prompts)}"
         )
-        for i, t in tqdm(enumerate(ttnn_timesteps), total=len(ttnn_timesteps)):
-            unet_outputs = []
-            for unet_slice in range(len(ttnn_time_ids)):
-                latent_model_input = latents
-                noise_pred, noise_shape = run_tt_iteration(
-                    ttnn_device,
-                    tt_unet,
-                    tt_scheduler,
-                    latent_model_input,
-                    [B, C, H, W],
-                    ttnn_prompt_embeds[iter][unet_slice],
-                    ttnn_time_ids[unet_slice],
-                    ttnn.unsqueeze(ttnn_text_embeds[iter][unet_slice], dim=0),
-                    t,
-                    i,
-                )
-                C, H, W = noise_shape
+        imgs = run_tt_image_gen(
+            ttnn_device,
+            tt_unet,
+            tt_scheduler,
+            latents,
+            ttnn_prompt_embeds,
+            ttnn_time_ids,
+            ttnn_text_embeds,
+            ttnn_timesteps,
+            extra_step_kwargs,
+            guidance_scale,
+            scaling_factor,
+            [B, C, H, W],
+            tt_vae if vae_on_device else pipeline.vae,
+            batch_size,
+            iter,
+        )
 
-                unet_outputs.append(noise_pred)
-
-            # perform guidance
-            noise_pred_uncond, noise_pred_text = unet_outputs
-            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-
-            ttnn.deallocate(noise_pred_uncond)
-            ttnn.deallocate(noise_pred_text)
-
-            latents = tt_scheduler.step(
-                noise_pred, tt_scheduler.timesteps[i], latents, **extra_step_kwargs, return_dict=False
-            )[0]
-
-            ttnn.deallocate(noise_pred)
-            latents = ttnn.move(latents)
-
-        tt_scheduler.set_step_index(0)
-
-        if vae_on_device:
-            latents = ttnn.div(latents, scaling_factor)
-
-            logger.info("Running TT VAE")
-            imgs = tt_vae.forward(latents, [B, C, H, W])
-        else:
-            latents = ttnn.to_torch(latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))
-            latents = latents.reshape(batch_size * B, H, W, C)
-            latents = torch.permute(latents, (0, 3, 1, 2))
-
-            latents = latents.to(pipeline.vae.dtype)
-
-            # VAE upcasting to float32 is happening in the reference SDXL demo if VAE dtype is float16. If it's bfloat16, it will not be upcasted.
-            latents = latents / pipeline.vae.config.scaling_factor
-
-            imgs = pipeline.vae.decode(latents, return_dict=False)[0]
+        logger.info(f"Denoising loop for {batch_size} promts completed in {profiler.get('denoising_loop'):.2f} seconds")
+        logger.info(
+            f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.get('vae_decode'):.2f} seconds"
+        )
+        profiler.clear()
 
         for idx, img in enumerate(imgs):
             if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:
@@ -323,12 +299,6 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
             else:
                 img.save(f"output/output{len(images) + start_from}.png")
                 logger.info(f"Image saved to output/output{len(images) + start_from}.png")
-
-        if vae_on_device:
-            ttnn.deallocate(latents)
-        else:
-            del latents
-            gc.collect()
 
         latents = latents_clone.clone()
         latents = ttnn.from_torch(

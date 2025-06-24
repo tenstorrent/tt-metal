@@ -160,7 +160,8 @@ def run_unet_model(
             [B, C, H, W],
             timestep=ttnn_timestep_tensor,
             encoder_hidden_states=ttnn_encoder_tensor,
-            added_cond_kwargs=ttnn_added_cond_kwargs,
+            time_ids=ttnn_added_cond_kwargs["time_ids"],
+            text_embeds=ttnn_added_cond_kwargs["text_embeds"],
         )
         ttnn.deallocate(ttnn_input_tensor)
         ttnn.deallocate(ttnn_output_tensor)
