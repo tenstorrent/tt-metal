@@ -2680,6 +2680,32 @@ tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_helper(FabricTestM
     }
 }
 
+void validate_1d_fabric_packet_send_test_config(
+    size_t num_devices_with_workers,
+    size_t num_devices,
+    bool use_device_init_fabric,
+    const WriteThroughputStabilityTestWithPersistentFabricParams& params) {
+    bool use_t3k = num_devices == 8;
+    TT_FATAL(
+        num_devices_with_workers <= params.line_size,
+        "num_devices_with_workers must be less than or equal to line_size");
+    TT_FATAL(
+        !(params.num_fabric_rows > 0 && params.num_fabric_cols > 0),
+        "Only one of num_fabric_rows and num_fabric_cols may be greater than 0. Test support for both axes live at the "
+        "same time is not yet supported");
+    if (use_device_init_fabric && params.num_fabric_rows == 0 && params.num_fabric_cols == 0) {
+        TT_FATAL(use_t3k, "Using the full mesh as one ring topoplogy is only supported for T3K");
+    }
+    if ((params.num_fabric_rows + params.num_fabric_cols) * params.line_size > num_devices) {
+        TT_THROW(
+            "The total number of devices in the fabric must be less than or equal to the number of devices in the "
+            "system");
+    }
+    if (num_devices == 2 && tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0) {
+        TT_THROW("Bandwidth tests not enabled on N300 yet");
+    }
+}
+
 template <typename FABRIC_DEVICE_FIXTURE = Fabric1DFixture>
 void Run1DFabricPacketSendTest(
     std::unique_ptr<Fabric1DFixture>& test_fixture,
@@ -2699,7 +2725,6 @@ void Run1DFabricPacketSendTest(
             params.fabric_mode == FabricTestMode::RingAsLinear,
         "This test can only be run with disable_end_workers_in_backward_direction set to true or fabric_mode set to "
         "Linear");
-    bool use_t3k = num_devices == 8;
     bool use_galaxy = num_devices == 32;
     bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
     bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
@@ -2718,14 +2743,7 @@ void Run1DFabricPacketSendTest(
         num_devices_with_workers = line_size;
     }
     using namespace ttnn::ccl;
-    TT_FATAL(num_devices_with_workers <= line_size, "num_devices_with_workers must be less than or equal to line_size");
-    TT_FATAL(
-        !(params.num_fabric_rows > 0 && params.num_fabric_cols > 0),
-        "Only one of num_fabric_rows and num_fabric_cols may be greater than 0. Test support for both axes live at the "
-        "same time is not yet supported");
-    if (use_device_init_fabric && params.num_fabric_rows == 0 && params.num_fabric_cols == 0) {
-        TT_FATAL(use_t3k, "Using the full mesh as one ring topoplogy is only supported for T3K");
-    }
+    validate_1d_fabric_packet_send_test_config(num_devices_with_workers, num_devices, use_device_init_fabric, params);
 
     ttnn::ccl::Topology topology;
     FabricTestMode fabric_mode = params.fabric_mode;
