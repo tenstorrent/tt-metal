@@ -62,6 +62,7 @@ def read_yaml(yaml_path: str):
         return []
     return data
 
+
 @dataclass
 class StartupData:
     startup_system_clock: datetime
@@ -97,7 +98,9 @@ class MeshDeviceData:
     initialized: bool = False
 
     def get_device_id(self, coordinate: MeshCoordinate) -> int:
-        assert len(coordinate.coordinates) == len(self.shape), f"Coordinate {coordinate.coordinates} does not match mesh shape {self.shape}"
+        assert len(coordinate.coordinates) == len(
+            self.shape
+        ), f"Coordinate {coordinate.coordinates} does not match mesh shape {self.shape}"
         linear_index = 0
         for dim in range(len(coordinate.coordinates)):
             linear_index = linear_index + coordinate.coordinates[dim] * self.shape[dim]
@@ -147,6 +150,7 @@ def get_kernels(log_directory: str) -> dict[int, KernelData]:
         )
         kernels[kernel_data.watcher_kernel_id] = kernel_data
     return kernels
+
 
 def get_startup_data(log_directory: str) -> StartupData:
     startup_yaml_path = os.path.join(log_directory, "startup.yaml")
@@ -259,7 +263,10 @@ def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, Mes
             )
             mesh_devices[mesh_id] = mesh_device
             if verbose:
-                startup.print_log(int(info.get("timestamp_ns")), f"Mesh device {mesh_id} created. Devices: {mesh_device.devices}, Shape: {mesh_device.shape}, Parent: {mesh_device.parent_mesh_id}")
+                startup.print_log(
+                    int(info.get("timestamp_ns")),
+                    f"Mesh device {mesh_id} created. Devices: {mesh_device.devices}, Shape: {mesh_device.shape}, Parent: {mesh_device.parent_mesh_id}",
+                )
         elif "mesh_device_destroyed" in entry:
             info = entry["mesh_device_destroyed"]
             mesh_id = int(info.get("mesh_id"))
@@ -291,7 +298,9 @@ def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, M
         if "mesh_workload_created" in entry:
             info = entry["mesh_workload_created"]
             mesh_workload_id = int(info.get("mesh_workload_id"))
-            mesh_workloads[mesh_workload_id] = MeshWorkloadData(mesh_workload_id=mesh_workload_id, programs=[], binary_status_per_mesh_device={})
+            mesh_workloads[mesh_workload_id] = MeshWorkloadData(
+                mesh_workload_id=mesh_workload_id, programs=[], binary_status_per_mesh_device={}
+            )
             if verbose:
                 startup.print_log(int(info.get("timestamp_ns")), f"Mesh workload {mesh_workload_id} created")
         elif "mesh_workload_destroyed" in entry:
@@ -305,11 +314,18 @@ def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, M
             info = entry["mesh_workload_add_program"]
             mesh_workload_id = int(info.get("mesh_workload_id"))
             program_id = int(info.get("program_id"))
-            coordinates = [MeshCoordinate(coordinates=[int(c) for c in coord]) for coord in info.get("coordinates", [[]])]
+            coordinates = [
+                MeshCoordinate(coordinates=[int(c) for c in coord]) for coord in info.get("coordinates", [[]])
+            ]
             if mesh_workload_id in mesh_workloads:
-                mesh_workloads[mesh_workload_id].programs.append(MeshWorkloadProgramData(program_id=program_id, coordinates=coordinates))
+                mesh_workloads[mesh_workload_id].programs.append(
+                    MeshWorkloadProgramData(program_id=program_id, coordinates=coordinates)
+                )
             if verbose:
-                startup.print_log(int(info.get("timestamp_ns")), f"Program {program_id} added to mesh workload {mesh_workload_id} with coordinates {coordinates}")
+                startup.print_log(
+                    int(info.get("timestamp_ns")),
+                    f"Program {program_id} added to mesh workload {mesh_workload_id} with coordinates {coordinates}",
+                )
         elif "mesh_workload_set_program_binary_status" in entry:
             info = entry["mesh_workload_set_program_binary_status"]
             mesh_workload_id = int(info.get("mesh_workload_id"))
@@ -318,14 +334,19 @@ def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, M
                 mesh_workloads[mesh_workload_id].binary_status_per_mesh_device[mesh_id] = info.get("status")
             if verbose:
                 startup.print_log(
-                    int(info.get("timestamp_ns")), f"Mesh workload {mesh_workload_id} binary status changed to {info.get('status')}"
+                    int(info.get("timestamp_ns")),
+                    f"Mesh workload {mesh_workload_id} binary status changed to {info.get('status')}",
                 )
     if verbose:
         print()
     return mesh_workloads
 
 
-def update_programs_with_mesh_workloads(programs: dict[int, ProgramData], mesh_workloads: dict[int, MeshWorkloadData], mesh_devices: dict[int, MeshDeviceData]):
+def update_programs_with_mesh_workloads(
+    programs: dict[int, ProgramData],
+    mesh_workloads: dict[int, MeshWorkloadData],
+    mesh_devices: dict[int, MeshDeviceData],
+):
     for mesh_workload in mesh_workloads.values():
         for mesh_id, binary_status in mesh_workload.binary_status_per_mesh_device.items():
             if binary_status != "NotSet":
@@ -357,7 +378,7 @@ class InspectorData:
     @cached_property
     def mesh_devices(self) -> dict[int, MeshDeviceData]:
         return get_mesh_devices(self.log_directory)
-    
+
     @cached_property
     def mesh_workloads(self) -> dict[int, MeshWorkloadData]:
         return get_mesh_workloads(self.log_directory)
@@ -418,7 +439,9 @@ def main():
     mesh_devices = get_mesh_devices(log_directory, verbose=True)
     print("Mesh Devices:")
     for mesh_device in mesh_devices.values():
-        print(f"  Mesh ID {mesh_device.mesh_id}, Parent Mesh ID: {mesh_device.parent_mesh_id}, Initialized: {mesh_device.initialized}")
+        print(
+            f"  Mesh ID {mesh_device.mesh_id}, Parent Mesh ID: {mesh_device.parent_mesh_id}, Initialized: {mesh_device.initialized}"
+        )
         print(f"    Devices: {mesh_device.devices}")
         print(f"    Shape: {mesh_device.shape}")
     print()

@@ -235,7 +235,7 @@ void Logger::log_mesh_device_created(const distributed::MeshDevice* mesh_device)
             mesh_devices_ostream << shape.get_stride(i);
         }
         mesh_devices_ostream << "]\n";
-        // TODO: Print shape 
+        // TODO: Print shape
 
         mesh_devices_ostream.flush();
     } catch (const std::exception& e) {

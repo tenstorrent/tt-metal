@@ -552,16 +552,16 @@ def main(argv=None):
         inspector_data = get_inspector_data(inspector_log_directory)
     except:
         inspector_data = None
-        print(
-            f"  {ORANGE}Inspector directory does not exist. Running tests that don't include it.{RST}"
-        )
+        print(f"  {ORANGE}Inspector directory does not exist. Running tests that don't include it.{RST}")
 
     # Populate integer array with device ids
     if len(args["--dev"]) == 1 and args["--dev"][0].lower() == "in_use":
         if inspector_data is not None:
             device_ids = inspector_data.devices_in_use
             if len(device_ids) == 0:
-                print(f"{ORANGE}No devices in use found in inspector data. Switching to use all available devices.{RST}")
+                print(
+                    f"{ORANGE}No devices in use found in inspector data. Switching to use all available devices.{RST}"
+                )
                 device_ids = [int(id) for id in context.devices.keys()]
         else:
             print(f"{ORANGE}Inspector data not found. Using all available devices.{RST}")

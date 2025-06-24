@@ -70,7 +70,7 @@ public:
         const distributed::MeshWorkloadImpl* mesh_workload,
         std::size_t mesh_id,
         ProgramBinaryStatus status) noexcept;
-        
+
 };
 
 }  // namespace tt::tt_metal
