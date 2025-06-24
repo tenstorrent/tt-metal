@@ -18,6 +18,7 @@
 #include <flatbuffers/flatbuffers.h>
 
 #include <tt_stl/overloaded.hpp>
+#include <tt_stl/cleanup.hpp>
 
 #include "distributed/distributed_tensor_config.hpp"
 #include "tensor/tensor_spec.hpp"
@@ -50,23 +51,15 @@ void validate_version(uint8_t version_id) {
         VERSION_ID);
 }
 
-struct FileCloser {
-    void operator()(FILE* file) const {
+auto make_file_closer(FILE* file) {
+    return ttsl::make_cleanup([file]() {
         if (file) {
             if (fclose(file) != 0) {
                 log_warning(tt::LogAlways, "Failed to close file");
             }
         }
-    }
-};
-
-struct FileDescriptorCloser {
-    void operator()(int* fd) const {
-        if (*fd != -1) {
-            close(*fd);
-        }
-    }
-};
+    });
+}
 
 constexpr uint64_t SENTINEL_VALUE = std::numeric_limits<uint64_t>::max();
 
@@ -273,7 +266,7 @@ Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
     if (not input_file) {
         TT_THROW("Cannot open \"{}\"", file_name);
     }
-    std::unique_ptr<FILE, FileCloser> file_guard(input_file);
+    auto cleanup = make_file_closer(input_file);
 
     std::size_t read_sentinel;
     safe_fread(&read_sentinel, sizeof(read_sentinel), 1, input_file);
@@ -297,13 +290,12 @@ Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
     return tensor;
 }
 
-void dump_tensor(
-    const std::string& file_name, const Tensor& tensor, const std::unordered_map<std::string, std::string>& strategy) {
+void dump_tensor(const std::string& file_name, const Tensor& tensor) {
     FILE* output_file = fopen(file_name.c_str(), "wb");
     if (not output_file) {
         TT_THROW("Cannot open \"{}\"", file_name);
     }
-    std::unique_ptr<FILE, FileCloser> file_guard(output_file);
+    auto cleanup = make_file_closer(output_file);
 
     safe_fwrite(&SENTINEL_VALUE, sizeof(SENTINEL_VALUE), 1, output_file);
     safe_fwrite(&VERSION_ID, sizeof(VERSION_ID), 1, output_file);
@@ -327,9 +319,9 @@ void dump_tensor(
             [output_file, dtype = tensor.dtype()](const DeviceStorage& storage) {
                 TT_THROW("Device storage isn't supported");
             },
-            [output_file, &strategy, &tensor_spec = tensor.tensor_spec()](const MultiDeviceHostStorage& storage) {
-                auto distribute_config = get_distributed_tensor_config(strategy);
-                dump_multi_device_host_storage(output_file, storage, distribute_config, tensor_spec);
+            [output_file, &tensor](const MultiDeviceHostStorage& storage) {
+                dump_multi_device_host_storage(
+                    output_file, storage, tensor.distributed_tensor_config(), tensor.tensor_spec());
             },
         },
         tensor_to_dump.storage());
@@ -350,7 +342,7 @@ void dump_memory_config(const std::string& file_name, const MemoryConfig& memory
     if (not output_file) {
         TT_THROW("Cannot open \"{}\"", file_name);
     }
-    std::unique_ptr<FILE, FileCloser> file_guard(output_file);
+    auto cleanup = make_file_closer(output_file);
     dump_memory_config(output_file, memory_config);
 }
 
@@ -376,14 +368,14 @@ MemoryConfig load_memory_config(const std::string& file_name) {
     if (not input_file) {
         TT_THROW("Cannot open \"{}\"", file_name);
     }
-    std::unique_ptr<FILE, FileCloser> file_guard(input_file);
+    auto cleanup = make_file_closer(input_file);
     return load_memory_config(input_file);
 }
 
 void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) {
     FILE* output_file = fopen(file_name.c_str(), "wb");
     TT_FATAL(output_file != nullptr, "Cannot open \"{}\"", file_name);
-    std::unique_ptr<FILE, FileCloser> file_guard(output_file);
+    auto cleanup = make_file_closer(output_file);
 
     Tensor cpu_tensor = tensor.cpu();
 
@@ -405,7 +397,7 @@ void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) 
 Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) {
     int fd = open(file_name.c_str(), O_RDONLY | O_CLOEXEC);
     TT_FATAL(fd != -1, "Cannot open \"{}\"", file_name);
-    std::unique_ptr<int, FileDescriptorCloser> fd_guard(&fd);
+    auto cleanup = ttsl::make_cleanup([fd]() { close(fd); });
 
     struct stat file_stat;
     TT_FATAL(fstat(fd, &file_stat) == 0, "Failed to get file stats for \"{}\"", file_name);
