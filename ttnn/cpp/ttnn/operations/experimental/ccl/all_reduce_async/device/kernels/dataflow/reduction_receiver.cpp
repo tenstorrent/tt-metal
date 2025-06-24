@@ -34,4 +34,5 @@ void kernel_main() {
 
     // 2. Signal compute kernel to start processing
     cb_push_back(cb_id, total_num_reduction_tiles);
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) = 0;
 }
