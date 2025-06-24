@@ -146,39 +146,47 @@ def to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT):
     return x
 
 
-def sharded_concat(input_tensors, num_cores=64, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
-    shard_grid = get_core_grid_from_num_cores(num_cores=num_cores)
-    in_shard_width = input_tensors[0].shape[-1]
+def sharded_concat(
+    input_tensors, num_cores=64, dim=3, skip_s2i=False
+):  # expected input tensors to be in fp16, RM, same (h*w)
     shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
-    input_sharded_memory_config = ttnn.create_sharded_memory_config_(
-        (shard_height, in_shard_width),
-        core_grid=shard_grid,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-    out_shard_width = 0
-    for i in range(len(input_tensors)):
-        out_shard_width += input_tensors[i].shape[-1]
-        input_tensors[i] = ttnn.to_memory_config(input_tensors[i], input_sharded_memory_config)
 
-    output_sharded_memory_config = ttnn.create_sharded_memory_config_(
-        (shard_height, out_shard_width),
-        core_grid=shard_grid,
+    input_sharded_memory_configs = []
+
+    for i in range(len(input_tensors)):
+        input_sharded_memory_config = ttnn.create_sharded_memory_config(
+            (shard_height, input_tensors[i].shape[-1]),
+            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        input_sharded_memory_configs.append(input_sharded_memory_config)
+
+    sharded_inputs = [
+        ttnn.to_memory_config(tensor, config) for tensor, config in zip(input_tensors, input_sharded_memory_configs)
+    ]
+
+    total_width = sum(tensor.shape[-1] for tensor in input_tensors)
+    out_sharded_memory_config = ttnn.create_sharded_memory_config(
+        (shard_height, total_width),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    output = ttnn.concat(input_tensors, dim, memory_config=output_sharded_memory_config)
+
+    output = ttnn.concat(sharded_inputs, dim, memory_config=out_sharded_memory_config)
+    if not skip_s2i:
+        output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
+
     return output
 
 
-def concat(tensors, dim=-1, use_sharded_concat=True):
+def concat(tensors, dim=-1, use_sharded_concat=True, skip_s2i=False):
     if use_sharded_concat:
         processed_tensors = [
             ttnn.to_dtype(to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT), ttnn.bfloat16) for tensor in tensors
         ]
-        return sharded_concat(processed_tensors, dim=dim)
+        return sharded_concat(processed_tensors, dim=dim, skip_s2i=skip_s2i)
     else:
         return ttnn.concat([*tensors], dim=dim, memory_config=ttnn.L1_MEMORY_CONFIG)
 
