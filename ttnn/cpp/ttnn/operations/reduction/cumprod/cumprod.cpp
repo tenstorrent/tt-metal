@@ -47,6 +47,7 @@ Tensor CumprodOperation::invoke(
         cum_axis += tensor_rank;
     }
 
+    // pre-/post-process WIP tensors if necessary to adjust kernel constraints
     if (tensor_rank - cum_axis < FOUR_DIMENSIONS) {
         int initial_tensor_rank = tensor_rank;
         if (initial_tensor_rank < FOUR_DIMENSIONS) {
@@ -73,6 +74,7 @@ Tensor CumprodOperation::invoke(
         Tensor permuted_tensor =
             ttnn::permute(adjusted_input_tensor, permutation, adjusted_input_tensor.memory_config());
 
+        // device cumprod works on the first dimension of 4
         Tensor output_tensor = ttnn::prim::cumprod(
             permuted_tensor,
             FIRST_DIMENSION,
@@ -81,8 +83,10 @@ Tensor CumprodOperation::invoke(
             memory_config.has_value() ? memory_config.value() : permuted_tensor.memory_config(),
             queue_id);
 
+        // permute back
         output_tensor = ttnn::permute(output_tensor, permutation, output_tensor.memory_config());
 
+        // reshape to the original form
         if (initial_tensor_rank < FOUR_DIMENSIONS) {
             output_tensor = ttnn::reshape(output_tensor, input_shape);
         }
