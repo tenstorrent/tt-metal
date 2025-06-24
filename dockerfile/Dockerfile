@@ -129,14 +129,15 @@ RUN mkdir -p /tmp/iwyu \
 
 # Remove gdb if we aren't on Ubuntu 24.04
 # 24.04 has gdb 15.1 by default, lets give that a chance before we decide we need to build something
-RUN [ "$UBUNTU_VERSION" != "24.04" ] && apt-get remove -y gdb || true
+# https://ftp.gnu.org/ is unreliable, so do not die if it is unavailable, and just go with what's available.
 RUN [ "$UBUNTU_VERSION" != "24.04" ] \
     && mkdir -p /tmp/gdb-build && cd /tmp/gdb-build/ \
-    && wget -O /tmp/gdb-build/gdb.tar.gz https://ftp.gnu.org/gnu/gdb/gdb-14.2.tar.gz \
-    && tar -xvf /tmp/gdb-build/gdb.tar.gz -C /tmp/gdb-build --strip-components=1 \
-    && /tmp/gdb-build/configure --prefix=/usr/local \
-    && make -j$(nproc) \
-    && make install \
+    && (wget -O gdb.tar.gz https://ftp.gnu.org/gnu/gdb/gdb-14.2.tar.gz \
+        && tar -xvf gdb.tar.gz --strip-components=1 \
+        && ./configure --prefix=/usr/local \
+        && make -j$(nproc) \
+        && (apt-get remove -y gdb || true) \
+        && make install || true) \
     && rm -rf /tmp/gdb-build
 
 #############################################################
