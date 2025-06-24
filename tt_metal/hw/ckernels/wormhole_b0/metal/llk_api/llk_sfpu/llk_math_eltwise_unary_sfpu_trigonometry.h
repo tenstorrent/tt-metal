@@ -73,8 +73,7 @@ inline void llk_math_eltwise_unary_sfpu_acos(uint dst_index, int vector_mode = (
 // acosh
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_acosh_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::acosh, APPROXIMATE>(
-        ckernel::sfpu::_init_inverse_hyperbolic_<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::acosh, APPROXIMATE>(ckernel::sfpu::_init_acosh_<APPROXIMATE>);
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
