@@ -366,6 +366,11 @@ void py_bind_conv2d(py::module& module) {
         | Conv2dSliceConfig determines how this slicing happens.
         )doc");
     py_conv_slice_config.def(
+        py::init<Conv2dSliceConfig::SliceType, uint32_t>(),
+        py::kw_only(),
+        py::arg("slice_type"),
+        py::arg("num_slices"));
+    py_conv_slice_config.def(
         py::init<Conv2dSliceConfig::SliceType, uint32_t, Layout>(),
         py::kw_only(),
         py::arg("slice_type"),
