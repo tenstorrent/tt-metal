@@ -759,7 +759,8 @@ void DeviceProfiler::logNocTracePacketDataToJson(
             EMD::FabricNoCEvent fabric_noc_event = std::get<EMD::FabricNoCEvent>(ev_md_contents);
             auto phys_coord =
                 getPhysicalAddressFromVirtual(device_id, {fabric_noc_event.dst_x, fabric_noc_event.dst_y});
-            noc_trace_json_log.push_back(nlohmann::ordered_json{
+
+            nlohmann::ordered_json data = {
                 {"run_host_id", run_host_id},
                 {"op_name", opname},
                 {"proc", risc_name},
@@ -770,7 +771,15 @@ void DeviceProfiler::logNocTracePacketDataToJson(
                 {"dy", phys_coord.y},
                 {"routing_fields_type", magic_enum::enum_name(fabric_noc_event.routing_fields_type)},
                 {"timestamp", timestamp},
-            });
+            };
+
+            // For scatter write operations, include additional scatter information
+            if (ev_md.noc_xfer_type == EMD::NocEventType::FABRIC_UNICAST_SCATTER_WRITE) {
+                data["scatter_address_index"] = fabric_noc_event.mcast_end_dst_x;
+                data["scatter_total_addresses"] = fabric_noc_event.mcast_end_dst_y;
+            }
+
+            noc_trace_json_log.push_back(std::move(data));
         } else if (std::holds_alternative<EMD::FabricRoutingFields>(ev_md_contents)) {
             uint32_t routing_fields_value = std::get<EMD::FabricRoutingFields>(ev_md_contents).routing_fields_value;
             noc_trace_json_log.push_back(nlohmann::ordered_json{

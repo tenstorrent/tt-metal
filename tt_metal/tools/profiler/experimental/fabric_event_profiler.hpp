@@ -60,6 +60,16 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
                 fabric_header_ptr->routing_fields.value);
             break;
         }
+        case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
+            const volatile auto& unicast_write_cmd = fabric_header_ptr->get_command_fields().unicast_scatter_write;
+            noc_event_profiler::recordFabricNocEvent(
+                KernelProfilerNocEventMetadata::NocEventType::FABRIC_UNICAST_SCATTER_WRITE,
+                routing_fields_type,
+                unicast_write_cmd.noc_address,
+                NOC_SCATTER_WRITE_MAX_CHUNKS,
+                fabric_header_ptr->routing_fields.value);
+            break;
+        }
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE:
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC: {
             // UNSUPPORTED for now
