@@ -1430,7 +1430,6 @@ uint16_t ControlPlane::get_routing_mode() const { return this->routing_mode_; }
 
 void ControlPlane::initialize_fabric_context(tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode) {
     TT_FATAL(this->fabric_context_ == nullptr, "Trying to re-initialize fabric context");
-    tt::tt_metal::MetalContext::instance().set_fabric_config(fabric_config, reliability_mode);
     this->fabric_context_ = std::make_unique<FabricContext>(fabric_config);
 }
 
@@ -1568,7 +1567,8 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(
         for (const auto& eth_channel : logical_active_eth_channels) {
             tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
             const auto& routing_info = eth_routing_info.at(eth_core);
-            if ((routing_info == EthRouterMode::BI_DIR_TUNNELING or routing_info == EthRouterMode::FABRIC_ROUTER) and
+            if ((routing_info == EthRouterMode::BI_DIR_TUNNELING or routing_info == EthRouterMode::FABRIC_ROUTER or
+                 routing_info == EthRouterMode::FABRIC_ROUTER_DISPATCH) and
                 skip_reserved_cores) {
                 continue;
             }

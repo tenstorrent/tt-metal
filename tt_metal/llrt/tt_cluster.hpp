@@ -80,9 +80,10 @@ enum class ClusterType : std::uint8_t {
 };
 
 enum class EthRouterMode : uint32_t {
-    IDLE = 0,
-    BI_DIR_TUNNELING = 1,
-    FABRIC_ROUTER = 2,
+    IDLE = 0,                    // Unused
+    BI_DIR_TUNNELING = 1,        // Eth core for legacy dispatch tunneling
+    FABRIC_ROUTER = 2,           // Eth core for Fabric router for general use
+    FABRIC_ROUTER_DISPATCH = 3,  // Eth core for Fabric router dispatch routing
 };
 
 class Cluster {
@@ -321,7 +322,9 @@ public:
     std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(chip_id_t chip_id) const;
 
     // Get fabric ethernet cores connecting src to dst
-    std::vector<CoreCoord> get_fabric_ethernet_routers_between_src_and_dest(chip_id_t src_id, chip_id_t dst_id) const;
+    // Will skip routers dedicated for dispatch by default
+    std::vector<CoreCoord> get_fabric_ethernet_routers_between_src_and_dest(
+        chip_id_t src_id, chip_id_t dst_id, bool skip_dispatch_routers = true) const;
 
     bool is_worker_core(const CoreCoord& core, chip_id_t chip_id) const;
     bool is_ethernet_core(const CoreCoord& core, chip_id_t chip_id) const;

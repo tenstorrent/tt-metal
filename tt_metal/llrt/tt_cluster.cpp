@@ -78,6 +78,14 @@ inline std::string get_soc_description_file(
     path += file;
     return path;
 }
+
+bool is_fabric_router(tt::EthRouterMode router_mode, bool skip_dispatch_routers = false) {
+    if (skip_dispatch_routers) {
+        return router_mode == tt::EthRouterMode::FABRIC_ROUTER;
+    }
+    return router_mode == tt::EthRouterMode::FABRIC_ROUTER || router_mode == tt::EthRouterMode::FABRIC_ROUTER_DISPATCH;
+}
+
 }  // namespace
 namespace tt {
 
@@ -1126,13 +1134,20 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
     if (num_routing_planes == std::numeric_limits<uint8_t>::max()) {
         // default behavior, reserve whatever cores are available
         for (const auto& [chip_id, eth_cores] : this->device_eth_routing_info_) {
+            uint8_t num_reserved_cores = 0;
             for (const auto& [eth_core, mode] : eth_cores) {
                 if (mode == EthRouterMode::IDLE) {
-                    this->device_eth_routing_info_[chip_id][eth_core] = EthRouterMode::FABRIC_ROUTER;
+                    if (rtoptions_.get_fd_fabric() && num_reserved_cores == eth_cores.size() - 1) {
+                        // Last link reserved for dispatch
+                        this->device_eth_routing_info_[chip_id][eth_core] = EthRouterMode::FABRIC_ROUTER_DISPATCH;
+                    } else {
+                        this->device_eth_routing_info_[chip_id][eth_core] = EthRouterMode::FABRIC_ROUTER;
+                    }
                 }
+                num_reserved_cores++;
             }
         }
-
+        log_info(tt::LogMetal, "Reserved {} cores", num_routing_planes);
         // Update sockets to reflect fabric routing
         this->ethernet_sockets_.clear();
         return;
@@ -1146,22 +1161,31 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
             uint8_t num_reserved_cores = 0;
             for (auto i = 0; i < cores.size(); i++) {
                 if (num_reserved_cores == num_cores_to_reserve) {
+                    log_info(tt::LogMetal, " DONE Reserved {} cores", num_routing_planes);
                     break;
                 }
 
                 const auto eth_core = cores[i];
                 const auto connected_core =
                     std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core)));
-                if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
-                    // already reserved for fabric, potenially by the connected chip id
+                if (is_fabric_router(this->device_eth_routing_info_.at(chip_id).at(eth_core))) {
+                    // already reserved for fabric, potentially by the connected chip id
                     num_reserved_cores++;
                     continue;
                 }
 
                 if (this->device_eth_routing_info_[chip_id][eth_core] == EthRouterMode::IDLE &&
                     this->device_eth_routing_info_.at(connnected_chip_id).at(connected_core) == EthRouterMode::IDLE) {
-                    this->device_eth_routing_info_[chip_id][eth_core] = EthRouterMode::FABRIC_ROUTER;
-                    this->device_eth_routing_info_[connnected_chip_id][connected_core] = EthRouterMode::FABRIC_ROUTER;
+                    if (rtoptions_.get_fd_fabric() && num_reserved_cores == num_cores_to_reserve - 1) {
+                        // Last link to be reserved for Dispatch
+                        this->device_eth_routing_info_[chip_id][eth_core] = EthRouterMode::FABRIC_ROUTER_DISPATCH;
+                        this->device_eth_routing_info_[connnected_chip_id][connected_core] =
+                            EthRouterMode::FABRIC_ROUTER_DISPATCH;
+                    } else {
+                        this->device_eth_routing_info_[chip_id][eth_core] = EthRouterMode::FABRIC_ROUTER;
+                        this->device_eth_routing_info_[connnected_chip_id][connected_core] =
+                            EthRouterMode::FABRIC_ROUTER;
+                    }
                     num_reserved_cores++;
                 }
             }
@@ -1184,7 +1208,7 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
 void Cluster::release_ethernet_cores_for_fabric_routers() {
     for (const auto& [chip_id, eth_cores] : this->device_eth_routing_info_) {
         for (const auto& [eth_core, mode] : eth_cores) {
-            if (mode == EthRouterMode::FABRIC_ROUTER) {
+            if (is_fabric_router(mode)) {
                 this->device_eth_routing_info_[chip_id][eth_core] = EthRouterMode::IDLE;
             }
         }
@@ -1201,7 +1225,7 @@ std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(chip_id_t c
         if (!this->is_ethernet_link_up(chip_id, eth_core)) {
             continue;
         }
-        if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
+        if (is_fabric_router(this->device_eth_routing_info_.at(chip_id).at(eth_core))) {
             fabric_ethernet_channels.insert(this->get_soc_desc(chip_id).logical_eth_core_to_chan_map.at(eth_core));
         }
     }
@@ -1209,7 +1233,7 @@ std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(chip_id_t c
 }
 
 std::vector<CoreCoord> Cluster::get_fabric_ethernet_routers_between_src_and_dest(
-    chip_id_t src_id, chip_id_t dst_id) const {
+    chip_id_t src_id, chip_id_t dst_id, bool skip_dispatch_routers) const {
     std::vector<CoreCoord> fabric_ethernet_channels;
     const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(src_id);
     TT_FATAL(
@@ -1218,7 +1242,7 @@ std::vector<CoreCoord> Cluster::get_fabric_ethernet_routers_between_src_and_dest
         dst_id,
         src_id);
     for (const auto& eth_core : connected_chips.at(dst_id)) {
-        if (this->device_eth_routing_info_.at(src_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
+        if (is_fabric_router(this->device_eth_routing_info_.at(src_id).at(eth_core), skip_dispatch_routers)) {
             fabric_ethernet_channels.push_back(eth_core);
         }
     }

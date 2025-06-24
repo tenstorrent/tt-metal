@@ -1425,7 +1425,7 @@ void build_tt_fabric_program(
         chip_neighbors.emplace(direction, neighbor_fabric_node_id);
 
         active_fabric_eth_channels.insert({direction, active_eth_chans});
-        log_debug(
+        log_info(
             tt::LogMetal,
             "Building fabric router -> device (phys): {}, (logical): {}, direction: {}, active_eth_chans: {}",
             device->id(),

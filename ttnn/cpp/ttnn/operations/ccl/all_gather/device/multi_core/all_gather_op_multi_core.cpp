@@ -6,6 +6,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
+#include "tt-metalium/data_types.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"

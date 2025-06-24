@@ -1358,21 +1358,16 @@ int TestLoopbackEntrypoint(
     const auto& device_0 = view.get_device(MeshCoordinate(0, 0));
     const auto& device_1 = view.get_device(MeshCoordinate(0, 1));
 
-    const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
-    auto eth_sender_core_iter = active_eth_cores.begin();
-    auto eth_sender_core_iter_end = active_eth_cores.end();
-    chip_id_t device_id = std::numeric_limits<chip_id_t>::max();
-    tt_xy_pair eth_receiver_core;
     bool initialized = false;
-    tt_xy_pair eth_sender_core;
-    do {
-        TT_FATAL(eth_sender_core_iter != eth_sender_core_iter_end, "Error");
-        std::tie(device_id, eth_receiver_core) = device_0->get_connected_ethernet_core(*eth_sender_core_iter);
-        eth_sender_core = *eth_sender_core_iter;
-        eth_sender_core_iter++;
-    } while (device_id != device_1->id());
-    TT_ASSERT(device_id == device_1->id());
-    // const auto& device_1 = test_fixture.mesh_device_->get_device(device_id);
+    const auto eth_receiver_cores = device_1->get_ethernet_sockets(device_0->id());
+    const auto eth_sender_cores = device_0->get_ethernet_sockets(device_1->id());
+
+    TT_ASSERT(
+        !eth_receiver_cores.empty(), "No eth receiver cores found (device {} to {})", device_1->id(), device_0->id());
+    TT_ASSERT(!eth_sender_cores.empty(), "No eth sender cores found (device {} to {})", device_0->id(), device_1->id());
+
+    const auto eth_receiver_core = eth_receiver_cores[0];
+    const auto eth_sender_core = eth_sender_cores[0];
 
     std::vector<Program> programs(1);
     std::optional<std::vector<Program>> fabric_programs;
