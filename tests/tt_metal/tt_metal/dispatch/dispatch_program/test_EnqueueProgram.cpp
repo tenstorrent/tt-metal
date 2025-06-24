@@ -188,6 +188,44 @@ std::vector<CBHandle> initialize_dummy_circular_buffers(
     return cb_handles;
 }
 
+bool cb_config_successful(std::shared_ptr<distributed::MeshDevice> mesh_device, distributed::MeshWorkload& workload, const DummyProgramMultiCBConfig& program_config) {
+    bool pass = true;
+
+    // Need to use old APIs to read since we cannot allocate a buffer in the reserved space we're trying
+    // to read from
+    vector<uint32_t> cb_config_vector;
+    uint32_t cb_config_buffer_size =
+        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+    auto device = mesh_device->get_devices()[0];
+    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    for (const CoreRange& core_range : program_config.cr_set.ranges()) {
+        for (const CoreCoord& core_coord : core_range) {
+            tt::tt_metal::detail::ReadFromDeviceL1(
+                device,
+                core_coord,
+                workload.get_cb_base_addr(mesh_device, core_coord, CoreType::WORKER),
+                cb_config_buffer_size,
+                cb_config_vector);
+
+            uint32_t cb_addr = l1_unreserved_base;
+            for (uint32_t i = 0; i < program_config.cb_config_vector.size(); i++) {
+                const uint32_t index = program_config.cb_config_vector[i].cb_id * sizeof(uint32_t);
+                const uint32_t cb_num_pages = program_config.cb_config_vector[i].num_pages;
+                const uint32_t cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
+                const bool addr_match = cb_config_vector.at(index) == cb_addr;
+                const bool size_match = cb_config_vector.at(index + 1) == cb_size;
+                const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
+                pass &= (addr_match and size_match and num_pages_match);
+
+                cb_addr += cb_size;
+            }
+        }
+    }
+
+    return pass;
+}
+
+
 bool cb_config_successful(IDevice* device, Program& program, const DummyProgramMultiCBConfig& program_config) {
     bool pass = true;
 
@@ -225,6 +263,9 @@ bool cb_config_successful(IDevice* device, Program& program, const DummyProgramM
     return pass;
 }
 
+
+
+
 void test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoord& eth_core_coord) {
     Program program;
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core_coord);
@@ -260,16 +301,23 @@ void test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoor
     ASSERT_EQ(dummy_kernel0_args, dummy_kernel0_args_readback);
 }
 
-bool test_dummy_EnqueueProgram_with_cbs(IDevice* device, CommandQueue& cq, DummyProgramMultiCBConfig& program_config) {
+bool test_dummy_EnqueueProgram_with_cbs(std::shared_ptr<distributed::MeshDevice> mesh_device, distributed::MeshCommandQueue& cq, const DummyProgramMultiCBConfig& program_config) {
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
+    
 
     initialize_dummy_circular_buffers(program, program_config.cr_set, program_config.cb_config_vector);
     initialize_dummy_kernels(program, program_config.cr_set);
     const bool is_blocking_op = false;
-    EnqueueProgram(cq, program, is_blocking_op);
+    
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::EnqueueMeshWorkload(cq, workload, is_blocking_op);
     Finish(cq);
 
-    return cb_config_successful(device, program, program_config);
+    return cb_config_successful(mesh_device, workload, program_config);
+    
 }
 
 bool test_dummy_EnqueueProgram_with_cbs_update_size(
@@ -1039,7 +1087,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestArbiterDoesNotHang) {
 }  // namespace compiler_workaround_hardware_bug_tests
 namespace single_core_tests {
 
-TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSingleCbConfigCorrectlySentSingleCore) {
+TEST_F(MeshCommandQueueSingleCardFixture, TensixTestSingleCbConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1047,12 +1095,12 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSingleCbConfigCorrectlySe
 
     DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = {cb_config}};
 
-    for (IDevice* device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
+    for (auto device : devices_) {
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
     }
 }
 
-TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCbSeqConfigCorrectlySentSingleCore) {
+TEST_F(MeshCommandQueueSingleCardFixture, TensixTestMultiCbSeqConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1064,12 +1112,12 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCbSeqConfigCorrectly
     DummyProgramMultiCBConfig config = {
         .cr_set = cr_set, .cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3}};
 
-    for (IDevice* device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
+    for (auto device : devices_) {
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
     }
 }
 
-TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCbRandomConfigCorrectlySentSingleCore) {
+TEST_F(MeshCommandQueueSingleCardFixture, TensixTestMultiCbRandomConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -1081,8 +1129,8 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCbRandomConfigCorrec
     DummyProgramMultiCBConfig config = {
         .cr_set = cr_set, .cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3}};
 
-    for (IDevice* device : devices_) {
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
+    for (auto device : devices_) {
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
     }
 }
 
@@ -1306,7 +1354,7 @@ TEST_F(MultiCommandQueueOnFabricMultiDeviceFixture, TensixTestBasicDispatchFunct
 }  // end namespace single_core_tests
 
 namespace multicore_tests {
-TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllCbConfigsCorrectlySentMultiCore) {
+TEST_F(MeshCommandQueueSingleCardFixture, TensixTestAllCbConfigsCorrectlySentMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -1314,7 +1362,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllCbConfigsCorrectlySent
         cb_config_vector[i].cb_id = i;
     }
 
-    for (IDevice* device : devices_) {
+    for (auto device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -1322,7 +1370,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllCbConfigsCorrectlySent
 
         DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = cb_config_vector};
 
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
     }
 }
 
@@ -1368,7 +1416,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCbConfigsCorrectlySe
     }
 }
 
-TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllCbConfigsCorrectlySentMultipleCoreRanges) {
+TEST_F(MeshCommandQueueSingleCardFixture, TensixTestAllCbConfigsCorrectlySentMultipleCoreRanges) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -1376,7 +1424,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllCbConfigsCorrectlySent
         cb_config_vector[i].cb_id = i;
     }
 
-    for (IDevice* device : devices_) {
+    for (auto device : devices_) {
         CoreRange cr0({0, 0}, {1, 1});
 
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
@@ -1387,7 +1435,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllCbConfigsCorrectlySent
 
         DummyProgramMultiCBConfig config = {.cr_set = core_ranges, .cb_config_vector = cb_config_vector};
 
-        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
+        EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->mesh_command_queue(), config));
     }
 }
 
