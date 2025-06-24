@@ -59,7 +59,9 @@ void append_fabric_connection_rt_args(
     std::vector<uint32_t>& worker_args,
     CoreType core_type = CoreType::WORKER);
 
-ControlPlane& get_control_plane();
+FabricNodeId get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id);
+
+size_t get_fabric_max_payload_size_bytes();
 
 namespace experimental {
 size_t get_number_of_available_routing_planes(

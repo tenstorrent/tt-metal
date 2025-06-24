@@ -19,13 +19,6 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
-
-namespace tt::tt_fabric {
-class FabricContext {
-public:
-    size_t get_fabric_max_payload_size_bytes() const;
-};
-}  // namespace tt::tt_fabric
 #include <limits>
 
 namespace ttnn::operations::ccl {
@@ -263,8 +256,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto src_device = mesh_device->get_device(mesh_coordinate);
     auto src_physical_device_id = src_device->id();
 
-    const auto& control_plane = tt::tt_fabric::get_control_plane();
-    auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device->id());
+    auto fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_device->id());
     uint32_t src_mesh_id = *fabric_node_id.mesh_id;
     uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
@@ -424,7 +416,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord : tensor_coords.coords()) {
         auto device = mesh_device->get_device(coord);
-        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
+        auto fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
         dest_mesh_id.push_back(*fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)fabric_node_id.chip_id);
     }
@@ -432,11 +424,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     log_debug(tt::LogOp, "dest_mesh_id: {}", detail::stringify_vector(dest_mesh_id));
     log_debug(tt::LogOp, "directions: {}", detail::stringify_array(directions));
 
-    // TODO: add fabric node and mesh id to the compile time args
-    // TODO: add an array mapping logical device id to physical device id
-
-    const auto& fabric_context = control_plane.get_fabric_context();
-    auto fabric_max_packet_size = fabric_context.get_fabric_max_payload_size_bytes();
+    auto fabric_max_packet_size = tt::tt_fabric::get_fabric_max_payload_size_bytes();
 
     std::vector<uint32_t> reader_compile_time_args = {
         input_tensor.buffer()->is_dram(),
@@ -484,7 +472,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         aligned_output_page_size,
         aligned_metadata_page_size,
 
-        fabric_max_packet_size,
+        (uint32_t)fabric_max_packet_size,
     };
 
     auto writer_compile_time_args = reader_compile_time_args;

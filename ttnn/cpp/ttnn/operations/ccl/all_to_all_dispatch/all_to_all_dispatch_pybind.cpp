@@ -21,17 +21,17 @@ void py_bind_all_to_all_dispatch(py::module& module) {
     auto doc =
         R"doc(all_to_all_dispatch(input_tensor: ttnn.Tensor, expert_indices_tensor: ttnn.Tensor, expert_mapping_tensor: ttnn.Tensor, num_links: int = 1, topology: ttnn.Topology = ttnn.Topology.Linear, memory_config: Optional[ttnn.MemoryConfig] = std::nullopt, subdevice_id: Optional[ttnn.SubDeviceId] = std::nullopt, global_semaphore: Optional[ttnn.GlobalSemaphore] = std::nullopt, queue_id: int = 0) -> Tuple[ttnn.Tensor, ttnn.Tensor]
 
-            All to all dispatch operation for dispatching the input tokens to devices with the selected experts.
+            All to all dispatch operation for dispatching the input tokens to devices with the selected experts, based on the expert indices and expert mapping tensors. If cluster axis is specified then we dispatch the tokens to the experts only on that axis. The global semaphore is the cross-device semaphore for synchronizing the dispatching of the tokens.
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor containing the tokens to dispatch.
                 expert_indices_tensor (ttnn.Tensor): the expert indices tensor containing the ranking of the experts for each token.
-                expert_mapping_tensor (ttnn.Tensor): the expert to device mapping tensor containing the location of the experts among each device and each mesh.
+                expert_mapping_tensor (ttnn.Tensor): the one-hot encoded expert to device mapping tensor containing the location of the experts among each device and each mesh.
 
 
             Keyword Args:
                 axis (int, optional): the axis to dispatch along. Defaults to `None` though we assert out when it is not specified.
-                num_links (number, optional): the number of links. Defaults to `1`.
+                num_links (number, optional): the number of cross-device links to use for dispatching the tokens. Defaults to `1`.
                 topology (ttnn.Topology, optional): the topology to use when dispatching the tokens. Defaults to `ttnn.Topology.Linear`.
                 memory_config (ttnn.MemoryConfig, optional): Output memory configuration for the output tensors. Defaults to `None`.
                 subdevice_id (ttnn.SubDeviceId, optional): the subdevice id for the subdevice on which we allocate the worker cores. Defaults to `None`.
@@ -39,7 +39,7 @@ void py_bind_all_to_all_dispatch(py::module& module) {
                 queue_id (int, optional): command queue id. Defaults to `0`.
 
            Returns:
-               Tuple[ttnn.Tensor, ttnn.Tensor]: The sparse output tokenstensor and the metadata tensor. The output tensor on each device is sparsely populated with all the tokens that are dispatched to that device. The non-dispatched tokens have placeholder rows populated with garbage. The metadata tensor is used to track the expert indices.
+               Tuple[ttnn.Tensor, ttnn.Tensor]: The sparse output tokens tensor and the metadata tensor. The output tensor on each device is sparsely populated with all the tokens that are dispatched to that device. The non-dispatched tokens have placeholder rows populated with garbage. The metadata tensor is used to track the expert indices.
 
             Example:
 

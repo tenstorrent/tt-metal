@@ -97,7 +97,7 @@ struct AllToAllDispatchDeviceOperation {
         const tt::tt_fabric::Topology topology,
         const ttnn::MemoryConfig& memory_config,
         tt::tt_metal::SubDeviceId subdevice_id,
-        const GlobalSemaphore& global_semaphore);
+        const std::optional<GlobalSemaphore>& global_semaphore);
 };
 }  // namespace ttnn::operations::ccl
 
