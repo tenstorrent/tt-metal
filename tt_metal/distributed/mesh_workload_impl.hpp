@@ -16,7 +16,7 @@ using RuntimeArgsPerCore = std::vector<std::vector<RuntimeArgsData>>;
 class MeshCommandQueue;
 class FDMeshCommandQueue;
 
-class MeshWorkloadImpl {
+class MeshWorkloadImpl : public std::enable_shared_from_this<MeshWorkloadImpl> {
     // A MeshWorkload can be fully described using a set of programs mapped to different Logical Device Regions
     // in a Mesh + configurable runtime Args
     // The current iteration supports the following compute paradigms:
@@ -26,7 +26,6 @@ class MeshWorkloadImpl {
 private:
     uint64_t id;
 
-    uint64_t get_id() const { return id; }
     bool runs_on_noc_multicast_only_cores();
     bool runs_on_noc_unicast_only_cores();
     void compile(MeshDevice* mesh_device);
@@ -69,6 +68,9 @@ private:
 public:
     // Main User-Facing API building blocks
     MeshWorkloadImpl();
+    ~MeshWorkloadImpl();
+
+    uint64_t get_id() const { return id; }
 
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
