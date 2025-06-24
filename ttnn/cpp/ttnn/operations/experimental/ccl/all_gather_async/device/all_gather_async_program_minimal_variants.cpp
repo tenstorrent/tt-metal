@@ -261,7 +261,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_any_any(
     const Tensor& input_tensor,
-    Tensor& intermediate_tensor,
     IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
@@ -278,7 +277,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     return all_gather_async_minimal_interleaved_dim3_1_1_any_any_helper(
         program,
         input_tensor,
-        intermediate_tensor,
         sender_device,
         forward_device,
         backward_device,
@@ -296,7 +294,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_any_any_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    Tensor& intermediate_tensor,
     IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
@@ -347,7 +344,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
-    std::vector<Tensor> output_tensors = {intermediate_tensor, output_tensor};
+    std::vector<Tensor> output_tensors = {output_tensor};
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
@@ -685,8 +682,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
-            const auto& output = output_tensors[1];
-            const auto& intermed = output_tensors[0];
+            const auto& output = output_tensors[0];
 
             // update senders
             auto& worker_reader_sender_forward_runtime_args_by_core =

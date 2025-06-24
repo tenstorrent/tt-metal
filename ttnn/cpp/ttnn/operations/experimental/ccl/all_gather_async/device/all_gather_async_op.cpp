@@ -37,10 +37,10 @@ void AllGatherAsync::validate_with_output_tensors(
 
     if (output_tensors.size() > 0 and output_tensors[0].has_value()) {
         TT_FATAL(
-            output_tensors.size() <= 2,
-            "Error, Number of output tensors should be at most 2 but has {}",
+            output_tensors.size() <= 1,
+            "Error, Number of output tensors should be at most 1 but has {}",
             output_tensors.size());
-        const auto& output_tensor = output_tensors.size() == 1 ? output_tensors[0] : output_tensors[1];
+        const auto& output_tensor = output_tensors[0];
 
         TT_FATAL(
             output_tensor.value().storage_type() == StorageType::DEVICE,
@@ -273,11 +273,10 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
                 "called");
             return all_gather_async_minimal_interleaved_dim3_1_1_any_any(
                 input_tensors[0],
-                output_tensors[0],
                 target_device,
                 forward_device,
                 backward_device,
-                output_tensors[1],
+                output_tensors[0],
                 this->dim,
                 this->num_links,
                 target_ring_size,
@@ -405,7 +404,6 @@ Tensor all_gather_async_impl(
 
 Tensor all_gather_async_impl(
     const Tensor& input_tensor,
-    Tensor& persistent_intermediate_buffer,
     Tensor& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -432,8 +430,7 @@ Tensor all_gather_async_impl(
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
-    std::vector<std::optional<Tensor>> optional_output_tensors = {
-        persistent_intermediate_buffer, persistent_output_buffer};
+    std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
 
     return tt::tt_metal::operation::run(
                ttnn::AllGatherAsync(
@@ -449,7 +446,7 @@ Tensor all_gather_async_impl(
                {input_tensor},
                {},
                optional_output_tensors)
-        .at(1);
+        .at(0);
 }
 
 Tensor all_gather_async_impl(
@@ -524,7 +521,6 @@ Tensor all_gather_async(
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
-    Tensor& persistent_intermediate_buffer,
     Tensor& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -537,7 +533,6 @@ Tensor all_gather_async(
 
     return all_gather_async_impl(
         input_tensor,
-        persistent_intermediate_buffer,
         persistent_output_buffer,
         dim,
         multi_device_global_semaphore,

@@ -85,17 +85,6 @@ def run_all_gather_impl(
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
-    persistent_intermediate_buffers = [
-        ttnn.from_torch(
-            torch.zeros(ag_output_shape),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ag_input_dtype,
-            memory_config=mem_config_ag,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        for _ in range(num_iters)
-    ]
     persistent_output_buffers = [
         ttnn.from_torch(
             torch.zeros(ag_output_shape),
@@ -214,7 +203,6 @@ def run_all_gather_impl(
             else:
                 tt_all_gather_out_tensor = ttnn.experimental.all_gather_async(
                     input_tensor_mesh_list[i],
-                    persistent_intermediate_buffer=persistent_intermediate_buffers[i],
                     persistent_output_buffer=persistent_output_buffers[i],
                     dim=dim,
                     multi_device_global_semaphore=ccl_semaphore_handles[i],
@@ -252,7 +240,6 @@ def run_all_gather_impl(
                 tt_all_gather_out_tensor, tt_matmul_out_tensor = ttnn.experimental.all_gather_matmul_async(
                     input_tensor_mesh_list[i],
                     weight_tt,
-                    persistent_intermediate_buffer=persistent_intermediate_buffers[i],
                     persistent_output_buffer=persistent_output_buffers[i],
                     dim=dim,
                     multi_device_global_semaphore=ccl_semaphore_handles[i],

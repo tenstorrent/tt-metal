@@ -185,15 +185,6 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     auto reserved_packet_header_CB_handle =
         CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
-    // Tensor Info
-    const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
-    const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
-    const auto input_tensor_shape = input_tensor.get_padded_shape();
-    const auto intermediate_tensor_buffer_type = intermediate_tensor.buffer()->buffer_type();
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const auto num_batches = input_tensor_shape[0];
-    const auto batch_slice_num_pages = input_tensor_num_pages / ring_size / num_batches;
-
     TT_FATAL(
         !(input_tensor_shape[3] % tt::constants::TILE_WIDTH),
         "Input tensor width ({}) must be divisible by tile width ({}).",
