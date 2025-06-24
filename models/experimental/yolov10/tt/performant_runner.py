@@ -16,9 +16,11 @@ class YOLOv10PerformantRunner:
         weight_dtype=ttnn.bfloat16,
         model_location_generator=None,
         resolution=(640, 640),
+        torch_input_tensor=None,
     ):
         self.device = device
         self.resolution = resolution
+        self.torch_input_tensor = torch_input_tensor
         self.runner_infra = YOLOv10PerformanceRunnerInfra(
             device,
             device_batch_size,
@@ -26,6 +28,7 @@ class YOLOv10PerformantRunner:
             weight_dtype,
             model_location_generator,
             resolution=resolution,
+            torch_input_tensor=self.torch_input_tensor,
         )
 
         (
