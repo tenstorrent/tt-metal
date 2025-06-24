@@ -53,6 +53,20 @@ Tests:
     patterns:
       - type: all_to_all_multicast
 
+  - name: "FullDevicePairingLinear"
+    fabric_setup:
+      topology: Linear
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+
+    patterns:
+      - type: full_device_random_pairing
+        iterations: 5
+
   - name: "SimpleUnicastMesh"
     fabric_setup:
       topology: Mesh

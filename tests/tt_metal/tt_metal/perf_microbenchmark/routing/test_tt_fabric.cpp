@@ -150,6 +150,7 @@ void TestContext::open_devices(Topology topology, RoutingType routing_type) {
 }
 
 void TestContext::compile_programs() {
+    fixture_->setup_workload();
     // TODO: should we be taking const ref?
     for (auto& [coord, test_device] : test_devices_) {
         test_device.create_kernels();
@@ -254,19 +255,13 @@ int main(int argc, char** argv) {
     TestConfigBuilder builder(*fixture, *fixture, gen);
 
     for (auto& test_config : raw_test_configs) {
-        log_info(tt::LogTest, "Running Test: {}", test_config.name);
+        log_info(tt::LogTest, "Running Test Group: {}", test_config.name);
 
         test_context.open_devices(test_config.fabric_setup.topology, test_config.fabric_setup.routing_type.value());
 
-        test_context.setup_devices();
-
         log_info(tt::LogTest, "building tests");
         auto built_tests = builder.build_tests({test_config});
-        log_info(tt::LogTest, "built tests");
-
-        for (auto& test : built_tests) {
-            test_context.process_traffic_config(test);
-        }
+        log_info(tt::LogTest, "built {} tests", built_tests.size());
 
         if (cmdline_parser.dump_built_tests()) {
             log_info(tt::LogTest, "dumping tests");
@@ -275,15 +270,23 @@ int main(int argc, char** argv) {
             log_info(tt::LogTest, "dumped tests");
         }
 
-        test_context.compile_programs();
+        for (auto& built_test : built_tests) {
+            log_info(tt::LogTest, "Running Test: {}", built_test.name);
 
-        test_context.launch_programs();
+            test_context.setup_devices();
 
-        test_context.wait_for_prorgams();
+            test_context.process_traffic_config(built_test);
 
-        log_info(tt::LogTest, "Test {} Finished.", test_config.name);
+            test_context.compile_programs();
 
-        test_context.reset_devices();
+            test_context.launch_programs();
+
+            test_context.wait_for_prorgams();
+
+            log_info(tt::LogTest, "Test {} Finished.", built_test.name);
+
+            test_context.reset_devices();
+        }
     }
 
     test_context.close_devices();

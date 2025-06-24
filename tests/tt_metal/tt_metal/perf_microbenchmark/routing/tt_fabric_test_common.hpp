@@ -105,7 +105,9 @@ public:
         } else {
             log_info(tt::LogTest, "Reusing existing device setup with fabric config: {}", current_fabric_config_);
         }
+    }
 
+    void setup_workload() {
         // create a new mesh workload for every run
         mesh_workload_ = std::make_unique<MeshWorkload>();
     }
