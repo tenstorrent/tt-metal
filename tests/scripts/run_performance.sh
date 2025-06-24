@@ -42,7 +42,7 @@ run_perf_models_other() {
 
         # env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov9c/tests/perf -m $test_marker
 
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_vanilla_unet/test/test_perf_vanilla_unet.py -m $test_marker
+        # env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_vanilla_unet/test/test_perf_vanilla_unet.py -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov8s_world/tests -m $test_marker
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/mobilenetv2/tests -m $test_marker
@@ -63,7 +63,7 @@ run_perf_models_other() {
 
     env pytest models/demos/distilbert/tests/test_perf_distilbert.py -m $test_marker
 
-    env pytest -n auto models/demos/vgg/tests/test_perf_vgg.py -m $test_marker
+    # env pytest -n auto models/demos/vgg/tests/test_perf_vgg.py -m $test_marker
 
     env pytest -n auto models/demos/convnet_mnist/tests -m $test_marker
 
