@@ -1281,7 +1281,7 @@ int TestLineFabricEntrypoint(
 
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
-        log_info(tt::LogTest, "This test can only be run on T3000 devices");
+        log_info(tt::LogTest, "This test can only be run on machines with at least 4 devices");
         return 0;
     }
 
@@ -2729,7 +2729,8 @@ void Run1DFabricPacketSendTest(
     bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
     bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
     if (num_devices < params.line_size) {
-        log_info(tt::LogTest, "This test can only be run on T3000 devices");
+        log_info(
+            tt::LogTest, "This test is requesting {} devices but only {} are available", params.line_size, num_devices);
         return;
     }
 
