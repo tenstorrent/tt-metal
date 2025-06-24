@@ -783,18 +783,18 @@ def test_conv_dram(
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, pad_h, pad_w, act_block_w_div",
     (
-        # (2, 128, 256, 9, 9, 3, 3, 1, 1, 1),
-        # (2, 576, 576, 9, 9, 3, 3, 0, 0, 1),
-        # (2, 960, 960, 5, 5, 3, 3, 0, 0, 1),
-        # (2, 256, 2048, 9, 9, 3, 3, 1, 1, 1),
-        # (2, 512, 2048, 17, 17, 3, 3, 1, 1, 1),
-        # (2, 768, 768, 17, 17, 3, 3, 0, 0, 1),
-        # (2, 1280, 2560, 15, 15, 3, 3, 1, 1, 1),
-        # (2, 1280, 1280, 17, 17, 3, 3, 1, 1, 1),
-        # [1, 3024, 1232, 14, 14, 1, 1, 0, 0, 1],
-        # (2, 768, 32, 9, 9, 3, 3, 1, 1, 1),
-        # (2, 64, 128, 9, 9, 3, 3, 1, 1, 1),
-        # (2, 32, 128, 9, 9, 3, 3, 1, 1, 1),
+        (2, 128, 256, 9, 9, 3, 3, 1, 1, 1),
+        (2, 576, 576, 9, 9, 3, 3, 0, 0, 1),
+        (2, 960, 960, 5, 5, 3, 3, 0, 0, 1),
+        (2, 256, 2048, 9, 9, 3, 3, 1, 1, 1),
+        (2, 512, 2048, 17, 17, 3, 3, 1, 1, 1),
+        (2, 768, 768, 17, 17, 3, 3, 0, 0, 1),
+        (2, 1280, 2560, 15, 15, 3, 3, 1, 1, 1),
+        (2, 1280, 1280, 17, 17, 3, 3, 1, 1, 1),
+        [1, 3024, 1232, 14, 14, 1, 1, 0, 0, 1],
+        (2, 768, 32, 9, 9, 3, 3, 1, 1, 1),
+        (2, 64, 128, 9, 9, 3, 3, 1, 1, 1),
+        (2, 32, 128, 9, 9, 3, 3, 1, 1, 1),
         (1, 2904, 2904, 48, 48, 3, 3, 1, 1, 1),
     ),
 )
@@ -3259,14 +3259,14 @@ def test_conv2d_sdxl(
 
         # VAE
         # kernel 3x3
-        (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 8, 32),
-        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 16, 32),
-        (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 16, 128),
-        (1, 256, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 4, 64),
+        (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 12, 32),
+        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 24, 32),
+        (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 24, 128),
+        (1, 256, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 8, 64),
         (1, 512, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, None, 1, 128),
-        (1, 512, 512, 256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 2, 32),
-        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 8, 64),
-        (1, 512, 512, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 8, 32),
+        (1, 512, 512, 256, 256, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 4, 32),
+        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 12, 64),
+        (1, 512, 512, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 12, 32),
 
         # output_channels 3
         (1, 128, 3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False, 1, 1, ttnn.Conv2dSliceWidth, 16, 512),

@@ -16,6 +16,7 @@
 #include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
+#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -362,8 +363,15 @@ Result conv2d_DRAM(
                 bias_tensor.has_value(),
                 compute_config);
         }
+
+        TT_ASSERT(conv_config.shard_layout.has_value(), " Conv2D DRAM Slicing must have a shard layout set.");
+
         Tensor sliced_input_tensor;
         if (conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED) {
+            TT_FATAL(
+                output_layout != Layout::TILE,
+                "Conv2D DRAM Slicing with Width Sharded layout is not supported with TILE layout. "
+                "Please use ROW_MAJOR layout.");
             sliced_input_tensor = ttnn::slice(
                 queue_id,
                 input_tensor_on_device,
@@ -429,11 +437,6 @@ Result conv2d_DRAM(
         }
         if (sliced_output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
             // slice_write expects the output tensor to be correctly shaped when its in interleaved memory layout.
-            TT_FATAL(
-                additional_padded_width == 0,
-                "Conv2D DRAM Slicing: Additional padding should not be applied when the output tensor is in "
-                "interleaved "
-                "memory layout.");
             sliced_output_tensor = ttnn::reshape(
                 sliced_output_tensor,
                 ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
@@ -456,10 +459,10 @@ Result conv2d_DRAM(
     if (conv_config.deallocate_activation) {
         input_tensor_on_device.deallocate(true);
     }
-    // const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.logical_shape());
-    // const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.padded_shape());
+    const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.logical_shape());
+    const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.padded_shape());
 
-    // dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
+    dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
 
     return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
