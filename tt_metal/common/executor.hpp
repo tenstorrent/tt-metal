@@ -13,17 +13,9 @@ inline static const size_t EXECUTOR_NTHREADS = std::getenv("TT_METAL_THREADCOUNT
                                                    ? std::stoi(std::getenv("TT_METAL_THREADCOUNT"))
                                                    : std::thread::hardware_concurrency();
 
-using Executor = tf::Executor;
-using ExecTask = tf::Task;
-
-inline Executor& GetExecutor() {
-    static Executor exec(EXECUTOR_NTHREADS);
+inline tf::Executor& GetExecutor() {
+    static tf::Executor exec(EXECUTOR_NTHREADS);
     return exec;
-}
-
-inline std::mutex& GetExecutorMutex() {
-    static std::mutex exec_mutex;
-    return exec_mutex;
 }
 
 // When a taskflow worker thread throws an exception, Taskflow does not propagate this to main thread
@@ -33,21 +25,11 @@ inline std::mutex& GetExecutorMutex() {
 // launch an async tf job only if not all workers are occupied
 template <class F, class... Args>
 auto async(F&& func, Args&&... args) {
-    using return_type = typename std::invoke_result<F, Args...>::type;
-
-    auto task = std::make_shared<std::packaged_task<return_type()>>(
+    auto task = std::make_shared<std::packaged_task<std::invoke_result_t<F, Args...>()>>(
         std::bind(std::forward<F>(func), std::forward<Args>(args)...));
-    std::shared_future<return_type> res(std::move(task->get_future()));
-    GetExecutorMutex().lock();
-
-    if (GetExecutor().num_topologies() >= GetExecutor().num_workers()) {
-        GetExecutorMutex().unlock();
-        (*task)();
-        return res;
-    }
+    auto res = task->get_future();
 
     GetExecutor().silent_async([task] { (*task)(); });
-    GetExecutorMutex().unlock();
     return res;
 }
 }  // namespace tt::tt_metal::detail
