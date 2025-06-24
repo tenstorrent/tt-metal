@@ -78,6 +78,7 @@ DatacopyParams setup_datacopy(
     CoreRangeSet datacopy_workers = CoreRangeSet({CoreRange(datacopy_core_coord)});
     std::vector<CoreCoord> all_datacopy_cores = corerange_to_cores(datacopy_workers, std::nullopt, true);
     std::vector<CoreCoord> all_datacopy_cores_noc;
+    all_datacopy_cores_noc.reserve(all_datacopy_cores.size());
     for (auto core : all_datacopy_cores) {
         all_datacopy_cores_noc.push_back(device->worker_core_from_logical_core(core));
     }

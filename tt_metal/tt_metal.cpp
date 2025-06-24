@@ -425,6 +425,7 @@ std::map<chip_id_t, IDevice*> CreateDevices(
 
 void CloseDevices(const std::map<chip_id_t, IDevice*>& devices) {
     std::vector<IDevice*> devices_to_close;
+    devices_to_close.reserve(devices.size());
     for (auto& [id, device] : devices) {
         devices_to_close.push_back(device);
     }
