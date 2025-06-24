@@ -596,7 +596,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         accumulated_input_total_tiles_per_dim[i] = num_unpadded_dim * accumulated_input_total_tiles_per_dim[i - 1];
     }
 
-    log_info(
+    log_debug(
         tt::LogOp,
         "Slice Write Input Tiles {}, Output Tiles {}, Acc Output Tiles {}, Acc Input Tiles {}",
         num_input_tiles_per_dim,
@@ -663,20 +663,15 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
             id_per_dim[j] = unpadded_written % num_input_tiles_per_dim[j];
             unpadded_written = unpadded_written / num_input_tiles_per_dim[j];
             start_id += id_per_dim[j] * accumulated_total_tiles_per_dim[j - 1];
-            size_till_end[j] = output_tensor_end[-1 - j] - output_tensor_start[-1 - j] - id_per_dim[j] - 1;
-            if (j == 1) {
-                max_num_sticks_this_core +=
-                    tt::div_up(size_till_end[j], TILE_HEIGHT) * accumulated_input_total_tiles_per_dim[j - 1];
-            } else {
-                max_num_sticks_this_core += size_till_end[j] * accumulated_input_total_tiles_per_dim[j - 1];
-            }
+            size_till_end[j] = num_input_tiles_per_dim[j] - id_per_dim[j] - ((j == 1) ? 0 : 1);
+            max_num_sticks_this_core += size_till_end[j] * accumulated_input_total_tiles_per_dim[j - 1];
         }
         std::vector<uint32_t> writer_kernel_args = common_writer_kernel_args;
 
         uint32_t num_tiles_this_core =
             std::min(num_tiles_nhw_per_core * num_tiles_per_channel, max_num_sticks_this_core);
 
-        log_info(
+        log_trace(
             tt::LogOp,
             "Start ID: {}, Start ID per dim : {} , Size till end : {}, Max Sticks: {}, Num Sticks: {} for Core: {}",
             start_id,
