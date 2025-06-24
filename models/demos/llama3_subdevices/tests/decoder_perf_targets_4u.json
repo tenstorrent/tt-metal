@@ -226,6 +226,15 @@
             "dispatch_duration_relative_margin": 0.5
         },
         "BinaryDeviceOperation_1": {
+            "op_name": "BinaryDeviceOperation_Temerature_Scaling",
+            "kernel_duration": 900,
+            "op_to_op": 720.0,
+            "non-overlapped-dispatch-time": 6464.0,
+            "kernel_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.2,
+            "dispatch_duration_relative_margin": 0.5
+        },
+        "BinaryDeviceOperation_2": {
             "op_name": "BinaryDeviceOperation_Indices_Correction",
             "kernel_duration": 3447.309659090909,
             "op_to_op": 735.5454545454545,
@@ -352,6 +361,15 @@
             "dispatch_duration_relative_margin": 0.5
         },
         "TypecastDeviceOperation_0": {
+            "op_name": "TypecastDeviceOperation_input_bf16",
+            "kernel_duration": 22953.0,
+            "op_to_op": 707.0,
+            "non-overlapped-dispatch-time": 3992.0,
+            "kernel_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.2,
+            "dispatch_duration_relative_margin": 0.5
+        },
+        "TypecastDeviceOperation_1": {
             "op_name": "TypecastDeviceOperation_0",
             "kernel_duration": 2206.1633522727275,
             "op_to_op": 726.8181818181819,
@@ -360,7 +378,7 @@
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
         },
-        "TypecastDeviceOperation_1": {
+        "TypecastDeviceOperation_2": {
             "op_name": "TypecastDeviceOperation_1",
             "kernel_duration": 2234.7982954545455,
             "op_to_op": 718.5909090909091,

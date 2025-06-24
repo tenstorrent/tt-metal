@@ -135,6 +135,17 @@ def run_llama3_demo(
     assert batch_size <= 32, "Max batch size currently supported is 32"
     assert max_seq_len <= 128 * 1024, "Max sequence length must be less than 128k tokens"
 
+    top_k = sampling_params["top_k"]
+    if isinstance(top_k, int):
+        top_k = [top_k] * batch_size
+    top_p = sampling_params["top_p"]
+    if isinstance(top_p, float):
+        top_p = [top_p] * batch_size
+    temperature = sampling_params["temperature"]
+    if isinstance(temperature, float):
+        temperature = [temperature] * batch_size
+    seed = sampling_params["seed"]
+
     dummy_weights = weights == "random"
 
     # We disregard any warmup iteration for profiling, in favour of just measuring compile time on the first iteration
@@ -238,7 +249,7 @@ def run_llama3_demo(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        sampling_params=sampling_params,
+        temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
     )
     profiler.end("loading_weights_to_device")
@@ -322,7 +333,7 @@ def run_llama3_demo(
         )
 
         # Sampling
-        _ = tt_sampling(tt_out[0], tt_out_tok)
+        _ = tt_sampling(tt_out[0], top_k, top_p, seed, tt_out_tok=tt_out_tok)  # Compile once with setting the seed
         logger.info(f"Sampling done")
 
     if not stress_test:
@@ -334,7 +345,10 @@ def run_llama3_demo(
             rot_mat_idxs,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
-    # profiler.end(f"plus one position done")
+
+    _ = tt_sampling(
+        tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok
+    )  # Compile again without seed to obtain random sampling; at this position to simplify test_decoder_device_perf.py
 
     # Capture Trace
     logger.info(f"Capturing model trace...")
@@ -356,7 +370,7 @@ def run_llama3_demo(
     )
 
     # Sampling
-    _ = tt_sampling(tt_out[0], tt_out_tok)
+    _ = tt_sampling(tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok)
 
     if not stress_test:
         ttnn.plus_one(
@@ -605,7 +619,7 @@ def run_llama3_demo(
             2000,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 32, "top_p": 0.9, "temperature": 0.7, "seed": 42},  # sampling_params
             False,  # stress_test
             0,  # start_pos
         ),
@@ -620,7 +634,7 @@ def run_llama3_demo(
             2000,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             0,  # start_pos
         ),
@@ -635,7 +649,7 @@ def run_llama3_demo(
             500000,  # max_generated_tokens (same index for stress test)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.0, "temperature": 1.0, "seed": 42},  # sampling_params
             True,  # stress_test
             0,  # start_pos
         ),
@@ -650,7 +664,7 @@ def run_llama3_demo(
             2048,  # max_generated_tokens (same index for stress test)
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
         ),
@@ -665,7 +679,7 @@ def run_llama3_demo(
             1,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             127,  # start_pos
         ),
@@ -680,7 +694,7 @@ def run_llama3_demo(
             20000,  # experimentally established as large enough to catch ND hangs
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 1, "top_p": 0.00, "seed": 42},  # sampling_params (argmax)
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
         ),

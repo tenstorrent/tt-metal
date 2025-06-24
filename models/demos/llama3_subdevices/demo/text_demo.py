@@ -330,7 +330,7 @@ def test_demo_text(
     if print_to_file:
         # Creat batch output file
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_directory = "models/tt_transformers/demo/output"
+        output_directory = "models/demos/llama3_subdevices/demo/output"
         os.makedirs(output_directory, exist_ok=True)
         os.chmod(output_directory, 0o755)
         output_filename = f"{output_directory}/llama_text_demo_output_{timestamp}.txt"

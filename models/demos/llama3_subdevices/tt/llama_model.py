@@ -167,7 +167,6 @@ class TtTransformer(LightweightModule):
             self.tt_sampling = TTSampling(
                 args=self.args,
                 mesh_device=self.mesh_device,
-                sampling_params={"top_k": 1, "top_p": 0.00, "seed": 42},
                 tt_ccl=self.tt_ccl,
             )
         else:
@@ -442,7 +441,7 @@ class TtTransformer(LightweightModule):
         )
 
         # sampling
-        tt_logits = self.tt_sampling(tt_logits[0], x)
+        tt_logits = self.tt_sampling(tt_logits[0], tt_out_tok=x)
 
         ttnn.plus_one(
             current_pos,
