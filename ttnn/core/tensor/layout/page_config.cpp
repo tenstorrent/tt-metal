@@ -116,10 +116,6 @@ Shape2D TilePageConfig::get_page_shape(
     DataType dtype,
     const MemoryConfig& memory_config,
     const std::optional<Shape2D>&) const {
-    if (memory_config.memory_layout() == TensorMemoryLayout::SINGLE_BANK && physical_size.width() != 0 &&
-        physical_size.height() != 0) {
-        return physical_size;
-    }
     return Shape2D(tile_.get_height(), tile_.get_width());
 }
 
@@ -179,10 +175,6 @@ Shape2D RowMajorPageConfig::get_page_shape(
     const std::optional<Shape2D>& physical_shard_size) const {
     if (physical_size.height() == 0 || physical_size.width() == 0) {
         return Shape2D(1, sizeof(uint32_t) / CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype));
-    }
-
-    if (memory_config.memory_layout() == TensorMemoryLayout::SINGLE_BANK) {
-        return physical_size;
     }
 
     if (memory_config.shard_spec().has_value() && memory_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {

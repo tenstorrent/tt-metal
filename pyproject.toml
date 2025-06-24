@@ -23,7 +23,7 @@ dependencies = [
   # "seaborn>=0.13.2",
 ]
 requires-python = ">=3.10"
-keywords = ["metalium", "ttnn", "tt-metal", "machine learning", "tenstorrent"]
+keywords = ["metalium", "ttnn", "tt-metal", "machine learning", "tenstorrent", "libnuma", "libhwloc"]
 license = { text = "Apache-2.0" }
 description = "General compute framework for Tenstorrent devices"
 dynamic = ["version", "readme"]

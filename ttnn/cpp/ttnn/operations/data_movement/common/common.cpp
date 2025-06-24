@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/operations/data_movement/common/common.hpp"
-#include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
-#include "cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
+#include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -110,7 +110,7 @@ ttnn::Tensor pad_to_tile_vol(
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config) {
-    auto logical_shape = tensor.logical_shape();
+    const auto& logical_shape = tensor.logical_shape();
     auto padded_shape = tensor.padded_shape();
     auto rank = logical_shape.rank();
     if (padded_shape[-1] % tt::constants::TILE_WIDTH != 0 || padded_shape[-2] % tt::constants::TILE_HEIGHT != 0) {

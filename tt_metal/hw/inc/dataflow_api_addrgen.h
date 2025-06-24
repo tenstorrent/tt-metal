@@ -115,18 +115,30 @@ FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint
     };
 }
 
+// clang-format off
+/**
+ * Get an encoding for a noc address which contains Tensix core grid and L1 address.
+ *
+ * Return value: uint64_t
+ *
+ * | Argument    | Description                             | Data type | Valid range        | required |
+ * |-------------|-----------------------------------------|-----------|--------------------|----------|
+ * | noc_x_start | Physical x coordinate of the start core | uint32_t  | WH: 0-9, BH: 0-16  | True     |
+ * | noc_y_start | Physical y coordinate of the start core | uint32_t  | WH: 0-11, BH: 0-11 | True     |
+ * | noc_x_end   | Physical x coordinate of the end core   | uint32_t  | WH: 0-9, BH: 0-16  | True     |
+ * | noc_y_end   | Physical y coordinate of the end core   | uint32_t  | WH: 0-11, BH: 0-11 | True     |
+ * | addr        | Address in local L1 memory              | uint32_t  | 0..1MB             | True     |
+ * | noc         | Which NOC to use for the transaction    | uint8_t   | 0 or 1             | False    |
+ */
+// clang-format on
 FORCE_INLINE
-std::uint64_t get_noc_multicast_addr(
-    std::uint32_t noc_x_start,
-    std::uint32_t noc_y_start,
-    std::uint32_t noc_x_end,
-    std::uint32_t noc_y_end,
-    std::uint32_t addr,
+uint64_t get_noc_multicast_addr(
+    uint32_t noc_x_start,
+    uint32_t noc_y_start,
+    uint32_t noc_x_end,
+    uint32_t noc_y_end,
+    uint32_t addr,
     uint8_t noc = noc_index) {
-    /*
-        Get an encoding which contains tensix core and address you want to
-        read from/write to via the noc
-    */
     return NOC_MULTICAST_ADDR(
         DYNAMIC_NOC_X(noc, noc_x_start),
         DYNAMIC_NOC_Y(noc, noc_y_start),
@@ -150,7 +162,7 @@ std::uint64_t get_noc_multicast_addr(
  */
 // clang-format on
 FORCE_INLINE
-std::uint64_t get_noc_addr(std::uint32_t noc_x, std::uint32_t noc_y, std::uint32_t addr, uint8_t noc = noc_index) {
+uint64_t get_noc_addr(uint32_t noc_x, uint32_t noc_y, uint32_t addr, uint8_t noc = noc_index) {
     return NOC_XY_ADDR(DYNAMIC_NOC_X(noc, noc_x), DYNAMIC_NOC_Y(noc, noc_y), addr);
 }
 

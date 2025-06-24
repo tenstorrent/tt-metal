@@ -28,7 +28,7 @@ void Transpose::validate(const std::vector<Tensor>& input_tensors) const {
         this->dim == TransposeOpDim::HC || this->dim == TransposeOpDim::WH || this->dim == TransposeOpDim::CN,
         "Transpose HC, WH, CN are the only supported transpose operations. Transpose {} is not supported.",
         (int)this->dim);
-    const auto shape = input_tensor.padded_shape();
+    const auto& shape = input_tensor.padded_shape();
     bool row_major = input_tensor.layout() == Layout::ROW_MAJOR;
     uint32_t W = shape[3], H = shape[2], C = shape[1], N = shape[0];
     uint32_t HW = H * W;
@@ -116,7 +116,7 @@ void Transpose::validate(const std::vector<Tensor>& input_tensors) const {
                 W * input_tensor.element_size(),
                 BUFFER_ALIGNMENT);
         }
-        TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32, "Error");
+        TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::INT32, "Unsupported data type for input tensor");
         TT_FATAL(
             !(input_tensor.is_sharded() && input_tensor.layout() == Layout::TILE),
             "HC transpose does not support sharded+tilized inputs");

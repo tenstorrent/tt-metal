@@ -182,6 +182,7 @@ void RunTestLineMcast(
     auto* sender_device = DevicePool::instance().get_active_device(sender_phys_id);
     auto* mcast_start_device = DevicePool::instance().get_active_device(mcast_start_phys_id);
     std::vector<tt_metal::IDevice*> mcast_group_devices = {};
+    mcast_group_devices.reserve(mcast_group_phys_ids.size());
     for (auto id : mcast_group_phys_ids) {
         mcast_group_devices.push_back(DevicePool::instance().get_active_device(id));
     }
@@ -1052,6 +1053,7 @@ TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
 
                     // Map logical to virtual cores
                     std::vector<CoreCoord> worker_virtual_cores;
+                    worker_virtual_cores.reserve(worker_logical_cores_vec.size());
                     for (const auto& logical_core : worker_logical_cores_vec) {
                         worker_virtual_cores.push_back(sender_device->worker_core_from_logical_core(logical_core));
                     }

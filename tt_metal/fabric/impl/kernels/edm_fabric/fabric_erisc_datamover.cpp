@@ -982,9 +982,11 @@ void run_receiver_channel_step_impl(
     ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table) {
-    auto& ack_counter = receiver_channel_pointers.ack_counter;
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
+    auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
+    bool unwritten_packets;
     if constexpr (enable_first_level_ack) {
+        auto& ack_counter = receiver_channel_pointers.ack_counter;
         bool pkts_received = pkts_received_since_last_check > 0;
         ASSERT(receiver_channel_pointers.completion_counter - ack_counter < RECEIVER_NUM_BUFFERS);
         if (pkts_received) {
@@ -993,15 +995,11 @@ void run_receiver_channel_step_impl(
             receiver_send_received_ack(ack_counter.get_buffer_index(), local_receiver_channel);
             ack_counter.increment();
         }
+        unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
     } else {
-        increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
-        // Ack counter does not get used to index a buffer slot, so we skip the buffer index increment
-        // and only increment the counter
-        ack_counter.counter += pkts_received_since_last_check;
+        unwritten_packets = pkts_received_since_last_check != 0;
     }
 
-    auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
-    bool unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
     if (unwritten_packets) {
         invalidate_l1_cache();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
@@ -1044,8 +1042,11 @@ void run_receiver_channel_step_impl(
             can_send_to_all_local_chip_receivers =
                 can_forward_packet_completely(cached_routing_fields, downstream_edm_interface[receiver_channel]);
         }
-        bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-        if (can_send_to_all_local_chip_receivers && trid_flushed) {
+        if constexpr (enable_trid_flush_check_on_noc_txn) {
+            bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+            can_send_to_all_local_chip_receivers &= trid_flushed;
+        }
+        if (can_send_to_all_local_chip_receivers) {
             did_something = true;
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                 receiver_buffer_index);
@@ -1062,6 +1063,8 @@ void run_receiver_channel_step_impl(
                     packet_header, cached_routing_fields, downstream_edm_interface[receiver_channel], trid);
             }
             wr_sent_counter.increment();
+            // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
+            increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
         }
     }
 
@@ -1194,11 +1197,6 @@ void run_fabric_edm_main_loop(
 
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         invalidate_l1_cache();
-        bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
-        if (got_graceful_termination) {
-            DPRINT << "EDM Graceful termination\n";
-            return;
-        }
         did_something = false;
         for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
             // Capture these to see if we made progress
@@ -1258,7 +1256,7 @@ void run_fabric_edm_main_loop(
                     channel_connection_established,
                     local_sender_channel_free_slots_stream_ids_ordered);
             }
-            if constexpr (enable_ring_support && !dateline_connection) {
+            if constexpr (enable_ring_support && !dateline_connection && !skip_sender_vc1_channel_connection) {
                 run_sender_channel_step<enable_packet_header_recording, VC1_RECEIVER_CHANNEL, NUM_SENDER_CHANNELS - 1>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
@@ -1282,7 +1280,6 @@ void run_fabric_edm_main_loop(
             }
         }
     }
-    DPRINT << "EDM Terminating\n";
 }
 
 template <typename EdmChannelWorkerIFs>
@@ -1428,8 +1425,6 @@ void kernel_main() {
     //
     // COMMON CT ARGS (not specific to sender or receiver)
     //
-    *reinterpret_cast<volatile uint32_t*>(handshake_addr) = 0;
-    auto eth_transaction_ack_word_addr = handshake_addr + sizeof(eth_channel_sync_t);
 
     // Initialize stream register state for credit management across the Ethernet link.
     // We make sure to do this before we handshake to guarantee that the registers are
@@ -1467,14 +1462,6 @@ void kernel_main() {
         init_ptr_val<to_sender_packets_acked_streams[4]>(0);
         init_ptr_val<to_sender_packets_completed_streams[3]>(0);
         init_ptr_val<to_sender_packets_completed_streams[4]>(0);
-    }
-
-    if constexpr (enable_ethernet_handshake) {
-        if constexpr (is_handshake_sender) {
-            erisc::datamover::handshake::sender_side_start(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
-        } else {
-            erisc::datamover::handshake::receiver_side_start(handshake_addr);
-        }
     }
 
     // TODO: CONVERT TO SEMAPHORE
@@ -1878,7 +1865,6 @@ void kernel_main() {
         local_receiver_buffer_addresses.data(),
         channel_buffer_size,
         sizeof(PACKET_HEADER_TYPE),
-        eth_transaction_ack_word_addr,
         receiver_channel_base_id);
 
     // initialize the remote receiver channel buffers
@@ -1886,16 +1872,11 @@ void kernel_main() {
         remote_receiver_buffer_addresses.data(),
         channel_buffer_size,
         sizeof(PACKET_HEADER_TYPE),
-        eth_transaction_ack_word_addr,
         receiver_channel_base_id);
 
     // initialize the local sender channel worker interfaces
     local_sender_channels.init(
-        local_sender_buffer_addresses.data(),
-        channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE),
-        0,  // For sender channels there is no eth_transaction_ack_word_addr because they don't send acks
-        sender_channel_base_id);
+        local_sender_buffer_addresses.data(), channel_buffer_size, sizeof(PACKET_HEADER_TYPE), sender_channel_base_id);
 
     // initialize the local sender channel worker interfaces
     init_local_sender_channel_worker_interfaces(
@@ -1924,9 +1905,11 @@ void kernel_main() {
 
     if constexpr (enable_ethernet_handshake) {
         if constexpr (is_handshake_sender) {
-            erisc::datamover::handshake::sender_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+            erisc::datamover::handshake::sender_side_handshake(
+                handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         } else {
-            erisc::datamover::handshake::receiver_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
+            erisc::datamover::handshake::receiver_side_handshake(
+                handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         }
 
         *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
@@ -2064,6 +2047,5 @@ void kernel_main() {
 
     *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
 
-    DPRINT << "EDM DONE\n";
     WAYPOINT("DONE");
 }
