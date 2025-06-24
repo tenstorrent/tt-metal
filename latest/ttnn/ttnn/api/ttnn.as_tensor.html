@@ -169,7 +169,7 @@
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – The <cite>ttnn</cite> memory configuration. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>cache_file_name</strong> (<em>str</em><em> | </em><em>pathlib.Path</em><em>, </em><em>optional</em>) – The cache file name. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>preprocess</strong> (<em>Callable</em><em>[</em><em>[</em><em>ttnn.Tensor</em><em>]</em><em>, </em><em>ttnn.Tensor</em><em>]</em><em>, </em><em>optional</em>) – The function to preprocess the tensor before serializing/converting to ttnn. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>mesh_mapper</strong> (<em>ttnn.TensorToMesh</em><em>, </em><em>optional</em>) – The TensorToMesh to define the mapping from torch to multi-device. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>mesh_mapper</strong> (<em>ttnn.CppTensorToMesh</em><em>, </em><em>optional</em>) – The TensorToMesh to define the mapping from torch to multi-device. Defaults to <cite>None</cite>.</p></li>
 <li>
 <p><strong>use_device_tilizer</strong> (<em>bool</em><em>, </em><em>optional</em>) – </p>
 <p>The flag that toggles whether to use host vs. device tilizer. Defaults to <cite>False</cite>.</p>
