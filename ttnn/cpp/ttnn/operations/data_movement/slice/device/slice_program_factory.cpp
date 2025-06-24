@@ -260,7 +260,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
-            auto src_tensor = input_tensors.at(0);
+            const auto& src_tensor = input_tensors.at(0);
             auto dst_tensor = output_tensors.at(0);
             uint32_t num_cores_x = compute_with_storage_grid_size.x;
             uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -293,9 +293,13 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
             for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-                { SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first); }
+                {
+                    SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
+                }
 
-                { SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second); }
+                {
+                    SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
+                }
             }
         };
 
@@ -311,8 +315,8 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
     // TODO: multi core implementation - work division is not trivial as we need to determine the N/C/H/W start and end
     // points for each split, and base that off stride
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-    const auto output_shape = output.padded_shape();
-    const auto input_shape = a.padded_shape();
+    const auto& output_shape = output.padded_shape();
+    const auto& input_shape = a.padded_shape();
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     uint32_t src_is_dram = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
@@ -851,8 +855,6 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
 
 operation::ProgramWithCallbacks slice_tile_multi_core(
     const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
-    const auto output_shape = output.padded_shape();
-
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device

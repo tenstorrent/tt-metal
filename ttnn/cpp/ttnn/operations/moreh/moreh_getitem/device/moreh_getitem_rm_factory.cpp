@@ -28,7 +28,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
 
     auto input = tensor_args.input;
     auto index_tensors = tensor_args.index_tensors;
-    auto output = output_tensor;
+    const auto& output = output_tensor;
     auto index_dims = operation_attributes.index_dims;
     auto memory_config = operation_attributes.memory_config;
     // auto core_range = operation_attributes.core_range;

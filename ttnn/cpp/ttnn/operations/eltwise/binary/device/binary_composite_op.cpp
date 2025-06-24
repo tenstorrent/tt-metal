@@ -407,7 +407,7 @@ Tensor ExecutePrelu::invoke(
 
 Tensor ExecutePrelu::invoke(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const auto s_a = input_a.logical_shape();
+    const auto& s_a = input_a.logical_shape();
     const auto volume = input_b.logical_volume();
     TT_FATAL(
         s_a[1] == volume,
@@ -553,8 +553,8 @@ Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const std::optiona
  *   by running reshape.
  */
 Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const ttnn::Shape s_a = input_a.logical_shape();
-    const ttnn::Shape s_b = input_b.logical_shape();
+    const ttnn::Shape& s_a = input_a.logical_shape();
+    const ttnn::Shape& s_b = input_b.logical_shape();
     auto num_ones = [](const ttnn::Shape& s) -> uint32_t {
         uint32_t num1s = 0;
         for (uint32_t idx = 0; idx < 4; idx++) {

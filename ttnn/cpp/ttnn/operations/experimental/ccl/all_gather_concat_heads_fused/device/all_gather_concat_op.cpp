@@ -19,7 +19,7 @@ void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     const auto input_core_ranges = input_tensor.buffer()->shard_spec().grid().ranges();
-    const auto padded_input_shape = input_tensor.padded_shape();
+    const auto& padded_input_shape = input_tensor.padded_shape();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
@@ -170,7 +170,7 @@ Tensor all_gather_concat(
     const std::optional<uint32_t> num_links,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     uint32_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     int32_t rank = input_tensor.logical_shape().rank();

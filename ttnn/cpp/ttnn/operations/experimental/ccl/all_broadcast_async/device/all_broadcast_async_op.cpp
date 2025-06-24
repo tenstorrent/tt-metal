@@ -58,7 +58,7 @@ void AllBroadcastAsync::validate_with_output_tensors(
 
             // check the output tensor size
             auto output_shape = output_tensor.value().get_padded_shape();
-            auto input_shape = input_tensor.get_padded_shape();
+            const auto& input_shape = input_tensor.get_padded_shape();
             TT_FATAL(
                 output_shape.size() == input_shape.size(),
                 "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
@@ -75,7 +75,7 @@ void AllBroadcastAsync::validate_with_output_tensors(
 
 std::vector<ttnn::TensorSpec> AllBroadcastAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.get_padded_shape();
+    const auto& shape = input_tensor.get_padded_shape();
     std::vector<TensorSpec> output_specs;
     for (uint32_t i = 0; i < this->ring_size; ++i) {
         output_specs.push_back(TensorSpec(
@@ -212,7 +212,7 @@ std::vector<Tensor> all_broadcast_async_impl(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(),
         "all-broadcast invoked with cluster_axis API on >2D mesh, which is currently unsupported");

@@ -242,7 +242,7 @@ operation::ProgramWithCallbacks upsample_multi_core(
     auto config_tensor_device = config_tensor.to_device(device, memory_config);
 
     tt::DataFormat config_df = tt::DataFormat::RawUInt16;
-    auto config_storage = config_tensor_device.device_storage();
+    const auto& config_storage = config_tensor_device.device_storage();
     auto config_buffer = config_storage.get_buffer();
     auto config_buffer_page_size = config_buffer->page_size();
 

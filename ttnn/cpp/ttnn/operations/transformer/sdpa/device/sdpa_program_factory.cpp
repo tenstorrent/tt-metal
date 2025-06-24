@@ -43,8 +43,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     attn_mask: B x NQH x S x S
     */
 
-    const auto q_shape = input_tensor_q.logical_shape();
-    const auto k_shape = input_tensor_k.logical_shape();
+    const auto& q_shape = input_tensor_q.logical_shape();
+    const auto& k_shape = input_tensor_k.logical_shape();
     const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2], DH = q_shape[3];
     const uint32_t NKH = k_shape[1];
 

@@ -41,7 +41,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     /* Buffers */
     const Buffer& global_cb_buffer = global_cb.cb_buffer();
     // tensors that with addresses
-    ttnn::Tensor tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
+    const ttnn::Tensor& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
     Buffer* tensor_addrs_buffer = tensor_addrs.buffer();
     std::vector<Buffer*> tensor_buffers;
     // tensors that with actual data
@@ -108,7 +108,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         global_cb.size());
 
     /* Cores setup */
-    auto all_reader_core_range = global_cb.sender_cores();
+    const auto& all_reader_core_range = global_cb.sender_cores();
     auto reader_core_range_vec = corerange_to_cores(all_reader_core_range, std::nullopt, true);
     std::vector<CoreRange> active_reader_core_range_vec;
     for (uint32_t i = 0; i < num_readers; ++i) {
@@ -293,7 +293,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
             const std::vector<Tensor>& output_tensors) {
             TT_ASSERT(output_tensors.size() == 1);
 
-            auto tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
+            const auto& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
             auto tensor_addrs_buffer = tensor_addrs.buffer();
             UpdateDynamicCircularBufferAddress(program, tensor_addrs_cb, *tensor_addrs_buffer);
         };

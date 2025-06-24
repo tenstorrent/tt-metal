@@ -36,8 +36,8 @@ struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NL
 
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const {
         const auto& input_tensor = input_tensors.at(0);
-        const ttnn::Shape input_logical_shape = input_tensor.logical_shape();
-        const ttnn::Shape input_padded_shape = input_tensor.padded_shape();
+        const ttnn::Shape& input_logical_shape = input_tensor.logical_shape();
+        const ttnn::Shape& input_padded_shape = input_tensor.padded_shape();
 
         auto batch_size = input_logical_shape[0];
         auto num_heads = input_logical_shape[1];

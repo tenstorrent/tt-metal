@@ -54,8 +54,6 @@ uint32_t get_packed_value(const Tensor tensor, const ttnn::PadValue pad_value) {
 
 operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
-    auto output_shape = output.padded_shape();
-
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});

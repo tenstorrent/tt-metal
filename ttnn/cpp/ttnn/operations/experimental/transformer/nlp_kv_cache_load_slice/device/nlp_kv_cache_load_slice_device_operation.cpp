@@ -27,7 +27,7 @@ void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor>& inp
     Shape output_tensor_shape = this->compute_output_specs(input_tensors)[0].padded_shape();
     auto num_dims = input_tensor_a.padded_shape().rank();
     TT_FATAL(num_dims == 4, "Input tensor must be 4D");
-    const auto input_shape = input_tensor_a.padded_shape();
+    const auto& input_shape = input_tensor_a.padded_shape();
     auto dim0 = input_shape[0];
     auto dim1 = input_shape[1];
     auto fused_batch_heads = dim0 * dim1;
@@ -45,7 +45,7 @@ void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor>& inp
 std::vector<ttnn::TensorSpec> NlpKVCacheLoadSliceDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    const auto input_shape = input_tensor_a.padded_shape();
+    const auto& input_shape = input_tensor_a.padded_shape();
 
     SmallVector<uint32_t> out_shape;
     auto rank = input_shape.rank();

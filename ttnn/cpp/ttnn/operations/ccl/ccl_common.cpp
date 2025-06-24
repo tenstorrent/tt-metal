@@ -464,8 +464,8 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
     log_trace(tt::LogOp, "input_page_size={}", input_page_size);
     if (row_major) {
         this->num_cols = input_tensor.padded_shape()[-1];
-        auto input_shape = input_tensor.padded_shape();
-        auto output_shape = output_tensor.padded_shape();
+        const auto& input_shape = input_tensor.padded_shape();
+        const auto& output_shape = output_tensor.padded_shape();
         this->num_rows =
             std::accumulate(input_shape.cbegin() + slice_dim, input_shape.cend() - 1, 1, std::multiplies<uint32_t>());
         this->row_offset =

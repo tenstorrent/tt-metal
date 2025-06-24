@@ -123,7 +123,7 @@ uint32_t calculate_L1_usage(
     const MemoryConfig& input_memory,
     const MemoryConfig& output_memory,
     Pool2DType pool_type) {
-    const auto input_shape = input.get_padded_shape();
+    const auto& input_shape = input.get_padded_shape();
 
     auto in_dtype = input.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input.dtype();
     tt::DataFormat in_df = datatype_to_dataformat_converter(in_dtype);
