@@ -52,7 +52,7 @@ def create_custom_preprocessor(device):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_image_classificaton(device, reset_seeds):
     dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
+    image = dataset["train"]["image"][0]
     torch_model = SegformerForImageClassification.from_pretrained("nvidia/mit-b0")
     config = torch_model.config
     reference_model = SegformerForImageClassificationReference(config=config)

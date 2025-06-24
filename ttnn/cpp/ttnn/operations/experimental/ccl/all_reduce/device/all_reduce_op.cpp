@@ -20,7 +20,7 @@ void AllReduce::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<ttnn::TensorSpec> AllReduce::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto shape = input_tensor.logical_shape();
+    const auto& shape = input_tensor.logical_shape();
     TensorSpec spec(
         shape,
         tt::tt_metal::TensorLayout(

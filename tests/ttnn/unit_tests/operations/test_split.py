@@ -26,9 +26,6 @@ dims = [0, 1, 2, 3, 4]
 @pytest.mark.parametrize("chunksize", chunksize_list)
 @pytest.mark.parametrize("dim", dims)
 def test_split(device, layout, dtype, shape, chunksize, dim):
-    # https://github.com/tenstorrent/tt-metal/issues/23237
-    device.disable_and_clear_program_cache()
-
     if dim > len(shape) - 1:
         pytest.skip("dim greater than rank")
 
