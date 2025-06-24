@@ -282,7 +282,7 @@ corresponding input activation and weight blocks can be determined as in
 the following.
 
 In order to compute an output block of dimensions $[bH_{o}, bW_{o}]$, we
-need the the following input blocks:
+need the following input blocks:
 
 1.  an activation matrix of dimensions
     $[bH_{o}\textbf{,} \ K_h \times K_w \times C_i]$
