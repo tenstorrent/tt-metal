@@ -203,16 +203,6 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
         expected_num_workers_completed_[*sub_device_id] = 0;
     }
 
-    // Block after clearing counter(s) on dispatcher
-#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
-    if (thread_exception_ptr_) {
-        // At this point the thread has already stopped and there is no much do I should do here.
-        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        // Let's ensure that no zombie process is left behind.
-        cluster.reset_cluster(mesh_device_->id());
-        return;
-    }
-#endif
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
         std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
     this->increment_num_entries_in_completion_queue();
