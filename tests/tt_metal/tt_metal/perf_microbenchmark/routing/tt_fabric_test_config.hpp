@@ -846,24 +846,17 @@ private:
         }
 
         if (test.fabric_setup.topology == tt::tt_fabric::Topology::Linear) {
-            std::vector<FabricNodeId> devices_in_test;
             for (const auto& sender : test.senders) {
-                devices_in_test.push_back(sender.device);
                 for (const auto& pattern : sender.patterns) {
                     if (pattern.destination->device.has_value()) {
-                        devices_in_test.push_back(pattern.destination->device.value());
+                        TT_FATAL(
+                            this->route_manager_.are_devices_linear(
+                                {sender.device, pattern.destination->device.value()}),
+                            "For a 'Linear' topology, all specified devices must be in the same row or column. Test: "
+                            "{}",
+                            test.name);
                     }
                 }
-            }
-            // Remove duplicates
-            std::sort(devices_in_test.begin(), devices_in_test.end());
-            devices_in_test.erase(std::unique(devices_in_test.begin(), devices_in_test.end()), devices_in_test.end());
-
-            if (devices_in_test.size() > 1) {
-                TT_FATAL(
-                    this->route_manager_.are_devices_linear(devices_in_test),
-                    "For a 'Linear' topology, all specified devices must be in the same row or column. Test: {}",
-                    test.name);
             }
         }
     }

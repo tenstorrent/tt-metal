@@ -453,7 +453,7 @@ struct SenderKernelTrafficConfig {
                 noc_ops_.parse_and_setup = NocFusedSenderOperations::parse_and_setup_impl;
                 noc_ops_.update_header = NocFusedSenderOperations::update_header_impl;
                 break;
-            default: ASSERT(false && "Invalid NOC send type"); break;
+            default: ASSERT(false); break;
         }
 
         ASSERT(noc_ops_.parse_and_setup != nullptr);

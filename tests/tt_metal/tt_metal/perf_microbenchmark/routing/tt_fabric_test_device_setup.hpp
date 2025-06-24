@@ -623,7 +623,7 @@ inline std::vector<uint32_t> TestDevice::get_fabric_connection_args(
 inline void TestDevice::create_sender_kernels() {
     // TODO: fetch these dynamically
     const bool is_2d_fabric = this->device_info_provider_->is_2d_fabric();
-    const bool use_dynamic_routing = false;
+    const bool use_dynamic_routing = this->device_info_provider_->use_dynamic_routing();
 
     for (const auto& [core, sender] : this->senders_) {
         // get ct args
@@ -631,7 +631,7 @@ inline void TestDevice::create_sender_kernels() {
         std::vector<uint32_t> ct_args = {
             is_2d_fabric,
             use_dynamic_routing,
-            1, /* num fabric connections */
+            sender.fabric_connections_.size(), /* num fabric connections */
             sender.configs_.size(),
             0 /* benchmark mode */};
 

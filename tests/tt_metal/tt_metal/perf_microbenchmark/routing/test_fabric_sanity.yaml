@@ -27,6 +27,32 @@ Tests:
             destination:
               device: [0, 3]
 
+  - name: "AllToAllUnicastLinear"
+    fabric_setup:
+      topology: Linear
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+
+    patterns:
+      - type: all_to_all_unicast
+
+  - name: "AllToAllMulticastLinear"
+    fabric_setup:
+      topology: Linear
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+
+    patterns:
+      - type: all_to_all_multicast
+
   - name: "SimpleUnicastMesh"
     fabric_setup:
       topology: Mesh

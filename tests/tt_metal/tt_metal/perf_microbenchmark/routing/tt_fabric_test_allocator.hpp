@@ -26,20 +26,33 @@ namespace tt::tt_fabric::fabric_tests {
  * Defines the memory layout for a worker core.
  */
 class WorkerCoreMemoryMap {
+    static constexpr uint32_t ATOMIC_COUNTER_SIZE = 0x1000;
+
 public:
-    WorkerCoreMemoryMap(uint32_t l1_unreserved_base, uint32_t l1_alignment) :
-        l1_alignment(l1_alignment),
-        payload_buffer_start(l1_unreserved_base),
-        payload_buffer_end(payload_buffer_start + 0x20000),  // 128KB for payloads
-        atomic_counter_start(payload_buffer_end),
-        atomic_counter_end(atomic_counter_start + 0x1000)  // 4KB for atomics
-    {}
+    WorkerCoreMemoryMap(
+        uint32_t l1_unreserved_base,
+        uint32_t l1_unreserved_size,
+        uint32_t l1_alignment,
+        uint32_t payload_chunk_size,
+        uint32_t num_workers) :
+        l1_alignment(l1_alignment) {
+        // reserve the top space for atomic counters
+        atomic_counter_start = l1_unreserved_base;
+        atomic_counter_end = l1_unreserved_base + ATOMIC_COUNTER_SIZE;
+
+        // reserve the bottom space for payloads
+        payload_buffer_start = atomic_counter_end;
+        payload_buffer_end = payload_buffer_start + payload_chunk_size * num_workers;
+        TT_FATAL(
+            payload_buffer_end <= l1_unreserved_base + l1_unreserved_size,
+            "Overflow when setting up memory map for worker core, try adjusting the chunk size of number of workers");
+    }
 
     const uint32_t l1_alignment;
-    const uint32_t payload_buffer_start;
-    const uint32_t payload_buffer_end;
-    const uint32_t atomic_counter_start;
-    const uint32_t atomic_counter_end;
+    uint32_t payload_buffer_start;
+    uint32_t payload_buffer_end;
+    uint32_t atomic_counter_start;
+    uint32_t atomic_counter_end;
 };
 
 /**
@@ -47,8 +60,14 @@ public:
  */
 class CoreResources {
 public:
-    CoreResources(uint32_t l1_unreserved_base, uint32_t l1_alignment, uint32_t payload_chunk_size) :
-        payload_chunk_size(payload_chunk_size), memory_map_(l1_unreserved_base, l1_alignment) {
+    CoreResources(
+        uint32_t l1_unreserved_base,
+        uint32_t l1_unreserved_size,
+        uint32_t l1_alignment,
+        uint32_t payload_chunk_size,
+        uint32_t num_workers) :
+        payload_chunk_size(payload_chunk_size),
+        memory_map_(l1_unreserved_base, l1_unreserved_size, l1_alignment, payload_chunk_size, num_workers) {
         this->next_atomic_addr_ = this->memory_map_.atomic_counter_start;
         init_payload_buffer_allocator();
     }
@@ -149,6 +168,7 @@ public:
         const FabricNodeId& node_id,
         const CoreCoord& worker_grid_size,
         uint32_t l1_unreserved_base,
+        uint32_t l1_unreserved_size,
         uint32_t l1_alignment,
         const CoreAllocationConfig& sender_policy,
         const CoreAllocationConfig& receiver_policy);
@@ -160,6 +180,7 @@ public:
 
     const FabricNodeId node_id_;
     uint32_t l1_unreserved_base_;
+    uint32_t l1_unreserved_size_;
     uint32_t l1_alignment_;
     std::vector<CoreCoord> pristine_cores_;                        // Cores not yet used at all.
     std::array<CorePool, 2> core_pools_;                           // Indexed by CoreType
@@ -180,11 +201,13 @@ inline TestDeviceResources::TestDeviceResources(
     const FabricNodeId& node_id,
     const CoreCoord& worker_grid_size,
     uint32_t l1_unreserved_base,
+    uint32_t l1_unreserved_size,
     uint32_t l1_alignment,
     const CoreAllocationConfig& sender_policy,
     const CoreAllocationConfig& receiver_policy) :
     node_id_(node_id),
     l1_unreserved_base_(l1_unreserved_base),
+    l1_unreserved_size_(l1_unreserved_size),
     l1_alignment_(l1_alignment),
     core_pools_{CorePool(sender_policy), CorePool(receiver_policy)} {
     for (size_t y = 0; y < worker_grid_size.y; ++y) {
@@ -245,7 +268,11 @@ inline CoreResources& TestDeviceResources::get_or_create_core_resources(const Co
         const auto& config = core_pools_[static_cast<size_t>(core_type)].policy;
         // Use the policy's chunk size, or a global default if not specified.
         uint32_t chunk_size = config.default_payload_chunk_size.value_or(detail::DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES);
-        core_resources_.emplace(core, CoreResources(this->l1_unreserved_base_, this->l1_alignment_, chunk_size));
+        uint32_t num_workers = config.max_workers_per_core;
+        core_resources_.emplace(
+            core,
+            CoreResources(
+                this->l1_unreserved_base_, this->l1_unreserved_size_, this->l1_alignment_, chunk_size, num_workers));
     }
     return core_resources_.at(core);
 }
@@ -386,11 +413,13 @@ inline TestDeviceResources& GlobalAllocator::get_or_create_device_resources(cons
             worker_grid_size_ = device_info_provider_.get_worker_grid_size();
         }
         uint32_t l1_unreserved_base = device_info_provider_.get_l1_unreserved_base(node_id);
+        uint32_t l1_unreserved_size = device_info_provider_.get_l1_unreserved_size(node_id);
         uint32_t l1_alignment = device_info_provider_.get_l1_alignment();
         all_device_resources_[node_id] = std::make_unique<TestDeviceResources>(
             node_id,
             worker_grid_size_.value(),
             l1_unreserved_base,
+            l1_unreserved_size,
             l1_alignment,
             policies_.sender_config,
             policies_.receiver_config);
@@ -436,8 +465,7 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                     dst_node_ids = route_manager_.get_dst_node_ids_from_hops(
                         sender.device, dest.hops.value(), pattern.ftype.value());
                 } else {
-                    TT_FATAL(
-                        dest.device.has_value(), "Multicast destination requires hops or a (meaningless) device ID");
+                    TT_FATAL(dest.device.has_value(), "Multicast destination requires hops");
                     dst_node_ids.push_back(dest.device.value());
                 }
 
@@ -457,6 +485,9 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 for (const auto& device_id : dst_node_ids) {
                     auto& device_resources = get_or_create_device_resources(device_id);
                     const auto& receiver_pool = device_resources.core_pools_[RECEIVER_TYPE_IDX];
+                    if (!receiver_pool.initialized) {
+                        device_resources.initialize_receiver_pool();
+                    }
 
                     for (const auto& core : receiver_pool.get_available_cores(device_resources.core_workload_)) {
                         core_counts[core]++;

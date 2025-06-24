@@ -101,6 +101,7 @@ public:
             open_devices_internal(new_fabric_config);
 
             topology_ = topology;
+            routing_type_ = routing_type;
         } else {
             log_info(tt::LogTest, "Reusing existing device setup with fabric config: {}", current_fabric_config_);
         }
@@ -173,15 +174,19 @@ public:
         return device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     }
 
-    uint32_t get_l1_alignment() const override {
-        return tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t get_l1_unreserved_size(const FabricNodeId& node_id) const override {
+        return tt::tt_metal::hal::get_max_worker_l1_unreserved_size();
     }
+
+    uint32_t get_l1_alignment() const override { return tt::tt_metal::hal::get_l1_alignment(); }
 
     uint32_t get_max_payload_size_bytes() const override {
         return control_plane_ptr_->get_fabric_context().get_fabric_max_payload_size_bytes();
     }
 
     bool is_2d_fabric() const override { return topology_ == Topology::Mesh; }
+
+    bool use_dynamic_routing() const override { return routing_type_ == RoutingType::Dynamic; }
 
     // ======================================================================================
     // IRouteManager methods
@@ -190,7 +195,7 @@ public:
     // or capturing every device in the path or not
     std::vector<FabricNodeId> get_dst_node_ids_from_hops(
         FabricNodeId src_node,
-        const std::unordered_map<RoutingDirection, uint32_t>& hops,
+        std::unordered_map<RoutingDirection, uint32_t>& hops,
         ChipSendType chip_send_type) const override {
         std::vector<FabricNodeId> dst_nodes;
         const MeshCoordinate& src_coord = get_device_coord(src_node);
@@ -329,9 +334,9 @@ public:
 
         const auto src_coord = get_device_coord(src_node_id);
         hops[RoutingDirection::N] = src_coord[NS_DIM];
-        hops[RoutingDirection::S] = mesh_shape_[NS_DIM] - src_coord[NS_DIM];
-        hops[RoutingDirection::E] = src_coord[EW_DIM];
-        hops[RoutingDirection::W] = mesh_shape_[EW_DIM] - src_coord[EW_DIM];
+        hops[RoutingDirection::S] = mesh_shape_[NS_DIM] - src_coord[NS_DIM] - 1;
+        hops[RoutingDirection::E] = mesh_shape_[EW_DIM] - src_coord[EW_DIM] - 1;
+        hops[RoutingDirection::W] = src_coord[EW_DIM];
 
         return hops;
     }
@@ -439,6 +444,7 @@ public:
 private:
     ControlPlane* control_plane_ptr_;
     Topology topology_;
+    RoutingType routing_type_;
     MeshShape mesh_shape_;
     tt::tt_metal::FabricConfig current_fabric_config_;
     std::vector<MeshCoordinate> available_device_coordinates_;
@@ -489,7 +495,9 @@ private:
 
     MeshCoordinateRange get_coords_from_range(
         const MeshCoordinate& src_coords, const MeshCoordinate& dst_coords) const {
-        return MeshCoordinateRange(src_coords, dst_coords);
+        const auto start = std::min(src_coords, dst_coords);
+        const auto end = std::max(src_coords, dst_coords);
+        return MeshCoordinateRange(start, end);
     }
 
     std::unordered_map<RoutingDirection, uint32_t> get_hops_from_displacement(
@@ -535,29 +543,25 @@ private:
     // for 1D, we handle each direction separately
     // for 2D, we look at the combination of directions
     std::vector<MeshCoordinate> convert_hops_to_displacement(
-        const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
+        std::unordered_map<RoutingDirection, uint32_t>& hops) const {
         std::vector<MeshCoordinate> displacements;
 
         if (topology_ == Topology::Linear) {
             displacements.reserve(4);
-            displacements.push_back(get_displacement_from_hops({{RoutingDirection::N, hops.at(RoutingDirection::N)}}));
-            displacements.push_back(get_displacement_from_hops({{RoutingDirection::S, hops.at(RoutingDirection::S)}}));
-            displacements.push_back(get_displacement_from_hops({{RoutingDirection::E, hops.at(RoutingDirection::E)}}));
-            displacements.push_back(get_displacement_from_hops({{RoutingDirection::W, hops.at(RoutingDirection::W)}}));
+            displacements.push_back(get_displacement_from_hops({{RoutingDirection::N, hops[RoutingDirection::N]}}));
+            displacements.push_back(get_displacement_from_hops({{RoutingDirection::S, hops[RoutingDirection::S]}}));
+            displacements.push_back(get_displacement_from_hops({{RoutingDirection::E, hops[RoutingDirection::E]}}));
+            displacements.push_back(get_displacement_from_hops({{RoutingDirection::W, hops[RoutingDirection::W]}}));
         } else if (topology_ == Topology::Mesh) {
             displacements.reserve(4);
             displacements.push_back(get_displacement_from_hops(
-                {{RoutingDirection::N, hops.at(RoutingDirection::N)},
-                 {RoutingDirection::E, hops.at(RoutingDirection::E)}}));
+                {{RoutingDirection::N, hops[RoutingDirection::N]}, {RoutingDirection::E, hops[RoutingDirection::E]}}));
             displacements.push_back(get_displacement_from_hops(
-                {{RoutingDirection::N, hops.at(RoutingDirection::N)},
-                 {RoutingDirection::W, hops.at(RoutingDirection::W)}}));
+                {{RoutingDirection::N, hops[RoutingDirection::N]}, {RoutingDirection::W, hops[RoutingDirection::W]}}));
             displacements.push_back(get_displacement_from_hops(
-                {{RoutingDirection::S, hops.at(RoutingDirection::S)},
-                 {RoutingDirection::E, hops.at(RoutingDirection::E)}}));
+                {{RoutingDirection::S, hops[RoutingDirection::S]}, {RoutingDirection::E, hops[RoutingDirection::E]}}));
             displacements.push_back(get_displacement_from_hops(
-                {{RoutingDirection::S, hops.at(RoutingDirection::S)},
-                 {RoutingDirection::W, hops.at(RoutingDirection::W)}}));
+                {{RoutingDirection::S, hops[RoutingDirection::S]}, {RoutingDirection::W, hops[RoutingDirection::W]}}));
         } else {
             TT_FATAL(false, "Unsupported topology: {}", topology_);
         }

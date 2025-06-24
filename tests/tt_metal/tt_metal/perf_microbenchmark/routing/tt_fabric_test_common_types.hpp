@@ -78,10 +78,10 @@ struct TestConfig {
 // ======================================================================================
 namespace detail {
 constexpr uint32_t DEFAULT_MAX_SENDER_WORKERS_PER_CORE = 1;
-constexpr uint32_t DEFAULT_MAX_RECEIVER_WORKERS_PER_CORE = 16;
+constexpr uint32_t DEFAULT_MAX_RECEIVER_WORKERS_PER_CORE = 2;
 constexpr uint32_t DEFAULT_SENDER_INITIAL_POOL_SIZE = 1;
 constexpr uint32_t DEFAULT_SENDER_POOL_REFILL_SIZE = 1;
-constexpr uint32_t DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES = 0x15000;  // 84KB
+constexpr uint32_t DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES = 0x80000;  // 512KB
 }  // namespace detail
 
 enum class CoreType {
