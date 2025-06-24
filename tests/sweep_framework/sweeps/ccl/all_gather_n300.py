@@ -98,7 +98,7 @@ def run(
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttnn.Tensor(t, input_dtype, {}, ttnn.Tile(tile)).to(layout))
+        tt_input_tensors.append(ttnn.Tensor(tensor=t, data_type=input_dtype, tile=ttnn.Tile(tile)).to(layout))
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(device, mem_config)
     for i in range(num_iters):
