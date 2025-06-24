@@ -911,6 +911,16 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_core_group_2 = {},
         },
         NDShardingCoreInfoParams{
+            .shape_in_pages = Shape({0, 0, 0}),
+            .shard_shape_in_pages = Shape({2, 2, 2}),
+            .grid_size = CoreCoord{2, 2},
+            .expected_max_num_shards_per_core = 0,
+            .expected_num_shards_per_core = {0, 0, 0, 0},
+            .expected_cores_with_data = {},
+            .expected_core_group_1 = {},
+            .expected_core_group_2 = {},
+        },
+        NDShardingCoreInfoParams{
             .shape_in_pages = Shape({2, 2, 2}),
             .shard_shape_in_pages = Shape({2, 2, 2}),
             .grid_size = CoreCoord{2, 2},
