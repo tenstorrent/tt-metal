@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     constexpr bool input_is_dram = (bool)get_compile_time_arg_val(0);
@@ -84,4 +85,6 @@ void kernel_main() {
     // wait for all other devices to finish dispatching their input tokens and metadata
     noc_semaphore_wait((uint32_t*)global_semaphore_address, tokens_per_device * dispatch_devices);
     noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
+
+    tt::data_movement::common::wait((uint32_t)21474836400);
 }

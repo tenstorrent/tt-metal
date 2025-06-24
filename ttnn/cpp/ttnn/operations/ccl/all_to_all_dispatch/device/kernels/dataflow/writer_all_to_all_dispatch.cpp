@@ -91,6 +91,7 @@ inline void dispatch_metadata_remote_device(
     volatile PACKET_HEADER_TYPE* metadata_packet_header,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections) {
     uint32_t route = static_cast<uint32_t>(get_direction(src_chip_id, dest_chip_id, mesh_cols, mesh_rows));
+    DPRINT << "Using route " << route << " from " << src_chip_id << " to " << (uint32_t)dest_chip_id << ENDL();
 
     // Populate packet header with routing information
     fabric_set_unicast_route(
@@ -309,7 +310,9 @@ void kernel_main() {
 
     // Send our selected experts tensor to all other devices and signal that we are done dispatching the input tokens
     // with a semaphore
+    DPRINT << "Global semaphore address value: " << *(uint32_t*)global_semaphore_address << ENDL();
     uint64_t global_noc_semaphore_address = get_noc_addr(global_semaphore_address);
+    DPRINT << "Sending metadata" << ENDL();
     for (uint32_t local_token = 0; local_token < tokens_per_device; local_token++) {
         uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
         uint64_t metadata_write_addr = get_noc_addr(global_token, metadata_addr_gen);
@@ -323,6 +326,8 @@ void kernel_main() {
                     token_indices_address, metadata_write_addr, metadata_page_size, global_noc_semaphore_address);
             } else if (is_configured_target<mesh_cols, mesh_rows, axis>(src_chip_id, dest_chip_ids[d])) {
                 // dispatch the metadata to the remote device and increment the remote device's copy of the semaphore
+                // DPRINT << "dispatching metadata from " << src_chip_id << " to device " << d << " with fabric id " <<
+                // (uint32_t) dest_chip_ids[d] << ENDL();
                 dispatch_metadata_remote_device(
                     src_chip_id,
                     dest_chip_ids[d],
