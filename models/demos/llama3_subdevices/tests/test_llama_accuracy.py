@@ -30,7 +30,7 @@ is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 )
 @pytest.mark.parametrize(
     "sampling_params",
-    [{"top_k": 1, "top_p": 0.00, "seed": 42}],
+    [{"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42}],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -106,14 +106,23 @@ def test_tt_model_acc(
     if is_ci_env and not use_reference_file:
         pytest.skip("CI test only runs vs reference file")
 
+    top_k = sampling_params["top_k"]
+    if isinstance(top_k, int):
+        top_k = [top_k] * batch_size
+    top_p = sampling_params["top_p"]
+    if isinstance(top_p, float):
+        top_p = [top_p] * batch_size
+    temperature = sampling_params["temperature"]
+    if isinstance(temperature, float):
+        temperature = [temperature] * batch_size
+    seed = sampling_params["seed"]
+
     dtype = ttnn.bfloat8_b
 
     # Load model args and tokenizer
     model_args = TtModelArgs(
         mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len, instruct=True
     )
-
-    # model_args.n_layers = 1
 
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
@@ -186,7 +195,7 @@ def test_tt_model_acc(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        sampling_params=sampling_params,
+        temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
     )
     # Initialize embedding
@@ -235,7 +244,7 @@ def test_tt_model_acc(
         )
 
         # Sampling
-        tt_out_tok = tt_sampling(tt_out[0])
+        tt_out_tok = tt_sampling(tt_out[0], top_k, top_p, seed)
 
         # Update the idxs
         ttnn.plus_one(

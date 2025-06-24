@@ -19,7 +19,7 @@ ttnn::Tensor SamplingOperation::invoke(
     const Tensor& input_indices_tensor,
     const std::vector<uint16_t>& k,
     const std::vector<float>& p,
-    const uint32_t seed,
+    const std::optional<uint32_t>& seed,
     const std::optional<CoreRangeSet>& sub_core_grids,
     std::optional<Tensor> optional_output_tensor) {
     return tt::tt_metal::operation::run(
@@ -36,7 +36,7 @@ ttnn::Tensor SamplingOperation::invoke(
     const Tensor& input_indices_tensor,
     const std::vector<uint16_t>& k,
     const std::vector<float>& p,
-    const uint32_t seed,
+    const std::optional<uint32_t>& seed,
     const std::optional<CoreRangeSet>& sub_core_grids,
     std::optional<Tensor> optional_output_tensor) {
     return invoke(
