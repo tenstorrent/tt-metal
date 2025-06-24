@@ -64,6 +64,7 @@ def preprocess_images(image_paths):
 
 def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size=(256, 256)):
     enable_persistent_kernel_cache()
+    device.enable_program_cache()
     profiler.clear()
 
     # Until di/dt issues are resolved
@@ -228,6 +229,7 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
 
 def run_interactive_demo_inference(device, num_inference_steps, image_size=(256, 256)):
     enable_persistent_kernel_cache()
+    device.enable_program_cache()
 
     # Until di/dt issues are resolved
     os.environ["SLOW_MATMULS"] = "1"
@@ -373,6 +375,7 @@ def run_demo_inference_diffusiondb(
     device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size=(256, 256)
 ):
     enable_persistent_kernel_cache()
+    device.enable_program_cache()
 
     # Until di/dt issues are resolved
     os.environ["SLOW_MATMULS"] = "1"

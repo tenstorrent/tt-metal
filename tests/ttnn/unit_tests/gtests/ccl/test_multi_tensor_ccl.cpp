@@ -54,6 +54,7 @@ protected:
 };
 
 TEST_F(T3000MultiCQMeshDeviceFixture, AllGather) {
+    mesh_device_->enable_program_cache();
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
 
     std::vector<ttnn::Tensor> tensors;
@@ -75,6 +76,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AllGather) {
 }
 
 TEST_F(T3000MultiCQFabricMeshDeviceFixture, AllGatherAsync) {
+    mesh_device_->enable_program_cache();
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
 
     std::vector<ttnn::Tensor> tensors;
@@ -98,6 +100,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AllGatherAsync) {
 }
 
 TEST_F(T3000MultiCQMeshDeviceFixture, ReduceScatter) {
+    mesh_device_->enable_program_cache();
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
 
     std::vector<ttnn::Tensor> tensors;
@@ -119,6 +122,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, ReduceScatter) {
 }
 
 TEST_F(T3000MultiCQMeshDeviceFixture, AllReduce) {
+    mesh_device_->enable_program_cache();
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
 
     std::vector<ttnn::Tensor> tensors;
