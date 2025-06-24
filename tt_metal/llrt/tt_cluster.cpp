@@ -333,17 +333,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         // generate the cluster desc and pull chip ids from there
         auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
         if (rtoptions_.is_visible_device_specified()) {
-            int desired_logical_id = -1;
-            for (auto& [logical_id, pci_id] : temp_cluster_desc->get_chips_with_mmio()) {
-                if (pci_id == rtoptions_.get_visible_device()) {
-                    desired_logical_id = logical_id;
-                    break;
-                }
-            }
-            TT_FATAL(desired_logical_id != -1, "Visible device not found in cluster descriptor");
-            for (auto& chip_id : temp_cluster_desc->get_chips_grouped_by_closest_mmio().at(desired_logical_id)) {
-                chips_set.emplace(chip_id);
-            }
+            chips_set = rtoptions_.get_visible_device();
         }
         // Adding this check is a workaround for current UMD bug that only uses this getter to populate private metadata
         // that is later expected to be populated by unrelated APIs
@@ -356,7 +346,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .num_host_mem_ch_per_mmio_device = num_host_mem_ch_per_mmio_device,
             .sdesc_path = get_soc_description_file(this->arch_, this->target_type_),
-            .target_devices = chips_set,
+            .pci_target_devices = chips_set,
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
