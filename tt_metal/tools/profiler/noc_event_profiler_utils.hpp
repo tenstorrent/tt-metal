@@ -92,20 +92,31 @@ inline void dumpClusterCoordinatesAsJson(const std::filesystem::path& filepath) 
     }
 }
 
-// determines the implied unicast hop count in tt_fabric::LowLatencyRoutingFields
-inline int get_low_latency_routing_hops(uint32_t llrf_value) {
+// determines the implied unicast/multicast start distance and range in tt_fabric::LowLatencyRoutingFields
+inline std::tuple<int, int> get_low_latency_routing_start_distance_and_range(uint32_t llrf_value) {
+    using LLRF = tt::tt_fabric::LowLatencyRoutingFields;
+
     uint32_t value = llrf_value;
-    uint32_t hops = 0;
-    while (value) {
-        value >>= tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
-        hops++;
+    int start_distance = 1;
+    int range = 0;
+    while ((value & LLRF::FIELD_MASK) == LLRF::FORWARD_ONLY) {
+        value >>= LLRF::FIELD_WIDTH;
+        start_distance++;
     }
-    return hops;
+    // checks if it is either write+forward or just write only
+    while (value & LLRF::WRITE_ONLY) {
+        value >>= LLRF::FIELD_WIDTH;
+        range++;
+    }
+
+    return {start_distance, range};
 }
 
-// determines the implied unicast hop count in tt_fabric::RoutingFields
-inline int get_routing_hops(uint8_t routing_fields_value) {
-    return tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK & routing_fields_value;
+// determines the implied unicast/multicast start distance and range in tt_fabric::RoutingFields
+inline std::tuple<int, int> get_routing_start_distance_and_range(uint8_t routing_fields_value) {
+    int start_distance = tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK & routing_fields_value;
+    int range = routing_fields_value >> tt::tt_fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
+    return {start_distance, range};
 }
 
 }  // namespace tt_metal
