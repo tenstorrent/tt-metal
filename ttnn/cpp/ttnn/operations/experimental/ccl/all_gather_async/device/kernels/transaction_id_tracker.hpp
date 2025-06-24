@@ -74,77 +74,9 @@ private:
     uint8_t next_trid = 0;
 };
 
-template <size_t NUM_TRIDS>
-struct TransactionIdTracker {
-    static constexpr uint8_t INVALID_TRID = NUM_TRIDS;
-    static constexpr bool N_TRIDS_IS_POW2 = is_power_of_2(NUM_TRIDS);
-    static_assert(N_TRIDS_IS_POW2, "NUM_TRIDS must be a power of 2");
-
-    TransactionIdTracker(uint32_t cb_id) :
-        cb_interface(get_local_cb_interface(cb_id)),
-        trid_counter({}),
-        cb_id(cb_id),
-        open_trids(0),
-        oldest_trid(0),
-        next_trid(0) {
-        // Check for invalid usage
-    }
-
-    // Sent but not complete
-    FORCE_INLINE bool oldest_write_trid_sent() {
-        return ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, oldest_trid);
-    }
-    // sent and complete
-    FORCE_INLINE bool oldest_write_trid_flushed() {
-        return ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, oldest_trid);
-    }
-    FORCE_INLINE bool oldest_read_trid_flushed() {
-        return ncrisc_noc_read_with_transaction_id_flushed(noc_index, oldest_trid);
-    }
-
-    FORCE_INLINE bool next_cb_write_slot_is_available(size_t num_pages) {
-        if constexpr (NUM_TRIDS != 1) {
-            return cb_pages_reservable_at_back(cb_id, total_pages_open + num_pages);
-        } else {
-            return cb_pages_reservable_at_back(cb_id, num_pages);
-        }
-    }
-
-    FORCE_INLINE bool backpressured() { return open_trids == NUM_TRIDS; }
-
-    FORCE_INLINE bool next_cb_read_slot_is_available(size_t num_pages) {
-        if constexpr (NUM_TRIDS != 1) {
-            return !this->backpressured() && cb_pages_available_at_front(cb_id, total_pages_open + num_pages);
-        } else {
-            return !this->backpressured() && cb_pages_available_at_front(cb_id, num_pages);
-        }
-    }
-
-    FORCE_INLINE std::tuple<size_t, TransactionId> get_next_cb_write_slot(size_t num_pages) {
-        auto [chunk_start_address, next_available_trid] = update_for_next_cb_slots(num_pages, cb_interface.fifo_rd_ptr);
-
-        if constexpr (NUM_TRIDS != 1) {
-            cb_reserve_back(cb_id, total_pages_open);
-        } else {
-            cb_reserve_back(cb_id, num_pages);
-        }
-        if constexpr (NUM_TRIDS != 1) {
-            next_trid = TransactionId{wrap_increment<NUM_TRIDS>(next_trid.get())};
-        }
-        return {chunk_start_address, next_available_trid};
-    }
-    // How does this work with wrapping?
-    // Do I need to know the CB ID too?
-    FORCE_INLINE std::tuple<size_t, TransactionId> get_next_cb_read_slot(size_t num_pages) {
-        auto [chunk_start_address, next_available_trid] = update_for_next_cb_slots(num_pages, cb_interface.fifo_rd_ptr);
-
-        cb_wait_front(cb_id, total_pages_open);
-        if constexpr (NUM_TRIDS != 1) {
-            next_trid = TransactionId{wrap_increment<NUM_TRIDS>(next_trid.get())};
-        }
-        return {chunk_start_address, next_available_trid};
-    }
-
+// Use if writing into a CB
+template <size_t NUM_TRIDS, typename DERIVED_TRACKER_TYPE>
+struct TransactionIdTrackerBase {
     // Returns the chunk start address
     FORCE_INLINE std::tuple<size_t, TransactionId> update_for_next_cb_slots(size_t num_pages, size_t base_ptr) {
         size_t chunk_start_address = 0;
@@ -170,29 +102,11 @@ struct TransactionIdTracker {
         return {chunk_start_address, next_available_trid};
     }
 
+    FORCE_INLINE bool backpressured() { return open_trids == NUM_TRIDS; }
+
     FORCE_INLINE bool has_unflushed_trid() { return open_trids > 0; }
 
-    FORCE_INLINE void push_pages_for_oldest_trid() {
-        auto pages_to_push = pages_per_trid[oldest_trid];
-        cb_push_back(cb_id, pages_to_push);
-        advance_pages_for_oldest_trid_update_counters(pages_to_push);
-    }
-
-    FORCE_INLINE void pop_pages_for_oldest_trid() {
-        auto pages_to_pop = pages_per_trid[oldest_trid];
-        cb_pop_front(cb_id, pages_to_pop);
-        advance_pages_for_oldest_trid_update_counters(pages_to_pop);
-    }
-
-    FORCE_INLINE void write_barrier() {
-        while (open_trids > 0) {
-            while (!oldest_write_trid_flushed()) {
-            }
-            this->pop_pages_for_oldest_trid();
-        }
-    }
-
-private:
+protected:
     FORCE_INLINE void advance_pages_for_oldest_trid_update_counters(size_t pages_to_advance) {
         if constexpr (NUM_TRIDS != 1) {
             total_pages_open -= pages_to_advance;
@@ -204,6 +118,7 @@ private:
         open_trids--;
     }
 
+    friend typename DERIVED_TRACKER_TYPE;
     std::array<size_t, NUM_TRIDS> pages_per_trid;
     LocalCBInterface& cb_interface;
     uint16_t total_pages_open = 0;
@@ -217,4 +132,125 @@ private:
     // TODO: cleanup - only used for when both params are pow2, else above are used.
     TransactionId oldest_trid = 0;
     TransactionId next_trid = 0;
+}
+
+
+// Use if writing into a CB
+template <size_t NUM_TRIDS>
+struct CBWriterTransactionIdTracker : public TransactionIdTrackerBase<NUM_TRIDS, CBWriterTransactionIdTracker> {
+    static constexpr uint8_t INVALID_TRID = NUM_TRIDS;
+    static constexpr bool N_TRIDS_IS_POW2 = is_power_of_2(NUM_TRIDS);
+    static_assert(N_TRIDS_IS_POW2, "NUM_TRIDS must be a power of 2");
+
+    TransactionIdTracker(uint32_t cb_id) :
+        cb_interface(get_local_cb_interface(cb_id)),
+        trid_counter({}),
+        cb_id(cb_id),
+        open_trids(0),
+        oldest_trid(0),
+        next_trid(0) {
+        // Check for invalid usage
+    }
+
+    // Sent but not complete
+    FORCE_INLINE bool oldest_write_trid_sent() {
+        return ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, oldest_trid);
+    }
+    // sent and complete
+    FORCE_INLINE bool oldest_write_trid_flushed() {
+        return ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, oldest_trid);
+    }
+
+    FORCE_INLINE bool next_cb_write_slot_is_available(size_t num_pages) {
+        if constexpr (NUM_TRIDS != 1) {
+            return cb_pages_reservable_at_back(cb_id, total_pages_open + num_pages);
+        } else {
+            return cb_pages_reservable_at_back(cb_id, num_pages);
+        }
+    }
+
+    FORCE_INLINE std::tuple<size_t, TransactionId> get_next_cb_write_slot(size_t num_pages) {
+        auto [chunk_start_address, next_available_trid] = update_for_next_cb_slots(num_pages, cb_interface.fifo_rd_ptr);
+
+        if constexpr (NUM_TRIDS != 1) {
+            cb_reserve_back(cb_id, total_pages_open);
+        } else {
+            cb_reserve_back(cb_id, num_pages);
+        }
+        if constexpr (NUM_TRIDS != 1) {
+            next_trid = TransactionId{wrap_increment<NUM_TRIDS>(next_trid.get())};
+        }
+        return {chunk_start_address, next_available_trid};
+    }
+
+    FORCE_INLINE void push_pages_for_oldest_trid() {
+        auto pages_to_push = pages_per_trid[oldest_trid];
+        cb_push_back(cb_id, pages_to_push);
+        advance_pages_for_oldest_trid_update_counters(pages_to_push);
+    }
+
+    FORCE_INLINE void write_barrier() {
+        while (open_trids > 0) {
+            while (!oldest_write_trid_flushed()) {
+            }
+            this->push_pages_for_oldest_trid();
+        }
+    }
+};
+
+template <size_t NUM_TRIDS>
+struct CBReaderTransactionIdTracker : public TransactionIdTrackerBase<NUM_TRIDS, CBReaderTransactionIdTracker> {
+    static constexpr uint8_t INVALID_TRID = NUM_TRIDS;
+    static constexpr bool N_TRIDS_IS_POW2 = is_power_of_2(NUM_TRIDS);
+    static_assert(N_TRIDS_IS_POW2, "NUM_TRIDS must be a power of 2");
+
+    TransactionIdTracker(uint32_t cb_id) :
+        cb_interface(get_local_cb_interface(cb_id)),
+        trid_counter({}),
+        cb_id(cb_id),
+        open_trids(0),
+        oldest_trid(0),
+        next_trid(0) {
+        // Check for invalid usage
+    }
+
+
+    FORCE_INLINE bool oldest_read_trid_flushed() {
+        return ncrisc_noc_read_with_transaction_id_flushed(noc_index, oldest_trid);
+    }
+
+    FORCE_INLINE bool next_cb_read_slot_is_available(size_t num_pages) {
+        if constexpr (NUM_TRIDS != 1) {
+            return !this->backpressured() && cb_pages_available_at_front(cb_id, total_pages_open + num_pages);
+        } else {
+            return !this->backpressured() && cb_pages_available_at_front(cb_id, num_pages);
+        }
+    }
+
+    // How does this work with wrapping?
+    // Do I need to know the CB ID too?
+    FORCE_INLINE std::tuple<size_t, TransactionId> get_next_cb_read_slot(size_t num_pages) {
+        auto [chunk_start_address, next_available_trid] = update_for_next_cb_slots(num_pages, cb_interface.fifo_rd_ptr);
+
+        cb_wait_front(cb_id, total_pages_open);
+        if constexpr (NUM_TRIDS != 1) {
+            next_trid = TransactionId{wrap_increment<NUM_TRIDS>(next_trid.get())};
+        }
+        return {chunk_start_address, next_available_trid};
+    }
+
+    FORCE_INLINE void pop_pages_for_oldest_trid() {
+        auto pages_to_pop = pages_per_trid[oldest_trid];
+        cb_pop_front(cb_id, pages_to_pop);
+        advance_pages_for_oldest_trid_update_counters(pages_to_pop);
+    }
+
+    FORCE_INLINE void read_barrier() {
+        while (open_trids > 0) {
+            while (!oldest_read_trid_flushed()) {
+            }
+            this->pop_pages_for_oldest_trid();
+        }
+    }
+
 };
