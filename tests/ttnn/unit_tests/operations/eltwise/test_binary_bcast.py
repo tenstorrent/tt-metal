@@ -1966,6 +1966,7 @@ profile_a_b_shape_pairs = [
 )
 @pytest.mark.parametrize("a_and_b_shape", profile_a_b_shape_pairs)
 def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_config_input):
+    device.enable_program_cache()
     torch.manual_seed(0)
     a_shape, b_shape = a_and_b_shape
 
