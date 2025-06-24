@@ -22,7 +22,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     const auto& mean = tensor_args.mean;
     const auto& rstd = tensor_args.rstd;
 
-    auto input_grad = outputs;
+    const auto& input_grad = outputs;
     auto gamma = tensor_args.gamma;
     auto num_groups = operation_attributes.num_groups;
     ////////////////////////////////////////////////////////////////////////////

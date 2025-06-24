@@ -18,7 +18,7 @@ void PlusOne::validate_with_output_tensors(
     TT_FATAL(
         input_tensor_a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for inputs!");
 
-    auto input_shape = input_tensor_a.padded_shape();
+    const auto& input_shape = input_tensor_a.padded_shape();
     TT_FATAL(input_shape.size() >= 1 && input_shape.size() <= 4, "must have 1 to 4 dimensions for input tensor");
 }
 

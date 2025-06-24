@@ -61,8 +61,8 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
     const std::optional<uint32_t> num_kv_heads,
     const bool transpose_key,
     const std::optional<MemoryConfig>& memory_config) {
-    const auto input_shape = input_tensor.logical_shape();
-    const auto padded_input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.logical_shape();
+    const auto& padded_input_shape = input_tensor.padded_shape();
     TT_FATAL(input_shape.rank() == 3, "Invalid input tensor: expected 3 dimensions, but found {}.", input_shape.rank());
 
     TT_FATAL(

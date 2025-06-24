@@ -31,7 +31,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
     auto input = tensor_args.input;
     auto index_tensors = tensor_args.index_tensors;
-    auto output = output_tensor;
+    const auto& output = output_tensor;
     auto index_dims = operation_attributes.index_dims;
     auto memory_config = operation_attributes.memory_config;
     auto TILE_HEIGHT = constants::TILE_HEIGHT;

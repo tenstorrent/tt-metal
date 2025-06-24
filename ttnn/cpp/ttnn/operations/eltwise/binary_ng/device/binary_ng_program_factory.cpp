@@ -90,9 +90,9 @@ std::optional<AllShardSpecs> get_shard_specs(const Tensor& a, const std::optiona
         return std::nullopt;
     }
 
-    auto a_shape = a.padded_shape();
+    const auto& a_shape = a.padded_shape();
     auto b_shape = b.has_value() ? b->padded_shape() : ttnn::Shape{1, 1};
-    auto c_shape = c.padded_shape();
+    const auto& c_shape = c.padded_shape();
 
     ShardSpec c_shard_spec = c_sharded   ? *c.shard_spec()
                              : a_sharded ? adjust_to_shape(*a.shard_spec(), a_shape, c_shape)

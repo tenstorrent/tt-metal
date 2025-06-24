@@ -11,7 +11,7 @@ namespace ttnn::operations::experimental::transformer {
 // Hard-coded for Vit
 void NlpCreateHeadsVitDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
@@ -34,7 +34,7 @@ std::vector<ttnn::TensorSpec> NlpCreateHeadsVitDeviceOperation::compute_output_s
         return {};
     }
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     TensorSpec spec(
         Shape({input_shape[0], 12, input_shape[2], 64}),
         tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_mem_config));

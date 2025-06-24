@@ -27,7 +27,6 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
-    auto output_shape = output.padded_shape();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");

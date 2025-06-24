@@ -45,7 +45,6 @@ get_padded_slice_runtime_args_rm_sharded_output(
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.logical_shape();
-    auto output_shape = output_tensor.logical_shape();
     auto output_shard_spec = output_tensor.shard_spec().value();
     auto output_shard_shape = output_shard_spec.shape;
 
@@ -327,7 +326,7 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_tensor = input_tensors.at(0);
+        const auto& src_tensor = input_tensors.at(0);
         auto dst_tensor = output_tensors.at(0);
         TT_FATAL(dst_tensor.is_sharded(), "Output tensor must be sharded");
         UpdateDynamicCircularBufferAddress(program, cb_src0, *dst_tensor.buffer());
@@ -341,7 +340,6 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
             tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
             i++;
         }
-
     };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
@@ -361,7 +359,6 @@ get_padded_slice_runtime_args_tile_sharded_output(
     auto output_buffer = output_tensor.buffer();
     auto input_padded_shape = input_tensor.get_padded_shape();
     auto input_shape = input_tensor.get_logical_shape();
-    auto output_shape = output_tensor.get_logical_shape();
     auto output_shard_spec = output_tensor.shard_spec().value();
     auto output_shard_shape = output_shard_spec.shape;
 
@@ -633,7 +630,7 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         actual_output_shape[i] = output_tensor_end[i] - output_tensor_start[i];
     }
 
-    const ttnn::Shape input_padded_shape = a.get_padded_shape();
+    const ttnn::Shape& input_padded_shape = a.get_padded_shape();
     TT_FATAL(
         input_padded_shape.rank() == 4, "Input tensor must be rank 4 for padded_slice operation with tiled inputs");
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -809,7 +806,7 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_tensor = input_tensors.at(0);
+        const auto& src_tensor = input_tensors.at(0);
         auto dst_tensor = output_tensors.at(0);
         TT_FATAL(dst_tensor.is_sharded(), "Output tensor must be sharded");
         UpdateDynamicCircularBufferAddress(program, std::get<1>(cb_output_tuple), *dst_tensor.buffer());

@@ -65,7 +65,7 @@ void Softmax::validate(
                         TT_FATAL(input_tensor.padded_shape()[0] == mask.padded_shape()[0], "Error");
                         TT_FATAL(!this->is_scale_causal_mask_hw_dims_softmax, "Error");
                     } else if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
-                        const auto shape = input_tensor.padded_shape();
+                        const auto& shape = input_tensor.padded_shape();
                         uint32_t M = input_tensor.physical_volume() / shape[-1];
                         uint32_t K = shape[-1];
 

@@ -924,7 +924,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
     bool skip_compute,
     bool skip_in0_mcast,
     bool skip_write_back) {
-    const auto &ashape = a.padded_shape(), bshape = b.padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
     auto in0_tile = a.tensor_spec().tile();
     auto in1_tile = b.tensor_spec().tile();
     auto in0_tile_shape = in0_tile.get_tile_shape();

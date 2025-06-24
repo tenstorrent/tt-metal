@@ -21,7 +21,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::select_program_factory(
 void LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
-    auto input_spec = input_tensor.tensor_spec();
 
     TT_FATAL(attributes.dim == 3, "dim must be 3, got {}", attributes.dim);
     TT_FATAL(attributes.cluster_axis == 1, "cluster_axis must be 1, got {}", attributes.cluster_axis);

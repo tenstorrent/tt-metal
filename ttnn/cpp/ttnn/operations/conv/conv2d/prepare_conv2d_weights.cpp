@@ -380,7 +380,6 @@ static Tensor conv_depthwise_weight_bcast_helper(
     DataType output_dtype) {
     auto compute =
         [&original_weight_shape, &output_weight_shape, &output_dtype](const auto& conv_weight_tensor_buffer) {
-            ttnn::Shape output_shape = output_weight_shape;
             // Create a new buffer with the output shape
             auto output_buffer = std::vector<T>(output_weight_shape.volume());
 

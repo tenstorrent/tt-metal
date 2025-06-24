@@ -52,7 +52,7 @@ void ScaledDotProductAttention::validate(
 
         const auto& mask_option = optional_input_tensors.at(0);
         if (mask_option.has_value()) {
-            auto mask = mask_option.value();
+            const auto& mask = mask_option.value();
             TT_FATAL(
                 mask.storage_type() == StorageType::DEVICE,
                 "When mask is provided to SDPA, the tensor must be on device");
@@ -69,7 +69,7 @@ void ScaledDotProductAttention::validate(
                 mask.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
                 "When mask is provided to SDPA, it must be in DRAM");
 
-            const auto mask_shape = mask.logical_shape();
+            const auto& mask_shape = mask.logical_shape();
             const auto q_shape = input_tensors.at(0).logical_shape();
             const auto k_shape = input_tensors.at(1).logical_shape();
 

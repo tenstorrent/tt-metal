@@ -17,8 +17,8 @@ using namespace tt::constants;
 namespace ttnn::operations::data_movement {
 operation::ProgramWithCallbacks bcast_multi_core_w(
     const Tensor& a, const Tensor& b, const Tensor& output, BcastOpMath bcast_math) {
-    const auto ashape = a.padded_shape();
-    const auto bshape = b.padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];
