@@ -140,6 +140,12 @@ size_t BufferDistributionSpec::num_shards() const {
     return num_shards;
 }
 
+size_t BufferDistributionSpec::num_cores_with_data() const { return std::min(num_cores(), num_shards()); }
+
+std::vector<CoreCoord> BufferDistributionSpec::get_cores_with_data() const {
+    return std::vector<CoreCoord>(cores_.begin(), cores_.begin() + num_cores_with_data());
+}
+
 size_t BufferDistributionSpec::max_num_shards_per_core() const {
     if (cores_.size() == 0) {
         return 0;
@@ -169,7 +175,10 @@ BufferDistributionSpec::get_core_groups_by_num_shards() const {
     }
 
     std::vector<CoreCoord> cores_with_more_shards(cores_.begin(), cores_.begin() + num_cores_with_more_shards);
-    std::vector<CoreCoord> cores_with_less_shards(cores_.begin() + num_cores_with_more_shards, cores_.end());
+    std::vector<CoreCoord> cores_with_less_shards;
+    if (num_shards / num_cores() != 0) {
+        cores_with_less_shards = std::vector<CoreCoord>(cores_.begin() + num_cores_with_more_shards, cores_.end());
+    }
     return {
         CoreGroup{num_shards / num_cores() + 1, std::move(cores_with_more_shards)},
         CoreGroup{num_shards / num_cores(), std::move(cores_with_less_shards)},

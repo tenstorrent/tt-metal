@@ -34,7 +34,9 @@ public:
     size_t max_num_shards_per_core() const;
     size_t max_num_dev_pages_per_core() const;
     size_t num_cores() const { return cores_.size(); }
+    size_t num_cores_with_data() const;
     const std::vector<CoreCoord>& get_cores() const { return cores_; }
+    std::vector<CoreCoord> get_cores_with_data() const;
 
     size_t num_shards_per_core(size_t core_idx) const;
     size_t num_dev_pages_per_core(size_t core_idx) const;
