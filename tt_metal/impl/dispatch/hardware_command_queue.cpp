@@ -36,6 +36,7 @@
 #include "program/program_device_map.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
+#include "trace/trace_node.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
@@ -462,13 +463,15 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     }
 
     // Expected number of workers from the previous run. Used to generate the wait command in the EnqueueProgramCommand
-    const auto expected_workers_completed = program_dispatch::update_expected_num_workers_completed(
-        device_,
-        sub_device_id,
-        get_config_buffer_mgr(sub_device_index),
-        expected_num_workers_completed_[sub_device_index],
-        num_additional_workers,
-        id_);
+    const auto updated_worker_counts = program_dispatch::get_expected_num_workers_completed_updates(
+        expected_num_workers_completed_[sub_device_index], num_additional_workers);
+    if (updated_worker_counts.wrapped) {
+        program_dispatch::reset_expected_num_workers_completed_on_device(
+            device_, sub_device_id, expected_num_workers_completed_[sub_device_index], id());
+        get_config_buffer_mgr(*sub_device_id).mark_completely_full(0);
+    }
+    uint32_t expected_workers_completed = updated_worker_counts.previous;
+    expected_num_workers_completed_[sub_device_index] = updated_worker_counts.current;
 
 #ifdef DEBUG
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_validate_kernel_binaries()) {
