@@ -135,26 +135,27 @@ class TtMoeLayer(LightweightModule):
         weights_1SB1.deallocate(True)
 
         # All gather
-        if mode == "prefill":
-            output_11BH_gathered = ttnn.all_gather(results_11BH, dim=1, num_links=1)
-            results_11BH.deallocate(True)
-            # Sum reduction
-            output_11BH_reduced = ttnn.experimental.fast_reduce_nc(
-                output_11BH_gathered, dims=[1], output=None, compute_kernel_config=None
-            )
-            output_11BH_gathered.deallocate(True)
-        else:  # Decode mode
-            breakpoint()
-            output_11BH_gathered = ttnn.all_gather(results_11BH, dim=2, num_links=1)
-            results_11BH.deallocate(True)
-            # Reduction
-            output_11BH_reduced = ttnn.matmul(
-                self.reduce_mask, output_11BH_gathered, compute_kernel_config=self.compute_kernel_reduce
-            )
+        # if mode == "prefill":
+        #     breakpoint()
+        #     output_11BH_gathered = ttnn.all_gather(results_11BH, dim=1, num_links=1)
+        #     results_11BH.deallocate(True)
+        #     # Sum reduction
+        #     output_11BH_reduced = ttnn.experimental.fast_reduce_nc(
+        #         output_11BH_gathered, dims=[1], output=None, compute_kernel_config=None
+        #     )
+        #     output_11BH_gathered.deallocate(True)
+        # else:  # Decode mode
+        #     breakpoint()
+        #     output_11BH_gathered = ttnn.all_gather(results_11BH, dim=2, num_links=1)
+        #     results_11BH.deallocate(True)
+        #     # Reduction
+        #     output_11BH_reduced = ttnn.matmul(
+        #         self.reduce_mask, output_11BH_gathered, compute_kernel_config=self.compute_kernel_reduce
+        #     )
 
         def replicate_to_shard(tensor):
             return ttnn.aggregate_as_tensor(ttnn.get_device_tensors(tensor))
 
-        output_11BH_sharded = replicate_to_shard(output_11BH_reduced)
+        output_11BH_sharded = replicate_to_shard(results_11BH)
 
         return output_11BH_sharded
