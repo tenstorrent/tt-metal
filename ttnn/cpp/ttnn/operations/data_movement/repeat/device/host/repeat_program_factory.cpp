@@ -125,8 +125,8 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto input = input_tensors.at(0);
-        auto output = output_tensors.at(0);
+        const auto& input = input_tensors.at(0);
+        const auto& output = output_tensors.at(0);
         auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
         for (const auto& core : total_cores) {
             auto& runtime_args = runtime_args_by_core[core.x][core.y];
@@ -269,8 +269,8 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto input = input_tensors.at(0);
-        auto output = output_tensors.at(0);
+        const auto& input = input_tensors.at(0);
+        const auto& output = output_tensors.at(0);
         auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
         for (const auto& core : total_cores) {
             auto& runtime_args = runtime_args_by_core[core.x][core.y];

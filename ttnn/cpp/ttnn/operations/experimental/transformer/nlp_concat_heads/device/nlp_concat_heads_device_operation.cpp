@@ -9,7 +9,6 @@ namespace ttnn::operations::experimental::transformer {
 // Generic NLP ConcatHeads op
 void NLPConcatHeadsDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.padded_shape();
 
     TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
@@ -37,7 +36,7 @@ void NLPConcatHeadsDeviceOperation::validate(const std::vector<Tensor>& input_te
 std::vector<ttnn::TensorSpec> NLPConcatHeadsDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.logical_shape();
+    const auto& input_shape = input_tensor.logical_shape();
 
     auto num_heads = input_shape[1];
     auto sequence_length = input_shape[2];

@@ -265,11 +265,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // This should allocate a DRAM buffer on the device
     IDevice* device = input.device();
     tt::tt_metal::Buffer* src_dram_buffer = input.buffer();
-    tt::tt_metal::DeviceStorage reader_indices_storage = reader_indices.device_storage();
+    const tt::tt_metal::DeviceStorage& reader_indices_storage = reader_indices.device_storage();
     tt::tt_metal::Buffer* dst_dram_buffer = output.buffer();
 
-    const auto input_shape = input.padded_shape();
-    const auto output_shape = output.padded_shape();
+    const auto& input_shape = input.padded_shape();
+    const auto& output_shape = output.padded_shape();
 
     tt::DataFormat in_df = datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat out_df = datatype_to_dataformat_converter(output.dtype());

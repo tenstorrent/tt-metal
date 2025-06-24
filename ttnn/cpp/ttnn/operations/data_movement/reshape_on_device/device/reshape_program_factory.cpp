@@ -322,7 +322,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_tensor = input_tensors.at(0);
+        const auto& src_tensor = input_tensors.at(0);
 
         auto dst_tensor = output_tensors.at(0);
 
@@ -366,9 +366,13 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
         for (uint32_t i = 0; i < num_cores_total; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-            { SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first); }
+            {
+                SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
+            }
 
-            { SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second); }
+            {
+                SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
+            }
         }
     };
 
