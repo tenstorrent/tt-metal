@@ -30,6 +30,6 @@ void write_socket_configs(
 //  =============== Additional utility functions  ===============
 
 // Given a MeshDevice and a logical device coordinate, determine the device's physical mesh id
-uint32_t get_physical_mesh_id(MeshDevice* mesh_device, const MeshCoordinate& coord);
+uint32_t get_physical_mesh_id(const MeshDevice* mesh_device, const MeshCoordinate& coord);
 
 }  // namespace tt::tt_metal::distributed

@@ -7,7 +7,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "llama_reduce_scatter_device_operation.hpp"
-#include "cpp/ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ccl {
@@ -131,7 +131,8 @@ LlamaReduceScatterDeviceOperation::invoke(
     const uint32_t ring_devices,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    tt::tt_fabric::Topology topology) {
+    tt::tt_fabric::Topology topology,
+    bool use_noc1_only) {
     return {
         operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.logical_shape().rank() + dim) : (uint32_t)dim),
@@ -142,6 +143,7 @@ LlamaReduceScatterDeviceOperation::invoke(
             .ring_devices = ring_devices,
             .num_links = num_links,
             .topology = topology,
+            .use_noc1_only = use_noc1_only,
         },
         tensor_args_t{.input_tensor = input_tensor, .intermediate_packet_buffer = intermediate_packet_buffer}};
 }

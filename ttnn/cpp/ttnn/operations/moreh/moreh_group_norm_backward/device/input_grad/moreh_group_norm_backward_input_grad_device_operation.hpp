@@ -61,7 +61,7 @@ struct MorehGroupNormBackwardInputGradOperation {
         const Tensor& input,
         const Tensor& mean,
         const Tensor& rstd,
-        const uint32_t num_groups,
+        uint32_t num_groups,
         const std::optional<const Tensor>& gamma,
         const std::optional<const Tensor>& input_grad,
         const std::optional<MemoryConfig>& input_grad_memory_config,

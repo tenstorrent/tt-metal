@@ -375,8 +375,8 @@ def run_mamba_demo(
     chunk_size_to_prefill_targets_tok_per_s = {32: 135.0, 128: 380.0}  # perf is different for different chunk sizes
     targets = {
         "prefill_t/s": chunk_size_to_prefill_targets_tok_per_s[prefill_chunk_size],
-        "decode_t/s": 375.0,
-        "decode_t/s/u": 11.5,
+        "decode_t/s": 346.0,
+        "decode_t/s/u": 10.8,
     }
     warmup_iterations = {"inference_prefill": 0, "inference_decode": 0}
 
@@ -415,6 +415,9 @@ def run_mamba_demo(
     ),
 )
 def test_demo(user_input, device, use_program_cache, get_tt_cache_path, model_version, max_gen_len):
+    # https://github.com/tenstorrent/tt-metal/issues/23282
+    device.disable_and_clear_program_cache()
+
     return run_mamba_demo(
         prompts=user_input,
         device=device,

@@ -24,11 +24,11 @@ jobs:
   smoke:
     runs-on: >-
       ${{
-        ((inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox') && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner))
+        ((inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox' || inputs.runner == 'P150b-viommu') && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner))
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner))
       }}
     container:
-      image: ${{ (inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner == 'N150' || inputs.runner == 'N300' || inputs.runner == 'N300-llmbox' || inputs.runner == 'P150b-viommu') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"
@@ -60,6 +60,7 @@ jobs:
           GTEST_COLOR: yes
           GTEST_OUTPUT: xml:/work/test-reports/
           TT_METAL_HOME: /usr/libexec/tt-metalium # TODO: Need to get away from env vars!
+          LSAN_OPTIONS: suppressions=lsan.supp
           TT_METAL_WATCHER: 5
           TT_METAL_WATCHER_TEST_MODE: 1
         run: |

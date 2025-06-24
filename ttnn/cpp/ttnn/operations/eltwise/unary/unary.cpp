@@ -7,7 +7,6 @@
 #include "ttnn/common/queue_id.hpp"
 #include "device/unary_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
@@ -80,6 +79,7 @@ template struct ExecuteUnary<UnaryOpType::ACOS>;
 template struct ExecuteUnary<UnaryOpType::ASIN>;
 template struct ExecuteUnary<UnaryOpType::ATAN>;
 template struct ExecuteUnary<UnaryOpType::COS>;
+template struct ExecuteUnary<UnaryOpType::ACOSH>;
 template struct ExecuteUnary<UnaryOpType::ERFINV>;
 template struct ExecuteUnary<UnaryOpType::EXP2>;
 template struct ExecuteUnary<UnaryOpType::EXPM1>;
@@ -117,6 +117,7 @@ template struct ExecuteUnary<UnaryOpType::BITWISE_NOT>;
 template struct ExecuteUnary<UnaryOpType::ALT_COMPLEX_ROTATE90>;
 template struct ExecuteUnary<UnaryOpType::CEIL>;
 template struct ExecuteUnary<UnaryOpType::FLOOR>;
+template struct ExecuteUnary<UnaryOpType::TRUNC>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
@@ -172,6 +173,22 @@ Tensor ExecuteUnaryWithFloatParameter<unary_op_type>::invoke(
         optional_output_tensor);
 }
 
+template <UnaryOpType unary_op_type>
+template <typename T>
+Tensor ExecuteUnaryWithVariantFloatIntParameter<unary_op_type>::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const T parameter,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        queue_id,
+        input_tensor,
+        {UnaryWithParam{unary_op_type, static_cast<T>(parameter)}},
+        memory_config,
+        optional_output_tensor);
+}
+
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::ELU>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RSUB>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::HEAVISIDE>;
@@ -185,8 +202,15 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GT>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LT>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_NE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_EQ>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::MAXIMUM>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::MINIMUM>;
+
+template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MINIMUM>::invoke<float>(
+    QueueId, const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+
+template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MAXIMUM>::invoke<float>(
+    QueueId, const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+
+template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MAXIMUM>::invoke<int32_t>(
+    QueueId, const Tensor&, const int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
 
 Tensor Sigmoid_accurate::invoke(
     QueueId queue_id,

@@ -90,7 +90,7 @@ struct WatcherSettings {
 
 struct InspectorSettings {
     bool enabled = true;
-    bool initialization_is_important = true;
+    bool initialization_is_important = false;
     bool warn_on_write_exceptions = true;
     std::filesystem::path log_path;
 };
@@ -105,6 +105,9 @@ class RunTimeOptions {
     bool is_kernel_dir_env_var_set = false;
     std::string kernel_dir;
     std::string system_kernel_dir;
+
+    bool is_visible_device_env_var_set = false;
+    uint32_t visible_device;
 
     bool build_map_enabled = false;
 
@@ -142,7 +145,8 @@ class RunTimeOptions {
     bool validate_kernel_binaries = false;
     unsigned num_hw_cqs = 1;
 
-    bool fb_fabric_en = false;
+    bool fd_fabric_en = false;
+    bool using_slow_dispatch = false;
 
     bool enable_dispatch_data_collection = false;
 
@@ -190,6 +194,9 @@ public:
     const std::string& get_kernel_dir() const;
     // Location where kernels are installed via package manager.
     const std::string& get_system_kernel_dir() const;
+
+    inline bool is_visible_device_specified() const { return this->is_visible_device_env_var_set; }
+    inline uint32_t get_visible_device() const { return this->visible_device; }
 
     inline bool get_build_map_enabled() const { return build_map_enabled; }
 
@@ -371,7 +378,8 @@ public:
     inline unsigned get_num_hw_cqs() const { return num_hw_cqs; }
     inline void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
 
-    inline bool get_fd_fabric() const { return fb_fabric_en; }
+    inline bool get_fd_fabric() const { return fd_fabric_en && !using_slow_dispatch; }
+    inline void set_fd_fabric(bool enable) { fd_fabric_en = enable; }
 
     inline uint32_t get_watcher_debug_delay() const { return watcher_debug_delay; }
     inline void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }

@@ -102,7 +102,7 @@ TEST_F(TensorDistributionT3000Test, Shard1DInvalidDim) {
         std::vector<float>(num_devices, 0), get_tensor_spec(ttnn::Shape{1, 1, 1, num_devices}, DataType::FLOAT32));
 
     EXPECT_ANY_THROW({
-        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, -1);
+        auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, -10);
         Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
     });
 
@@ -137,6 +137,23 @@ TEST_F(TensorDistributionT3000Test, Shard1DFewerShardsThanDevices) {
     Tensor expected_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{num_devices - 1, 1, 3, 1}, DataType::FLOAT32));
     EXPECT_TRUE(ttnn::allclose<float>(concatenated_tensor, expected_tensor));
+}
+
+TEST_F(TensorDistributionT3000Test, Shard1DNegativeDim) {
+    const int num_devices = mesh_device_->num_devices();
+    std::vector<float> test_data(num_devices, 0);
+    std::iota(test_data.begin(), test_data.end(), 0);
+    Tensor input_tensor =
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, 1, 1, num_devices}, DataType::FLOAT32));
+
+    auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, -1);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+
+    std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
+    EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
+    for (int i = 0; i < device_tensors.size(); i++) {
+        EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i));
+    }
 }
 
 TEST_F(TensorDistributionT3000Test, Shard1D) {
