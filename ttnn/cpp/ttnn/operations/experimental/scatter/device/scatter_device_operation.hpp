@@ -34,6 +34,8 @@ struct ScatterDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
+    static operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     using invocation_result_t = std::tuple<operation_attributes_t, tensor_args_t>;
