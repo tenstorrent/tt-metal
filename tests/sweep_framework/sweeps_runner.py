@@ -9,6 +9,7 @@ import importlib
 import datetime as dt
 import os
 import json
+import uuid
 import enlighten
 from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
@@ -298,31 +299,141 @@ def export_test_results_json(header_info, results):
             json.dump(new_data, file, indent=2)
 
 
-def run_sweeps_json(module_name, suite_name):
-    pbar_manager = enlighten.get_manager()
-    with open(READ_FILE, "r") as file:
-        print(READ_FILE)
-        data = json.load(file)
-        for suite in data:
-            if suite_name and suite_name != suite:
-                continue  # user only wants to run a specific suite
+def find_vector_files_for_modules(module_names):
+    """Find vector files for specified modules in the vectors_export directory"""
+    vectors_export_dir = pathlib.Path(__file__).parent / "vectors_export"
 
-            for input_hash in data[suite]:
-                data[suite][input_hash]["vector_id"] = input_hash
-            vectors = [data[suite][input_hash] for input_hash in data[suite]]
-            module_name = vectors[0]["sweep_name"]
-            test_module = importlib.import_module("sweeps." + module_name)
-            header_info, test_vectors = sanitize_inputs(vectors)
-            logger.info(f"Executing tests for module {module_name}, suite {suite}")
-            results = execute_suite(test_module, test_vectors, pbar_manager, suite)
-            logger.info(f"Completed tests for module {module_name}, suite {suite}.")
-            logger.info(f"Tests Executed - {len(results)}")
-            if DATABASE_BACKEND == "postgres":
-                logger.info("Dumping results to PostgreSQL database.")
-                export_test_results_postgres(header_info, results)
-            else:
-                logger.info("Dumping results to JSON file.")
-                export_test_results_json(header_info, results)
+    if not vectors_export_dir.exists():
+        logger.error(f"Vectors export directory not found: {vectors_export_dir}")
+        return {}
+
+    module_files = {}
+    for module_name in module_names:
+        # Look for JSON files that match the module name pattern
+        # Module name format: "category.subcategory.test_name"
+        # File name format: "category.subcategory.test_name.json"
+        potential_files = list(vectors_export_dir.glob(f"{module_name}.json"))
+        if potential_files:
+            module_files[module_name] = potential_files[0]
+            logger.info(f"Found vector file for module '{module_name}': {potential_files[0]}")
+        else:
+            logger.warning(f"No vector file found for module '{module_name}' in {vectors_export_dir}")
+            # Try to find similar files for debugging
+            similar_files = list(vectors_export_dir.glob(f"*{module_name.split('.')[-1]}*.json"))
+            if similar_files:
+                logger.info(f"Similar files found: {[f.name for f in similar_files[:5]]}")
+
+    return module_files
+
+
+def run_multiple_modules_json(module_names, suite_name):
+    """Run multiple modules using JSON files from vectors_export directory"""
+    pbar_manager = enlighten.get_manager()
+
+    # Find vector files for each module
+    module_files = find_vector_files_for_modules(module_names)
+
+    if not module_files:
+        logger.error("No vector files found for any of the specified modules")
+        return
+
+    all_results = []
+    all_header_info = []
+
+    # Process each module
+    for module_name, vector_file in module_files.items():
+        logger.info(f"Processing module: {module_name} from file: {vector_file}")
+
+        try:
+            with open(vector_file, "r") as file:
+                data = json.load(file)
+
+                for suite in data:
+                    if suite_name and suite_name != suite:
+                        continue  # user only wants to run a specific suite
+
+                    # Prepare vectors for this suite
+                    for input_hash in data[suite]:
+                        data[suite][input_hash]["vector_id"] = input_hash
+                    vectors = [data[suite][input_hash] for input_hash in data[suite]]
+
+                    # Verify the module name matches
+                    if vectors and vectors[0]["sweep_name"] != module_name:
+                        logger.warning(f"Module name mismatch: expected {module_name}, got {vectors[0]['sweep_name']}")
+                        continue
+
+                    # Import and run the test module
+                    try:
+                        test_module = importlib.import_module("sweeps." + module_name)
+                        header_info, test_vectors = sanitize_inputs(vectors)
+                        logger.info(f"Executing tests for module {module_name}, suite {suite}")
+                        results = execute_suite(test_module, test_vectors, pbar_manager, suite)
+                        logger.info(f"Completed tests for module {module_name}, suite {suite}.")
+                        logger.info(f"Tests Executed - {len(results)}")
+
+                        # Collect results for batch export
+                        all_results.extend(results)
+                        all_header_info.extend(header_info)
+
+                    except ImportError as e:
+                        logger.error(f"Failed to import module {module_name}: {e}")
+                        continue
+                    except Exception as e:
+                        logger.error(f"Failed to execute module {module_name}: {e}")
+                        continue
+
+        except FileNotFoundError:
+            logger.error(f"Vector file not found: {vector_file}")
+            continue
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in file {vector_file}: {e}")
+            continue
+        except Exception as e:
+            logger.error(f"Error processing file {vector_file}: {e}")
+            continue
+
+    # Export all results to PostgreSQL in a single run
+    if all_results and DATABASE_BACKEND == "postgres":
+        logger.info("Dumping all results to PostgreSQL database.")
+        export_test_results_postgres(all_header_info, all_results)
+    elif all_results:
+        logger.info("Dumping results to JSON file.")
+        export_test_results_json(all_header_info, all_results)
+    else:
+        logger.warning("No results to export")
+
+
+def run_sweeps_json(module_names, suite_name):
+    """Run sweeps from JSON files - supports single or multiple modules"""
+    if isinstance(module_names, str):
+        # Single module - use existing logic
+        pbar_manager = enlighten.get_manager()
+        with open(READ_FILE, "r") as file:
+            print(READ_FILE)
+            data = json.load(file)
+            for suite in data:
+                if suite_name and suite_name != suite:
+                    continue  # user only wants to run a specific suite
+
+                for input_hash in data[suite]:
+                    data[suite][input_hash]["vector_id"] = input_hash
+                vectors = [data[suite][input_hash] for input_hash in data[suite]]
+                module_name = vectors[0]["sweep_name"]
+                test_module = importlib.import_module("sweeps." + module_name)
+                header_info, test_vectors = sanitize_inputs(vectors)
+                logger.info(f"Executing tests for module {module_name}, suite {suite}")
+                results = execute_suite(test_module, test_vectors, pbar_manager, suite)
+                logger.info(f"Completed tests for module {module_name}, suite {suite}.")
+                logger.info(f"Tests Executed - {len(results)}")
+                if DATABASE_BACKEND == "postgres":
+                    logger.info("Dumping results to PostgreSQL database.")
+                    export_test_results_postgres(header_info, results)
+                else:
+                    logger.info("Dumping results to JSON file.")
+                    export_test_results_json(header_info, results)
+    else:
+        # Multiple modules - use new logic
+        run_multiple_modules_json(module_names, suite_name)
 
 
 def run_sweeps(module_name, suite_name, vector_id):
@@ -478,45 +589,88 @@ def initialize_postgres_database():
         conn = psycopg2.connect(**pg_config)
         cursor = conn.cursor()
 
-        # Create the sweep_results table if it doesn't exist
-        create_table_query = """
-        CREATE TABLE IF NOT EXISTS sweep_results (
-            id SERIAL PRIMARY KEY,
-            sweep_name VARCHAR(255) NOT NULL,
-            suite_name VARCHAR(255) NOT NULL,
-            vector_id VARCHAR(255) NOT NULL,
-            input_hash VARCHAR(255) NOT NULL,
+        # Create the Run table
+        create_run_table_query = """
+        CREATE TABLE IF NOT EXISTS runs (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            initiated_by VARCHAR(255) NOT NULL,
+            git_author VARCHAR(255),
+            git_branch_name VARCHAR(255),
+            git_commit_hash VARCHAR(50),
+            start_time_ts TIMESTAMP NOT NULL,
+            end_time_ts TIMESTAMP,
+            status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled')),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+
+        # Create the Test table
+        create_test_table_query = """
+        CREATE TABLE IF NOT EXISTS tests (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            run_id UUID NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+            name VARCHAR(255) NOT NULL,
+            start_time_ts TIMESTAMP NOT NULL,
+            end_time_ts TIMESTAMP,
+            status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled', 'skipped')),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+
+        # Create the Sweep Testcase table
+        create_testcase_table_query = """
+        CREATE TABLE IF NOT EXISTS sweep_testcases (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            test_id UUID NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+            name VARCHAR(255) NOT NULL,
+            device VARCHAR(255),
+            host VARCHAR(255) NOT NULL,
+            start_time_ts TIMESTAMP NOT NULL,
+            end_time_ts TIMESTAMP,
             status VARCHAR(100) NOT NULL,
+            suite_name VARCHAR(255) NOT NULL,
+            test_vector JSONB,
             message TEXT,
             exception TEXT,
             e2e_perf FLOAT,
             device_perf JSONB,
-            timestamp TIMESTAMP NOT NULL,
-            host VARCHAR(255) NOT NULL,
-            user_name VARCHAR(255) NOT NULL,
-            git_hash VARCHAR(50) NOT NULL,
+            git_hash VARCHAR(50),
             test_parameters JSONB,
             vector_data_jsonb JSONB,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """
 
-        cursor.execute(create_table_query)
+        # Execute table creation queries
+        cursor.execute(create_run_table_query)
+        cursor.execute(create_test_table_query)
+        cursor.execute(create_testcase_table_query)
 
         # Create indexes for better query performance
         create_indexes_query = """
-        CREATE INDEX IF NOT EXISTS idx_sweep_results_sweep_name ON sweep_results(sweep_name);
-        CREATE INDEX IF NOT EXISTS idx_sweep_results_suite_name ON sweep_results(suite_name);
-        CREATE INDEX IF NOT EXISTS idx_sweep_results_vector_id ON sweep_results(vector_id);
-        CREATE INDEX IF NOT EXISTS idx_sweep_results_status ON sweep_results(status);
-        CREATE INDEX IF NOT EXISTS idx_sweep_results_timestamp ON sweep_results(timestamp);
-        CREATE INDEX IF NOT EXISTS idx_sweep_results_git_hash ON sweep_results(git_hash);
+        CREATE INDEX IF NOT EXISTS idx_runs_initiated_by ON runs(initiated_by);
+        CREATE INDEX IF NOT EXISTS idx_runs_git_commit_hash ON runs(git_commit_hash);
+        CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
+        CREATE INDEX IF NOT EXISTS idx_runs_start_time_ts ON runs(start_time_ts);
+
+        CREATE INDEX IF NOT EXISTS idx_tests_run_id ON tests(run_id);
+        CREATE INDEX IF NOT EXISTS idx_tests_name ON tests(name);
+        CREATE INDEX IF NOT EXISTS idx_tests_status ON tests(status);
+        CREATE INDEX IF NOT EXISTS idx_tests_start_time_ts ON tests(start_time_ts);
+
+        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_test_id ON sweep_testcases(test_id);
+        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_name ON sweep_testcases(name);
+        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_suite_name ON sweep_testcases(suite_name);
+        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_status ON sweep_testcases(status);
+        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_host ON sweep_testcases(host);
+        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_start_time_ts ON sweep_testcases(start_time_ts);
+        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_git_hash ON sweep_testcases(git_hash);
         """
 
         cursor.execute(create_indexes_query)
 
         conn.commit()
-        logger.info("Successfully initialized PostgreSQL database with sweep_results table")
+        logger.info("Successfully initialized PostgreSQL database with runs, tests, and sweep_testcases tables")
 
     except Exception as e:
         logger.error(f"Failed to initialize PostgreSQL database: {e}")
@@ -528,6 +682,64 @@ def initialize_postgres_database():
             cursor.close()
         if conn:
             conn.close()
+
+
+def get_git_author():
+    """Get the git author name"""
+    try:
+        return subprocess.check_output(["git", "config", "user.name"]).decode("ascii").strip()
+    except Exception as e:
+        return "Unknown"
+
+
+def get_git_branch():
+    """Get the current git branch name"""
+    try:
+        return subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"]).decode("ascii").strip()
+    except Exception as e:
+        return "Unknown"
+
+
+def get_initiated_by():
+    """Get the user who initiated the run - username for dev, CI pipeline name for CI/CD"""
+    # Check if we're in a CI environment
+    ci_pipeline = os.getenv("GITHUB_WORKFLOW") or os.getenv("CI_PIPELINE_NAME")
+    if ci_pipeline:
+        return ci_pipeline
+    else:
+        return get_username()
+
+
+def map_test_status_to_run_status(test_statuses):
+    """Map test statuses to overall run status"""
+    if not test_statuses:
+        return "error"
+
+    # If any test failed, the run failed
+    if any(status in ["failure", "error"] for status in test_statuses):
+        return "failure"
+    # If any test was cancelled, the run was cancelled
+    elif any(status == "cancelled" for status in test_statuses):
+        return "cancelled"
+    # If all tests passed or were skipped, the run succeeded
+    elif all(status in ["success", "skipped"] for status in test_statuses):
+        return "success"
+    else:
+        return "error"
+
+
+def map_test_status_to_db_status(test_status):
+    """Map TestStatus enum to database status string"""
+    status_mapping = {
+        TestStatus.PASS: "success",
+        TestStatus.FAIL_ASSERT_EXCEPTION: "failure",
+        TestStatus.FAIL_L1_OUT_OF_MEM: "failure",
+        TestStatus.FAIL_WATCHER: "failure",
+        TestStatus.FAIL_CRASH_HANG: "failure",
+        TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "failure",
+        TestStatus.NOT_RUN: "skipped",
+    }
+    return status_mapping.get(test_status, "error")
 
 
 def export_test_results_postgres(header_info, results):
@@ -545,63 +757,154 @@ def export_test_results_postgres(header_info, results):
         conn = psycopg2.connect(**pg_config)
         cursor = conn.cursor()
 
-        sweep_name = header_info[0]["sweep_name"]
+        # Get git information
         curr_git_hash = git_hash()
+        git_author = get_git_author()
+        git_branch = get_git_branch()
+        initiated_by = get_initiated_by()
 
-        # Prepare the insert statement
-        insert_query = """
-        INSERT INTO sweep_results (
-            sweep_name, suite_name, vector_id, input_hash, status, message,
-            exception, e2e_perf, device_perf, timestamp, host, user_name,
-            git_hash, test_parameters, vector_data_jsonb
-        ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-        )
+        # Get current timestamp for run start
+        run_start_time = dt.datetime.now()
+
+        # Create a new run record
+        run_insert_query = """
+        INSERT INTO runs (
+            initiated_by, git_author, git_branch_name, git_commit_hash,
+            start_time_ts, status
+        ) VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id
         """
 
-        for i in range(len(results)):
-            # Prepare the data
-            header = header_info[i]
-            result = results[i]
+        run_values = (
+            initiated_by,
+            git_author,
+            git_branch,
+            curr_git_hash,
+            run_start_time,
+            "success",  # Will be updated after processing all results
+        )
 
-            # Extract test parameters from the original vector
-            test_parameters = {}
-            for key, value in result.items():
-                if key not in [
-                    "status",
-                    "message",
-                    "exception",
-                    "e2e_perf",
-                    "device_perf",
-                    "timestamp",
-                    "host",
-                    "user",
-                ]:
-                    test_parameters[key] = serialize(value) if hasattr(value, "__dict__") else value
+        cursor.execute(run_insert_query, run_values)
+        run_id = cursor.fetchone()[0]
 
-            # Prepare values for insertion
-            values = (
-                header.get("sweep_name"),
-                header.get("suite_name"),
-                header.get("vector_id"),
-                header.get("input_hash"),
-                str(result.get("status")),
-                result.get("message"),
-                result.get("exception"),
-                result.get("e2e_perf"),
-                json.dumps(result.get("device_perf")) if result.get("device_perf") else None,
-                dt.datetime.strptime(result.get("timestamp"), "%Y-%m-%d_%H-%M-%S"),
-                result.get("host"),
-                result.get("user"),
-                curr_git_hash,
-                json.dumps(test_parameters),
-                json.dumps(result.get("original_vector_data")),
+        # Group results by test module (sweep_name)
+        test_groups = {}
+        for i, result in enumerate(results):
+            sweep_name = header_info[i]["sweep_name"]
+            if sweep_name not in test_groups:
+                test_groups[sweep_name] = []
+            test_groups[sweep_name].append((i, result))
+
+        all_test_statuses = []
+
+        # Process each test module
+        for sweep_name, test_results in test_groups.items():
+            # Create a test record for this module
+            test_start_time = dt.datetime.now()
+
+            test_insert_query = """
+            INSERT INTO tests (
+                run_id, name, start_time_ts, status
+            ) VALUES (%s, %s, %s, %s)
+            RETURNING id
+            """
+
+            test_values = (
+                run_id,
+                sweep_name,
+                test_start_time,
+                "success",  # Will be updated after processing all testcases
             )
 
-            cursor.execute(insert_query, values)
+            cursor.execute(test_insert_query, test_values)
+            test_id = cursor.fetchone()[0]
+
+            test_statuses = []
+
+            # Process each test case within this test module
+            for idx, result in test_results:
+                header = header_info[idx]
+
+                # Extract test parameters from the original vector
+                test_parameters = {}
+                for key, value in result.items():
+                    if key not in [
+                        "status",
+                        "message",
+                        "exception",
+                        "e2e_perf",
+                        "device_perf",
+                        "timestamp",
+                        "host",
+                        "user",
+                        "original_vector_data",
+                    ]:
+                        test_parameters[key] = serialize(value) if hasattr(value, "__dict__") else value
+
+                # Map test status to database status
+                db_status = map_test_status_to_db_status(result.get("status"))
+                test_statuses.append(db_status)
+
+                # Create testcase record
+                testcase_insert_query = """
+                INSERT INTO sweep_testcases (
+                    test_id, name, device, host, start_time_ts, end_time_ts,
+                    status, suite_name, test_vector, message, exception,
+                    e2e_perf, device_perf, git_hash, test_parameters, vector_data_jsonb
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                """
+
+                # Parse timestamp
+                timestamp_str = result.get("timestamp")
+                start_time = (
+                    dt.datetime.strptime(timestamp_str, "%Y-%m-%d_%H-%M-%S") if timestamp_str else dt.datetime.now()
+                )
+
+                testcase_values = (
+                    test_id,
+                    f"{sweep_name}_{header.get('vector_id', 'unknown')}",
+                    None,  # device - could be extracted from result if available
+                    result.get("host"),
+                    start_time,
+                    None,  # end_time_ts - could be calculated if we track duration
+                    db_status,
+                    header.get("suite_name"),
+                    json.dumps(header.get("vector_id")),  # test_vector as JSON
+                    result.get("message"),
+                    result.get("exception"),
+                    result.get("e2e_perf"),
+                    json.dumps(result.get("device_perf")) if result.get("device_perf") else None,
+                    curr_git_hash,
+                    json.dumps(test_parameters),
+                    json.dumps(result.get("original_vector_data")),
+                )
+
+                cursor.execute(testcase_insert_query, testcase_values)
+
+            # Update test status based on testcase results
+            test_status = map_test_status_to_run_status(test_statuses)
+            test_end_time = dt.datetime.now()
+
+            test_update_query = """
+            UPDATE tests SET status = %s, end_time_ts = %s WHERE id = %s
+            """
+            cursor.execute(test_update_query, (test_status, test_end_time, test_id))
+
+            all_test_statuses.append(test_status)
+
+        # Update run status based on all test results
+        run_status = map_test_status_to_run_status(all_test_statuses)
+        run_end_time = dt.datetime.now()
+
+        run_update_query = """
+        UPDATE runs SET status = %s, end_time_ts = %s WHERE id = %s
+        """
+        cursor.execute(run_update_query, (run_status, run_end_time, run_id))
 
         conn.commit()
-        logger.info(f"Successfully exported {len(results)} results to PostgreSQL")
+        logger.info(f"Successfully exported {len(results)} results to PostgreSQL with run_id: {run_id}")
 
     except Exception as e:
         logger.error(f"Failed to export results to PostgreSQL: {e}")
@@ -671,7 +974,11 @@ if __name__ == "__main__":
         default="corp",
         help="Elastic Connection String for the vector and results database. Available presets are ['corp', 'cloud']",
     )
-    parser.add_argument("--module-name", required=False, help="Test Module Name, or all tests if omitted.")
+    parser.add_argument(
+        "--module-name",
+        required=False,
+        help="Test Module Name(s). For PostgreSQL with local files, can be comma-separated list (e.g., 'eltwise.unary.relu.relu,matmul.short.matmul'). For Elasticsearch, single module name only.",
+    )
     parser.add_argument("--suite-name", required=False, help="Suite of Test Vectors to run, or all tests if omitted.")
     parser.add_argument(
         "--vector-id", required=False, help="Specify vector id with a module name to run an individual test vector."
@@ -775,10 +1082,22 @@ if __name__ == "__main__":
     from framework.device_fixtures import default_device
     from framework.sweeps_logger import sweeps_logger as logger
 
-    if READ_FILE:
-        run_sweeps_json(args.module_name, args.suite_name)
+    # Parse module names
+    if args.module_name:
+        if DATABASE_BACKEND == "postgres" and not args.read_file:
+            # For PostgreSQL without read-file, support comma-separated module names
+            module_names = [name.strip() for name in args.module_name.split(",")]
+            logger.info(f"Running multiple modules: {module_names}")
+        else:
+            # For Elasticsearch or with read-file, use single module name
+            module_names = args.module_name
     else:
-        run_sweeps(args.module_name, args.suite_name, args.vector_id)
+        module_names = None
+
+    if READ_FILE:
+        run_sweeps_json(module_names, args.suite_name)
+    else:
+        run_sweeps(module_names, args.suite_name, args.vector_id)
 
     if args.watcher:
         disable_watcher()
