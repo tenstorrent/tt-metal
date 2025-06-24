@@ -413,6 +413,82 @@ def test_tg_trace_rms_fuse(
 @pytest.mark.parametrize(
     "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
     [
+        # RMS NORM ALL GATHER FUSION
+        (
+            4,
+            8192,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(x, y),
+                        ttnn.CoreCoord(x, y),
+                    )
+                    for x, y in PREFETCHER_NOC1_GRID
+                ]
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("use_new_version", [True])
+@pytest.mark.parametrize("num_iters, warmup_iters", [[200, 20]])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("fused_add", [True])
+@pytest.mark.parametrize("use_noc1_only", [False])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_6u_trace_rms_fuse(
+    mesh_device,
+    num_devices,
+    elements_per_batch,
+    num_links,
+    num_iters,
+    warmup_iters,
+    use_program_cache,
+    function_level_defaults,
+    input_shard_grid,
+    output_shard_grid,
+    trace_mode,
+    use_noc1_only,
+    use_new_version,
+    fused_add,
+):
+    profiler = BenchmarkProfiler()
+    run_rms_trace(
+        mesh_device,
+        num_devices,
+        elements_per_batch,
+        num_links,
+        use_program_cache,
+        function_level_defaults,
+        input_shard_grid,
+        output_shard_grid,
+        ttnn.Topology.Ring,
+        fused_add,
+        use_noc1_only=use_noc1_only,
+        num_iters=num_iters,
+        warmup_iters=warmup_iters,
+        profiler=profiler,
+        use_new_version=use_new_version,
+        trace_mode=trace_mode,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
+    [
         # RMS NORM ALL GATHER FUSION No Reshard
         (
             4,
