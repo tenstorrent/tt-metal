@@ -852,59 +852,6 @@ void pytensor_module(py::module& m_tensor) {
                     )
             )doc")
         .def(
-            py::init<>([](const py::object& tensor,
-                          std::optional<DataType> data_type,
-                          const distributed::TensorToMesh* mesh_mapper,
-                          const std::optional<Tile>& optional_tile,
-                          std::optional<Layout> optional_layout,
-                          const std::optional<MemoryConfig>& optional_memory_config,
-                          std::optional<float> pad_value) {
-                return CMAKE_UNIQUE_NAMESPACE::convert_python_tensor_to_tt_tensor(
-                    tensor,
-                    data_type,
-                    optional_layout,
-                    optional_tile,
-                    optional_memory_config.value_or(MemoryConfig{}),
-                    /*device=*/nullptr,
-                    ttnn::DefaultQueueId,
-                    pad_value.value_or(0.0f),
-                    mesh_mapper);
-            }),
-            py::arg("tensor"),
-            py::arg("data_type") = std::nullopt,
-            py::arg("mesh_mapper") = nullptr,
-            py::arg("tile") = std::nullopt,
-            py::arg("layout") = std::nullopt,
-            py::arg("mem_config") = std::nullopt,
-            py::arg("pad_value") = std::nullopt,
-            py::return_value_policy::move,
-            R"doc(
-                +--------------+--------------------------------+
-                | Argument     | Description                    |
-                +==============+================================+
-                | tensor       | Pytorch or Numpy Tensor        |
-                +--------------+--------------------------------+
-                | data_type    | TT Tensor data type (optional) |
-                +--------------+--------------------------------+
-                | mesh_mapper  | TT-NN Mesh Mapper (optional)    |
-                +--------------+--------------------------------+
-                | tile         | TT Tile Spec (optional)        |
-                +--------------+--------------------------------+
-                | layout       | TT Layout (optional)           |
-                +--------------+--------------------------------+
-                | mem_config   | TT Memory Config (optional)    |
-                +--------------+--------------------------------+
-                | pad_value    | Padding value (optional)       |
-                +--------------+--------------------------------+
-
-                Example of creating a TT Tensor that uses torch.Tensor's storage as its own storage:
-
-                .. code-block:: python
-
-                    py_tensor = torch.randn((1, 1, 32, 32))
-                    ttnn.Tensor(py_tensor)
-            )doc")
-        .def(
             py::init<>([](const py::object& python_tensor,
                           std::optional<DataType> data_type,
                           std::optional<MeshDevice*> device,
@@ -912,7 +859,8 @@ void pytensor_module(py::module& m_tensor) {
                           const std::optional<MemoryConfig>& mem_config,
                           const std::optional<Tile>& tile,
                           ttnn::QueueId cq_id,
-                          std::optional<float> pad_value) {
+                          std::optional<float> pad_value,
+                          const distributed::TensorToMesh* mesh_mapper) {
                 return CMAKE_UNIQUE_NAMESPACE::convert_python_tensor_to_tt_tensor(
                     python_tensor,
                     data_type,
@@ -922,7 +870,7 @@ void pytensor_module(py::module& m_tensor) {
                     device.value_or(nullptr),
                     cq_id,
                     pad_value.value_or(0.0f),
-                    /*mesh_mapper=*/nullptr);
+                    mesh_mapper);
             }),
             py::arg("tensor"),
             py::arg("data_type") = std::nullopt,
@@ -932,6 +880,7 @@ void pytensor_module(py::module& m_tensor) {
             py::arg("tile").noconvert() = std::nullopt,
             py::arg("cq_id") = ttnn::DefaultQueueId,
             py::arg("pad_value") = std::nullopt,
+            py::arg("mesh_mapper") = nullptr,
             py::return_value_policy::move,
             R"doc(
                 +--------------+--------------------------------+
@@ -952,6 +901,8 @@ void pytensor_module(py::module& m_tensor) {
                 | cq_id        | TT Command Queue ID (optional) |
                 +--------------+--------------------------------+
                 | pad_value    | Padding value (optional)       |
+                +--------------+--------------------------------+
+                | mesh_mapper  | TT-NN Mesh Mapper (optional)    |
                 +--------------+--------------------------------+
 
                 Example of creating a TT Tensor from numpy tensor:

@@ -286,14 +286,14 @@ def from_torch(
 
     return ttnn.Tensor(
         tensor=tensor,
-        dtype=dtype,
+        data_type=dtype,
         device=device,
-        mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
         layout=layout,
-        memory_config=memory_config,
+        mem_config=memory_config,
         tile=tile,
         cq_id=cq_id,
         pad_value=pad_value,
+        mesh_mapper=mesh_mapper.unwrap() if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
     )
 
 
